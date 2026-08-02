@@ -155,7 +155,8 @@ async def _seed_world(api_client, session_factory) -> dict:
         # normalized-substring containment arm of the trgm path (§2.2).
         cjk_long = issue(125, web, "移动端灰度发布后登录页在 Safari 浏览器频繁崩溃需回归验证")
         session.add_all([web_124, login_issue, vault_issue, log_issue, cjk_long])
-        # Paging pool: 25 near-identical titles (recall cap is 20 per type).
+        # Paging pool: 25 near-identical titles (must traverse past the
+        # per-query fuzzy fetch floor without gaps).
         pool = [issue(i, web, f"searchcase {i:02d}") for i in range(1, 26)]
         session.add_all(pool)
         await session.flush()
@@ -416,9 +417,10 @@ async def test_cursor_paging_no_dupes_no_gaps(api_client, session_factory) -> No
     world = await _seed_world(api_client, session_factory)
     token, ws_id = world["tokens"]["Admin"], world["ws_id"]
     paged, _ = await _paged_ids(api_client, token, ws_id, 8)
-    # Recall cap is 20 per type — 25 seeded, so exactly 20 candidates.
-    assert len(paged) == 20
-    assert len(set(paged)) == 20  # no dupes across pages
+    # Candidate caps are per-query fetch floors, never a permanent result-set
+    # truncation: all 25 matches remain reachable through the keyset cursor.
+    assert len(paged) == 25
+    assert len(set(paged)) == 25  # no dupes across pages
     # Same pool, one shot: identical ordered result (deterministic total order).
     resp = await _search(api_client, token, ws_id, q="searchcase",
                          types="issue", limit=50)

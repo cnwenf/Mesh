@@ -1,6 +1,8 @@
 import type { Page } from '@playwright/test';
 
-export const MOCK_BASE = 'http://127.0.0.1:8901';
+/** mock 服务地址(默认契约端口 8901;同机多 run 隔离经 MESH_MOCK_BASE 覆盖,
+ * 与 mock-server.mjs 的 MESH_MOCK_PORT 配套) */
+export const MOCK_BASE = process.env.MESH_MOCK_BASE ?? 'http://127.0.0.1:8901';
 
 /** mock 契约登录凭证(auth/login 签发同形:mesh-dev:<workspace-id>) */
 export const MOCK_TOKEN = 'mesh-dev:ws-1';
@@ -30,8 +32,9 @@ export async function emit(
   return body.data;
 }
 
-/** 真实邮箱/密码登录(mock 契约账号 jane@corp.com;像真人一样操作登录页) */
+/** 真实邮箱/密码登录(mock 契约账号 jane@corp.com;每个用例先复位服务端状态以隔离账号偏好) */
 export async function login(page: Page): Promise<void> {
+  await resetMockServer();
   await page.goto('/login');
   await page.getByTestId('login-email').fill('jane@corp.com');
   await page.getByTestId('login-password').fill('secret123');

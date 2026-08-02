@@ -51,6 +51,7 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.outbox.service import emit_realtime
+from mesh.search.projection import recompute_for_agent, sync_member_search_name
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
 WORKSPACE_AGENTS_CHANNEL = "workspace:{workspace_id}:agents"
@@ -413,6 +414,9 @@ class AgentService:
             session.add(version)
             await session.flush()
 
+            # Search projection for the agent roster row (§2.2).
+            await sync_member_search_name(session, member.id)
+
             # Overlapping composite FK guarantees the pointer targets THIS
             # agent's own version (README §6.2 rule 7, T27).
             agent.active_config_version_id = version.id
@@ -571,6 +575,9 @@ class AgentService:
             if not isinstance(patch.name, _Unset) and patch.name != agent.name:
                 agent.name = patch.name
                 changed["name"] = patch.name
+                # Search projection (§2.2): agent rename → resync its rows.
+                await session.flush()
+                await recompute_for_agent(session, agent.id)
             if not isinstance(patch.avatar_url, _Unset) and patch.avatar_url != agent.avatar_url:
                 if patch.avatar_url is not None:
                     _validate_avatar_url(patch.avatar_url)

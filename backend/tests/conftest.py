@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -61,6 +62,48 @@ def get_test_database_url() -> str:
 
 def get_test_redis_url() -> str:
     return os.environ.get("MESH_TEST_REDIS_URL", DEFAULT_TEST_REDIS_URL)
+
+
+_CLEANUP_RETRY_SQLSTATES = {
+    "40P01",  # deadlock_detected
+    "55P03",  # lock_not_available / lock_timeout
+    "57014",  # query_canceled / statement_timeout
+}
+
+
+async def truncate_tables_with_retry(
+    engine,
+    tables: str,
+    *,
+    attempts: int = 6,
+    lock_timeout_seconds: float = 0.5,
+    retry_delay_seconds: float = 0.3,
+) -> None:
+    """TRUNCATE test tables without wedging live worker transactions.
+
+    PostgreSQL queues new readers behind a waiting ``ACCESS EXCLUSIVE`` lock.
+    A relay handler can therefore hold an outer transaction, open a nested
+    session behind cleanup's queued TRUNCATE, and wait forever for that nested
+    session before committing the outer transaction.  Bounding each cleanup
+    lock wait removes TRUNCATE from the queue, lets the worker finish, and then
+    retries against the now-unlocked tables.
+    """
+    timeout_ms = max(1, int(lock_timeout_seconds * 1000))
+    max_attempts = max(1, int(attempts))
+    for attempt in range(max_attempts):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("SELECT set_config('lock_timeout', :timeout, true)"),
+                    {"timeout": f"{timeout_ms}ms"},
+                )
+                await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+            return
+        except DBAPIError as exc:
+            sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if sqlstate not in _CLEANUP_RETRY_SQLSTATES or attempt == max_attempts - 1:
+                raise
+            await asyncio.sleep(retry_delay_seconds * (attempt + 1))
 
 
 def _database_name(url: str) -> str:
@@ -125,28 +168,12 @@ def session_factory(db_url: str):
 @pytest_asyncio.fixture(autouse=True)
 async def clean_tables(db_url: str):
     """TRUNCATE all tables before each test — isolation regardless of fixtures used."""
-    import asyncio
-
-    from sqlalchemy.exc import DBAPIError
-
     import mesh.db.models  # noqa: F401 — register all models on Base.metadata
     from mesh.db.base import Base
 
     engine = create_async_engine(db_url)
     tables = ", ".join(table.name for table in reversed(Base.metadata.sorted_tables))
-    # E2e worker processes (relay / reaper) hold brief locks; TRUNCATE needs
-    # AccessExclusive on everything, so the two can deadlock (40P01). Retry —
-    # the worker transactions are short-lived and yield immediately.
-    for attempt in range(5):
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
-            break
-        except DBAPIError as exc:
-            if getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01" and attempt < 4:
-                await asyncio.sleep(0.3 * (attempt + 1))
-                continue
-            raise
+    await truncate_tables_with_retry(engine, tables)
     yield
     await engine.dispose()
 

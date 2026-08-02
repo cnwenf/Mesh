@@ -15,7 +15,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { errorToI18nKey } from '../api/errors';
 import { Dialog, Kbd } from '../design';
 import { useT } from '../i18n';
@@ -137,8 +137,11 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   // 规范深链给出,渲染不消费它(保留 prop 面以便 App 层显式传入,见接线说明)。
   const t = useT();
   const navigate = useNavigate();
-  const context = usePaletteContext();
+  const location = useLocation();
+  const context = usePaletteContext(location.pathname);
   const workspaceId = props.workspaceId !== undefined ? props.workspaceId : context.workspaceId;
+  const workspaceSlug =
+    props.workspaceSlug !== undefined ? props.workspaceSlug : context.workspaceSlug;
   const userId = props.userId !== undefined ? props.userId : context.userId;
   const canCreateIssue =
     props.canCreateIssue ?? (context.role !== null && context.role !== 'guest');
@@ -151,11 +154,15 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   // 使实体插入不移动用户即将 Enter 的条目(§4.3.1.4 选中不移位)
   const lastStableIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // PaletteResults keeps presentation-only callbacks; capture the pointer modifier at
+  // the palette boundary so mod+click can preserve the current page (§4.1).
+  const modifiedPointerActivationRef = useRef(false);
   const listId = useId();
   const isOnline = useSyncExternalStore(subscribeOnline, getIsOnline, () => true);
 
   const data = usePaletteData({
     workspaceId,
+    workspaceSlug,
     userId,
     query,
     enabled: open && isOnline,
@@ -176,7 +183,6 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
       setSelectedId(null);
       lastIndexRef.current = 0;
       lastStableIdRef.current = null;
-      inputRef.current?.focus();
     }
   }, [open, initialQuery]);
 
@@ -215,6 +221,8 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
     selection.stableId !== null ? `palette-opt-${selection.stableId}` : undefined;
 
   const handleActivate = (option: PaletteOption, opts: { newTab: boolean }): void => {
+    const newTab = opts.newTab || modifiedPointerActivationRef.current;
+    modifiedPointerActivationRef.current = false;
     activatePaletteOption(
       option,
       {
@@ -234,7 +242,7 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
           onClose();
         },
       },
-      opts,
+      { newTab },
     );
   };
 
@@ -275,12 +283,36 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
         event.stopPropagation(); // 先于 Dialog 焦点圈养消费 Tab
         setQuery(target.title);
       }
+      return;
+    }
+    if (event.key === 'Escape') {
+      // §4.5 分层关闭:输入框获焦时首个 Esc 只把焦点交回对话框,
+      // 不让事件冒泡到 Dialog 的关闭处理;第二个 Esc 再关闭面板。
+      event.preventDefault();
+      event.stopPropagation();
+      const dialog = inputRef.current?.closest<HTMLElement>('.mesh-dialog');
+      if (dialog !== null && dialog !== undefined) {
+        dialog.focus();
+      } else {
+        inputRef.current?.blur();
+      }
     }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={title} closeLabel={closeLabel}>
-      <div className="mesh-palette">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={title}
+      closeLabel={closeLabel}
+      initialFocusRef={inputRef}
+    >
+      <div
+        className="mesh-palette"
+        onClickCapture={(event) => {
+          modifiedPointerActivationRef.current = event.metaKey || event.ctrlKey;
+        }}
+      >
         {data.isSearching && trimmed !== '' ? (
           <div className="mesh-palette__progress" aria-hidden="true" />
         ) : null}
@@ -329,7 +361,9 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
         {showNoResults ? (
           <div className="mesh-palette__no-results" data-testid="palette-no-results">
             <p className="mesh-palette__empty">{emptyText}</p>
-            <p className="mesh-palette__no-results-title">{t('search.noResults', { q: trimmed })}</p>
+            <p className="mesh-palette__no-results-title">
+              {t('search.noResults', { q: trimmed })}
+            </p>
             <p className="mesh-palette__no-results-hints">{t('search.noResultsHints')}</p>
             {canCreateIssue ? (
               <button

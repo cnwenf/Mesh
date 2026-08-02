@@ -31,6 +31,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DataEnvelope_dict_'
+  /__mesh_entry/w/{slug}/{subpath}:
+    get:
+      tags:
+      - entry
+      summary: Mesh Entry With Path
+      description: Entry probe for ``/w/{slug}/{path}`` document requests (auth_request).
+      operationId: mesh_entry_with_path___mesh_entry_w__slug___subpath__get
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Slug
+      - name: subpath
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subpath
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /__mesh_entry/w/{slug}:
+    get:
+      tags:
+      - entry
+      summary: Mesh Entry Bare
+      description: Entry probe for the workspace root ``/w/{slug}`` document request.
+      operationId: mesh_entry_bare___mesh_entry_w__slug__get
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Slug
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/realtime/events:
     get:
       tags:
@@ -6891,7 +6949,12 @@ paths:
       tags:
       - favorites
       summary: List Favorites
-      description: List the caller's favorites (newest first, dead targets pruned).
+      description: 'List the caller''s favorites (newest first, dead targets pruned).
+
+
+        ``workspace_id`` accepts a UUID or a slug (§3.1 「UUID 或 slug」 —
+
+        palettes on canonical /w/{slug}/… pages pass the slug).'
       operationId: list_favorites_api_v1_favorites_get
       parameters:
       - name: workspace_id
@@ -6934,6 +6997,67 @@ paths:
                 type: object
                 additionalProperties: true
                 title: Response List Favorites Api V1 Favorites Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/search:
+    get:
+      tags:
+      - search
+      summary: Search Workspace
+      description: Unified object search over the six workspace resource types (§3.2).
+      operationId: search_workspace_api_v1_workspaces__workspace_id__search_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Q
+      - name: types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Types
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Search Workspace Api V1 Workspaces  Workspace Id  Search Get
         '422':
           description: Validation Error
           content:

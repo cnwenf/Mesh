@@ -43,6 +43,26 @@ const DEFAULTS = {
 };
 
 describe('PaletteResults', () => {
+  it('selectedStableId 变化时把共享结果行滚动到最近可见位置', () => {
+    const scrollIntoView = vi.fn();
+    const original = window.HTMLElement.prototype.scrollIntoView;
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const sections = buildQuerySections([issueWithHighlight()], [], '登录');
+      renderWithProviders(
+        <PaletteResults {...DEFAULTS} sections={sections} selectedStableId="issue:i-1" />,
+      );
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      if (original === undefined) {
+        // @ts-expect-error jsdom 可无该 DOM API,恢复为原始缺席状态。
+        delete window.HTMLElement.prototype.scrollIntoView;
+      } else {
+        window.HTMLElement.prototype.scrollIntoView = original;
+      }
+    }
+  });
+
   it('分组组头以 i18n 键标注;选项具稳定 DOM id(palette-opt-{stableId})', () => {
     const sections = buildQuerySections([issueWithHighlight()], [], '登录');
     renderWithProviders(
@@ -66,6 +86,7 @@ describe('PaletteResults', () => {
     );
     const mark = container.querySelector('mark.mesh-palette__mark');
     expect(mark).not.toBeNull();
+    expect(mark).toHaveClass('mesh-palette__hit');
     expect(mark?.textContent).toBe('登录');
     // 标题全文经 title 属性提供(省略号场景可查全名)
     const titleSpan = container.querySelector('.mesh-palette__title');
@@ -102,7 +123,10 @@ describe('PaletteResults', () => {
             group: 'members',
             title: 'Ada',
             icon: 'user',
-            subtitle: { key: 'search.subtitle.member', params: { memberType: 'human', role: 'admin' } },
+            subtitle: {
+              key: 'search.subtitle.member',
+              params: { memberType: 'human', role: 'admin' },
+            },
           },
         ],
       },
@@ -128,7 +152,10 @@ describe('PaletteResults', () => {
             group: 'projects',
             title: 'Web',
             icon: 'info',
-            subtitle: { key: 'search.subtitle.project', params: { key: 'WEB', visibility: 'private' } },
+            subtitle: {
+              key: 'search.subtitle.project',
+              params: { key: 'WEB', visibility: 'private' },
+            },
           },
         ],
       },
@@ -136,9 +163,9 @@ describe('PaletteResults', () => {
     const { container } = renderWithProviders(
       <PaletteResults {...DEFAULTS} sections={sections} selectedStableId={null} />,
     );
-    const subtitles = Array.from(
-      container.querySelectorAll('.mesh-palette__subtitle'),
-    ).map((node) => node.textContent ?? '');
+    const subtitles = Array.from(container.querySelectorAll('.mesh-palette__subtitle')).map(
+      (node) => node.textContent ?? '',
+    );
     expect(subtitles).toHaveLength(3);
     // 枚举参数经目录解析为本地化文案(en 权威源)
     expect(subtitles[0]).toContain('Member');
@@ -236,7 +263,20 @@ describe('HighlightedTitle(单元)', () => {
   it('多段区间交替渲染 mark/普通分段', () => {
     const item = issueWithHighlight();
     const sections: ReadonlyArray<PaletteSection> = buildQuerySections(
-      [{ ...item, highlight: { title: { unit: 'codepoint', ranges: [[0, 2], [5, 7]] } } }],
+      [
+        {
+          ...item,
+          highlight: {
+            title: {
+              unit: 'codepoint',
+              ranges: [
+                [0, 2],
+                [5, 7],
+              ],
+            },
+          },
+        },
+      ],
       [],
       'x',
     );

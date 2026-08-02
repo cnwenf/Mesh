@@ -102,6 +102,17 @@ class ChatSession(Base):
         CheckConstraint("message_count >= 0", name="chat_sessions_message_count_nonneg"),
         # Composite-FK reference target (README §6.2 rule 1).
         Index("uq_chat_sessions_ws_id", "workspace_id", "id", unique=True),
+        # Search indexes (search-command-palette.md §2.2).
+        Index(
+            "idx_chat_sessions_title_trgm",
+            text("(public.mesh_search_norm(title)) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "idx_chat_sessions_title_prefix",
+            "workspace_id",
+            text("(public.mesh_search_norm(title)) text_pattern_ops"),
+        ),
         # §2.8 list indexes: owner timeline / per-agent filter / issue backref.
         Index(
             "idx_chat_sessions_owner_list",

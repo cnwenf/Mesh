@@ -175,6 +175,38 @@ def test_trigram_floor_applies_only_to_recalled_candidates() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("query", "title", "trigram_recalled"),
+    [
+        ("safari", "Safari", False),
+        ("saf", "Safari crashes", False),
+        ("crash", "Safari crashes", False),
+        ("saf cra", "Safari crashes", False),
+        ("sc", "Safari Crashes", False),
+        ("crash", "safariCrashReport", False),
+        ("fari", "Safari", False),
+        ("sfx", "Safari fix", False),
+        ("qxz", "Safari", True),
+        ("登录", "代码助手 登录", False),
+    ],
+)
+async def test_python_scoring_matches_database_function(
+    db_session, query: str, title: str, trigram_recalled: bool
+) -> None:
+    """SQL keyset scoring and Python highlight classification cannot drift."""
+    from sqlalchemy import text
+
+    db_bucket = (
+        await db_session.execute(
+            text("SELECT public.mesh_search_text_score(:title, :query)"),
+            {"title": title, "query": query},
+        )
+    ).scalar_one()
+    assert db_bucket == score_candidate(
+        search_norm(query), title, trigram_recalled=trigram_recalled
+    )
+
+
 # ---------------------------------------------------------------------------
 # Highlight codepoint ranges (spec §3.2 — offsets on the ORIGINAL title)
 # ---------------------------------------------------------------------------

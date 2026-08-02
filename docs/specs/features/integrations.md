@@ -889,8 +889,9 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
   'webhook.dispatch' 分别承载实时与出向;幂等键 §6.5)
   → outbox relay 分发 'webhook.dispatch':取 event_types 命中且 status='active' 的订阅
   → 每订阅在投递事务内 INSERT webhook_subscription_deliveries(state='pending',
-     UNIQUE(subscription_id, event_ref) 幂等)
-  → 投递 worker 取 pending(按 next_retry_at)→ HTTPS POST 目标 URL:
+     UNIQUE(subscription_id, event_ref) 幂等;INSERT ... ON CONFLICT DO NOTHING,重复投递不以异常回滚事务)
+  → 投递 worker 每条独立短事务取 1 条 pending(按 next_retry_at,FOR UPDATE SKIP LOCKED),
+     再以 webhook_subscriptions 行的 FOR UPDATE SKIP LOCKED 作订阅级互斥→ HTTPS POST 目标 URL:
        头:Mesh-Signature: t=<ts>,v1=HMAC_SHA256(secret, "<ts>.<body>")
            Mesh-Event: <event_type>   Mesh-Delivery: <delivery_id>
        目标受 §6.16 SSRF 防护(禁私网段 / https-only)
@@ -900,6 +901,8 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 ```
 
 > **不**在业务事务外直接 POST 外部 URL(README §6.6 硬约束);出向投递是 outbox 的消费方。投递幂等键 `sha256(subscription_id | event_ref)`(README §6.5)。
+
+> **投递并发/锁边界(写死)**:同一 worker pass 的 `batch_size` 只限制最大处理条数,不得整批预锁后把网络 I/O 包在长事务中;每次仅锁一条 delivery,一次 POST 完成即提交。不同副本可并行处理不同订阅;同一订阅必须先取得订阅行 `FOR UPDATE SKIP LOCKED` 互斥,未取得者保持 delivery `pending` 并让出,禁止同订阅并发 POST 竞写 `fail_count` / 熔断状态。数据库锁等待沿用 README §6.6 有限 `lock_timeout`。
 
 > **`Mesh-Event` 头与投递 body 携带真实域事件(P8,写死)**:`Mesh-Event: <event_type>` 取**派发时捕获的真实领域事件类型**(如 `issue.updated`,即 `webhook_subscription_deliveries.event_type`,派生订阅投递时自源 outbox 事件捕获),**绝不**以不透明的 outbox 事件 UUID 占位;投递 JSON body 为 `{"event": <event_type>, "data": <payload.data>, "event_ref": <event_ref>, "delivery_id": <delivery_id>}`(事件载荷捕获于 `webhook_subscription_deliveries.payload`,§2.6)——订阅方**仅凭单个投递即可还原完整域事件**,无需回查 Mesh(P8 出向订阅契约)。
 
@@ -1264,7 +1267,8 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **HMAC 签名**:出向投递携带 `Mesh-Signature: t=<ts>,v1=HMAC_SHA256(secret,"<ts>.<body>")` + `Mesh-Event` + `Mesh-Delivery` 头;接收方可以用密钥重算验证;密钥创建后仅显示一次,响应/日志不回显。
 - [ ] **重试退避**:非 2xx/超时 → `attempts+1` + 指数退避(`min(base×2^n,max)×jitter`)写 `next_retry_at`;超 `retry_max_attempts` 置 `failed`。
 - [ ] **订阅级熔断**:连续失败超 `circuit_break_threshold` → 订阅 `status='disabled'`(熔断)+ 告警;`POST .../resume` 恢复并 `fail_count` 清零;熔断期间投递返回 422 `subscription_circuit_open`。
-- [ ] **投递幂等(README §6.5)**:`UNIQUE(subscription_id, event_ref)` 保证同一订阅对同一源事件至多一条台账;outbox 重复出队不产生重复投递。
+- [ ] **投递幂等(README §6.5)**:`UNIQUE(subscription_id, event_ref)` + `INSERT ... ON CONFLICT DO NOTHING` 保证同一订阅对同一源事件至多一条台账;outbox 重复出队不产生重复投递,且正常重复路径不产生唯一键异常/不污染 relay 事务。
+- [ ] **投递并发互斥**:两个 worker 并发领取同一订阅的不同 delivery 时,订阅行 `FOR UPDATE SKIP LOCKED` 保证最多一个实际 POST;另一条保持 `pending`,不同订阅仍可并行。每条 delivery 独立事务,慢请求不预锁批内后续行。
 - [ ] **经 outbox(README §6.6)**:出向投递由 outbox `webhook.dispatch` 消费驱动,业务事务不直接 POST 外部 URL。
 - [ ] **https-only + SSRF(README §6.16)**:创建订阅 URL 非 `https` → 400 `invalid_url_scheme`;目标解析到私网地址段(RFC1918/link-local/`169.254.169.254`)→ 422 `ssrf_blocked`,拒绝投递。
 

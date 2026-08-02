@@ -222,6 +222,33 @@ class Issue(Base):
         Index("uq_issues_identifier", "workspace_id", "identifier", unique=True),
         # Composite-FK reference target for dependencies/activity/labels.
         Index("uq_issues_ws_id", "workspace_id", "id", unique=True),
+        # Search indexes (search-command-palette.md §2.2): trigram GIN for ≥3
+        # char fuzzy, text_pattern_ops B-trees for 1–2 char prefix, plus the
+        # tenant/soft-delete support index (BitmapAnd partner).
+        Index(
+            "idx_issues_title_trgm",
+            text("(public.mesh_search_norm(title)) gin_trgm_ops"),
+            postgresql_using="gin",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_issues_title_prefix",
+            "workspace_id",
+            text("(public.mesh_search_norm(title)) text_pattern_ops"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_issues_identifier_prefix",
+            "workspace_id",
+            text("(public.mesh_search_norm(identifier)) text_pattern_ops"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_issues_ws_not_deleted",
+            "workspace_id",
+            "project_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         CheckConstraint("parent_id <> id", name="ck_issues_no_self_parent"),
         CheckConstraint(
             "due_date IS NULL OR start_date IS NULL OR due_date >= start_date",

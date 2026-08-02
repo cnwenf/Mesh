@@ -70,23 +70,197 @@ function executionRow({
 
 function seedIssues() {
   const categories = ['todo', 'in_progress', 'in_review', 'done'];
-  return Array.from({ length: 8 }, (_, i) => ({
-    id: `issue-${i + 1}`,
-    workspace_id: 'ws-1',
-    identifier: `MESH-${i + 1}`,
-    title: `Acme 工作项 ${i + 1}`,
-    state_category: categories[i % categories.length],
-    assignee_id: i % 2 === 0 ? 'member-human-1' : 'member-agent-1',
-    updated_at: isoAt(i * 60_000),
-    project_id: i % 3 === 0 ? null : 'project-1',
-  }));
+  const categoryNames = {
+    todo: '待办',
+    in_progress: '进行中',
+    in_review: '评审中',
+    done: '已完成',
+  };
+  const priorities = ['urgent', 'high', 'medium', 'low'];
+  // 与真实后端 IssueSummary 契约逐字段对齐(issues/types.ts):列表渲染(DataView
+  // 行)直接读 assignee/status/priority/due_date,缺键即渲染崩溃——mock 不得以
+  // 精简形状替代完整契约。
+  return Array.from({ length: 8 }, (_, i) => {
+    const category = categories[i % categories.length];
+    const isHuman = i % 2 === 0;
+    const hasProject = i % 3 !== 0;
+    return {
+      id: `issue-${i + 1}`,
+      workspace_id: 'ws-1',
+      project_id: hasProject ? 'project-1' : null,
+      project: hasProject ? { id: 'project-1', name: '平台', key: 'PLAT' } : null,
+      identifier_namespace_key: 'MESH',
+      number: i + 1,
+      identifier: `MESH-${i + 1}`,
+      title: `Acme 工作项 ${i + 1}`,
+      description: null,
+      status: {
+        id: `st-${category}`,
+        project_id: null,
+        name: categoryNames[category],
+        category,
+        color: null,
+        position: i % 4,
+        is_default: category === 'todo',
+        allowed_transitions: [],
+        created_at: isoAt(0),
+        updated_at: isoAt(0),
+      },
+      status_id: `st-${category}`,
+      state_category: category,
+      priority: priorities[i % priorities.length],
+      assignee: isHuman
+        ? { id: 'member-human-1', name: 'Jane Doe', member_type: 'human' }
+        : { id: 'member-agent-1', name: 'Code Assistant', member_type: 'agent' },
+      assignee_id: isHuman ? 'member-human-1' : 'member-agent-1',
+      reporter: { id: 'member-human-1', name: 'Jane Doe', member_type: 'human' },
+      reporter_id: 'member-human-1',
+      estimate: null,
+      estimate_unit: null,
+      due_date: i % 4 === 1 ? '2026-08-01' : null,
+      start_date: null,
+      milestone_id: null,
+      cycle_id: null,
+      parent_id: null,
+      position: i,
+      completed_at: category === 'done' ? isoAt(i * 60_000) : null,
+      version: 1,
+      created_at: isoAt(0),
+      updated_at: isoAt(i * 60_000),
+    };
+  });
 }
+
+// ---------------------------------------------------------------------------
+// 全局搜索 fixture(search-command-palette.md §3.2 结果形状:结构化 context +
+// 消息目录徽章 + codepoint 高亮区间;url 为 §3.4 规范深链)
+// ---------------------------------------------------------------------------
+
+const SEARCH_ENTITY_TYPES = new Set([
+  'issue',
+  'member',
+  'agent',
+  'project',
+  'view',
+  'chat_session',
+]);
+
+const SEARCH_FIXTURES = [
+  {
+    type: 'issue',
+    id: 'sr-issue-1',
+    title: 'Login page crashes on Safari',
+    context: {
+      identifier: 'WEB-124',
+      project: { id: 'p-1', name: 'Website' },
+      status: { id: 's-3', name: 'In Progress', category: 'in_progress' },
+    },
+    icon: 'issue',
+    url: '/w/acme/issues/by-identifier/WEB-124',
+    badge: {
+      kind: 'status',
+      label_key: 'issue.status.name',
+      label_params: { name: 'In Progress' },
+      color: 'info',
+    },
+  },
+  {
+    type: 'issue',
+    id: 'sr-issue-2',
+    title: 'Login rate limiting',
+    context: {
+      identifier: 'WEB-130',
+      project: null,
+      status: { id: 's-1', name: 'Todo', category: 'todo' },
+    },
+    icon: 'issue',
+    url: '/w/acme/issues/by-identifier/WEB-130',
+    badge: {
+      kind: 'status',
+      label_key: 'issue.status.name',
+      label_params: { name: 'Todo' },
+      color: 'status',
+    },
+  },
+  {
+    type: 'member',
+    id: 'sr-member-1',
+    title: 'Zhang Wei',
+    context: { member_type: 'human', role: 'admin' },
+    icon: 'member',
+    url: '/w/acme/members/sr-member-1',
+    badge: { kind: 'member_type', label_key: 'member.type.human', label_params: {}, color: 'info' },
+  },
+  {
+    type: 'agent',
+    id: 'sr-agent-1',
+    title: 'Code Assistant',
+    context: {
+      member_type: 'agent',
+      role: 'member',
+      capacity: { running: 2, queued: 1, awaiting_approval: 0 },
+    },
+    icon: 'agent',
+    url: '/w/acme/members/sr-agent-1',
+    badge: { kind: 'member_type', label_key: 'member.type.agent', label_params: {}, color: 'info' },
+  },
+  {
+    type: 'project',
+    id: 'sr-project-1',
+    title: 'Website Revamp',
+    context: { visibility: 'public', key: 'WEB' },
+    icon: 'project',
+    url: '/w/acme/projects/sr-project-1',
+    badge: {
+      kind: 'visibility',
+      label_key: 'project.visibility.public',
+      label_params: {},
+      color: 'success',
+    },
+  },
+  {
+    type: 'view',
+    id: 'sr-view-1',
+    title: 'Active Website Tasks',
+    context: { scope: 'workspace' },
+    icon: 'view',
+    url: '/w/acme/views/sr-view-1',
+  },
+  {
+    type: 'chat_session',
+    id: 'sr-chat-1',
+    title: 'Release planning chat',
+    context: { participants_count: 3, agent: { id: 'sr-agent-1', name: 'Code Assistant' } },
+    icon: 'chat_session',
+    url: '/w/acme/chat/sr-chat-1',
+  },
+];
+
+const FAVORITES_FIXTURES = [
+  {
+    id: 'fav-1',
+    workspace_id: 'ws-1',
+    member_id: 'member-human-1',
+    target_type: 'issue',
+    target_id: 'sr-issue-1',
+    created_at: isoAt(2 * 60_000),
+  },
+  {
+    id: 'fav-2',
+    workspace_id: 'ws-1',
+    member_id: 'member-human-1',
+    target_type: 'project',
+    target_id: 'sr-project-1',
+    created_at: isoAt(1 * 60_000),
+  },
+];
 
 const state = {
   issues: seedIssues(),
   idempotency: new Map(), // key → { status, body }
   eventLog: new Map(), // channel → [{ op:'event', channel, seq, event, payload }]
   seqs: new Map(), // channel → last seq
+  userPreferences: { timezone: 'UTC', settings: {}, updatedAt: isoAt(0) },
 };
 
 function resetState() {
@@ -94,6 +268,24 @@ function resetState() {
   state.idempotency.clear();
   state.eventLog.clear();
   state.seqs.clear();
+  state.userPreferences = { timezone: 'UTC', settings: {}, updatedAt: isoAt(0) };
+}
+
+function currentUserFixture() {
+  return {
+    id: 'user-1',
+    email: 'jane@corp.com',
+    email_verified: true,
+    display_name: 'Jane Doe',
+    avatar_url: null,
+    status: 'active',
+    timezone: state.userPreferences.timezone,
+    settings: { ...state.userPreferences.settings },
+    mfa_enabled: false,
+    last_login_at: isoAt(0),
+    created_at: isoAt(0),
+    updated_at: state.userPreferences.updatedAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +502,40 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- 当前用户与成员身份(member.md §3.1 GET /users/me)------------------
+  // ---- 当前 principal 与成员身份(auth.md / member.md)-------------------
+  if (path === '/api/v1/me' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(res, 200, envelope(currentUserFixture()));
+    return;
+  }
+
+  if (path === '/api/v1/users/me' && req.method === 'PATCH') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const body = (await readBody(req)) ?? {};
+    const nextSettings = { ...state.userPreferences.settings };
+    if (body.settings && typeof body.settings === 'object') {
+      for (const key of ['locale', 'theme']) {
+        if (Object.prototype.hasOwnProperty.call(body.settings, key)) {
+          if (body.settings[key] === null) delete nextSettings[key];
+          else nextSettings[key] = body.settings[key];
+        }
+      }
+    }
+    state.userPreferences = {
+      timezone: typeof body.timezone === 'string' ? body.timezone : state.userPreferences.timezone,
+      settings: nextSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    sendJson(res, 200, envelope(currentUserFixture()));
+    return;
+  }
+
   if (path === '/api/v1/users/me' && req.method === 'GET') {
     if (!isAuthorized(req)) {
       sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
@@ -331,6 +556,37 @@ async function handleRequest(req, res, url) {
             joined_at: isoAt(0),
           },
         ],
+      }),
+    );
+    return;
+  }
+
+  // ---- 工作区按 slug 解析(workspace.md §4.1 GET /workspaces/by-slug/{slug})
+  // 规范深链 /w/{slug}/* 的 WorkspaceProvider 真源;与 /users/me 成员资格同治具
+  // (单一工作区 Acme / ws-1,my_role=admin)。未知 slug → 404(与真实后端同信封)。
+  const bySlugMatch = /^\/api\/v1\/workspaces\/by-slug\/([^/]+)$/.exec(path);
+  if (bySlugMatch !== null && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    if (decodeURIComponent(bySlugMatch[1]) !== 'acme') {
+      sendJson(res, 404, errorEnvelope('not_found', 'workspace not found'));
+      return;
+    }
+    sendJson(
+      res,
+      200,
+      envelope({
+        id: 'ws-1',
+        name: 'Acme',
+        slug: 'acme',
+        logo_url: null,
+        timezone: 'UTC',
+        settings: {},
+        my_role: 'admin',
+        created_at: isoAt(0),
+        updated_at: isoAt(0),
       }),
     );
     return;
@@ -402,11 +658,12 @@ async function handleRequest(req, res, url) {
 
     if (req.method === 'GET') {
       if (!issue) {
-        sendJson(res, 404, errorEnvelope('not_found', `issue ${id} not found`));
+        // 不在 CRUD 演示库的 id 放行至下方「收藏解析」搜索 fixture 路由
+        // (sr-* 条目仅存于 SEARCH_FIXTURES);两处皆不命中方落终末 404。
+      } else {
+        sendJson(res, 200, envelope(issue));
         return;
       }
-      sendJson(res, 200, envelope(issue));
-      return;
     }
 
     if (req.method === 'PATCH') {
@@ -547,6 +804,99 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  // ---- 全局搜索(search-command-palette.md §3.1/§3.2:workspace scope = 路径;
+  //      空 q → 空集;types 白名单校验;limit ≤50;前缀命中给 codepoint 高亮区间)---
+  const searchMatch = /^\/api\/v1\/workspaces\/([^/]+)\/search$/.exec(path);
+  if (searchMatch !== null && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const q = (url.searchParams.get('q') ?? '').trim();
+    if (q === '') {
+      sendJson(res, 200, { data: [], next_cursor: null });
+      return;
+    }
+    if ([...q].length > 120) {
+      sendJson(res, 400, errorEnvelope('validation_error', 'q exceeds 120 characters'));
+      return;
+    }
+    let typesFilter = null;
+    const typesParam = url.searchParams.get('types');
+    if (typesParam !== null) {
+      typesFilter = typesParam.split(',').filter((item) => item !== '');
+      if (typesFilter.length === 0 || typesFilter.some((item) => !SEARCH_ENTITY_TYPES.has(item))) {
+        sendJson(res, 400, errorEnvelope('validation_error', 'invalid types value'));
+        return;
+      }
+    }
+    const limitParam = url.searchParams.get('limit');
+    const limit = limitParam === null ? 20 : Number(limitParam);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      sendJson(res, 400, errorEnvelope('validation_error', 'limit must be 1..50'));
+      return;
+    }
+    const lower = q.toLowerCase();
+    const qLength = [...q].length;
+    const matched = SEARCH_FIXTURES.filter((item) => item.title.toLowerCase().includes(lower))
+      .filter((item) => typesFilter === null || typesFilter.includes(item.type))
+      .slice(0, limit)
+      .map((item) => {
+        const index = item.title.toLowerCase().indexOf(lower);
+        // 前缀命中:标注原始 title 上的 codepoint 区间 [0, len(q))(§3.2)
+        return index === 0
+          ? { ...item, highlight: { title: { unit: 'codepoint', ranges: [[0, qLength]] } } }
+          : item;
+      });
+    sendJson(res, 200, { data: matched, next_cursor: null });
+    return;
+  }
+
+  // ---- 收藏(§6.19:面板空态唯一服务端数据源;created_at 倒序)----------------
+  if (path === '/api/v1/favorites' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const favorites = [...FAVORITES_FIXTURES].sort((a, b) =>
+      a.created_at < b.created_at ? 1 : -1,
+    );
+    sendJson(res, 200, { data: favorites, next_cursor: null });
+    return;
+  }
+
+  // ---- issue 详情(面板空态收藏解析 H6:resolveTarget → getIssue)-----------
+  // favorites 仅返回 target id(§6.19);面板打开时经详情端点解析标题 + 深链,
+  // 404 即「目标已不存在」→ 收藏行不渲染。mock 以 SEARCH_FIXTURES 的 issue 条目
+  // 按 id 或 identifier 应答,未知 id → not_found(与真实端点同语义)。
+  const issueDetailMatch = path.match(/^\/api\/v1\/issues\/([^/]+)$/);
+  if (issueDetailMatch && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const ref = decodeURIComponent(issueDetailMatch[1]);
+    const fixture = SEARCH_FIXTURES.find(
+      (f) => f.type === 'issue' && (f.id === ref || (f.context && f.context.identifier === ref)),
+    );
+    if (!fixture) {
+      sendJson(res, 404, errorEnvelope('not_found', `issue ${ref} not found`));
+      return;
+    }
+    const status = fixture.context.status;
+    sendJson(res, 200, {
+      data: {
+        id: fixture.id,
+        title: fixture.title,
+        identifier: fixture.context.identifier,
+        state_category: status.category,
+        status: { id: status.id, name: status.name, category: status.category },
+        project: fixture.context.project,
+      },
+    });
+    return;
+  }
+
   // ---- 找回密码 / 重置密码(auth.md §4.1;forgot→reset 全链 e2e 契约)----
   if (path === '/api/v1/auth/forgot-password' && req.method === 'POST') {
     // 恒成功(防枚举);不要求鉴权。
@@ -662,6 +1012,35 @@ async function handleRequest(req, res, url) {
       ],
       next_cursor: null,
     });
+    return;
+  }
+
+  // ---- 状态定义列表(issue.md §4.4 GET /workspaces/{ws}/statuses):IssuesPage 经
+  // Promise.all 与 listIssues 并发加载,缺此端点会让整页塌成 not_found 错误态,
+  // 致使命令面板跳转 /issues 的取证只能命中骨架/错误占位。补齐四类状态定义。
+  if (path === '/api/v1/workspaces/ws-1/statuses' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const defs = [
+      ['todo', 'Todo', '#94a3b8'],
+      ['in_progress', 'In Progress', '#3b82f6'],
+      ['in_review', 'In Review', '#a855f7'],
+      ['done', 'Done', '#22c55e'],
+    ].map(([category, name, color], idx) => ({
+      id: `status-${category}`,
+      project_id: null,
+      name,
+      category,
+      color,
+      position: idx,
+      is_default: idx === 0,
+      allowed_transitions: [],
+      created_at: isoAt(0),
+      updated_at: isoAt(0),
+    }));
+    sendJson(res, 200, { data: defs, next_cursor: null });
     return;
   }
 

@@ -6,3 +6,4 @@ export { InboxBell } from './InboxBell';
 export { NotificationPreferencesSection } from './NotificationPreferencesSection';
 export * from './api';
 export * from './types';
+export { getCurrentInboxView, setCurrentInboxView } from './currentFilter';

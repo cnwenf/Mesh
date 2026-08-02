@@ -9,14 +9,20 @@
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
-import { Outlet, useLocation, useMatch, useNavigate } from 'react-router';
+import { Outlet, useMatch } from 'react-router';
 import { MeshApiError, getToken } from '../api';
 import { env, resolveWsGatewayUrl } from '../env';
 import { useT } from '../i18n';
-import { useToast } from '../design';
-import { usePaletteContext } from '../shortcuts/usePaletteContext';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
@@ -24,7 +30,8 @@ import { OnboardingChecklist } from '../features/onboarding';
 import { useAuthStore } from '../state/authStore';
 import type { RealtimeEventFrame } from '../types/realtime';
 import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
-import { registerShellShortcuts } from './shortcutsRegistration';
+import { SeoMeta } from './SeoMeta';
+import { ShellShortcutsRegistrar } from './shortcutsRegistration';
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from './navigation';
 import { Sidebar } from './Sidebar';
 import { MAIN_CONTENT_ID, SkipLink } from './SkipLink';
@@ -134,7 +141,12 @@ export async function fetchRestEvents(
       });
     }
     const body = (await response.json()) as {
-      data: Array<{ channel: string; seq: number; event: string; payload: Record<string, unknown> }>;
+      data: Array<{
+        channel: string;
+        seq: number;
+        event: string;
+        payload: Record<string, unknown>;
+      }>;
       next_cursor: string | null;
     };
     for (const item of body.data) {
@@ -237,12 +249,7 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
 }
 
 export function AppShell(): React.JSX.Element {
-  const navigate = useNavigate();
-  const location = useLocation();
   const t = useT();
-  const { addToast } = useToast();
-  // 命令注册身份上下文(GET /users/me 缓存解析):角色门控 + 工作区作用域命令
-  const paletteContext = usePaletteContext();
   const hasToken = useAuthStore((state) => state.token !== null);
   // theme.md §4.5:登录态偏好回填(GET /me 真源)+ pending 重放触发器。
   usePreferencesBootstrap();
@@ -280,85 +287,6 @@ export function AppShell(): React.JSX.Element {
     intervalMs: env.pollingIntervalMs,
   });
 
-  // 命令注册随身份/路由再注册(同 id 替换,幂等):设置子页按角色门控、
-  // 收藏切换按当前路由可否收藏增减(search-command-palette.md §1.2 S3)。
-  const shellIdentity = useMemo(
-    () => ({
-      role: paletteContext.role,
-      isHuman: paletteContext.userId !== null,
-      workspaceId: paletteContext.workspaceId,
-      workspaceSlug: paletteContext.workspaceSlug,
-    }),
-    [
-      paletteContext.role,
-      paletteContext.userId,
-      paletteContext.workspaceId,
-      paletteContext.workspaceSlug,
-    ],
-  );
-  useEffect(
-    () =>
-      registerShellShortcuts(
-        navigate,
-        {
-          nav: {
-            home: t('nav.home'),
-            inbox: t('nav.inbox'),
-            projects: t('nav.projects'),
-            issues: t('nav.issues'),
-            board: t('nav.board'),
-            members: t('nav.members'),
-            chat: t('nav.chat'),
-            insights: t('nav.insights'),
-            settings: t('nav.settings'),
-            squads: t('nav.squads'),
-            skills: t('nav.skills'),
-            autopilots: t('nav.autopilots'),
-            runtimes: t('nav.runtimes'),
-            integrations: t('nav.integrations'),
-            approvals: t('nav.approvals'),
-          },
-          theme: {
-            light: t('theme.light'),
-            dark: t('theme.dark'),
-            system: t('theme.system'),
-          },
-          actions: {
-            themeToggle: t('a11y.themeToggle'),
-            newIssue: t('shortcuts.actionNewIssue'),
-            focusSearch: t('shortcuts.actionFocusSearch'),
-            goInbox: t('shortcuts.actionGoInbox'),
-            goBoard: t('shortcuts.actionGoBoard'),
-            goMembers: t('shortcuts.actionGoMembers'),
-            goAutopilot: t('shortcuts.actionGoAutopilot'),
-            restoreOnboarding: t('onboarding.restoreHelp'),
-            pendingApprovals: t('shortcuts.actionPendingApprovals'),
-            copyDeepLink: t('shortcuts.actionCopyDeepLink'),
-            toggleFavorite: t('shortcuts.actionToggleFavorite'),
-            markAllRead: t('shortcuts.actionMarkAllRead'),
-            copiedDeepLink: t('shortcuts.copiedDeepLink'),
-            markedAllRead: t('shortcuts.markedAllRead'),
-          },
-          settings: {
-            general: t('shortcuts.settingsGeneral'),
-            labels: t('shortcuts.settingsLabels'),
-            customFields: t('shortcuts.settingsCustomFields'),
-            data: t('shortcuts.settingsData'),
-            tokens: t('shortcuts.settingsTokens'),
-            audit: t('shortcuts.settingsAudit'),
-            danger: t('shortcuts.settingsDanger'),
-          },
-        },
-        {
-          ...shellIdentity,
-          path: location.pathname,
-          notify: (message) =>
-            addToast(message, { tone: 'success', closeLabel: t('a11y.closeDialog') }),
-        },
-      ),
-    [navigate, t, shellIdentity, location.pathname, addToast],
-  );
-
   const realtimeValue = useMemo<RealtimeContextValue>(() => ({ state, client }), [state, client]);
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
@@ -390,13 +318,26 @@ export function AppShell(): React.JSX.Element {
     });
   }, []);
 
-  const shellClassName = sidebarCollapsed ? 'mesh-shell mesh-shell--sidebar-collapsed' : 'mesh-shell';
+  const shellClassName = sidebarCollapsed
+    ? 'mesh-shell mesh-shell--sidebar-collapsed'
+    : 'mesh-shell';
 
   const layout = (
     <div className={shellClassName}>
+      {/* SEO 契约(§3.4):认证内页面 noindex + canonical 规范深链 */}
+      <SeoMeta />
+      {/* 快捷键/命令注册:位于 WorkspaceProvider 子树内(工作区路由命中时),
+          按 slug/role 门控命令集;上下文变化自动重注册 */}
+      <ShellShortcutsRegistrar />
       {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
       <SkipLink label={t('a11y.skipLink')} />
-      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} onOpenSearch={openSearch} />
+      <TopBar
+        state={state}
+        onOpenPalette={openPalette}
+        onOpenHelp={openHelp}
+        onOpenSearch={openSearch}
+        searchMode="palette"
+      />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>

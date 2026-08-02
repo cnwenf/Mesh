@@ -8,7 +8,7 @@
  * 以 mock fetch 提供(不触真实网络)。
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App';
 import { useAuthStore } from '../../state/authStore';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -56,7 +56,14 @@ describe('App 路由', () => {
     const me = {
       user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
       memberships: [
-        { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner', status: 'active', joined_at: null },
+        {
+          workspace_id: 'ws-1',
+          workspace_name: 'WS',
+          workspace_slug: 'ws',
+          role: 'owner',
+          status: 'active',
+          joined_at: null,
+        },
       ],
     };
     vi.stubGlobal(
@@ -70,9 +77,16 @@ describe('App 路由', () => {
   });
   afterEach(() => {
     useAuthStore.getState().clearToken();
-    vi.unstubAllGlobals();
+    // 全局替身(fetch/WebSocket)不在用例间拆除:壳内异步链(迁移重定向后的
+    // 页面取数、实时降级轮询)可能在用例收尾后才发起请求;若此处拆替身,请求会
+    // 落入真实网络——本地恰有 e2e mock 服务监听默认 API 地址时,假 token 收到
+    // 真 401,触发 api/unauthorized 全局兜底清 token,污染后续用例登录态。
+    // 替身留存至 afterAll,用例间由 beforeEach 叠加新替身(旧替身不再被引用)。
     FakeWebSocket.urls = [];
     navigateTo('/');
+  });
+  afterAll(() => {
+    vi.unstubAllGlobals();
   });
 
   it('/ 渲染真实首页(shell + 导航 + 问候 + 工作区卡片 + 仪表盘, MES-107)', async () => {
@@ -105,25 +119,43 @@ describe('App 路由', () => {
     await waitFor(() => expect(screen.getByText('No notifications yet')).toBeInTheDocument());
   });
 
-  it('未知路由渲染 404', () => {
+  it('未知路由渲染 404', async () => {
+    // MES-106 守卫先于 404:受保护壳内未知路由需登录态(Fetch stub 提供 /users/me)
+    signIn();
     navigateTo('/definitely-missing');
     render(<App />);
-    expect(screen.getByText('Page not found')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Page not found', undefined, { timeout: 3000 }),
+    ).toBeInTheDocument();
   });
 
-  it('/skills/marketplace 直达市场页、旧 /marketplace 兼容重定向(design-quality A-01 死链修复)', async () => {
+  it('/skills/marketplace 经扁平迁移收敛至运营区规范深链并直达市场页(design-quality A-01 死链修复)', async () => {
     signIn();
     navigateTo('/skills/marketplace');
     render(<App />);
-    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument());
+    // 双跳重定向链(Navigate → FlatRouteMigration 解析 slug → replace 规范深链)
+    // 在并行套件负载下可逾默认 1s,显式放宽(与 IssueDetailPage 等慢链用例同策)
+    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    await waitFor(
+      () => expect(window.location.pathname).toBe('/w/ws/automations/skills/marketplace'),
+      { timeout: 3000 },
+    );
   });
 
-  it('/marketplace 兼容跳转收敛到 /skills/marketplace', async () => {
+  it('/marketplace 兼容跳转经 /skills/marketplace 迁移收敛到规范深链', async () => {
     signIn();
     navigateTo('/marketplace');
     render(<App />);
-    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument());
-    await waitFor(() => expect(window.location.pathname).toBe('/skills/marketplace'));
+    // 三跳重定向链(/marketplace → /skills/marketplace → 规范深链),同上显式放宽
+    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    await waitFor(
+      () => expect(window.location.pathname).toBe('/w/ws/automations/skills/marketplace'),
+      { timeout: 3000 },
+    );
   });
 
   it('/login 未登录时渲染登录页', () => {
@@ -148,10 +180,10 @@ describe('App 路由', () => {
     render(<App />);
     const input = screen.getByTestId('topbar-search');
     fireEvent.change(input, { target: { value: 'theme' } });
-    // 与命令面板同一结果视图(§4.9):弹层打开、输入携带查询、aria-expanded 同步
-    expect(screen.getByTestId('topbar-search-popover')).toBeInTheDocument();
-    expect(input).toHaveValue('theme');
-    expect(input).toHaveAttribute('aria-expanded', 'true');
+    // §4.9 明确要求键入即展开命令面板同一结果视图并交接焦点/查询。
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox')).toHaveValue('theme');
+    expect(input).toHaveValue('');
     // 本地命令同步零延迟呈现(§11.4)
     await waitFor(() => expect(screen.getByText('Toggle theme')).toBeInTheDocument());
   });
@@ -193,9 +225,16 @@ describe('App 登录守卫(MES-106:未登录访问受保护页 → /login?next=)
   });
   afterEach(() => {
     useAuthStore.getState().clearToken();
-    vi.unstubAllGlobals();
+    // 全局替身(fetch/WebSocket)不在用例间拆除:壳内异步链(迁移重定向后的
+    // 页面取数、实时降级轮询)可能在用例收尾后才发起请求;若此处拆替身,请求会
+    // 落入真实网络——本地恰有 e2e mock 服务监听默认 API 地址时,假 token 收到
+    // 真 401,触发 api/unauthorized 全局兜底清 token,污染后续用例登录态。
+    // 替身留存至 afterAll,用例间由 beforeEach 叠加新替身(旧替身不再被引用)。
     FakeWebSocket.urls = [];
     navigateTo('/');
+  });
+  afterAll(() => {
+    vi.unstubAllGlobals();
   });
 
   it('未登录访问首页 → 渲染登录页,URL 携带 next=/(编码)', () => {

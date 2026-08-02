@@ -31,6 +31,7 @@ from mesh.errors import ValidationError
 # appear in uuid hex, type names or the numeric factors, so concatenation is
 # unambiguous.
 _SEP = "\x1f"
+_RESULT_TYPES = frozenset({"issue", "member", "agent", "project", "view", "chat_session"})
 
 # Last-resort signing key when neither MESH_SEARCH_CURSOR_SECRET nor the
 # server JWT secret is configured (the JWT secret always has a default, so
@@ -115,12 +116,19 @@ def factors_as_sort_key(factors: list) -> tuple[int, int, str, str, str]:
     """
     try:
         score_bucket, title_len, title_lex, result_type, result_id = factors
-        return (
-            -int(score_bucket),
-            int(title_len),
-            str(title_lex),
-            str(result_type),
-            str(result_id),
-        )
+        if type(score_bucket) is not int or score_bucket < 0:  # bool is not an integer here
+            raise ValueError("invalid score bucket")
+        if type(title_len) is not int or title_len < 0:
+            raise ValueError("invalid title length")
+        if not isinstance(title_lex, str):
+            raise ValueError("invalid title sort value")
+        if not isinstance(result_type, str) or result_type not in _RESULT_TYPES:
+            raise ValueError("invalid result type")
+        if not isinstance(result_id, str):
+            raise ValueError("invalid result id")
+        parsed_id = uuid.UUID(result_id)
+        if str(parsed_id) != result_id:
+            raise ValueError("non-canonical result id")
+        return (-score_bucket, title_len, title_lex, result_type, result_id)
     except (ValueError, TypeError) as exc:
         raise ValidationError("invalid cursor", code="validation_error") from exc

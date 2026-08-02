@@ -22,7 +22,9 @@ before reading tenant tables, so the same code path is correct under RLS
 
 from __future__ import annotations
 
+import logging
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from fastapi import Depends
@@ -35,6 +37,21 @@ from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, NotFoundError
+
+logger = logging.getLogger(__name__)
+
+# Throttle for the users.last_active_workspace_id backfill (per-process): once
+# a (user, workspace) pair has been written this run, skip repeat writes.
+# Bounded LRU (evicts oldest pairs past the cap) so a long-lived process
+# serving many distinct pairs cannot grow this set without limit (LOW fix).
+_LAST_WS_WRITTEN_MAX = 4096
+_LAST_WS_WRITTEN: OrderedDict[tuple[uuid.UUID, uuid.UUID], None] = OrderedDict()
+
+
+def _remember_ws_write(pair: tuple[uuid.UUID, uuid.UUID]) -> None:
+    _LAST_WS_WRITTEN[pair] = None
+    while len(_LAST_WS_WRITTEN) > _LAST_WS_WRITTEN_MAX:
+        _LAST_WS_WRITTEN.popitem(last=False)
 
 # Role seniority (member.md §2.2 fixed enum; no custom roles — YAGNI).
 ROLE_RANK: dict[str, int] = {"guest": 0, "member": 1, "admin": 2, "owner": 3}
@@ -169,7 +186,41 @@ async def resolve_workspace_context(
                 code="forbidden",
                 details={"required_scope": permission},
             )
+    await _backfill_last_active_workspace(
+        session, principal=principal, workspace_id=workspace.id
+    )
     return WorkspaceContext(workspace=workspace, member=member)
+
+
+async def _backfill_last_active_workspace(
+    session: AsyncSession, *, principal: AuthenticatedPrincipal, workspace_id: uuid.UUID
+) -> None:
+    """Best-effort users.last_active_workspace_id hint (search-command-palette.md §3.4).
+
+    Throttled per process via ``_LAST_WS_WRITTEN``: each (user, workspace) pair
+    writes at most once per run, and the UPDATE itself is a no-op when the
+    value already matches (IS DISTINCT FROM). Never fails the request — the
+    column is a restoration hint, authorization never reads it. Only
+    user-backed principals (sessions, PATs) carry a ``user_id``; principals
+    without one (e.g. agent credentials) are skipped — the hint is a
+    per-human-user UI restoration aid.
+    """
+    if principal.user_id is None:
+        return
+    pair = (principal.user_id, workspace_id)
+    if pair in _LAST_WS_WRITTEN:
+        return
+    try:
+        await session.execute(
+            text(
+                "UPDATE users SET last_active_workspace_id = :ws "
+                "WHERE id = :uid AND last_active_workspace_id IS DISTINCT FROM :ws"
+            ),
+            {"ws": workspace_id, "uid": principal.user_id},
+        )
+        _remember_ws_write(pair)
+    except Exception:  # noqa: BLE001 — best-effort hint, never fail the request
+        logger.debug("last_active_workspace_id backfill skipped", exc_info=True)
 
 
 async def resolve_workspace_by_slug(
@@ -203,13 +254,41 @@ async def resolve_workspace_by_slug(
     )
 
 
+async def resolve_workspace_by_ref(
+    session: AsyncSession,
+    *,
+    principal: AuthenticatedPrincipal,
+    ref: str,
+    permission: str | None = None,
+) -> WorkspaceContext:
+    """Resolve a workspace path/query reference: UUID **or slug** (§3.1).
+
+    ``{ws}`` references are 「UUID 或 slug」 (search-command-palette.md §3.1,
+    same shape as the issue/project collection endpoints): a UUID goes
+    straight to the membership gate; any other value is resolved as a
+    current slug, falling back to a historic slug (workspace.md §2.5).
+    Unresolvable values are a 404 — never leak what shape of id exists.
+    """
+    try:
+        parsed = uuid.UUID(ref)
+    except ValueError:
+        return await resolve_workspace_by_slug(
+            session, principal=principal, slug=ref, permission=permission
+        )
+    return await resolve_workspace_context(
+        session, principal=principal, workspace_id=parsed, permission=permission
+    )
+
+
 def require_workspace(permission: str | None = None):
     """FastAPI dependency factory for ``/workspaces/{workspace_id}`` routes.
 
     Usage: ``context: WorkspaceContext = Depends(require_workspace("workspace:settings"))``.
-    Non-UUID path values are a 404 (not a 400 — never leak what shape of id
-    exists). Accepts every credential kind the unified Bearer gate routes
-    (session JWT / mesh_pat_ / mesh_agt_; auth.md §2.5.1 review H7).
+    The path segment accepts a UUID or a slug — see
+    :func:`resolve_workspace_by_ref`; an unresolvable value is a 404 (not a
+    400 — never leak what shape of id exists). Accepts every credential kind
+    the unified Bearer gate routes (session JWT / mesh_pat_ / mesh_agt_;
+    auth.md §2.5.1 review H7).
     """
 
     async def _dependency(
@@ -217,12 +296,8 @@ def require_workspace(permission: str | None = None):
         principal: AuthenticatedPrincipal = Depends(get_current_principal),
         session: AsyncSession = Depends(get_session),
     ) -> WorkspaceContext:
-        try:
-            parsed = uuid.UUID(workspace_id)
-        except ValueError as exc:
-            raise NotFoundError(_WORKSPACE_NOT_FOUND) from exc
-        return await resolve_workspace_context(
-            session, principal=principal, workspace_id=parsed, permission=permission
+        return await resolve_workspace_by_ref(
+            session, principal=principal, ref=workspace_id, permission=permission
         )
 
     return _dependency

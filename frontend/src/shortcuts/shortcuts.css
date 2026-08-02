@@ -423,3 +423,289 @@
   color: var(--color-danger);
   font-size: var(--font-size-sm);
 }
+
+/* ===== CommandPalette:统一搜索面板(search-command-palette.md §4.1)===== */
+
+/* 顶部细进度条(loading,§4.2):不确定进度经 transform 平移,合成器友好 */
+.mesh-palette__progress {
+  position: relative;
+  inline-size: 100%;
+  block-size: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+}
+
+.mesh-palette__progress::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inline-size: 40%;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-primary);
+  animation: mesh-palette-progress calc(var(--duration-slow) * 4) ease-in-out infinite;
+}
+
+@keyframes mesh-palette-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+/* 结果计数播报区:视觉隐藏但对读屏可见(aria-live=polite,§4.7) */
+.mesh-palette__live {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 分组(组头 + 组内列表;组头 i18n 键 search.group.*) */
+.mesh-palette__section {
+  display: block;
+}
+
+.mesh-palette__section + .mesh-palette__section {
+  margin-block-start: var(--space-2);
+}
+
+.mesh-palette__section-title {
+  display: block;
+  padding-block-end: var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.mesh-palette__section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 行布局:图标 + 主体(标题/副标题)+ 右侧徽章/快捷键 */
+.mesh-palette__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mesh-palette__icon {
+  flex: none;
+  inline-size: 1.5em;
+  text-align: center;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.mesh-palette__label {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-palette__main {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mesh-palette__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-palette__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 命中高亮:字重 + 下划线叠加,颜色不作唯一信号(§6.12) */
+.mesh-palette__hit {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 命令快捷键提示(右对齐,平台自适应,§4.1) */
+.mesh-palette__combo {
+  flex: none;
+  margin-inline-start: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 徽章:语义 token 描边 + 文本色(§3.2 color 五值闭合) */
+.mesh-palette__badge {
+  flex: none;
+  margin-inline-start: auto;
+  padding-block: 2px;
+  padding-inline: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.mesh-palette__badge--status {
+  color: var(--color-info);
+  border-color: var(--color-info);
+}
+
+.mesh-palette__badge--info {
+  color: var(--color-info);
+  border-color: var(--color-info);
+}
+
+.mesh-palette__badge--success {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.mesh-palette__badge--warn {
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+}
+
+.mesh-palette__badge--danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+/* 状态区:offline 提示 / error + 重试 / no-results(§4.2) */
+.mesh-palette__notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-palette__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-palette__retry,
+.mesh-palette__create {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) ease-out;
+}
+
+.mesh-palette__retry:hover,
+.mesh-palette__create:hover {
+  border-color: var(--color-info);
+  color: var(--color-info);
+}
+
+.mesh-palette__retry:focus-visible,
+.mesh-palette__create:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-palette__noresults {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text);
+}
+
+.mesh-palette__noresults p {
+  margin: 0;
+}
+
+.mesh-palette__hint {
+  margin-block-start: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-palette__create {
+  margin-block-start: var(--space-3);
+}
+
+/* prefers-reduced-motion:浮层动画降级为即时/静态(§4.7) */
+@media (prefers-reduced-motion: reduce) {
+  .mesh-palette__progress::after {
+    animation: none;
+    inline-size: 100%;
+    transform: none;
+  }
+
+  .mesh-palette__retry,
+  .mesh-palette__create {
+    transition: none;
+  }
+}
+
+/* ===== 序列键等待态提示(§4.5:G — 状态条)===== */
+.mesh-sequence-hint {
+  position: fixed;
+  inset-block-end: var(--space-4);
+  inset-inline-start: var(--space-4);
+  z-index: var(--z-overlay);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-text) 12%, transparent);
+  animation: mesh-sequence-hint-in var(--duration-fast) ease-out;
+  pointer-events: none;
+}
+
+@keyframes mesh-sequence-hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-sequence-hint {
+    animation: none;
+  }
+}

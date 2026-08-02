@@ -744,3 +744,125 @@
     box-shadow: inset 0 3px 0 var(--color-accent);
   }
 }
+
+/* ===== 工作区选择页(search-command-palette.md §3.4 解析序 ⑤)===== */
+.mesh-ws-picker__hint {
+  color: var(--color-text-muted);
+  margin-block-end: var(--space-4);
+}
+
+.mesh-ws-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.mesh-ws-picker__card {
+  inline-size: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) ease-out;
+}
+
+.mesh-ws-picker__card:hover {
+  border-color: var(--color-primary);
+}
+
+.mesh-ws-picker__card:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-ws-picker__name {
+  font-weight: 600;
+}
+
+.mesh-ws-picker__slug,
+.mesh-ws-picker__role {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-ws-picker__card {
+    transition: none;
+  }
+}
+
+/* ===== 统一「待我审批」页(README §6.10)===== */
+.mesh-approvals__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-approvals__card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.mesh-approvals__summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-approvals__subject {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-approvals__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* ===== 成员详情资料卡(§3.4 规范深链)===== */
+.mesh-member-detail__card {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.mesh-member-detail__card dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-member-detail__card dd {
+  margin: 0;
+}
+
+.mesh-member-detail__joined {
+  margin-block-start: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

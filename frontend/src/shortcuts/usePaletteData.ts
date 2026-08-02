@@ -11,28 +11,34 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiClient } from '../api/instance';
 import type { MeshApiError } from '../api/errors';
 import { listPaletteFavorites } from '../api/search';
-import type { PaletteFavorite, SearchItem } from '../api/search';
+import type { FavoriteTargetType, PaletteFavorite, SearchItem } from '../api/search';
 import {
-  buildEmptySections,
-  buildQuerySections,
-  flattenSections,
-} from './paletteModel';
+  collectValidRecentKeys,
+  resolveFavoriteTargets,
+} from '../features/search/favoritesResolve';
+import { buildEmptySections, buildQuerySections, flattenSections } from './paletteModel';
 import type { PaletteSection } from './paletteModel';
 import { setRecentsScope } from './recents';
-import { commandUseCounts, listRecents } from './recents';
+import { commandUseCounts, listRecents, removeRecent } from './recents';
 import { useEntitySearch } from './useEntitySearch';
 import { useShortcutRegistry } from './registry';
 
 /** favorites 数据源注入点(测试桩;缺省走 GET /api/v1/favorites,§6.19) */
-export type FavoritesProvider = (
-  workspaceId: string,
-) => Promise<ReadonlyArray<PaletteFavorite>>;
+export type FavoritesProvider = (workspaceId: string) => Promise<ReadonlyArray<PaletteFavorite>>;
 
 export const defaultFavoritesProvider: FavoritesProvider = (workspaceId) =>
   listPaletteFavorites(getApiClient(), workspaceId);
 
+const FAVORITE_TARGET_TYPES: ReadonlySet<FavoriteTargetType> = new Set([
+  'issue',
+  'project',
+  'view',
+  'chat_session',
+]);
+
 export interface UsePaletteDataArgs {
   readonly workspaceId: string | null;
+  readonly workspaceSlug?: string | null;
   readonly userId: string | null;
   readonly query: string;
   readonly enabled: boolean;
@@ -54,6 +60,7 @@ export interface UsePaletteDataResult {
 
 export function usePaletteData(args: UsePaletteDataArgs): UsePaletteDataResult {
   const { workspaceId, userId, query, enabled } = args;
+  const workspaceSlug = args.workspaceSlug ?? null;
   const favoritesProvider = args.favoritesProvider ?? defaultFavoritesProvider;
   const commands = useShortcutRegistry((state) => state.commands);
   const trimmed = query.trim();
@@ -74,11 +81,37 @@ export function usePaletteData(args: UsePaletteDataArgs): UsePaletteDataResult {
       setFavorites([]);
       return;
     }
+    setFavorites([]);
     let cancelled = false;
     favoritesProvider(workspaceId)
-      .then((entries) => {
+      .then(async (entries) => {
+        const directlyRenderable = entries.filter(
+          (entry) => entry.title !== undefined && entry.url !== undefined,
+        );
+        const resolvable = entries.filter(
+          (entry): entry is PaletteFavorite & { readonly target_type: FavoriteTargetType } =>
+            (entry.title === undefined || entry.url === undefined) &&
+            FAVORITE_TARGET_TYPES.has(entry.target_type as FavoriteTargetType),
+        );
+        const resolved = await resolveFavoriteTargets(getApiClient(), resolvable, {
+          workspaceId,
+          workspaceSlug,
+        });
+        const hydrated = resolvable.flatMap((entry) => {
+          const target = resolved.get(`${entry.target_type}:${entry.target_id}`);
+          return target === undefined
+            ? []
+            : [
+                {
+                  ...entry,
+                  title: entry.title ?? target.title,
+                  url: entry.url ?? target.url,
+                },
+              ];
+        });
         if (!cancelled) {
-          setFavorites(entries);
+          // 未知类型/失效/瞬态不可解析的裸 id 均不渲染,避免 UUID 死行。
+          setFavorites([...directlyRenderable, ...hydrated]);
         }
       })
       .catch(() => {
@@ -90,7 +123,44 @@ export function usePaletteData(args: UsePaletteDataArgs): UsePaletteDataResult {
     return () => {
       cancelled = true;
     };
-  }, [enabled, workspaceId, favoritesProvider]);
+  }, [enabled, workspaceId, workspaceSlug, favoritesProvider]);
+
+  // 打开即核验对象 recents:403/404 代表已删或失权,从 UI 与持久化同步剪枝;
+  // 瞬态错误由 collectValidRecentKeys 保留,避免网络抖动误删本地历史。
+  useEffect(() => {
+    if (!enabled || workspaceId === null) {
+      return;
+    }
+    const scope = {
+      userId: userId ?? 'anonymous',
+      workspaceId,
+    };
+    const objectRecents = listRecents(scope).filter(
+      (entry): entry is typeof entry & { readonly type: NonNullable<typeof entry.type> } =>
+        entry.kind === 'object' && entry.type !== undefined,
+    );
+    if (objectRecents.length === 0) {
+      return;
+    }
+    const snapshotKeys = new Set(objectRecents.map((entry) => `${entry.type}:${entry.id}`));
+    let cancelled = false;
+    void collectValidRecentKeys(getApiClient(), objectRecents, { workspaceId, workspaceSlug }).then(
+      (validKeys) => {
+        if (cancelled) return;
+        removeRecent((entry) => {
+          if (entry.kind !== 'object' || entry.type === undefined) return false;
+          const key = `${entry.type}:${entry.id}`;
+          // Only remove targets from the validated snapshot. A different
+          // tab may append a recent while the detail requests are pending.
+          return snapshotKeys.has(key) && !validKeys.has(key);
+        }, scope);
+        setLocalVersion((version) => version + 1);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, workspaceId, workspaceSlug, userId]);
 
   // 本地存储版本:每次开启重读 recents;激活写入后亦 bump
   useEffect(() => {
@@ -107,14 +177,17 @@ export function usePaletteData(args: UsePaletteDataArgs): UsePaletteDataResult {
     if (trimmed === '') {
       return buildEmptySections({
         favorites,
-        recents: listRecents(),
+        recents: listRecents({
+          userId: userId ?? 'anonymous',
+          workspaceId: workspaceId ?? 'none',
+        }),
         commands,
         usageCounts: commandUseCounts(),
       });
     }
     return buildQuerySections(search.items, commands, trimmed);
     // localVersion 参与依赖:recents/命令计数经其重读(读取发生在 memo 内)
-  }, [trimmed, favorites, search.items, commands, localVersion]);
+  }, [trimmed, favorites, search.items, commands, localVersion, userId, workspaceId]);
 
   // 结果落地令牌:检索结束后变化,驱动 live region 播报
   useEffect(() => {

@@ -5,7 +5,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useShortcutRegistry } from '../../shortcuts';
 import { useSettingsStore } from '../../state/settingsStore';
-import { isAdminRole, parseFavoritablePath, registerShellShortcuts } from '../shortcutsRegistration';
+import {
+  isAdminRole,
+  parseFavoritablePath,
+  registerShellShortcuts,
+} from '../shortcutsRegistration';
 import type { ShellShortcutLabels } from '../shortcutsRegistration';
 
 const LABELS: ShellShortcutLabels = {
@@ -82,6 +86,22 @@ describe('registerShellShortcuts', () => {
     unregister();
   });
 
+  it('可选导航文案缺失时跳过该命令,待审批文案回退到导航文案', () => {
+    const { integrations, ...nav } = LABELS.nav;
+    const { pendingApprovals, ...actions } = LABELS.actions;
+    void integrations;
+    void pendingApprovals;
+    const labels: ShellShortcutLabels = { ...LABELS, nav, actions };
+    const unregister = registerShellShortcuts(vi.fn(), labels);
+
+    expect(commandIds()).not.toContain('nav.integrations');
+    expect(
+      useShortcutRegistry.getState().commands.find((command) => command.id === 'approvals.pending')
+        ?.label,
+    ).toBe('Approvals');
+    unregister();
+  });
+
   it('admin/owner + 工作区:设置七子页注册且落工作区规范路由;guest 不注册(§1.2 S3 门控)', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS, {
@@ -97,9 +117,15 @@ describe('registerShellShortcuts', () => {
     expect(settingsIds).toContain('settings.danger');
     expect(ids).toContain('inbox.markAllRead');
     // 设置命令导航到 /w/acme/settings 子页
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'settings.labels')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'settings.labels')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/w/acme/settings/labels');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'settings.general')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'settings.general')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/w/acme/settings');
     unregister();
 
@@ -112,6 +138,31 @@ describe('registerShellShortcuts', () => {
     });
     expect(commandIds().filter((id) => id.startsWith('settings.'))).toHaveLength(0);
     unregisterGuest();
+  });
+
+  it('options 注册器复用导航规范目标,Integrations 落 automations 且账号设置保持全局', () => {
+    const navigate = vi.fn();
+    const unregister = registerShellShortcuts(navigate, LABELS, {
+      role: 'member',
+      workspaceSlug: 'acme',
+    });
+    const run = (id: string): void => {
+      useShortcutRegistry
+        .getState()
+        .commands.find((command) => command.id === id)
+        ?.run();
+    };
+    run('nav.home');
+    run('nav.integrations');
+    run('nav.skills');
+    run('nav.settings');
+    expect(navigate.mock.calls.map(([target]) => target)).toEqual([
+      '/w/acme',
+      '/w/acme/automations/integrations',
+      '/w/acme/automations/skills',
+      '/settings',
+    ]);
+    unregister();
   });
 
   it('agent 身份(isHuman=false)即使是 admin 也不注册设置命令', () => {
@@ -137,17 +188,14 @@ describe('registerShellShortcuts', () => {
     const { fakeResponse } = await import('../../api/__tests__/fetchStub');
     const { resetApiClient } = await import('../../api/instance');
     const calls: Array<{ url: string; method?: string }> = [];
-    vi.stubGlobal(
-      'fetch',
-      (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        calls.push({ url, method: init?.method });
-        if (url.includes('/api/v1/favorites') && (init?.method ?? 'GET') === 'GET') {
-          return fakeResponse({ body: { data: [], next_cursor: null } });
-        }
-        return fakeResponse({ status: 204 });
-      }) as typeof fetch,
-    );
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method });
+      if (url.includes('/api/v1/favorites') && (init?.method ?? 'GET') === 'GET') {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return fakeResponse({ status: 204 });
+    }) as typeof fetch);
     resetApiClient();
 
     const unregister = registerShellShortcuts(vi.fn(), LABELS, {
@@ -156,9 +204,14 @@ describe('registerShellShortcuts', () => {
       path: '/issues/iss-9',
     });
     expect(commandIds()).toContain('favorites.toggle');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'favorites.toggle')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'favorites.toggle')
+      ?.run();
     await vi.waitFor(() =>
-      expect(calls.some((call) => call.url.includes('/favorites/issue/iss-9') && call.method === 'PUT')).toBe(true),
+      expect(
+        calls.some((call) => call.url.includes('/favorites/issue/iss-9') && call.method === 'PUT'),
+      ).toBe(true),
     );
     unregister();
 
@@ -175,27 +228,97 @@ describe('registerShellShortcuts', () => {
     resetApiClient();
   });
 
+  it('favorites.toggle 对已收藏资源发送 DELETE', async () => {
+    const { fakeResponse } = await import('../../api/__tests__/fetchStub');
+    const { resetApiClient } = await import('../../api/instance');
+    const calls: Array<{ url: string; method?: string }> = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method });
+      if (url.includes('/api/v1/favorites') && (init?.method ?? 'GET') === 'GET') {
+        return fakeResponse({
+          body: {
+            data: [{ target_type: 'issue', target_id: 'iss-9' }],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ status: 204 });
+    }) as typeof fetch);
+    resetApiClient();
+
+    const unregister = registerShellShortcuts(vi.fn(), LABELS, {
+      role: 'member',
+      workspaceId: 'ws-1',
+      path: '/issues/iss-9',
+    });
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'favorites.toggle')
+      ?.run();
+    await vi.waitFor(() =>
+      expect(
+        calls.some(
+          (call) => call.url.includes('/favorites/issue/iss-9') && call.method === 'DELETE',
+        ),
+      ).toBe(true),
+    );
+
+    unregister();
+    vi.unstubAllGlobals();
+    resetApiClient();
+  });
+
+  it('favorites.toggle 端点失败时保持静默且不通知', async () => {
+    const { fakeResponse } = await import('../../api/__tests__/fetchStub');
+    const { resetApiClient } = await import('../../api/instance');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return fakeResponse({ status: 500, body: { error: { code: 'internal_error' } } });
+    }) as typeof fetch);
+    resetApiClient();
+    const notify = vi.fn();
+
+    const unregister = registerShellShortcuts(vi.fn(), LABELS, {
+      role: 'member',
+      workspaceId: 'ws-1',
+      path: '/issues/iss-9',
+      notify,
+    });
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'favorites.toggle')
+      ?.run();
+    await vi.waitFor(() =>
+      expect(calls.some((url) => url.includes('/api/v1/favorites'))).toBe(true),
+    );
+    await Promise.resolve();
+    expect(notify).not.toHaveBeenCalled();
+
+    unregister();
+    vi.unstubAllGlobals();
+    resetApiClient();
+  });
+
   it('inbox.markAllRead 随注入的视图 filter 发送(comment-inbox.md 同口径)', async () => {
     const { fakeResponse } = await import('../../api/__tests__/fetchStub');
     const { resetApiClient } = await import('../../api/instance');
     const bodies: string[] = [];
-    vi.stubGlobal(
-      'fetch',
-      (async (input: RequestInfo | URL, init?: RequestInit) => {
-        bodies.push(String(init?.body ?? ''));
-        if (String(input).includes('/users/me')) {
-          return fakeResponse({
-            body: {
-              data: {
-                user: { id: 'u', email: 'e', display_name: 'd' },
-                memberships: [],
-              },
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ''));
+      if (String(input).includes('/users/me')) {
+        return fakeResponse({
+          body: {
+            data: {
+              user: { id: 'u', email: 'e', display_name: 'd' },
+              memberships: [],
             },
-          });
-        }
-        return fakeResponse({ body: { data: { updated: 3 } } });
-      }) as typeof fetch,
-    );
+          },
+        });
+      }
+      return fakeResponse({ body: { data: { updated: 3 } } });
+    }) as typeof fetch);
     resetApiClient();
     const notify = vi.fn();
     const unregister = registerShellShortcuts(vi.fn(), LABELS, {
@@ -205,8 +328,13 @@ describe('registerShellShortcuts', () => {
       notify,
       getInboxFilter: () => 'unread',
     });
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'inbox.markAllRead')?.run();
-    await vi.waitFor(() => expect(bodies.some((body) => body.includes('"filter":"unread"'))).toBe(true));
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'inbox.markAllRead')
+      ?.run();
+    await vi.waitFor(() =>
+      expect(bodies.some((body) => body.includes('"filter":"unread"'))).toBe(true),
+    );
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('Marked all as read'));
     unregister();
     vi.unstubAllGlobals();
@@ -221,7 +349,10 @@ describe('registerShellShortcuts', () => {
     });
     const notify = vi.fn();
     const unregister = registerShellShortcuts(vi.fn(), LABELS, { notify });
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'clipboard.copyDeepLink')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'clipboard.copyDeepLink')
+      ?.run();
     await vi.waitFor(() => expect(written).toHaveLength(1));
     expect(written[0]).toBe(window.location.href);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('Link copied'));
@@ -231,11 +362,20 @@ describe('registerShellShortcuts', () => {
   it('导航命令调用 navigate(对应路由);全部命令 label 非空(MES-45 守卫)', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.inbox')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'nav.inbox')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/inbox');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.squads')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'nav.squads')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/squads');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'approvals.pending')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'approvals.pending')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/approvals');
     for (const command of useShortcutRegistry.getState().commands) {
       expect(typeof command.label).toBe('string');
@@ -246,9 +386,15 @@ describe('registerShellShortcuts', () => {
 
   it('主题命令与切换命令写 settingsStore', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'theme.dark')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'theme.dark')
+      ?.run();
     expect(useSettingsStore.getState().preferences.theme).toBe('dark');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'theme.toggle')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'theme.toggle')
+      ?.run();
     expect(useSettingsStore.getState().preferences.theme).toBe('system');
     unregister();
   });
@@ -283,36 +429,36 @@ describe('registerShellShortcuts', () => {
     const { fakeResponse } = await import('../../api/__tests__/fetchStub');
     const { resetApiClient } = await import('../../api/instance');
     const calls: string[] = [];
-    vi.stubGlobal(
-      'fetch',
-      (async (input: RequestInfo | URL) => {
-        const url = String(input);
-        calls.push(url);
-        if (url.includes('/users/me')) {
-          return fakeResponse({
-            body: {
-              data: {
-                user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
-                memberships: [
-                  {
-                    workspace_id: 'ws-1',
-                    workspace_name: 'WS',
-                    workspace_slug: 'ws',
-                    role: 'owner',
-                    status: 'active',
-                    joined_at: null,
-                  },
-                ],
-              },
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: {
+            data: {
+              user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
+              memberships: [
+                {
+                  workspace_id: 'ws-1',
+                  workspace_name: 'WS',
+                  workspace_slug: 'ws',
+                  role: 'owner',
+                  status: 'active',
+                  joined_at: null,
+                },
+              ],
             },
-          });
-        }
-        return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: null } } });
-      }) as typeof fetch,
-    );
+          },
+        });
+      }
+      return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: null } } });
+    }) as typeof fetch);
     resetApiClient();
     const unregister = registerShellShortcuts(vi.fn(), LABELS);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'onboarding.restore')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'onboarding.restore')
+      ?.run();
     await vi.waitFor(() =>
       expect(calls.some((url) => url.includes('/onboarding/restore'))).toBe(true),
     );
@@ -324,12 +470,25 @@ describe('registerShellShortcuts', () => {
 
 describe('parseFavoritablePath', () => {
   it('issues/projects/views/chat 详情路由解析目标;其余 → null', () => {
-    expect(parseFavoritablePath('/issues/iss-1')).toEqual({ targetType: 'issue', targetId: 'iss-1' });
-    expect(parseFavoritablePath('/projects/p-1/settings')).toEqual({ targetType: 'project', targetId: 'p-1' });
+    expect(parseFavoritablePath('/issues/iss-1')).toEqual({
+      targetType: 'issue',
+      targetId: 'iss-1',
+    });
+    expect(parseFavoritablePath('/projects/p-1/settings')).toEqual({
+      targetType: 'project',
+      targetId: 'p-1',
+    });
     expect(parseFavoritablePath('/views/v%201')).toEqual({ targetType: 'view', targetId: 'v 1' });
-    expect(parseFavoritablePath('/chat/s-1')).toEqual({ targetType: 'chat_session', targetId: 's-1' });
+    expect(parseFavoritablePath('/chat/s-1')).toEqual({
+      targetType: 'chat_session',
+      targetId: 's-1',
+    });
     expect(parseFavoritablePath('/board')).toBeNull();
     expect(parseFavoritablePath('/issues')).toBeNull();
     expect(parseFavoritablePath('/issues/by-identifier/WEB-1')).toBeNull();
+  });
+
+  it('损坏的百分号编码安全降级为 null', () => {
+    expect(parseFavoritablePath('/issues/%E0%A4%A')).toBeNull();
   });
 });

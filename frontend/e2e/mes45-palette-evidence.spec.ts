@@ -25,7 +25,11 @@ test('MES-45 取证:Ctrl+K 输入 issues/home 均命中且 Enter 可跳转', asy
   // Enter 跳转 /issues
   await page.keyboard.press('Enter');
   await page.waitForURL('**/issues');
-  await expect(page.locator('main')).toBeVisible();
+  // 取证须捕获真实列表页,而非路由切换瞬间的全局/页级骨架占位:此前仅断言 main 可见即
+  // 截图,命中的是骨架屏(与 MES-79 旧扁平路由迁移存证撞同一张占位图,触发
+  // check-evidence-unique 门禁红)。过滤搜索框仅存在于 .mesh-issues 加载完成态,等到它
+  // 出现即越过骨架,保证本步存证为该步骤的真实不同画面。
+  await expect(page.getByTestId('issue-filter-q')).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/evidence/mes45-palette-nav-issues.png' });
 
   // 关键词 home:同样命中(任意关键词不再塌成 0 条)

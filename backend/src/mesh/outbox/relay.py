@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.outbox import (
@@ -38,8 +39,51 @@ from mesh.realtime.pubsub import RedisFanOut
 
 logger = logging.getLogger("mesh.outbox.relay")
 
+_TRANSIENT_SQLSTATES = {
+    "40001",  # serialization_failure
+    "40P01",  # deadlock_detected
+    "55P03",  # lock_not_available / lock_timeout
+    "57014",  # query_canceled / statement_timeout
+}
+
 # handler(session, event) → optional [(channel, frame)] to fan out after commit
 Handler = Callable[[AsyncSession, OutboxEvent], Awaitable[list[tuple[str, dict]] | None]]
+
+
+async def isolated_optional_step(
+    session: AsyncSession, label: str, event_id: object, step: Awaitable[None]
+) -> None:
+    """Run a handler's OPTIONAL consumer step in its own savepoint.
+
+    MES-147 deadlock-recovery contract: a failure inside the step rolls back
+    to the step's savepoint and never poisons the surrounding batch
+    transaction — the failure mode that previously wedged the relay (a
+    deadlock swallowed by a bare ``except`` left the transaction aborted;
+    every later statement in the batch then failed with "current transaction
+    is aborted" and the event could never be marked published).
+
+    - Database errors (deadlock victim, serialization failure, connection
+      error) are re-raised AFTER the savepoint rollback: the event falls into
+      the relay failure budget and is redelivered whole, so an optional step's
+      DB failure never silently drops its side effects, and the batch
+      transaction remains usable for the failure bookkeeping.
+    - Non-database errors (logic bugs in the optional consumer) are logged and
+      swallowed: an optional step must not turn a poison event into a
+      permanently failing batch (the primary projection outcome still lands).
+    """
+    try:
+        async with session.begin_nested():
+            await step
+    except DBAPIError:
+        logger.warning(
+            "%s hit a database error for event %s; savepoint rolled back, event will retry",
+            label,
+            event_id,
+            exc_info=True,
+        )
+        raise
+    except Exception:  # noqa: BLE001 — optional step: log + skip, keep batch alive
+        logger.exception("%s failed for event %s (rolled back to savepoint)", label, event_id)
 
 
 class RetryableDelay(Exception):
@@ -77,6 +121,10 @@ class OutboxRelay:
         batch_size: int = 50,
         max_attempts: int = 5,
         poll_interval: float = 1.0,
+        error_backoff: float = 1.0,
+        failure_backoff: float = 1.0,
+        failure_backoff_max: float = 60.0,
+        lock_timeout: float = 0.5,
         fanout: RedisFanOut | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -84,12 +132,22 @@ class OutboxRelay:
         self._batch_size = batch_size
         self._max_attempts = max_attempts
         self._poll_interval = poll_interval
+        self._error_backoff = error_backoff
+        self._failure_backoff = max(0.0, float(failure_backoff))
+        self._failure_backoff_max = max(0.0, float(failure_backoff_max))
+        self._lock_timeout = max(0.0, float(lock_timeout))
         self._fanout = fanout
 
     def register(self, event_type: str, handler: Handler) -> None:
         self._handlers[event_type] = handler
 
-    async def claim_batch(self, session: AsyncSession) -> list[OutboxEvent]:
+    async def claim_batch(
+        self,
+        session: AsyncSession,
+        *,
+        limit: int | None = None,
+        exclude_ids: Collection[object] = (),
+    ) -> list[OutboxEvent]:
         """Claim up to ``batch_size`` claimable rows, oldest first (SKIP LOCKED).
 
         README §6.6 authority claim predicate: ``status='pending' AND
@@ -105,6 +163,7 @@ class OutboxRelay:
         """
         if not self._handlers:
             return []
+        claim_limit = self._batch_size if limit is None else max(0, int(limit))
         stmt = (
             select(OutboxEvent)
             .where(OutboxEvent.status == OUTBOX_STATUS_PENDING)
@@ -115,9 +174,11 @@ class OutboxRelay:
                 OutboxEvent.created_at.asc(),
                 OutboxEvent.id.asc(),
             )
-            .limit(self._batch_size)
+            .limit(claim_limit)
             .with_for_update(skip_locked=True)
         )
+        if exclude_ids:
+            stmt = stmt.where(OutboxEvent.id.not_in(tuple(exclude_ids)))
         return list((await session.execute(stmt)).scalars().all())
 
     async def _mark_delivery_failure(self, session: AsyncSession, event: OutboxEvent) -> None:
@@ -132,11 +193,18 @@ class OutboxRelay:
                 event.event_type,
             )
         else:
+            exponent = min(max(event.delivery_attempts - 1, 0), 30)
+            delay = min(
+                self._failure_backoff_max,
+                self._failure_backoff * (2**exponent),
+            )
+            event.available_at = datetime.now(UTC) + timedelta(seconds=delay)
             logger.warning(
-                "outbox event %s delivery failed (attempt %d, type=%s)",
+                "outbox event %s delivery failed (attempt %d, type=%s); retrying in %.1fs",
                 event.id,
                 event.delivery_attempts,
                 event.event_type,
+                delay,
             )
         await session.flush()
 
@@ -160,6 +228,25 @@ class OutboxRelay:
         except RetryableDelay as delay:
             # Savepoint rolled back; outer transaction still usable.
             await self._defer_retryable(session, event, delay)
+            return []
+        except DBAPIError as exc:
+            # Lock/statement timeouts, deadlocks and serialization failures are
+            # infrastructure contention, not poison payloads.  The savepoint
+            # is already rolled back: defer without consuming the event's
+            # finite failure budget.  A connection-level failure may make the
+            # outer transaction unusable; in that case this write raises and
+            # run_forever rolls the pass back before retrying.
+            if _is_transient_database_error(exc):
+                await self._defer_retryable(
+                    session,
+                    event,
+                    RetryableDelay(
+                        delay=max(self._failure_backoff, 0.1),
+                        reason=f"transient_database_error:{_sqlstate(exc) or 'unknown'}",
+                    ),
+                )
+                return []
+            await self._mark_delivery_failure(session, event)
             return []
         except Exception:
             # Savepoint rolled back; outer transaction still usable.
@@ -186,34 +273,90 @@ class OutboxRelay:
         )
         await session.flush()
 
+    async def _configure_transaction(self, session: AsyncSession) -> None:
+        """Bound lock waits so maintenance contention cannot wedge a pass."""
+        if self._lock_timeout <= 0:
+            return
+        timeout_ms = max(1, int(self._lock_timeout * 1000))
+        await session.execute(text(f"SET LOCAL lock_timeout = '{timeout_ms}ms'"))
+
     async def run_once(self) -> RelayResult:
-        """Claim and dispatch one batch in a single transaction."""
-        frames: list[tuple[str, dict]] = []
+        """Dispatch up to ``batch_size`` events, committing one event at a time.
+
+        ``FOR UPDATE SKIP LOCKED`` remains the replica-claim authority, but a
+        slow first handler no longer pre-locks every later row in the batch.
+        Each event owns one short transaction and releases its outbox/business
+        locks before the next claim, removing the relay↔maintenance lock cycle.
+        """
+        claimed = 0
         published = 0
         failed = 0
-        async with self._session_factory() as session:
-            async with session.begin():
-                events = await self.claim_batch(session)
-                for event in events:
-                    frames.extend(await self.dispatch_one(session, event))
-                    if event.status == OUTBOX_STATUS_PUBLISHED:
-                        published += 1
-                    elif event.status == OUTBOX_STATUS_FAILED:
-                        failed += 1
-        if frames and self._fanout is not None:
-            await self._fanout.publish_frames(frames)
-        return RelayResult(claimed=len(events), published=published, failed=failed)
+        attempted_ids: set[object] = set()
+        for _ in range(self._batch_size):
+            event_id: object | None = None
+            event_frames: list[tuple[str, dict]] = []
+            event_status: str | None = None
+            async with self._session_factory() as session:
+                async with session.begin():
+                    await self._configure_transaction(session)
+                    events = await self.claim_batch(
+                        session,
+                        limit=1,
+                        exclude_ids=attempted_ids,
+                    )
+                    if events:
+                        event = events[0]
+                        event_id = event.id
+                        event_frames = await self.dispatch_one(session, event)
+                        event_status = event.status
+            if event_id is None:
+                break
+            # The event transaction has committed.  Fan out its frames now,
+            # before opening the next claim transaction: if a later database
+            # operation fails, already-committed realtime frames must not be
+            # stranded in pass-local memory.
+            if event_frames and self._fanout is not None:
+                await self._fanout.publish_frames(event_frames)
+            attempted_ids.add(event_id)
+            claimed += 1
+            if event_status == OUTBOX_STATUS_PUBLISHED:
+                published += 1
+            elif event_status == OUTBOX_STATUS_FAILED:
+                failed += 1
+        return RelayResult(claimed=claimed, published=published, failed=failed)
 
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
-        """Loop until ``stop`` is set (or forever when None)."""
+        """Loop until ``stop`` is set (or forever when None).
+
+        A failed pass (transient DB error — deadlock victim, serialization
+        failure, connection reset) does NOT terminate the loop: its
+        transaction was already rolled back by ``run_once``'s session scope,
+        so the relay sleeps a short backoff and retries. Dying here would make
+        the outbox publisher depend entirely on the external supervisor for
+        recovery (MES-147: a wedged publisher leaves e2e waits pending until
+        job timeout).
+        """
         while stop is None or not stop.is_set():
-            result = await self.run_once()
+            try:
+                result = await self.run_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — transient infra failure: back off + retry
+                logger.exception(
+                    "outbox relay pass failed; retrying in %.1fs", self._error_backoff
+                )
+                await self._idle_sleep(stop, self._error_backoff)
+                continue
             if result.claimed == 0:
-                if stop is not None:
-                    with _suppress_cancel():
-                        await asyncio.wait_for(stop.wait(), timeout=self._poll_interval)
-                else:
-                    await asyncio.sleep(self._poll_interval)
+                await self._idle_sleep(stop, self._poll_interval)
+
+    async def _idle_sleep(self, stop: asyncio.Event | None, seconds: float) -> None:
+        """Sleep ``seconds``, returning early when ``stop`` is set."""
+        if stop is not None:
+            with _suppress_cancel():
+                await asyncio.wait_for(stop.wait(), timeout=seconds)
+        else:
+            await asyncio.sleep(seconds)
 
 
 class _suppress_cancel:
@@ -224,3 +367,12 @@ class _suppress_cancel:
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         return exc_type in (asyncio.TimeoutError, asyncio.CancelledError, TimeoutError)
+
+
+def _sqlstate(exc: DBAPIError) -> str | None:
+    orig = getattr(exc, "orig", None)
+    return getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+
+
+def _is_transient_database_error(exc: DBAPIError) -> bool:
+    return _sqlstate(exc) in _TRANSIENT_SQLSTATES

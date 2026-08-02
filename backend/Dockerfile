@@ -32,4 +32,4 @@ EXPOSE 8000 8081
 
 # Default: API server. Override with `python -m mesh.workers` (worker) or
 # `uvicorn mesh.realtime.app:create_app --factory` (realtime gateway).
-CMD ["uvicorn", "mesh.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "mesh.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

@@ -13,6 +13,7 @@ Revision ID: 0031
 Revises: 0030
 Create Date: 2026-07-30
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -34,7 +35,8 @@ def upgrade() -> None:
             IF OLD.status IN ('consumed', 'expired', 'invalidated')
                AND NEW.status IS DISTINCT FROM OLD.status THEN
                 RAISE EXCEPTION
-                    'device authorization % is terminal (%) — state transitions out of terminal states are forbidden',
+                    'device authorization % is terminal (%) — '
+                    'state transitions out of terminal states are forbidden',
                     OLD.id, OLD.status
                     USING ERRCODE = 'integrity_constraint_violation';
             END IF;

@@ -1,7 +1,12 @@
 /**
  * 快捷键体系公共 API(README §6.12 / search-command-palette.md)。
  */
-export { useShortcutRegistry } from './registry';
+export {
+  CONTEXT_SPECIFICITY,
+  arbitrateShortcut,
+  isContextActive,
+  useShortcutRegistry,
+} from './registry';
 export type {
   ShortcutCommand,
   ShortcutContext,
@@ -63,3 +68,17 @@ export {
   trackCommandUse,
 } from './recents';
 export type { RecentEntry, RecentKind, RecentsScope } from './recents';
+export {
+  handleOverlayEscape,
+  isFormFieldElement,
+  isOverlayOpen,
+  overlayDepth,
+  pushOverlay,
+  removeOverlay,
+  restoreOverlayFocus,
+  topOverlay,
+} from './overlayStack';
+export type { OverlayEntry } from './overlayStack';
+export { usePageContext } from './usePageContext';
+export { SHORTCUT_DECLS } from './shortcutDefs';
+export type { ShortcutDecl } from './shortcutDefs';

@@ -9,10 +9,12 @@ from pydantic import ValidationError
 
 from mesh.config import (
     DEV_JWT_SECRET,
+    DEV_SEARCH_CURSOR_SECRET,
     ConfigError,
     load_settings,
     validate_auth_settings,
     validate_infra_settings,
+    validate_search_settings,
 )
 
 REQUIRED = {"database_url": "postgresql+asyncpg://u:p@h:5432/db", "redis_url": "redis://h:6379/0"}
@@ -59,6 +61,10 @@ def test_load_settings_reads_env_and_defaults(monkeypatch):
     assert settings.realtime_event_retention == timedelta(days=7)
     assert settings.outbox_batch_size == 50
     assert settings.outbox_max_attempts == 5
+    assert settings.outbox_lock_timeout_seconds == 0.5
+    assert settings.outbox_failure_backoff_seconds == 1.0
+    assert settings.outbox_failure_backoff_max_seconds == 60.0
+    assert settings.outbox_error_backoff_seconds == 1.0
 
 
 def test_overrides_take_precedence():
@@ -120,6 +126,56 @@ def test_validate_auth_settings_accepts_dev_key_in_dev_mode():
     # Regression: the guard is production-only — dev keeps the default key.
     settings = load_settings(**REQUIRED, auth_mode="dev")  # default DEV_JWT_SECRET
     validate_auth_settings(settings)  # does not raise
+
+
+# --- Search cursor HMAC fail-safe (§3.2; mirrors the jwt_secret guard) ------
+# validate_search_settings refuses the public dev cursor key in production;
+# called by the API factory at startup (the gateway does not sign cursors).
+
+
+def test_validate_search_settings_rejects_dev_key_in_production():
+    settings = load_settings(**REQUIRED, auth_mode="production")  # default dev key
+    assert settings.search_cursor_secret == DEV_SEARCH_CURSOR_SECRET
+    with pytest.raises(ConfigError) as excinfo:
+        validate_search_settings(settings)
+    assert excinfo.value.missing_fields == ("search_cursor_secret",)
+    assert "MESH_SEARCH_CURSOR_SECRET" in excinfo.value.detail
+
+
+def test_validate_search_settings_accepts_strong_secret_in_production():
+    settings = load_settings(
+        **REQUIRED,
+        auth_mode="production",
+        jwt_secret="a-real-production-secret-0123456789",
+        search_cursor_secret="a-real-production-cursor-secret-9876543210",
+    )
+    validate_search_settings(settings)  # does not raise
+
+
+def test_validate_search_settings_accepts_dev_key_in_dev_mode():
+    # Regression: the guard is production-only — dev keeps the default key.
+    settings = load_settings(**REQUIRED, auth_mode="dev")  # default dev key
+    validate_search_settings(settings)  # does not raise
+
+
+def test_api_factory_refuses_dev_search_cursor_secret_in_production():
+    # Fail-fast wiring: create_app rejects the public dev cursor key at
+    # startup in production — raised before any engine/IO side effects.
+    # device_code_pepper (auth.md §2.4.2) and jwt_secret are satisfied so the
+    # earlier validate_auth_settings guard passes and this test isolates the
+    # search-cursor guard it targets (create_app runs auth → search → infra).
+    from mesh.api.app import create_app
+
+    with pytest.raises(ConfigError) as excinfo:
+        create_app(
+            load_settings(
+                **REQUIRED,
+                auth_mode="production",
+                jwt_secret="a-real-production-secret-0123456789",
+                device_code_pepper="a-real-device-code-pepper-0123456789",
+            )
+        )  # search_cursor_secret still the public dev default
+    assert excinfo.value.missing_fields == ("search_cursor_secret",)
 
 
 def test_validate_auth_settings_accepts_strong_secret_in_dev_mode():

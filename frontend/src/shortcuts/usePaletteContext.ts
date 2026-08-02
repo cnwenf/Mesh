@@ -17,6 +17,7 @@ import { getApiClient } from '../api/instance';
 import { useAuthStore } from '../state/authStore';
 import { activeWorkspace, fetchMe } from '../features/members/api';
 import type { MeResponse, MemberRole } from '../features/members/types';
+import { workspaceSlugFromPath } from '../features/search/usePaletteIdentity';
 
 export interface PaletteContextValue {
   readonly userId: string | null;
@@ -53,41 +54,60 @@ function loadMe(token: string): Promise<MeResponse | null> {
   return meCache.promise;
 }
 
-function contextFromMe(me: MeResponse | null): PaletteContextValue {
+function contextFromMe(me: MeResponse | null, pathname: string): PaletteContextValue {
   if (me === null) {
     return { ...EMPTY_CONTEXT, resolved: true };
   }
-  const active = activeWorkspace(me.memberships);
+  const routeSlug = workspaceSlugFromPath(pathname);
+  const active =
+    routeSlug === null
+      ? activeWorkspace(me.memberships)
+      : (me.memberships.find((membership) => membership.workspace_slug === routeSlug) ?? null);
   return {
     userId: me.user.id,
     workspaceId: active?.workspace_id ?? null,
-    workspaceSlug: active?.workspace_slug ?? null,
+    workspaceSlug: routeSlug ?? active?.workspace_slug ?? null,
     role: active?.role ?? null,
     resolved: true,
   };
 }
 
-export function usePaletteContext(): PaletteContextValue {
+interface ContextSnapshot {
+  readonly token: string | null;
+  readonly pathname: string;
+  readonly value: PaletteContextValue;
+}
+
+export function usePaletteContext(
+  pathname: string = typeof window === 'undefined' ? '/' : window.location.pathname,
+): PaletteContextValue {
   const token = useAuthStore((state) => state.token);
-  const [context, setContext] = useState<PaletteContextValue>(EMPTY_CONTEXT);
+  const [snapshot, setSnapshot] = useState<ContextSnapshot>({
+    token,
+    pathname,
+    value: EMPTY_CONTEXT,
+  });
 
   useEffect(() => {
     if (token === null) {
       // 匿名:不请求(见模块头注),并丢弃上一账号缓存防串用。
       resetPaletteContextCache();
-      setContext(ANONYMOUS_CONTEXT);
+      setSnapshot({ token, pathname, value: ANONYMOUS_CONTEXT });
       return;
     }
     let cancelled = false;
     void loadMe(token).then((me) => {
       if (!cancelled) {
-        setContext(contextFromMe(me));
+        setSnapshot({ token, pathname, value: contextFromMe(me, pathname) });
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, pathname]);
 
-  return context;
+  // 路由或账号切换后的首帧不得短暂复用上一工作区/上一账号的搜索作用域。
+  return snapshot.token === token && snapshot.pathname === pathname
+    ? snapshot.value
+    : EMPTY_CONTEXT;
 }

@@ -1,9 +1,10 @@
 /**
  * MobileNav — 底部主导航契约(design-quality §4.3)。
  */
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test-utils/render';
+import { WorkspaceProvider } from '../../workspace/WorkspaceProvider';
 import { MobileNav } from '../MobileNav';
 import type { NavItemKey } from '../navigation';
 
@@ -25,6 +26,35 @@ describe('MobileNav(手机底部主导航)', () => {
     renderNav('/board');
     expect(screen.getByTestId('mobile-nav-board')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('mobile-nav-home')).not.toHaveAttribute('aria-current');
+  });
+
+  it('工作区上下文内生成规范深链并在规范看板路由保持活动态', async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({
+        id: 'ws-1',
+        name: 'Acme',
+        slug: 'acme',
+        logo_url: null,
+        timezone: 'UTC',
+        settings: {},
+        my_role: 'owner',
+        created_at: '2026-07-25T00:00:00Z',
+        updated_at: '2026-07-25T00:00:00Z',
+      }),
+    };
+    renderWithProviders(
+      <WorkspaceProvider slug="acme" client={client as never}>
+        <MobileNav onOpenMore={vi.fn()} />
+      </WorkspaceProvider>,
+      { route: '/w/acme/board' },
+    );
+
+    const board = screen.getByTestId('mobile-nav-board');
+    await waitFor(() => expect(board).toHaveAttribute('href', '/w/acme/board'));
+    expect(screen.getByTestId('mobile-nav-home')).toHaveAttribute('href', '/w/acme');
+    expect(screen.getByTestId('mobile-nav-issues')).toHaveAttribute('href', '/w/acme/issues');
+    expect(screen.getByTestId('mobile-nav-chat')).toHaveAttribute('href', '/w/acme/chat');
+    expect(board).toHaveAttribute('aria-current', 'page');
   });
 
   it('「更多」触发 onOpenMore 回调', () => {

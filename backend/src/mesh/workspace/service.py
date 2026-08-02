@@ -311,6 +311,10 @@ class WorkspaceService:
 
             await seed_default_statuses(session, workspace_id=workspace.id)
             await session.flush()
+            # Search projection for the founding owner row (§2.2).
+            from mesh.search.projection import sync_member_search_name
+
+            await sync_member_search_name(session, member.id)
             await emit_realtime(
                 session,
                 workspace_id=workspace.id,

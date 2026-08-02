@@ -100,6 +100,19 @@ class Project(Base):
         # Prefix permanent reservation (README §6.3): plain (NON-partial)
         # unique index — soft-deleted/archived keys are never re-issued.
         Index("uq_projects_key", "workspace_id", "key", unique=True),
+        # Search indexes (search-command-palette.md §2.2).
+        Index(
+            "idx_projects_name_trgm",
+            text("(public.mesh_search_norm(name)) gin_trgm_ops"),
+            postgresql_using="gin",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_projects_name_prefix",
+            "workspace_id",
+            text("(public.mesh_search_norm(name)) text_pattern_ops"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         # Optional same-workspace name de-dup over live projects only.
         Index(
             "uq_projects_name",

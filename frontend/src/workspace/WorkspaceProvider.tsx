@@ -161,6 +161,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
     navigate(`/w/${workspace.slug}${rest}`, { replace: true });
   }, [workspace, slug, location.pathname, navigate]);
 
+
   const patch = useCallback(
     async (changes: WorkspacePatch): Promise<WorkspaceDetail> => {
       const current = workspace;

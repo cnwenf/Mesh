@@ -50,6 +50,16 @@ SESSION_COOKIE_NAME = "mesh_session"
 # startup (fail-safe, mirroring the auth_mode pattern).
 DEV_JWT_SECRET = "mesh-dev-insecure-signing-key-do-not-use-in-production"
 
+# A clearly-marked development HMAC key for search cursor signing
+# (search-command-palette.md §3.2). Production MUST override
+# ``MESH_SEARCH_CURSOR_SECRET``: :func:`validate_search_settings` refuses this
+# default when ``auth_mode=production`` (mirrors the DEV_JWT_SECRET pattern —
+# auth.md §5.5, keys not in code/repo). The exposure ceiling is low (cursors
+# only carry keyset page position; all visibility filtering runs independently
+# inside each entity's SQL WHERE clause, so a forged cursor can never read
+# resources the caller may not already see) — the guard is defense-in-depth
+# against cursor forgery/replay with a public key.
+DEV_SEARCH_CURSOR_SECRET = "mesh-dev-search-cursor-secret-do-not-use-in-production"
 # Middleware credential guard (MES-83). A publicly reachable Redis shipped with a
 # guessable password is exactly how the incident happened; production must never
 # come up on an empty, well-known, or too-short secret. ``validate_infra_settings``
@@ -204,6 +214,15 @@ class Settings(BaseSettings):
     outbox_batch_size: int = Field(default=50, ge=1, le=1000)
     outbox_poll_interval: float = Field(default=1.0, gt=0)
     outbox_max_attempts: int = Field(default=5, ge=1)
+    # Bound relation-lock waits so a maintenance AccessExclusive request cannot
+    # form a long relay lock cycle. Zero explicitly disables the guard.
+    outbox_lock_timeout_seconds: float = Field(default=0.5, ge=0, le=60)
+    # Handler failures consume the finite budget and move available_at using
+    # bounded exponential backoff; pass-level infrastructure failures use the
+    # short error backoff before the relay loop retries.
+    outbox_failure_backoff_seconds: float = Field(default=1.0, ge=0, le=3600)
+    outbox_failure_backoff_max_seconds: float = Field(default=60.0, ge=0, le=86400)
+    outbox_error_backoff_seconds: float = Field(default=1.0, gt=0, le=3600)
 
     # Outbox retention (§6.6): terminal (published/failed) rows are purged once
     # older than this window so outbox_events and its idempotency_key unique
@@ -303,6 +322,16 @@ class Settings(BaseSettings):
     skill_source_host_allowlist: str | None = None
     skill_marketplace_url: str | None = None
     skill_import_sweep_interval: float = Field(default=1.0, gt=0)
+
+    # Search projection reconcile (search-command-palette.md §2.2): low-
+    # frequency full comparison + repair of members.search_name; write paths
+    # sync in-transaction, this is the observable drift backstop.
+    search_reconcile_interval: float = Field(default=86400.0, gt=0)
+
+    # HMAC key for search cursor signing (§3.2). Production MUST set a real
+    # secret via env — ``validate_search_settings`` refuses the public dev
+    # default when ``auth_mode=production`` (fail-fast at API startup).
+    search_cursor_secret: str = Field(default=DEV_SEARCH_CURSOR_SECRET)
 
     # Object storage for the attachment module (attachment.md §3). The bucket
     # is PRIVATE; every access goes through short-lived presigned URLs and the
@@ -467,15 +496,6 @@ class Settings(BaseSettings):
         default=timedelta(seconds=300), gt=0
     )
 
-    # -- Search module (search-command-palette.md §3.2) ----------------------
-    # HMAC key for the signed, query-bound search cursor. Optional: when
-    # unset the service falls back to ``jwt_secret`` (the existing server
-    # signing key) so cursors survive restarts / multi-replica deployments
-    # with zero extra configuration; the override exists to decouple cursor
-    # signatures from token signing. A process-random last resort (documented
-    # in mesh.search.cursor) applies only if both are somehow absent.
-    search_cursor_secret: str | None = None
-
     # -- Analytics module (analytics.md §2.5/§2.6) ------------------------------
     # Snapshot freshness: a cached aggregate older than this is recomputed
     # (§2.6 default 15 min; ``workload`` is never cached).
@@ -574,6 +594,31 @@ def validate_auth_settings(settings: Settings) -> None:
         raise ConfigError(
             ("device_code_pepper",),
             "MESH_DEVICE_CODE_PEPPER must be set to a strong secret in production",
+        )
+
+
+def validate_search_settings(settings: Settings) -> None:
+    """Fail-safe for the search cursor HMAC key (search-command-palette.md §3.2).
+
+    Production must never sign cursors with the well-known dev key: the
+    default is public in this repository, so cursors forged with it would
+    pass verification. Scope is the API factory only (``mesh.api.app``) —
+    the realtime gateway never signs search cursors, so its startup must not
+    depend on this variable (README §2.2 independently deployable unit).
+
+    The confidentiality ceiling without this guard is low — forged cursors
+    can only hop pages inside the result set the caller may already read
+    (visibility is enforced inside each entity's SQL, cursor-independent) —
+    but forgery/replay with a public key must still fail fast in production,
+    mirroring the ``validate_auth_settings`` / ``DEV_JWT_SECRET`` pattern.
+
+    :raises ConfigError: when ``auth_mode=production`` and
+        ``search_cursor_secret`` is still the public development default.
+    """
+    if settings.auth_mode == "production" and settings.search_cursor_secret == DEV_SEARCH_CURSOR_SECRET:
+        raise ConfigError(
+            ("search_cursor_secret",),
+            "MESH_SEARCH_CURSOR_SECRET must be set to a strong secret in production",
         )
 
 

@@ -288,6 +288,15 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     groupBy: 'status',
     // kanban 投影层 §4 文案占位符(MES-33):WIP 超限 toast 的列 key
     group: 'in_progress',
+    // search-command-palette §4 文案占位符(MES-79):结构化副标题/徽章/空态
+    // (status 占位符复用下方 runtime 块的 'completed';对象字面量禁止重名键,TS1117)
+    identifier: 'WEB-124',
+    project: '官网改版',
+    key: 'WEB',
+    visibility: 'public',
+    scope: 'project',
+    agent: '代码助手',
+    q: '登录',
     // comment-inbox §4 文案占位符(触发预览的 agent 名单)
     names: 'code-reviewer, test-runner',
     // runtime §4 文案占位符:负载 / 心跳新鲜度 / 日志偏移 / 终态原因
@@ -310,7 +319,7 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     net: 2,
     tz: 'UTC',
     // MES-111 批次② 看板拖拽/键盘移动/触控/评论草稿占位符
-    identifier: 'WEB-12',
+    // (identifier 复用上方 WEB-124 占位,合并去重)
     position: 2,
     direction: 'moved up',
     time: '10:30',
@@ -322,13 +331,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     comment: '请补充影响评估',
     tool: 'http_request',
     steps: 3,
-    // search-command-palette §4 文案占位符(MES-127):查询词 / 实体副标题结构化参数
-    q: '登录崩溃',
-    project: '官网',
+    // search-command-palette §4 文案占位符(MES-127):成员类型
+    // (查询词/项目/key/可见性/scope 复用上方搜索占位,避免对象重名键)
     memberType: 'human',
-    key: 'WEB',
-    visibility: 'public',
-    scope: 'workspace',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

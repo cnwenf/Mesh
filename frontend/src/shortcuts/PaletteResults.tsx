@@ -8,6 +8,7 @@
  * - 检索中呈现 skeleton(不阻塞本地命令,§11.4;prefers-reduced-motion 由 CSS 降级);
  * - 纯呈现:键盘语义在调用方(对话框/顶栏)处理,本组件经回调上报 hover/激活。
  */
+import { useEffect } from 'react';
 import { Badge, Icon, Kbd, Skeleton } from '../design';
 import type { BadgeTone } from '../design';
 import { useT } from '../i18n';
@@ -96,7 +97,7 @@ export function HighlightedTitle(props: {
     <span className="mesh-palette__title" title={title}>
       {spans.map((span, index) =>
         span.marked ? (
-          <mark key={index} className="mesh-palette__mark">
+          <mark key={index} className="mesh-palette__mark mesh-palette__hit">
             {span.text}
           </mark>
         ) : (
@@ -164,6 +165,12 @@ export function PaletteResults(props: PaletteResultsProps): React.JSX.Element {
     listLabel,
   } = props;
   const t = useT();
+
+  useEffect(() => {
+    if (selectedStableId === null) return;
+    document.getElementById(optionDomId(selectedStableId))?.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedStableId]);
+
   return (
     <ul id={listId} role="listbox" className="mesh-palette__list" aria-label={listLabel}>
       {sections.map((section) => (

@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.squad import IssueSquadAssignment, SquadTask
+from tests.e2e.conftest import _drain_stdout, pin_code_under_test
 
 pytestmark = pytest.mark.e2e
 
@@ -48,12 +49,14 @@ async def squad_worker(provision_database):
     env["MESH_STORAGE_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_PUBLIC_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
+    pin_code_under_test(env)
     process = subprocess.Popen(
         [sys.executable, "-m", "mesh.workers"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    _drain_stdout(process)
     await asyncio.sleep(WORKER_READY_WAIT_SECONDS)
     assert process.poll() is None, "worker died during startup"
     yield process
@@ -485,4 +488,3 @@ async def test_human_squad_completion_writes_back_summary(api_client, squad_work
     bodies = [c.get("body_markdown", "") for c in comments.json()["data"]]
     assert len(bodies) == 1, bodies
     assert "child 0 result" in bodies[0] and "child 1 result" in bodies[0]
-

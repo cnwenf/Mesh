@@ -44,7 +44,11 @@ function ApprovalsSkeleton(props: { readonly label: string }): React.JSX.Element
     <div role="status" data-testid="approvals-loading" className="mesh-approvals__list">
       <span className="sr-only">{props.label}</span>
       {[0, 1, 2].map((i) => (
-        <span className="mesh-skeleton__shape mesh-approvals__card-skeleton" key={i} aria-hidden="true" />
+        <span
+          className="mesh-skeleton__shape mesh-approvals__card-skeleton"
+          key={i}
+          aria-hidden="true"
+        />
       ))}
     </div>
   );
@@ -122,10 +126,13 @@ export function ApprovalsPage(): React.JSX.Element {
         } else {
           await rejectApproval(client, workspaceId, approval.id, { comment });
         }
-        addToast(t(decision === 'approved' ? 'approvals.toast.approved' : 'approvals.toast.rejected'), {
-          tone: 'success',
-          closeLabel: t('a11y.dismiss'),
-        });
+        addToast(
+          t(decision === 'approved' ? 'approvals.toast.approved' : 'approvals.toast.rejected'),
+          {
+            tone: 'success',
+            closeLabel: t('a11y.dismiss'),
+          },
+        );
       } catch (err: unknown) {
         setApprovals(snapshot); // 回滚并给出可见反馈
         addToast(t(toastKeyForError(err)), { tone: 'danger', closeLabel: t('a11y.dismiss') });
@@ -216,7 +223,9 @@ export function ApprovalsPage(): React.JSX.Element {
     ) : approvals.length === 0 ? (
       <EmptyState
         title={t(status === 'pending' ? 'approvals.empty.title' : 'approvals.emptyStatus.title')}
-        description={t(status === 'pending' ? 'approvals.empty.hint' : 'approvals.emptyStatus.hint')}
+        description={t(
+          status === 'pending' ? 'approvals.empty.hint' : 'approvals.emptyStatus.hint',
+        )}
       />
     ) : (
       <div className="mesh-approvals__list" data-testid="approvals-list">
@@ -240,7 +249,7 @@ export function ApprovalsPage(): React.JSX.Element {
     );
 
   return (
-    <main className="mesh-page mesh-approvals">
+    <main className="mesh-page mesh-approvals" data-testid="approvals-page">
       <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
       <Tabs
         items={tabItems.map((item) => ({ ...item, content: listPanel }))}
@@ -265,7 +274,11 @@ export function ApprovalsPage(): React.JSX.Element {
           />
         </label>
         <div className="mesh-approvals__dialog-actions">
-          <Button variant="danger" onClick={handleRejectConfirm} data-testid="approval-reject-confirm">
+          <Button
+            variant="danger"
+            onClick={handleRejectConfirm}
+            data-testid="approval-reject-confirm"
+          >
             {t('approvals.reject.confirm')}
           </Button>
           <Button variant="secondary" onClick={() => setRejectTarget(null)}>

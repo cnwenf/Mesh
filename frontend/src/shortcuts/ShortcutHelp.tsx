@@ -2,11 +2,15 @@
  * 快捷键帮助层(? 打开,README §6.12):列出当前上下文(global + activeContexts)
  * 全部已注册快捷键,按分组呈现(分组标题经 groupLabels prop 提供);
  * 组合键经 Kbd + formatCombo 渲染,序列键拆为多个按键帽。构建于 Dialog 之上。
+ *
+ * 同 combo 多上下文注册时,按 §4.3.1 规则 6 只展示**仲裁胜出的那一条**
+ * (board 激活时 C 展示为「当前列新建卡片」,不并列两条;离开 board 后
+ * 实时切回全局语义),胜者归入其所属分组。
  */
 import { Kbd } from '../design/components/Kbd';
 import { Dialog } from '../design/components/Dialog';
-import { useShortcutRegistry } from './registry';
-import type { ShortcutContext } from './registry';
+import { arbitrateShortcut, isContextActive, useShortcutRegistry } from './registry';
+import type { ShortcutContext, ShortcutDef } from './registry';
 import { detectMac, formatCombo } from './ShortcutProvider';
 import './shortcuts.css';
 
@@ -49,12 +53,23 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.JSX.Element | null
     return null;
   }
 
+  // §4.3.1 规则 6:同 combo 只展示仲裁胜出的有效键位。先求出每条激活定义的
+  // 仲裁胜者,败者(如 board 激活时的全局 C)不进入分组渲染。
+  const winningDefs: ShortcutDef[] = [];
+  for (const def of shortcuts) {
+    if (!isContextActive(def.group, activeContexts)) continue;
+    const winner = arbitrateShortcut(shortcuts, def.combo, activeContexts);
+    if (winner !== null && winner.id === def.id) {
+      winningDefs.push(def);
+    }
+  }
+
   const visibleGroups = GROUP_ORDER.filter(
     (group) => group === 'global' || activeContexts.includes(group),
   )
     .map((group) => ({
       group,
-      defs: shortcuts.filter((def) => def.group === group),
+      defs: winningDefs.filter((def) => def.group === group),
     }))
     .filter((entry) => entry.defs.length > 0);
 

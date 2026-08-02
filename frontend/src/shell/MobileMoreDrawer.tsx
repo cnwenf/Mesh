@@ -12,7 +12,7 @@ import { NavLink } from 'react-router';
 import { Drawer, Icon } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
-import { NAV_GROUPS, MORE_DRAWER_KEYS } from './navigation';
+import { NAV_GROUPS, MORE_DRAWER_KEYS, resolveNavTarget } from './navigation';
 import type { NavGroupDef, NavItemDef } from './navigation';
 
 export interface MobileMoreDrawerProps {
@@ -33,7 +33,6 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   const showWorkspaceSettings =
     workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
-
   if (!open) {
     return null;
   }
@@ -41,10 +40,12 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
   const renderItem = (item: NavItemDef): React.JSX.Element => (
     <li key={item.key} className="mesh-mobile-drawer__item">
       <NavLink
-        to={item.to}
+        to={resolveNavTarget(item, workspace?.slug ?? null)}
         data-testid={'mobile-drawer-nav-' + item.key}
         className={({ isActive }) =>
-          isActive ? 'mesh-mobile-drawer__link mesh-mobile-drawer__link--active' : 'mesh-mobile-drawer__link'
+          isActive
+            ? 'mesh-mobile-drawer__link mesh-mobile-drawer__link--active'
+            : 'mesh-mobile-drawer__link'
         }
         onClick={onClose}
       >
@@ -55,7 +56,12 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
   );
 
   return (
-    <Drawer open={open} onClose={onClose} title={t('mobileNav.moreTitle')} closeLabel={t('mobileNav.moreClose')}>
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title={t('mobileNav.moreTitle')}
+      closeLabel={t('mobileNav.moreClose')}
+    >
       <nav aria-label={t('mobileNav.moreTitle')}>
         {DRAWER_GROUPS.map((group) => (
           <section key={group.key} className="mesh-mobile-drawer__group">

@@ -57,6 +57,7 @@ from mesh.errors import (
     UnauthorizedError,
 )
 from mesh.outbox.service import emit_realtime
+from mesh.search.projection import recompute_for_user
 
 MFA_ISSUER = "Mesh"
 MFA_TICKET_TYPE = "mfa"
@@ -159,6 +160,12 @@ def user_to_dict(user: User) -> dict:
         "settings": user.settings or {},
         "mfa_enabled": user.mfa_enabled_at is not None,
         "last_login_at": user.last_login_at,
+        # Active-workspace restoration hint (search-command-palette.md §3.4).
+        "last_active_workspace_id": (
+            str(user.last_active_workspace_id)
+            if user.last_active_workspace_id is not None
+            else None
+        ),
         "created_at": user.created_at,
         # theme.md §4.5: pending-queue conflict strategy needs the server's
         # updated_at to detect "server newer → discard stale local write".
@@ -1020,6 +1027,10 @@ class AuthService:
                 raise NotFoundError("user not found")
             if patch.display_name is not None:
                 user.display_name = patch.display_name
+                # Search projection (§2.2): rename → resync every member row
+                # of this identity across all workspaces, same transaction.
+                await session.flush()
+                await recompute_for_user(session, user_id)
             if patch.avatar_url is not None:
                 _validate_avatar_url(patch.avatar_url)
                 user.avatar_url = patch.avatar_url

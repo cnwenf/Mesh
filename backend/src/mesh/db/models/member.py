@@ -71,7 +71,6 @@ class Member(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
-
     __table_args__ = (
         CheckConstraint(f"member_type IN {MEMBER_TYPE_VALUES!r}", name="members_member_type"),
         CheckConstraint(f"role IN {MEMBER_ROLE_VALUES!r}", name="members_role"),

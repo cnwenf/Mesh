@@ -49,6 +49,7 @@ from mesh.member.display import resolve_display_name
 from mesh.member.owner_guard import LAST_OWNER_CODE, lock_active_owner_set
 from mesh.member.reassign import DEFAULT_REASSIGN_STATUSES, IssueReassigner, NullReassigner
 from mesh.outbox.service import emit_realtime
+from mesh.search.projection import sync_member_search_name
 from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
@@ -372,6 +373,8 @@ class MemberService:
                 )
                 session.add(member)
             await session.flush()
+            # Search projection (§2.2 sync contract): same transaction.
+            await sync_member_search_name(session, member.id)
 
             await emit_realtime(
                 session,
@@ -512,6 +515,9 @@ class MemberService:
                     changes["display_override"] = new_display
                     if audit_action == "member.updated":
                         audit_action = "member.profile_updated"
+                    # Search projection (§2.2): flush the override, resync.
+                    await session.flush()
+                    await sync_member_search_name(session, member.id)
 
             if not changes:
                 # §6.9: no field change → no event, no audit.

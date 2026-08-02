@@ -11,6 +11,8 @@ Objects created:
 - ``public.mesh_search_norm(TEXT)`` — the SINGLE normalization entry point
   (NFKD + unaccent + lower; plpgsql IMMUTABLE PARALLEL SAFE so expression
   indexes stay matched across planner versions, spec §2.2 R5-H3);
+- ``public.mesh_search_text_score(TEXT, TEXT)`` — the integer §4.6 scoring
+  ladder used by SQL ordering/keyset paging and mirrored by ``scoring.py``;
 - ``members.search_name`` — search-only projection of the README §6.1
   display-name resolution chain, backfilled in ≤10k-row batches;
 - 11 search indexes (9 mesh_search_norm expression indexes + 2 projection
@@ -38,6 +40,8 @@ revision = "0035"
 down_revision = "0034"
 branch_labels = None
 depends_on = None
+
+APP_ROLE = "mesh_app"
 
 # The display-name resolution chain (README §6.1 / member.md §2.4) computed
 # in SQL over a members row + its optional users/agents JOINs — shared by the
@@ -81,14 +85,17 @@ SUPPORT_INDEXES: tuple[str, ...] = (
 def upgrade() -> None:
     _create_extensions_guarded()
     _create_norm_function()
+    _create_score_function()
     _add_projection_column()
     _backfill_projection()
     _create_indexes()
     _create_sync_triggers()
+    _create_resync_function()
 
 
 def downgrade() -> None:
     # Triggers first (they call the helper), then helper + normalizer.
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_resync_search_name(TEXT, UUID)")
     op.execute("DROP TRIGGER IF EXISTS trg_agents_search_name ON agents")
     op.execute("DROP TRIGGER IF EXISTS trg_users_search_name ON users")
     op.execute("DROP TRIGGER IF EXISTS trg_members_search_name ON members")
@@ -100,6 +107,7 @@ def downgrade() -> None:
         op.execute(f"DROP INDEX IF EXISTS {name}")
     # The normalizer has expression-index dependents — they must be gone
     # first (above); DROP refusal is the integrity backstop.
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_text_score(TEXT, TEXT)")
     op.execute("DROP FUNCTION IF EXISTS public.mesh_search_norm(TEXT)")
     op.execute("ALTER TABLE members DROP COLUMN IF EXISTS search_name")
     _drop_guarded_extensions()
@@ -117,6 +125,13 @@ def _create_extensions_guarded() -> None:
           name TEXT PRIMARY KEY
         )
         """
+    )
+    # The ledger controls what downgrade may DROP. Default privileges grant
+    # the app role DML on new tables, so revoke immediately while retaining
+    # migration-owner access. Keep each statement separate for asyncpg.
+    op.execute("REVOKE ALL PRIVILEGES ON TABLE mesh_search_ext_ledger FROM PUBLIC")
+    op.execute(
+        f"REVOKE ALL PRIVILEGES ON TABLE mesh_search_ext_ledger FROM {APP_ROLE}"
     )
     op.execute(
         """
@@ -173,6 +188,101 @@ def _create_norm_function() -> None:
     )
 
 
+def _create_score_function() -> None:
+    """Create the database mirror of ``mesh.search.scoring.match_bucket``."""
+    op.execute(
+        r"""
+        CREATE OR REPLACE FUNCTION public.mesh_search_text_score(t TEXT, q TEXT)
+        RETURNS INT
+        LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+        $$
+        DECLARE
+          nt TEXT := public.mesh_search_norm(t);
+          nq TEXT := public.mesh_search_norm(q);
+          title_tokens TEXT[];
+          query_tokens TEXT[];
+          boundary_tokens TEXT[];
+          acronym TEXT := '';
+          token TEXT;
+          query_token TEXT;
+          all_match BOOLEAN;
+          needle TEXT;
+          needle_pos INT;
+          index_pos INT;
+        BEGIN
+          IF nq = '' OR nt = '' THEN RETURN 0; END IF;
+          IF nt = nq THEN RETURN 90; END IF;
+          IF nt LIKE nq || '%' THEN RETURN 80; END IF;
+
+          title_tokens := regexp_split_to_array(nt, '[[:space:]_./-]+');
+          query_tokens := regexp_split_to_array(nq, '[[:space:]_./-]+');
+
+          IF cardinality(query_tokens) > 1 THEN
+            all_match := TRUE;
+            FOREACH query_token IN ARRAY query_tokens LOOP
+              IF query_token = '' OR NOT EXISTS (
+                SELECT 1 FROM unnest(title_tokens) AS tt
+                WHERE tt <> '' AND tt LIKE query_token || '%'
+              ) THEN
+                all_match := FALSE;
+                EXIT;
+              END IF;
+            END LOOP;
+            IF all_match THEN RETURN 70; END IF;
+
+            all_match := TRUE;
+            FOREACH query_token IN ARRAY query_tokens LOOP
+              IF query_token = '' OR NOT EXISTS (
+                SELECT 1 FROM unnest(title_tokens) AS tt
+                WHERE tt <> '' AND position(query_token IN tt) > 0
+              ) THEN
+                all_match := FALSE;
+                EXIT;
+              END IF;
+            END LOOP;
+            IF all_match THEN RETURN 40; END IF;
+            needle := array_to_string(query_tokens, ' ');
+          ELSE
+            FOREACH token IN ARRAY title_tokens LOOP
+              IF token <> '' AND token LIKE nq || '%' THEN RETURN 70; END IF;
+              IF token <> '' THEN acronym := acronym || left(token, 1); END IF;
+            END LOOP;
+            IF length(nq) >= 2 AND acronym = nq THEN RETURN 60; END IF;
+
+            boundary_tokens := regexp_split_to_array(
+              public.mesh_search_norm(
+                regexp_replace(t, '([[:lower:][:digit:]])([[:upper:]])', E'\\1 \\2', 'g')
+              ),
+              '[[:space:]_./-]+'
+            );
+            FOREACH token IN ARRAY boundary_tokens LOOP
+              IF token <> '' AND token LIKE nq || '%' THEN RETURN 50; END IF;
+            END LOOP;
+            IF position(nq IN nt) > 0 THEN RETURN 40; END IF;
+            needle := nq;
+          END IF;
+
+          needle_pos := 1;
+          FOR index_pos IN 1..length(nt) LOOP
+            IF substring(nt FROM index_pos FOR 1) =
+               substring(needle FROM needle_pos FOR 1) THEN
+              needle_pos := needle_pos + 1;
+              IF needle_pos > length(needle) THEN RETURN 20; END IF;
+            END IF;
+          END LOOP;
+
+          -- This function is evaluated only for rows recalled by a prefix or
+          -- trigram/substring predicate. An otherwise unclassified trigram hit
+          -- receives the deterministic fuzzy floor.
+          RETURN 10;
+        END $$;
+        """
+    )
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION public.mesh_search_text_score(TEXT, TEXT) TO {APP_ROLE}"
+    )
+
+
 def _add_projection_column() -> None:
     op.execute(
         "ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT ''"
@@ -180,7 +290,8 @@ def _add_projection_column() -> None:
     op.execute(
         """
         COMMENT ON COLUMN members.search_name IS
-          '检索专用投影 = public.mesh_search_norm(README §6.1 显示名解析链结果);仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2'
+          '检索专用投影 = public.mesh_search_norm(README §6.1 显示名解析链结果);'
+          '仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2'
         """
     )
 
@@ -391,4 +502,64 @@ def _create_sync_triggers() -> None:
         AFTER UPDATE OF name ON agents
         FOR EACH ROW EXECUTE FUNCTION public.mesh_search_sync_agent()
         """
+    )
+
+    # These SECURITY DEFINER helpers are trigger internals. PostgreSQL grants
+    # EXECUTE to PUBLIC for new functions by default; leaving that grant in
+    # place would let an app connection call the cross-tenant lookup helper
+    # directly. Trigger execution does not require caller EXECUTE privileges.
+    for signature in (
+        "public.mesh_member_search_name(UUID)",
+        "public.mesh_search_sync_member()",
+        "public.mesh_search_sync_user()",
+        "public.mesh_search_sync_agent()",
+    ):
+        op.execute(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
+
+
+def _create_resync_function() -> None:
+    """Compatibility entry point for write paths and the reconcile worker.
+
+    Main's triggers keep the projection current for ordinary writes. Existing
+    service write paths still call this function in the same transaction, and
+    the daily worker uses ``kind='all'`` to repair out-of-band drift. Both paths
+    share the trigger helper, so there is still one display-chain computation.
+    """
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_resync_search_name(
+          p_kind TEXT,
+          p_id UUID DEFAULT NULL
+        ) RETURNS BIGINT
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS
+        $$
+        DECLARE
+          changed BIGINT;
+        BEGIN
+          IF p_kind NOT IN ('member', 'user', 'agent', 'all') THEN
+            RAISE EXCEPTION 'mesh_resync_search_name: unknown kind %', p_kind;
+          END IF;
+          IF p_kind <> 'all' AND p_id IS NULL THEN
+            RAISE EXCEPTION 'mesh_resync_search_name: id is required for kind %', p_kind;
+          END IF;
+
+          UPDATE members m
+          SET search_name = public.mesh_member_search_name(m.id)
+          WHERE (
+              p_kind = 'all'
+              OR (p_kind = 'member' AND m.id = p_id)
+              OR (p_kind = 'user' AND m.user_id = p_id)
+              OR (p_kind = 'agent' AND m.agent_id = p_id)
+            )
+            AND m.search_name IS DISTINCT FROM public.mesh_member_search_name(m.id);
+          GET DIAGNOSTICS changed = ROW_COUNT;
+          RETURN changed;
+        END $$;
+        """
+    )
+    op.execute(
+        "REVOKE ALL ON FUNCTION public.mesh_resync_search_name(TEXT, UUID) FROM PUBLIC"
+    )
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION public.mesh_resync_search_name(TEXT, UUID) TO {APP_ROLE}"
     )

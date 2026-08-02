@@ -5,7 +5,7 @@
  *
  * 新 i18n 键(search.*)不断言译文,断言 testid/role/结构;既有 prop 文案照旧断言。
  */
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,8 +35,20 @@ const spies = {
 
 function registerCommands(): void {
   const commands: ShortcutCommand[] = [
-    { id: 'new-issue', label: 'Create issue', group: 'global', keywords: ['new', 'create'], run: spies.newIssue },
-    { id: 'goto-board', label: 'Go to board', group: 'board', keywords: ['kanban'], run: spies.gotoBoard },
+    {
+      id: 'new-issue',
+      label: 'Create issue',
+      group: 'global',
+      keywords: ['new', 'create'],
+      run: spies.newIssue,
+    },
+    {
+      id: 'goto-board',
+      label: 'Go to board',
+      group: 'board',
+      keywords: ['kanban'],
+      run: spies.gotoBoard,
+    },
     { id: 'toggle-theme', label: 'Toggle theme', group: 'global', run: spies.toggleTheme },
   ];
   act(() => {
@@ -160,6 +172,36 @@ describe('CommandPalette — 既有 prop 面回归', () => {
     expect(input).toHaveAttribute('aria-activedescendant', options[0]?.id ?? '');
   });
 
+  it('由关闭态动态打开后搜索框保持聚焦', async () => {
+    const user = userEvent.setup();
+    function Harness(): React.JSX.Element {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open palette
+          </button>
+          <CommandPalette
+            open={open}
+            onClose={() => setOpen(false)}
+            {...PALETTE_PROPS}
+            workspaceId="ws-1"
+            userId="u-1"
+            favoritesProvider={EMPTY_FAVORITES}
+          />
+        </div>
+      );
+    }
+
+    renderWithProviders(
+      <StrictMode>
+        <Harness />
+      </StrictMode>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open palette' }));
+    expect(screen.getByRole('combobox')).toHaveFocus();
+  });
+
   it('按 label / keywords 过滤', async () => {
     const user = userEvent.setup();
     renderPalette();
@@ -183,7 +225,10 @@ describe('CommandPalette — 既有 prop 面回归', () => {
     const input = screen.getByRole('combobox');
     await user.keyboard('{ArrowDown}');
     expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
-    expect(input).toHaveAttribute('aria-activedescendant', screen.getAllByRole('option')[1]?.id ?? '');
+    expect(input).toHaveAttribute(
+      'aria-activedescendant',
+      screen.getAllByRole('option')[1]?.id ?? '',
+    );
     await user.keyboard('{ArrowUp}{ArrowUp}');
     expect(screen.getAllByRole('option')[2]).toHaveAttribute('aria-selected', 'true');
   });
@@ -217,7 +262,7 @@ describe('CommandPalette — 既有 prop 面回归', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('关闭后焦点归还;重新打开查询清空', async () => {
+  it('Esc 分层关闭后焦点归还;重新打开查询清空', async () => {
     const user = userEvent.setup();
     function Harness(): React.JSX.Element {
       const [open, setOpen] = useState(false);
@@ -242,6 +287,11 @@ describe('CommandPalette — 既有 prop 面回归', () => {
     await user.click(trigger);
     await user.type(screen.getByRole('combobox'), 'theme');
     expect(screen.getAllByRole('option')).toHaveLength(1);
+    // §4.5:输入框获焦时首个 Esc 仅失焦,面板保持打开。
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+    // 第二个 Esc 才关闭面板并把焦点归还触发按钮。
     await user.keyboard('{Escape}');
     expect(trigger).toHaveFocus();
     await user.click(trigger);
@@ -336,6 +386,23 @@ describe('CommandPalette — 六类检索与键盘', () => {
     openSpy.mockRestore();
   });
 
+  it('mod+click 以新标签打开规范深链并保留当前上下文', async () => {
+    stubGlobalFetch(() =>
+      fakeResponse({ body: { data: [issueItem('10', 'Firefox 崩溃')], next_cursor: null } }),
+    );
+    resetApiClient();
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    vi.useFakeTimers();
+    renderPalette();
+    await act(async () => {
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Firefox' } });
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    fireEvent.click(screen.getByTestId('palette-opt-issue:10'), { ctrlKey: true });
+    expect(openSpy).toHaveBeenCalledWith('/issues/10', '_blank', 'noopener');
+    openSpy.mockRestore();
+  });
+
   it('异步补入按稳定 id 保持选择:命令选中不被实体插入移位,Enter 执行原选中(§4.3.1)', async () => {
     const pending = deferred<Response>();
     stubGlobalFetch(() => pending.promise);
@@ -348,7 +415,10 @@ describe('CommandPalette — 六类检索与键盘', () => {
     });
     // 实体未到,命令命中一条:goto-board(默认选中)
     expect(screen.getByTestId('palette-opt-cmd:goto-board')).toBeInTheDocument();
-    expect(screen.getByTestId('palette-opt-cmd:goto-board')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('palette-opt-cmd:goto-board')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     // 实体响应补入,插入到命令之前
     await act(async () => {
       pending.resolve(
@@ -357,7 +427,10 @@ describe('CommandPalette — 六类检索与键盘', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     // 选中仍是 cmd:goto-board(稳定 id),即使其索引下移
-    expect(screen.getByTestId('palette-opt-cmd:goto-board')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('palette-opt-cmd:goto-board')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     await act(async () => {
       fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
     });
@@ -415,7 +488,10 @@ describe('CommandPalette — no-results / 错误 / offline', () => {
     stubGlobalFetch(() => {
       call += 1;
       return call === 1
-        ? fakeResponse({ status: 422, body: { error: { code: 'query_cost_exceeded', message: 'x' } } })
+        ? fakeResponse({
+            status: 422,
+            body: { error: { code: 'query_cost_exceeded', message: 'x' } },
+          })
         : fakeResponse({ body: { data: [issueItem('1', 'ok')], next_cursor: null } });
     });
     resetApiClient();
@@ -459,11 +535,37 @@ describe('CommandPalette — no-results / 错误 / offline', () => {
 describe('CommandPalette — 空态唯一数据流(§4.2.1)', () => {
   it('favorites(服务端)→ recents(本地,同 target 去重)→ 常用命令(频次倒序)', async () => {
     const favoritesProvider: FavoritesProvider = async () => [
-      { target_type: 'issue', target_id: 'i-dup', title: 'Fav issue', url: '/issues/i-dup', created_at: '2026-02-01T00:00:00Z' },
-      { target_type: 'project', target_id: 'p-1', title: 'Fav project', url: '/projects/p-1', created_at: '2026-01-01T00:00:00Z' },
+      {
+        target_type: 'issue',
+        target_id: 'i-dup',
+        title: 'Fav issue',
+        url: '/issues/i-dup',
+        created_at: '2026-02-01T00:00:00Z',
+      },
+      {
+        target_type: 'project',
+        target_id: 'p-1',
+        title: 'Fav project',
+        url: '/projects/p-1',
+        created_at: '2026-01-01T00:00:00Z',
+      },
     ];
-    pushRecent({ kind: 'object', type: 'issue', id: 'i-dup', title: 'Recent dup', url: '/issues/i-dup', at: 5 });
-    pushRecent({ kind: 'object', type: 'view', id: 'v-9', title: 'Recent view', url: '/views/v-9', at: 6 });
+    pushRecent({
+      kind: 'object',
+      type: 'issue',
+      id: 'i-dup',
+      title: 'Recent dup',
+      url: '/issues/i-dup',
+      at: 5,
+    });
+    pushRecent({
+      kind: 'object',
+      type: 'view',
+      id: 'v-9',
+      title: 'Recent view',
+      url: '/views/v-9',
+      at: 6,
+    });
     trackCommandUse('toggle-theme');
     trackCommandUse('toggle-theme');
 
@@ -488,10 +590,19 @@ describe('CommandPalette — 空态唯一数据流(§4.2.1)', () => {
     const failing: FavoritesProvider = async () => {
       throw new Error('boom');
     };
-    pushRecent({ kind: 'object', type: 'view', id: 'v-1', title: 'Recent view', url: '/views/v-1', at: 1 });
+    pushRecent({
+      kind: 'object',
+      type: 'view',
+      id: 'v-1',
+      title: 'Recent view',
+      url: '/views/v-1',
+      at: 1,
+    });
     renderPalette({ favoritesProvider: failing });
     await waitFor(() => expect(screen.getByText('Recent view')).toBeInTheDocument());
-    const labels = screen.getAllByRole('group').map((group) => group.getAttribute('aria-label') ?? '');
+    const labels = screen
+      .getAllByRole('group')
+      .map((group) => group.getAttribute('aria-label') ?? '');
     expect(labels.some((label) => label === 'Favorites')).toBe(false);
   });
 });
@@ -535,7 +646,13 @@ describe('CommandPalette — 激活副作用与平台分支', () => {
   it('收藏选项点击:stableId(fav:{type}:{id})解析为对象 recent', async () => {
     const onClose = vi.fn();
     const favoritesProvider: FavoritesProvider = async () => [
-      { target_type: 'issue', target_id: 'i-fav', title: 'Fav issue', url: '/issues/i-fav', created_at: '2026-02-01T00:00:00Z' },
+      {
+        target_type: 'issue',
+        target_id: 'i-fav',
+        title: 'Fav issue',
+        url: '/issues/i-fav',
+        created_at: '2026-02-01T00:00:00Z',
+      },
     ];
     renderPalette({ favoritesProvider, onClose });
     await screen.findByText('Fav issue');
@@ -552,7 +669,13 @@ describe('CommandPalette — 激活副作用与平台分支', () => {
 
   it('收藏目标类型未知时 type 落 undefined(仍记录深链 recent)', async () => {
     const favoritesProvider: FavoritesProvider = async () => [
-      { target_type: 'weird', target_id: 'w-1', title: 'Weird fav', url: '/w/1', created_at: '2026-02-01T00:00:00Z' },
+      {
+        target_type: 'weird',
+        target_id: 'w-1',
+        title: 'Weird fav',
+        url: '/w/1',
+        created_at: '2026-02-01T00:00:00Z',
+      },
     ];
     renderPalette({ favoritesProvider });
     await screen.findByText('Weird fav');
@@ -564,7 +687,13 @@ describe('CommandPalette — 激活副作用与平台分支', () => {
 
   it('收藏 target_id 为空时守卫为 null,不写 recents', async () => {
     const favoritesProvider: FavoritesProvider = async () => [
-      { target_type: 'issue', target_id: '', title: 'Empty id fav', url: '/issues/x', created_at: '2026-02-01T00:00:00Z' },
+      {
+        target_type: 'issue',
+        target_id: '',
+        title: 'Empty id fav',
+        url: '/issues/x',
+        created_at: '2026-02-01T00:00:00Z',
+      },
     ];
     renderPalette({ favoritesProvider });
     await screen.findByText('Empty id fav');

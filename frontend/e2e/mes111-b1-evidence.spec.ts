@@ -26,6 +26,20 @@ async function presetDark(page: import('@playwright/test').Page): Promise<void> 
   });
 }
 
+/** 登录后通过真实设置控件写入服务端权威偏好,再回首页拍摄暗色工作台。 */
+async function persistAuthenticatedDark(page: import('@playwright/test').Page): Promise<void> {
+  await page.goto('/settings');
+  const persisted = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/v1/users/me') &&
+      response.request().method() === 'PATCH' &&
+      response.ok(),
+  );
+  await page.getByTestId('theme-select').selectOption('dark');
+  await persisted;
+  await page.goto('/');
+}
+
 /** 稳定化:等网络静默 + 字体就绪,减少截图时机/字体渲染不确定(回归基线前提)。 */
 async function settle(page: import('@playwright/test').Page): Promise<void> {
   await page.waitForLoadState('networkidle');
@@ -237,9 +251,9 @@ test.describe('首页工作台 四组合 + 五块断言(design-quality §3.2 首
   });
 
   test('桌面 1440 暗色', async ({ page }) => {
-    await presetDark(page);
     await page.setViewportSize(DESKTOP);
     await login(page);
+    await persistAuthenticatedDark(page);
     await page.getByTestId('home-greeting').waitFor();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await capture(page, 'desktop-home-dark', true);
@@ -253,9 +267,9 @@ test.describe('首页工作台 四组合 + 五块断言(design-quality §3.2 首
   });
 
   test('手机 390 暗色', async ({ page }) => {
-    await presetDark(page);
     await page.setViewportSize(PHONE);
     await login(page);
+    await persistAuthenticatedDark(page);
     await page.getByTestId('home-greeting').waitFor();
     await capture(page, 'phone-home-dark', true);
   });

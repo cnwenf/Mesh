@@ -9,6 +9,7 @@ derivation + handler idempotency, manual retry + resume.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import uuid
@@ -16,7 +17,9 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from mesh.db.models.integration import WebhookSubscription, WebhookSubscriptionDelivery
 from mesh.db.models.outbox import OutboxEvent
@@ -59,6 +62,7 @@ def make_worker(session_factory, *, transport=None, resolver=None, **overrides):
         timeout_seconds=5,
         break_threshold=overrides.get("break_threshold", 2),
         poll_interval=0.01,
+        batch_size=overrides.get("batch_size", 50),
         http_client_factory=((lambda: httpx.AsyncClient(transport=transport)) if transport else None),
         resolver=resolver or public_resolver,
         clock=lambda: NOW,
@@ -191,6 +195,60 @@ async def test_delivery_success_marks_sent_and_signs(session_factory):
         assert sub.fail_count == 0
 
 
+async def test_concurrent_workers_serialize_deliveries_per_subscription(session_factory):
+    """Only one replica may POST for a subscription at a time.
+
+    Delivery-row ``SKIP LOCKED`` alone is insufficient: two replicas can lock
+    different deliveries for the same subscription, race its circuit-breaker
+    state, and hold a batch transaction open around concurrent network calls.
+    """
+    world = await seed_world(session_factory)
+    subscription, _ = await make_subscription(session_factory, world)
+    first_delivery = await make_delivery(
+        session_factory, world, subscription, event_ref="concurrent-1"
+    )
+    second_delivery = await make_delivery(
+        session_factory, world, subscription, event_ref="concurrent-2"
+    )
+    async with session_factory() as session, session.begin():
+        first_row = await session.get(WebhookSubscriptionDelivery, first_delivery.id)
+        second_row = await session.get(WebhookSubscriptionDelivery, second_delivery.id)
+        first_row.created_at = NOW
+        second_row.created_at = NOW + timedelta(seconds=1)
+
+    first_request_started = asyncio.Event()
+    release_first_request = asyncio.Event()
+    requests: list[httpx.Request] = []
+
+    class BlockingTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if len(requests) == 1:
+                first_request_started.set()
+                await release_first_request.wait()
+            return httpx.Response(200)
+
+    transport = BlockingTransport()
+    first_worker = make_worker(session_factory, transport=transport, batch_size=1)
+    contender = make_worker(session_factory, transport=transport, batch_size=1)
+    first_task = asyncio.create_task(first_worker.run_once())
+    contender_result: int | None = None
+    requests_before_release = -1
+    try:
+        await asyncio.wait_for(first_request_started.wait(), timeout=5)
+        contender_result = await asyncio.wait_for(contender.run_once(), timeout=5)
+        requests_before_release = len(requests)
+    finally:
+        release_first_request.set()
+        first_result = await asyncio.wait_for(first_task, timeout=5)
+
+    assert contender_result == 0, "the locked subscription leaves its second delivery pending"
+    assert requests_before_release == 1, "no concurrent POST for one subscription"
+    assert first_result == 1
+    assert await contender.run_once() == 1
+    assert len(requests) == 2
+
+
 async def test_delivery_failure_retries_with_backoff_then_fails(session_factory):
     world = await seed_world(session_factory)
     subscription, _ = await make_subscription(session_factory, world)
@@ -312,8 +370,20 @@ async def test_derivation_and_dispatch_creates_one_delivery(session_factory):
         assert len(deliveries) == 1
         assert deliveries[0].state == "pending"
     # Redelivery (at-least-once) → UNIQUE(subscription_id, event_ref) no-op.
-    async with session_factory() as session, session.begin():
-        await ob.webhook_dispatch_handler(session, dispatch)
+    engine = session_factory.kw["bind"]
+    integrity_errors: list[BaseException] = []
+
+    def record_database_error(context):
+        if isinstance(context.sqlalchemy_exception, IntegrityError):
+            integrity_errors.append(context.sqlalchemy_exception)
+
+    sqlalchemy_event.listen(engine.sync_engine, "handle_error", record_database_error)
+    try:
+        async with session_factory() as session, session.begin():
+            await ob.webhook_dispatch_handler(session, dispatch)
+    finally:
+        sqlalchemy_event.remove(engine.sync_engine, "handle_error", record_database_error)
+    assert integrity_errors == [], "idempotent redelivery must use conflict-free insertion"
     async with session_factory() as session:
         from mesh.db.tenant import set_tenant_context
 

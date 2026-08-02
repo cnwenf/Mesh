@@ -42,6 +42,67 @@ export interface ShortcutRegistryState {
   setContexts: (contexts: ReadonlyArray<ShortcutContext>) => void;
 }
 
+/**
+ * 上下文特异性序(§4.3.1 写死):issue > board > global;chat 页面独占
+ * (其激活时不叠加 board/issue,但仲裁序上仍高于 global)。
+ */
+export const CONTEXT_SPECIFICITY: Readonly<Record<ShortcutContext, number>> = {
+  global: 0,
+  board: 1,
+  issue: 2,
+  chat: 3,
+};
+
+/** group 是否属当前激活上下文(global 组恒激活)。 */
+export function isContextActive(
+  group: ShortcutContext,
+  activeContexts: ReadonlyArray<ShortcutContext>,
+): boolean {
+  return group === 'global' || activeContexts.includes(group);
+}
+
+/**
+ * 确定性仲裁(§4.3.1):combo 命中且 group 属激活上下文的 handler 集合中取
+ * 特异性最高者;每次按键只执行一个 handler。同优先级冲突是编程错误,已由
+ * registerShortcuts 开发态检查 + CI 静态断言(conflicts.test.ts)拦截,
+ * 此处同分时取先注册者仅为运行时兜底。
+ */
+export function arbitrateShortcut(
+  shortcuts: ReadonlyArray<ShortcutDef>,
+  combo: string,
+  activeContexts: ReadonlyArray<ShortcutContext>,
+): ShortcutDef | null {
+  let best: ShortcutDef | null = null;
+  for (const def of shortcuts) {
+    if (def.combo !== combo || !isContextActive(def.group, activeContexts)) continue;
+    if (best === null || CONTEXT_SPECIFICITY[def.group] > CONTEXT_SPECIFICITY[best.group]) {
+      best = def;
+    }
+  }
+  return best;
+}
+
+/**
+ * 同优先级(同 group)combo 冲突检测(§4.3.1 规则 2)。开发态抛错使冲突在
+ * 本地与 CI 即时暴露,不静默「先注册者胜」。
+ */
+function assertNoSameGroupComboConflicts(defs: ReadonlyArray<ShortcutDef>): void {
+  if (!import.meta.env.DEV) return;
+  const seen = new Map<string, string>();
+  for (const def of defs) {
+    const key = `${def.group}::${def.combo}`;
+    const previous = seen.get(key);
+    if (previous !== undefined) {
+      throw new Error(
+        `Shortcut combo conflict in group '${def.group}': '${def.combo}' registered by both ` +
+          `'${previous}' and '${def.id}'. Same-priority conflicts are programming errors ` +
+          '(search-command-palette.md §4.3.1).',
+      );
+    }
+    seen.set(key, def.id);
+  }
+}
+
 export const useShortcutRegistry = create<ShortcutRegistryState>()((set) => ({
   commands: [],
   shortcuts: [],
@@ -57,9 +118,10 @@ export const useShortcutRegistry = create<ShortcutRegistryState>()((set) => ({
 
   registerShortcuts: (defs) => {
     const ids = new Set(defs.map((def) => def.id));
-    set((state) => ({
-      shortcuts: [...state.shortcuts.filter((item) => !ids.has(item.id)), ...defs],
-    }));
+    // 合并后的全集(同 id 替换旧定义)不得含同 group 同 combo 的两条定义。
+    const merged = [...useShortcutRegistry.getState().shortcuts.filter((item) => !ids.has(item.id)), ...defs];
+    assertNoSameGroupComboConflicts(merged);
+    set(() => ({ shortcuts: merged }));
     return () =>
       set((state) => ({ shortcuts: state.shortcuts.filter((item) => !ids.has(item.id)) }));
   },

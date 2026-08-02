@@ -21,7 +21,14 @@ test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整�
   test('暗色主题在刷新后保持(持久化)', async ({ page }) => {
     await login(page);
     await page.goto('/settings');
+    const persisted = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/v1/users/me') &&
+        response.request().method() === 'PATCH' &&
+        response.ok(),
+    );
     await page.getByTestId('theme-select').selectOption('dark');
+    await persisted;
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   });
@@ -117,7 +124,11 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
     await page.goto('/');
     await page.getByTestId('open-palette').click();
     await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
+    // §4.5 Esc 分层关闭栈:输入框获焦时首个 Esc 仅失焦,第二个 Esc 才关面板。
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).not.toBeVisible();
     await page.getByTestId('open-help').click();
     await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
   });

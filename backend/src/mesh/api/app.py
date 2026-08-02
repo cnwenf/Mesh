@@ -22,10 +22,12 @@ from mesh.agent.triggers import (
 )
 from mesh.analytics.routes import router as analytics_router
 from mesh.analytics.service import AnalyticsService
+from mesh.api.access_log import access_log_dispatch
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
+from mesh.api.html_entry import router as html_entry_router
 from mesh.api.realtime_routes import router as realtime_router
 from mesh.attachment.routes import router as attachment_router
 from mesh.attachment.service import AttachmentService
@@ -52,7 +54,13 @@ from mesh.comment_inbox.channels import register_inbox_checkers
 from mesh.comment_inbox.inbox import InboxService
 from mesh.comment_inbox.routes import router as comment_inbox_router
 from mesh.comment_inbox.service import CommentService
-from mesh.config import Settings, load_settings, validate_auth_settings, validate_infra_settings
+from mesh.config import (
+    Settings,
+    load_settings,
+    validate_auth_settings,
+    validate_infra_settings,
+    validate_search_settings,
+)
 from mesh.data_jobs.channels import register_data_job_checkers
 from mesh.data_jobs.routes import router as data_jobs_router
 from mesh.data_jobs.service import DataJobService
@@ -178,6 +186,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # the well-known dev signing key (auth.md §5.5 — keys not in code/repo).
     # Shared with the realtime gateway factory so the two cannot drift apart.
     validate_auth_settings(settings)
+    # Fail-safe: search cursors are HMAC-signed; production must never sign
+    # with the public dev key (search-command-palette.md §3.2). API-only —
+    # the gateway does not serve /search (validate_search_settings docstring).
+    validate_search_settings(settings)
     # Fail-safe (MES-83): production must connect to PostgreSQL / Redis / object
     # storage with strong, unique credentials — refuse an under-configured deploy
     # at startup instead of coming up on a guessable password.
@@ -359,7 +371,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_data_job_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
+    # Self-managed access log: method + path only, never the query string
+    # (§5.3 — uvicorn's default access log records the full request line and
+    # would leak the raw search q; deployments pass --no-access-log).
+    app.middleware("http")(access_log_dispatch)
     app.include_router(health_router)
+    # Public SPA entry probe (search-command-palette.md §3.4): no auth, no data.
+    app.include_router(html_entry_router)
     app.include_router(realtime_router)
     app.include_router(auth_router)
     app.include_router(device_auth_router)
@@ -377,6 +395,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(comment_inbox_router)
     app.include_router(chat_router)
     app.include_router(favorites_router)
+    app.include_router(search_router)
     app.include_router(onboarding_router)
     app.include_router(agent_router)
     app.include_router(runtime_router)
@@ -387,7 +406,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(squad_router)
     app.include_router(autopilot_router)
     app.include_router(analytics_router)
-    app.include_router(search_router)
     app.include_router(integrations_router)
     app.include_router(integrations_inbound_router)
 

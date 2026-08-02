@@ -38,6 +38,7 @@ import {
   muteIssue,
   readAll,
 } from './api';
+import { setCurrentInboxView } from './currentFilter';
 import { groupNotifications } from './grouping';
 import { InboxPreviewPane } from './InboxPreviewPane';
 import { extractQuietHours, isInQuietHours } from './quietHours';
@@ -63,6 +64,11 @@ export function InboxPage(): React.JSX.Element {
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
 
   const [filter, setFilter] = useState<InboxFilter>('all');
+  // 命令面板「标记全部已读」命令随当前视图 filter 口径(§1.2 S3 命令 ⑧)。
+  useEffect(() => {
+    setCurrentInboxView(workspaceId, filter);
+    return () => setCurrentInboxView(null, 'all');
+  }, [workspaceId, filter]);
   const [notifications, setNotifications] = useState<readonly Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

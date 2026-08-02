@@ -59,6 +59,12 @@ class User(Base):
     )
     mfa_enabled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     last_login_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
+    # Best-effort last active workspace hint for SPA active-workspace restoration
+    # (search-command-palette.md §3.4). Authorization never reads this column;
+    # soft FK (SET NULL) so workspace deletion never blocks on a hint.
+    last_active_workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="SET NULL"), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

@@ -60,7 +60,7 @@ from mesh.integrations.queue_events import (
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.onboarding.consumers import consume_realtime_event as onboarding_consume_realtime_event
 from mesh.outbox.projector import project_realtime_event
-from mesh.outbox.relay import OutboxRelay
+from mesh.outbox.relay import OutboxRelay, isolated_optional_step
 from mesh.realtime.pubsub import RedisFanOut
 from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
 from mesh.runtime.enqueue import (
@@ -92,6 +92,7 @@ from mesh.workers.retention import (
     outbox_retention_loop,
     retention_loop,
 )
+from mesh.workers.search_reconcile import search_reconcile_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
 logger = logging.getLogger("mesh.workers")
@@ -228,20 +229,29 @@ def build_relay(
         # execution.queued / notification.read advance checklists through
         # the §3.5 completion guards (at-least-once safe).
         frames = await project_realtime_event(session, event)
-        try:
-            await match_domain_event(session, event)
-        except Exception:  # noqa: BLE001 — matching must not break projection
-            logger.exception("autopilot event matching failed for %s", event.id)
-        try:
-            await onboarding_consume_realtime_event(session, event)
-        except Exception:  # noqa: BLE001 — onboarding must not break projection
-            logger.exception("onboarding event consumption failed for %s", event.id)
+        # MES-147: each optional consumer runs in its OWN savepoint
+        # (isolated_optional_step). A DB error (deadlock victim, serialization
+        # failure) rolls back to the step savepoint and is re-raised into the
+        # relay failure budget → the event redelivers whole; the batch
+        # transaction stays usable. The old bare-except swallow continued on
+        # the aborted transaction: every later statement failed ("current
+        # transaction is aborted") and the event could never be marked
+        # published. Non-DB errors stay logged-and-skipped (optional steps
+        # must not break projection).
+        await isolated_optional_step(
+            session, "autopilot event matching", event.id, match_domain_event(session, event)
+        )
+        await isolated_optional_step(
+            session,
+            "onboarding event consumption",
+            event.id,
+            onboarding_consume_realtime_event(session, event),
+        )
         # integrations.md §3.4: outbound developer webhooks derive from the
         # same domain-event stream (webhook.dispatch, deduped per event).
-        try:
-            await webhook_dispatch_derive(session, event)
-        except Exception:  # noqa: BLE001 — fan-out must not break projection
-            logger.exception("webhook dispatch derivation failed for %s", event.id)
+        await isolated_optional_step(
+            session, "webhook dispatch derivation", event.id, webhook_dispatch_derive(session, event)
+        )
         return frames
 
     handlers = {
@@ -294,6 +304,10 @@ def build_relay(
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
         poll_interval=settings.outbox_poll_interval,
+        error_backoff=settings.outbox_error_backoff_seconds,
+        failure_backoff=settings.outbox_failure_backoff_seconds,
+        failure_backoff_max=settings.outbox_failure_backoff_max_seconds,
+        lock_timeout=settings.outbox_lock_timeout_seconds,
         fanout=fanout,
     )
 
@@ -390,6 +404,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         break_threshold=settings.webhook_circuit_break_threshold,
         poll_interval=settings.webhook_delivery_poll_interval,
         batch_size=settings.webhook_delivery_batch_size,
+        lock_timeout=settings.outbox_lock_timeout_seconds,
     )
 
     # integrations.md §3.8/§3.10: the im.send fast relay — sole consumer of
@@ -547,6 +562,14 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             TaskSpec(
                 "data-job-reaper",
                 lambda: data_job_reaper_loop(session_factory, settings=settings, stop=stop),
+            ),
+            TaskSpec(
+                "search-reconcile",
+                lambda: search_reconcile_loop(
+                    session_factory,
+                    interval=settings.search_reconcile_interval,
+                    stop=stop,
+                ),
             ),
             # integrations.md §3.9: conversation FIFO queue dispatcher +
             # crash-safe lease repair (five branches, outbox rearm).

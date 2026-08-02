@@ -97,11 +97,9 @@ export async function approveApproval(
   approvalId: string,
   params: DecideParams = {},
 ): Promise<Approval> {
-  return client.request<Approval>(
-    'POST',
-    `${approvalsPath(workspaceId)}/${approvalId}/approve`,
-    { body: { comment: params.comment ?? null } },
-  );
+  return client.request<Approval>('POST', `${approvalsPath(workspaceId)}/${approvalId}/approve`, {
+    body: { comment: params.comment ?? null },
+  });
 }
 
 /** POST /workspaces/{ws}/approvals/{id}/reject(幂等) */
@@ -111,9 +109,7 @@ export async function rejectApproval(
   approvalId: string,
   params: DecideParams = {},
 ): Promise<Approval> {
-  return client.request<Approval>(
-    'POST',
-    `${approvalsPath(workspaceId)}/${approvalId}/reject`,
-    { body: { comment: params.comment ?? null } },
-  );
+  return client.request<Approval>('POST', `${approvalsPath(workspaceId)}/${approvalId}/reject`, {
+    body: { comment: params.comment ?? null },
+  });
 }

@@ -85,11 +85,15 @@ export function commandCountKey(host: string, userId: string, workspaceId: strin
   return `${CMD_COUNT_KEY_PREFIX}:${host}:${userId}:${workspaceId}`;
 }
 
-function resolveScopeParts(): { host: string; userId: string; workspaceId: string } {
+function resolveScopeParts(scope: RecentsScope | null = currentScope): {
+  host: string;
+  userId: string;
+  workspaceId: string;
+} {
   return {
     host: stableHost(),
-    userId: currentScope?.userId ?? ANONYMOUS_USER,
-    workspaceId: currentScope?.workspaceId ?? NO_WORKSPACE,
+    userId: scope?.userId ?? ANONYMOUS_USER,
+    workspaceId: scope?.workspaceId ?? NO_WORKSPACE,
   };
 }
 
@@ -110,19 +114,54 @@ function writeStorage(key: string, value: string): void {
 }
 
 const RECENT_KINDS: ReadonlySet<string> = new Set(['object', 'command']);
+const SEARCH_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'issue',
+  'member',
+  'agent',
+  'project',
+  'view',
+  'chat_session',
+]);
 
-function isRecentEntry(value: unknown): value is RecentEntry {
+function normalizeRecentEntry(value: unknown): RecentEntry | null {
   if (typeof value !== 'object' || value === null) {
-    return false;
+    return null;
   }
   const candidate = value as Record<string, unknown>;
-  return (
+  if (
     typeof candidate.kind === 'string' &&
     RECENT_KINDS.has(candidate.kind) &&
     typeof candidate.id === 'string' &&
     typeof candidate.title === 'string' &&
-    typeof candidate.at === 'number'
-  );
+    typeof candidate.at === 'number' &&
+    Number.isFinite(candidate.at)
+  ) {
+    return candidate as unknown as RecentEntry;
+  }
+
+  // 兼容早期对象形状:{type,id,title,url,at: RFC3339}。读取即升级,避免发布后
+  // API origin 键与旧 window.host 键变化导致用户最近访问静默消失。
+  if (
+    candidate.kind === undefined &&
+    typeof candidate.type === 'string' &&
+    SEARCH_ITEM_TYPES.has(candidate.type) &&
+    typeof candidate.id === 'string' &&
+    typeof candidate.title === 'string' &&
+    typeof candidate.at === 'string'
+  ) {
+    const at = Date.parse(candidate.at);
+    if (Number.isFinite(at)) {
+      return {
+        kind: 'object',
+        type: candidate.type as SearchItemType,
+        id: candidate.id,
+        title: candidate.title,
+        ...(typeof candidate.url === 'string' ? { url: candidate.url } : {}),
+        at,
+      };
+    }
+  }
+  return null;
 }
 
 function parseRecents(raw: string | null): RecentEntry[] {
@@ -138,7 +177,10 @@ function parseRecents(raw: string | null): RecentEntry[] {
   if (!Array.isArray(parsed)) {
     return [];
   }
-  return parsed.filter(isRecentEntry);
+  return parsed.flatMap((entry) => {
+    const normalized = normalizeRecentEntry(entry);
+    return normalized === null ? [] : [normalized];
+  });
 }
 
 /** 条目唯一身份:命令按 commandId,对象按 type + id(去重与 LRU 提前依据) */
@@ -148,14 +190,59 @@ export function recentIdentity(entry: RecentEntry): string {
     : `object:${entry.type ?? ''}:${entry.id}`;
 }
 
-function readRecentsAt(key: string): RecentEntry[] {
-  return parseRecents(readStorage(key));
+function legacyWindowHost(): string | null {
+  try {
+    return typeof window !== 'undefined' && window.location.host !== ''
+      ? window.location.host
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeStorage(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 存储不可用时与其它 recents 操作一致,静默降级。
+  }
+}
+
+/** 读取并惰性迁移当前键/旧 window.host 键,返回唯一规范写入键。 */
+function loadRecents(scope?: RecentsScope): { key: string; entries: RecentEntry[] } {
+  const { host, userId, workspaceId } = resolveScopeParts(scope);
+  const key = recentsKey(host, userId, workspaceId);
+  const raw = readStorage(key);
+  if (raw !== null && raw !== '') {
+    const entries = parseRecents(raw);
+    const normalized = JSON.stringify(entries);
+    if (normalized !== raw) {
+      writeStorage(key, normalized);
+    }
+    return { key, entries };
+  }
+
+  const oldHost = legacyWindowHost();
+  if (oldHost === null) {
+    return { key, entries: [] };
+  }
+  const legacyKey = recentsKey(oldHost, userId, workspaceId);
+  if (legacyKey === key) {
+    return { key, entries: [] };
+  }
+  const legacyRaw = readStorage(legacyKey);
+  if (legacyRaw === null || legacyRaw === '') {
+    return { key, entries: [] };
+  }
+  const entries = parseRecents(legacyRaw);
+  writeStorage(key, JSON.stringify(entries));
+  removeStorage(legacyKey);
+  return { key, entries };
 }
 
 /** 读取当前作用域 recents(按 at 倒序;损坏数据已过滤) */
-export function listRecents(): RecentEntry[] {
-  const { host, userId, workspaceId } = resolveScopeParts();
-  const entries = readRecentsAt(recentsKey(host, userId, workspaceId));
+export function listRecents(scope?: RecentsScope): RecentEntry[] {
+  const { entries } = loadRecents(scope);
   return [...entries].sort((a, b) => b.at - a.at);
 }
 
@@ -164,10 +251,9 @@ export function listRecents(): RecentEntry[] {
  * 返回写入后的新数组(不可变;入参不被修改)。
  */
 export function pushRecent(entry: RecentEntry): RecentEntry[] {
-  const { host, userId, workspaceId } = resolveScopeParts();
-  const key = recentsKey(host, userId, workspaceId);
+  const { key, entries } = loadRecents();
   const identity = recentIdentity(entry);
-  const kept = readRecentsAt(key).filter((existing) => recentIdentity(existing) !== identity);
+  const kept = entries.filter((existing) => recentIdentity(existing) !== identity);
   const next = [entry, ...kept].slice(0, RECENTS_LIMIT);
   writeStorage(key, JSON.stringify(next));
   return [...next];
@@ -177,10 +263,12 @@ export function pushRecent(entry: RecentEntry): RecentEntry[] {
  * 按谓词剔除 recent(如失效对象惰性清理的出口,§4.2.1 局限见 CommandPalette 注释)。
  * 返回剔除后的新数组。
  */
-export function removeRecent(predicate: (entry: RecentEntry) => boolean): RecentEntry[] {
-  const { host, userId, workspaceId } = resolveScopeParts();
-  const key = recentsKey(host, userId, workspaceId);
-  const next = readRecentsAt(key).filter((entry) => !predicate(entry));
+export function removeRecent(
+  predicate: (entry: RecentEntry) => boolean,
+  scope?: RecentsScope,
+): RecentEntry[] {
+  const { key, entries } = loadRecents(scope);
+  const next = entries.filter((entry) => !predicate(entry));
   writeStorage(key, JSON.stringify(next));
   return [...next];
 }
@@ -188,10 +276,14 @@ export function removeRecent(predicate: (entry: RecentEntry) => boolean): Recent
 /** 清空当前作用域 recents(切换账号/工作区无需调用——键隔离自然换键) */
 export function clearRecents(): void {
   const { host, userId, workspaceId } = resolveScopeParts();
-  try {
-    window.localStorage.removeItem(recentsKey(host, userId, workspaceId));
-  } catch {
-    // 存储不可用 → 无操作
+  const key = recentsKey(host, userId, workspaceId);
+  removeStorage(key);
+  const oldHost = legacyWindowHost();
+  if (oldHost !== null) {
+    const legacyKey = recentsKey(oldHost, userId, workspaceId);
+    if (legacyKey !== key) {
+      removeStorage(legacyKey);
+    }
   }
 }
 

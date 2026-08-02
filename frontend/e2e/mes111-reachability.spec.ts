@@ -39,7 +39,7 @@ test.describe('手机可达性 @390×844', () => {
 
   test('「更多」抽屉承载全部次级导航,点选后关闭并跳转', async ({ page }) => {
     await login(page);
-    await page.goto('/');
+    await page.goto('/w/acme/board');
     await page.getByTestId('mobile-nav-more').click();
     const drawer = page.getByRole('dialog', { name: 'All navigation' });
     await expect(drawer).toBeVisible();
@@ -59,10 +59,33 @@ test.describe('手机可达性 @390×844', () => {
     ]) {
       await expect(page.getByTestId('mobile-drawer-nav-' + key)).toBeVisible();
     }
-    await page.getByTestId('mobile-drawer-nav-members').click();
-    await page.waitForURL('**/members');
+    await expect(page.getByTestId('mobile-drawer-nav-skills')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/skills',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-autopilots')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/autopilots',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-runtimes')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/runtimes',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-integrations')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/integrations',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-settings')).toHaveAttribute(
+      'href',
+      '/settings',
+    );
+    await page.getByTestId('mobile-drawer-nav-integrations').click();
+    await page.waitForURL('**/w/acme/automations/integrations');
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await page.screenshot({ path: `${EVIDENCE_DIR}/phone-members-drawer-flow-light.png` });
+    await expect(page.getByText('Page not found')).toHaveCount(0);
+    await page.getByTestId('mobile-nav-more').click();
+    await page.getByTestId('mobile-drawer-nav-settings').click();
+    await page.waitForURL('**/settings');
   });
 
   test('/skills/marketplace 刷新直达(死链修复),旧 /marketplace 兼容重定向', async ({ page }) => {
@@ -76,18 +99,25 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByTestId('marketplace-title')).toBeVisible();
   });
 
-  test('顶栏搜索即统一入口:键入展开同一结果视图弹层并携带查询;Esc 关闭焦点不离输入框', async ({ page }) => {
+  test('顶栏搜索即统一入口:键入把查询交给完整命令面板;分层 Esc 后焦点回输入框', async ({
+    page,
+  }) => {
     await login(page);
     await page.goto('/');
     const topbarSearch = page.getByTestId('topbar-search');
     await topbarSearch.fill('theme');
-    // §4.9:键入即展开与命令面板同一结果视图(PaletteResults)的弹层,顶栏输入框即查询载体
-    const popover = page.getByTestId('topbar-search-popover');
-    await expect(popover).toBeVisible();
-    await expect(topbarSearch).toHaveValue('theme');
-    await expect(topbarSearch).toHaveAttribute('aria-expanded', 'true');
+    // §4.9:首字符即携查询把焦点交给完整命令面板,顶栏不保留第二份查询状态。
+    const palette = page.getByRole('dialog', { name: 'Command palette' });
+    const paletteSearch = palette.getByRole('combobox');
+    await expect(palette).toBeVisible();
+    await expect(paletteSearch).toHaveValue('theme');
+    await expect(topbarSearch).toHaveValue('');
+    // 分层关闭:首个 Esc 只把焦点从查询框交给 dialog,第二个才关闭并恢复触发点。
     await page.keyboard.press('Escape');
-    await expect(popover).toHaveCount(0);
+    await expect(palette).toBeVisible();
+    await expect(paletteSearch).not.toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
     await expect(topbarSearch).toBeFocused();
   });
 
@@ -211,9 +241,7 @@ test.describe('手机可达性 @320×640(极窄视口)', () => {
 const FOUNDATION_EVIDENCE_DIR = 'e2e/evidence/mes111-foundation';
 
 test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
-  test('桌面 1440×900 首页亮/暗:新令牌体系(表面分层/强调色/排版节奏)真实渲染', async ({
-    page,
-  }) => {
+  test('桌面 1440×900 首页亮/暗:新令牌体系(表面分层/强调色/排版节奏)真实渲染', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await login(page);
     await page.goto('/');
@@ -228,9 +256,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-home-dark.png` });
   });
 
-  test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({
-    page,
-  }) => {
+  test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/login');
     await expect(page.locator('input[type="email"], input[name="email"]').first()).toBeVisible();
@@ -248,9 +274,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-dark.png` });
   });
 
-  test('手机 390×844 首页/看板亮/暗:令牌体系在紧凑视口一致呈现且无横向溢出', async ({
-    page,
-  }) => {
+  test('手机 390×844 首页/看板亮/暗:令牌体系在紧凑视口一致呈现且无横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page);
     await page.goto('/');

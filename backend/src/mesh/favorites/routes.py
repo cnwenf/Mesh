@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
 from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
-from mesh.auth.rbac import resolve_workspace_context
+from mesh.auth.rbac import resolve_workspace_by_ref, resolve_workspace_context
 from mesh.db.models.chat import FAVORITE_TARGET_TYPE_VALUES
 from mesh.errors import NotFoundError, ValidationError
 from mesh.favorites.service import DEFAULT_LIMIT, MAX_LIMIT, FavoritesService
@@ -158,14 +158,17 @@ async def list_favorites(
     session: AsyncSession = Depends(get_session),
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> dict:
-    """List the caller's favorites (newest first, dead targets pruned)."""
-    resolved_ws = _path_uuid(workspace_id, message="workspace not found")
+    """List the caller's favorites (newest first, dead targets pruned).
+
+    ``workspace_id`` accepts a UUID or a slug (§3.1 「UUID 或 slug」 —
+    palettes on canonical /w/{slug}/… pages pass the slug).
+    """
     if target_type is not None:
         _validate_target_type(target_type)
-    context = await resolve_workspace_context(session, principal=principal, workspace_id=resolved_ws)
+    context = await resolve_workspace_by_ref(session, principal=principal, ref=workspace_id)
     page = await _service(request).list(
         actor=context.member,
-        workspace_id=resolved_ws,
+        workspace_id=context.workspace.id,
         target_type=target_type,
         cursor=cursor,
         limit=limit,

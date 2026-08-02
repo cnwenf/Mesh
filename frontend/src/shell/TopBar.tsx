@@ -7,28 +7,24 @@
  * tooltip 可读名,连接中/重连/重同步/离线四个进行/异常态才显式呈现文本标签。
  *
  * 搜索框为真实控件(search-command-palette.md §4.9 / design-quality §9.6):
- * - 受控输入;键入即展开输入框下方的内联结果弹层,渲染与命令面板**同一结果组件**
- *   (PaletteResults + usePaletteData,同一 hook 同一数据源,键鼠一致);
+ * - 产品接线使用 `palette` 模式:键入首字符即携查询交接完整命令面板;
+ * - `inline` 模式保留输入框下方结果弹层,渲染与命令面板**同一结果组件**
+ *   (PaletteResults + usePaletteData,同一 hook 同一数据源),供嵌入场景复用;
  * - Enter(无选中项)携带查询展开完整命令面板(onOpenSearch 统一入口);
  *   有选中项 → 直接激活该项(与面板键盘语义一致);
  * - ↑↓ 在弹层内移动选择、Enter 激活、Esc 关闭弹层(再按清空输入);
  * - 无工作区上下文时弹层仅呈现本地命令(workspaceId null → 不请求,§3.2)。
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { NavLink } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { useNavigate } from 'react-router';
 import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
 import { InboxBell } from '../features/inbox';
 import { useT } from '../i18n';
 import type { ConnectionState } from '../realtime';
 import { PaletteResults } from '../shortcuts/PaletteResults';
-import {
-  activatePaletteOption,
-  flattenSections,
-  moveSelection,
-} from '../shortcuts/paletteModel';
+import { activatePaletteOption, flattenSections, moveSelection } from '../shortcuts/paletteModel';
 import type { PaletteOption } from '../shortcuts/paletteModel';
 import { pushRecent, trackCommandUse } from '../shortcuts/recents';
 import { usePaletteContext } from '../shortcuts/usePaletteContext';
@@ -44,6 +40,8 @@ export interface TopBarProps {
   onOpenSearch: (query: string) => void;
   /** favorites 数据源注入(测试);缺省 GET /api/v1/favorites(§6.19) */
   favoritesProvider?: FavoritesProvider;
+  /** 产品按 Spec 使用 palette;inline 保留可复用的紧凑结果形态。 */
+  searchMode?: 'palette' | 'inline';
 }
 
 const TONE_BY_STATE: Record<ConnectionState, StatusDotTone> = {
@@ -76,16 +74,25 @@ const TEXT_VISIBLE_STATES: ReadonlySet<ConnectionState> = new Set<ConnectionStat
 export function TopBar(props: TopBarProps): React.JSX.Element {
   const t = useT();
   const navigate = useNavigate();
-  const { state, onOpenPalette, onOpenHelp, onOpenSearch, favoritesProvider } = props;
+  const {
+    state,
+    onOpenPalette,
+    onOpenHelp,
+    onOpenSearch,
+    favoritesProvider,
+    searchMode = 'inline',
+  } = props;
   const [searchValue, setSearchValue] = useState('');
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listId = useId();
-  const context = usePaletteContext();
+  const location = useLocation();
+  const context = usePaletteContext(location.pathname);
 
   const data = usePaletteData({
     workspaceId: context.workspaceId,
+    workspaceSlug: context.workspaceSlug,
     userId: context.userId,
     query: searchValue,
     enabled: popoverOpen,
@@ -157,6 +164,17 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
 
   const handleSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
     const value = event.target.value;
+    if (searchMode === 'palette') {
+      if (value === '') {
+        setSearchValue('');
+        return;
+      }
+      // §4.9:首字符即把查询与焦点交给完整命令面板;本框不残留第二份状态。
+      setSearchValue('');
+      closePopover();
+      onOpenSearch(value);
+      return;
+    }
     setSearchValue(value);
     setSelectedId(null);
     setPopoverOpen(value.trim() !== '');
@@ -240,7 +258,11 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
       </div>
       <span className="mesh-topbar__conn" data-testid="conn-status">
         {TEXT_VISIBLE_STATES.has(state) ? (
-          <StatusDot tone={TONE_BY_STATE[state]} label={t('status.' + state)} pulse={PULSING_STATES.has(state)} />
+          <StatusDot
+            tone={TONE_BY_STATE[state]}
+            label={t('status.' + state)}
+            pulse={PULSING_STATES.has(state)}
+          />
         ) : (
           // 稳定态:仅状态点(§4.2)。可读名经 aria-label(读屏)+ title(悬停提示)
           // 承载,颜色非唯一信号;不用 Tooltip 组件——其内联浮层在视口右缘会撑出
@@ -260,7 +282,11 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
       </span>
       <span className="mesh-topbar__actions">
         <InboxBell />
-        <IconButton data-testid="open-palette" label={t('a11y.openPalette')} onClick={onOpenPalette}>
+        <IconButton
+          data-testid="open-palette"
+          label={t('a11y.openPalette')}
+          onClick={onOpenPalette}
+        >
           ⌘
         </IconButton>
         <IconButton data-testid="open-help" label={t('a11y.openHelp')} onClick={onOpenHelp}>

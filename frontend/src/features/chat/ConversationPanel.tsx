@@ -30,6 +30,9 @@ import { useChatStream } from './useChatStream';
 import type { ChatMessage, ChatSession } from './types';
 
 const PAGE_LIMIT = 50;
+
+/** mod+↑「编辑上一条」委派事件(ChatPage 登记快捷键,本面板持有消息真源)。 */
+export const CHAT_EDIT_LAST_EVENT = 'mesh-chat-edit-last';
 /** 会触发列表重拉的终态/创建事件(§3.6)。 */
 const RELOAD_EVENTS: ReadonlySet<string> = new Set([
   'message.created',
@@ -66,6 +69,20 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
   const { client, workspaceId, session } = props;
 
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  // mod+↑ 编辑上一条自己消息:以草稿种子预填 composer 并聚焦(§4.3 S12)。
+  const [draftSeed, setDraftSeed] = useState<{ readonly nonce: number; readonly content: string } | null>(null);
+  useEffect(() => {
+    const handleEditLast = (): void => {
+      const lastOwn = [...messagesRef.current].reverse().find((message) => message.role === 'user');
+      if (lastOwn !== undefined) {
+        setDraftSeed({ nonce: Date.now(), content: lastOwn.content });
+      }
+    };
+    window.addEventListener(CHAT_EDIT_LAST_EVENT, handleEditLast);
+    return () => window.removeEventListener(CHAT_EDIT_LAST_EVENT, handleEditLast);
+  }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -343,6 +360,7 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
         quoteMessage={quoteMessage}
         onClearQuote={() => setQuoteMessage(null)}
         disabled={isArchived || stream.isStreaming}
+        draftSeed={draftSeed}
         workspaceId={workspaceId}
       />
 
