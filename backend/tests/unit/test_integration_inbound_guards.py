@@ -269,6 +269,7 @@ async def test_dingtalk_limiter_accounting_does_not_double_count_unlocated(
     monkeypatch, located: bool
 ):
     integration_id = uuid.uuid4()
+    robot_code = "dingrobot0001"
     calls: list[uuid.UUID | None] = []
 
     async def within_budget(_request: Request, *, integration_id: uuid.UUID | None) -> bool:
@@ -276,7 +277,20 @@ async def test_dingtalk_limiter_accounting_does_not_double_count_unlocated(
         return False
 
     async def lookup(*_args, **_kwargs):
-        return [(integration_id, object())] if located else []
+        return (
+            [
+                (
+                    integration_id,
+                    uuid.uuid4(),
+                    "active",
+                    "im_dingtalk",
+                    {"receive_mode": "http", "robot_code": robot_code},
+                    "secret-ref",
+                )
+            ]
+            if located
+            else []
+        )
 
     async def completed(*_args, **_kwargs) -> JSONResponse:
         return JSONResponse(status_code=200, content={"received": True})
@@ -284,7 +298,10 @@ async def test_dingtalk_limiter_accounting_does_not_double_count_unlocated(
     monkeypatch.setattr(ir, "_dingtalk_pre_limit_exceeded", within_budget)
     monkeypatch.setattr(ir, "_lookup_by_config_value", lookup)
     monkeypatch.setattr(ir, "_run_inbound", completed)
-    request = make_request(body=b'{"chatbotCorpId":"dingcorp"}', content_length=None)
+    request = make_request(
+        body=b'{"chatbotCorpId":"dingcorp","robotCode":"dingrobot0001"}',
+        content_length=None,
+    )
     request.app.state.session_factory = lambda: FakeSessionContext()
 
     response = await ir.dingtalk_events(request)
