@@ -27,11 +27,12 @@ describe('registerIssueContextShortcuts(search-command-palette §4.3)', () => {
     `;
   });
 
-  it('激活 issue context，完整注册 E/S/A/P/L/M/mod+Enter/Esc 并在清理时注销', () => {
+  it('保留页面 context，完整注册 E/S/A/P/L/M/mod+Enter/Esc 并在清理时注销', () => {
     const close = vi.fn();
+    useShortcutRegistry.getState().setContexts(['global', 'board', 'issue']);
     const cleanup = registerIssueContextShortcuts({ labels, close });
 
-    expect(useShortcutRegistry.getState().activeContexts).toEqual(['issue']);
+    expect(useShortcutRegistry.getState().activeContexts).toEqual(['global', 'board', 'issue']);
     expect(
       useShortcutRegistry
         .getState()
@@ -44,7 +45,7 @@ describe('registerIssueContextShortcuts(search-command-palette §4.3)', () => {
     ).toHaveLength(8);
 
     cleanup();
-    expect(useShortcutRegistry.getState().activeContexts).toEqual([]);
+    expect(useShortcutRegistry.getState().activeContexts).toEqual(['global', 'board', 'issue']);
     expect(
       useShortcutRegistry.getState().shortcuts.filter((entry) => entry.group === 'issue'),
     ).toEqual([]);

@@ -63,7 +63,10 @@ function AdminSettingsInner(props: {
 export function WorkspaceMembersSettingsPage(): React.JSX.Element {
   const t = useT();
   return (
-    <AdminSettingsGate testId="ws-settings-members" title={t('shortcuts.actionOpenSettingsMembers')}>
+    <AdminSettingsGate
+      testId="ws-settings-members"
+      title={t('shortcuts.actionOpenSettingsMembers')}
+    >
       {(workspaceId) => (
         <section aria-label={t('roles.sectionTitle')}>
           <h2>{t('roles.sectionTitle')}</h2>
@@ -192,12 +195,17 @@ function FieldsSection(props: {
       <section aria-label={t('labels.sectionTitle')}>
         <h2>{t('labels.sectionTitle')}</h2>
         <p>
-          <Link to={`/w/${props.workspaceSlug}/settings/labels`} data-testid="ws-fields-labels-link">
+          <Link
+            className="mesh-ws-settings__resource-link"
+            to={`/w/${props.workspaceSlug}/settings/labels`}
+            data-testid="ws-fields-labels-link"
+          >
             {t('labels.pageTitle')}
           </Link>
         </p>
         <p>
           <Link
+            className="mesh-ws-settings__resource-link"
             to={`/w/${props.workspaceSlug}/settings/custom-fields`}
             data-testid="ws-fields-custom-link"
           >
@@ -220,9 +228,7 @@ export function WorkspaceDangerSettingsPage(): React.JSX.Element {
             <DangerZone workspaceId={workspaceId} workspaceSlug={workspaceSlug} />
           </section>
         ) : (
-          <p data-testid="ws-settings-danger-owner-only">
-            {t('state.permissionDescription')}
-          </p>
+          <p data-testid="ws-settings-danger-owner-only">{t('state.permissionDescription')}</p>
         )
       }
     </AdminSettingsGate>

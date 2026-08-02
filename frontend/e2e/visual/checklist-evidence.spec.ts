@@ -14,6 +14,7 @@ import { prepareVisualPage, waitForStable } from './visual-helpers';
 const THEMES = ['light', 'dark'] as const;
 const EVIDENCE_DIR = resolve('e2e/evidence/mes128-checklist');
 const FIXED_TIME = '2026-07-25T08:00:00.000Z';
+const ISSUE_UUID = '0d3a1f7c-9b2e-4c5a-8f1d-6e7b8c9a0d1e';
 
 interface ChecklistPage {
   readonly row: number;
@@ -237,7 +238,7 @@ const ATTACHMENT = {
   scan_status: 'clean',
   upload_status: 'completed',
   uploader: { id: 'member-human-1', member_type: 'human', display_name: 'Ana' },
-  links: [{ type: 'issue', id: 'issue-1', display: 'inline', position: 0 }],
+  links: [{ type: 'issue', id: ISSUE_UUID, display: 'inline', position: 0 }],
   thumbnail_url: '/api/v1/attachments/img-1/thumbnail?size=md',
   download_url: '/api/v1/attachments/img-1/download',
   created_at: FIXED_TIME,
@@ -367,10 +368,10 @@ const CHECKLIST_PAGES: readonly ChecklistPage[] = [
   {
     row: 27,
     key: 'attachment-lightbox',
-    path: '/issues/issue-1',
+    path: `/w/acme/issues/${ISSUE_UUID}`,
     install: async (page) => {
       const image = await readFile(resolve('e2e/fixtures/mesh-upload.png'));
-      await routeGet(page, '/api/v1/issues/issue-1/attachments', listEnvelope([ATTACHMENT]));
+      await routeGet(page, `/api/v1/issues/${ISSUE_UUID}/attachments`, listEnvelope([ATTACHMENT]));
       await routeGet(
         page,
         '/api/v1/attachments/img-1/thumbnail',

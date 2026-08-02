@@ -78,16 +78,16 @@ export const PAGES: Record<string, VisualPageSpec> = {
   },
   'issue 列表': {
     snapshotKey: 'issues',
-    path: '/issues',
+    path: '/w/acme/issues',
     ready: async (page) => {
-      await page.getByTestId('issue-row-MESH-1').waitFor({ state: 'visible' });
+      await page.locator('.mesh-empty-state').waitFor({ state: 'visible' });
     },
     masks: () => [],
   },
   看板: {
     // 卡片/列计数全由 seed 决定,无时间/随机色;遮罩重同步横幅。
     snapshotKey: 'board',
-    path: '/board',
+    path: '/w/acme/board',
     ready: async (page) => {
       const compact = await page.evaluate(() => matchMedia('(max-width: 599px)').matches);
       await page
@@ -103,7 +103,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
     // 形态后直达详情渲染;旧 `/issues/issue-1` 扁平形态在 MES-79 路由态下构成
     // identifier 重定向自循环,不再使用。
     snapshotKey: 'issue-detail',
-    path: '/issues/by-identifier/MESH-1',
+    path: '/w/acme/issues/0d3a1f7c-9b2e-4c5a-8f1d-6e7b8c9a0d1e',
     ready: async (page) => {
       await page.getByTestId('issue-detail').waitFor({ state: 'visible' });
       await page.getByTestId('comments-panel').waitFor({ state: 'visible' });
@@ -117,7 +117,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   成员: {
     // 无时间戳;头像底色为 CSS 变量(主题确定),文字来自 seed。
     snapshotKey: 'members',
-    path: '/members',
+    path: '/w/acme/members',
     ready: async (page) => {
       const compact = await page.evaluate(() => matchMedia('(max-width: 599px)').matches);
       await page
@@ -129,7 +129,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   聊天: {
     // 选中首个会话展开对话;会话/消息时间戳为相对时间,遮罩。
     snapshotKey: 'chat',
-    path: '/chat',
+    path: '/w/acme/chat',
     ready: async (page) => {
       await page.getByTestId('chat-session-panel').waitFor({ state: 'visible' });
       await page.getByTestId('chat-session-sess-1').waitFor({ state: 'visible' });
@@ -147,7 +147,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   运行详情: {
     // exec-1 终态 completed:elapsed 计时器/进度条遮罩(秒级 tick)。
     snapshotKey: 'execution',
-    path: '/executions/exec-1',
+    path: '/w/acme/executions/exec-1',
     ready: async (page) => {
       await page.getByTestId('execution-detail-page').waitFor({ state: 'visible' });
       await page.getByTestId('execution-panel-logs').waitFor({ state: 'visible' });
@@ -160,7 +160,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   收件箱: {
     // 行内相对时间戳遮罩;未读红点/计数来自 seed(确定)。
     snapshotKey: 'inbox',
-    path: '/inbox',
+    path: '/w/acme/inbox',
     ready: async (page) => {
       await page.getByTestId('inbox-page').waitFor({ state: 'visible' });
       await page.getByTestId('inbox-groups').waitFor({ state: 'visible' });
@@ -169,7 +169,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   },
   自动值守: {
     snapshotKey: 'autopilots',
-    path: '/autopilots',
+    path: '/w/acme/automations/autopilots',
     ready: async (page) => {
       await page.getByTestId('autopilot-row-autopilot-1').waitFor({ state: 'visible' });
     },
@@ -177,7 +177,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   },
   集成: {
     snapshotKey: 'integrations',
-    path: '/integrations',
+    path: '/w/acme/automations/integrations',
     ready: async (page) => {
       await page.getByTestId('integration-row-integration-1').waitFor({ state: 'visible' });
     },
@@ -185,7 +185,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   },
   洞察: {
     snapshotKey: 'insights',
-    path: '/insights',
+    path: '/w/acme/insights',
     ready: async (page) => {
       await page.getByTestId('insights-range').waitFor({ state: 'visible' });
     },

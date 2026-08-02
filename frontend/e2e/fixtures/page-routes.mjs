@@ -755,10 +755,7 @@ export function handlePageRoute(req, res, url, ctx) {
   // UUID 规范主键形态与 issue-1 端点集等价(同一 issue 的两种寻址,§5.1)。
   const effectivePath = path
     .replaceAll(`/api/v1/issues/${ISSUE_UUID}`, '/api/v1/issues/issue-1')
-    .replace(
-      `/squads/assignments/by-issue/${ISSUE_UUID}`,
-      '/squads/assignments/by-issue/issue-1',
-    );
+    .replace(`/squads/assignments/by-issue/${ISSUE_UUID}`, '/squads/assignments/by-issue/issue-1');
 
   // ---- 看板 -------------------------------------------------------------
   if (path === `/api/v1/workspaces/${WORKSPACE_ID}/views`) {
@@ -803,6 +800,10 @@ export function handlePageRoute(req, res, url, ctx) {
     return true;
   }
   if (effectivePath === '/api/v1/issues/issue-1/attachments') {
+    sendJson(res, 200, list([]));
+    return true;
+  }
+  if (effectivePath === '/api/v1/issues/issue-1/vcs-links') {
     sendJson(res, 200, list([]));
     return true;
   }

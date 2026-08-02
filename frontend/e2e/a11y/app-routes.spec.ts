@@ -102,7 +102,7 @@ test('the 13 core-page registry exactly matches manifest core coverage', async (
   );
 });
 
-test('all 63 manifest routes enforce their declared public/protected access', async ({
+test('all manifest routes enforce their declared public/protected access', async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'one project owns the exhaustive access crawl');
@@ -163,7 +163,14 @@ test('workspace and human-only routes enforce their declared permission state', 
   for (const route of PERMISSION_ROUTES.filter((entry) => entry.permission === 'workspace_admin')) {
     await test.step(`${route.id} denies a workspace member`, async () => {
       await page.goto(route.samplePath);
-      await expect(page.getByTestId('ws-settings-denied')).toBeVisible();
+      const deniedTestId = [
+        'workspace-settings-members',
+        'workspace-settings-approvals',
+        'workspace-settings-fields',
+      ].includes(route.id)
+        ? `${route.id.replace('workspace-', 'ws-')}-denied`
+        : 'ws-settings-denied';
+      await expect(page.getByTestId(deniedTestId)).toBeVisible();
     });
   }
 

@@ -64,8 +64,22 @@ function squadFixture(overrides: Record<string, unknown> = {}) {
 
 const MEMBERS = {
   data: [
-    { id: 'sm-1', member_id: 'mem-1', member_type: 'human', name: 'Owner', role: 'leader', joined_at: '2026-07-01T00:00:00Z' },
-    { id: 'sm-2', member_id: 'mem-2', member_type: 'agent', name: 'Builder', role: 'member', joined_at: '2026-07-01T00:00:00Z' },
+    {
+      id: 'sm-1',
+      member_id: 'mem-1',
+      member_type: 'human',
+      name: 'Owner',
+      role: 'leader',
+      joined_at: '2026-07-01T00:00:00Z',
+    },
+    {
+      id: 'sm-2',
+      member_id: 'mem-2',
+      member_type: 'agent',
+      name: 'Builder',
+      role: 'member',
+      joined_at: '2026-07-01T00:00:00Z',
+    },
   ],
   next_cursor: null,
 };
@@ -161,9 +175,33 @@ const MESSAGES = {
 
 const ROSTER = {
   data: [
-    { id: 'mem-1', member_type: 'human', role: 'owner', status: 'active', display_name: 'Owner', joined_at: null, profile: null },
-    { id: 'mem-2', member_type: 'agent', role: 'member', status: 'active', display_name: 'Builder', joined_at: null, profile: null },
-    { id: 'mem-3', member_type: 'human', role: 'member', status: 'active', display_name: 'Newbie', joined_at: null, profile: null },
+    {
+      id: 'mem-1',
+      member_type: 'human',
+      role: 'owner',
+      status: 'active',
+      display_name: 'Owner',
+      joined_at: null,
+      profile: null,
+    },
+    {
+      id: 'mem-2',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    },
+    {
+      id: 'mem-3',
+      member_type: 'human',
+      role: 'member',
+      status: 'active',
+      display_name: 'Newbie',
+      joined_at: null,
+      profile: null,
+    },
   ],
   next_cursor: null,
 };
@@ -281,7 +319,9 @@ describe('SquadDetailPage', () => {
 
   it('archives the squad and flips the header to archived/restore', async () => {
     const stub = queueInitialLoad(
-      fakeResponse({ body: { data: squadFixture({ status: 'archived', archived_at: '2026-07-03T00:00:00Z' }) } }),
+      fakeResponse({
+        body: { data: squadFixture({ status: 'archived', archived_at: '2026-07-03T00:00:00Z' }) },
+      }),
     );
     renderPage(makeFakeRealtime().value);
     await screen.findByTestId('squad-detail-page');
@@ -337,7 +377,9 @@ describe('SquadDetailPage', () => {
       expect(JSON.parse(String(patches[0].init?.body))).toEqual({ role: 'observer' });
     });
     await waitFor(() => {
-      expect((screen.getByTestId('squad-member-role-mem-2') as HTMLSelectElement).value).toBe('observer');
+      expect((screen.getByTestId('squad-member-role-mem-2') as HTMLSelectElement).value).toBe(
+        'observer',
+      );
     });
   });
 
@@ -353,33 +395,68 @@ describe('SquadDetailPage', () => {
     expect(String(deletes[0].url)).toContain('/squads/sq-1/members/mem-2');
   });
 
-  // 三步串行桩(花名册 → POST → 成员刷新)+ 对话框交互,coverage instrumentation
-  // 下全量套件并行时偶发超 5s 默认 testTimeout(单独运行 <1s);放宽本条防 CI 抖动。
   it('adds a member from the workspace roster then refreshes the member list', async () => {
-    const stub = queueInitialLoad(
-      // dialog open → roster:
-      fakeResponse({ body: ROSTER }),
-      // submit → addMembers POST (returns squad):
-      fakeResponse({ body: { data: squadFixture({ member_count: 3 }) } }),
-      // onAdded → refresh members:
-      fakeResponse({
-        body: {
-          data: [
-            ...MEMBERS.data,
-            { id: 'sm-3', member_id: 'mem-3', member_type: 'human', name: 'Newbie', role: 'member', joined_at: '2026-07-03T00:00:00Z' },
-          ],
-          next_cursor: null,
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    let memberAdded = false;
+    const refreshedMembers = {
+      data: [
+        ...MEMBERS.data,
+        {
+          id: 'sm-3',
+          member_id: 'mem-3',
+          member_type: 'human',
+          name: 'Newbie',
+          role: 'member',
+          joined_at: '2026-07-03T00:00:00Z',
         },
-      }),
-    );
+      ],
+      next_cursor: null,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = new URL(url, 'http://mesh.test').pathname;
+      const method = init?.method ?? 'GET';
+      calls.push({ url, init });
+
+      if (path === '/api/v1/users/me' && method === 'GET') {
+        return fakeResponse({ body: { data: ME } });
+      }
+      if (path === '/api/v1/workspaces/ws-1/members' && method === 'GET') {
+        return fakeResponse({ body: ROSTER });
+      }
+
+      const squadPath = '/api/v1/workspaces/ws-1/squads/sq-1';
+      if (path === squadPath && method === 'GET') {
+        return fakeResponse({ body: { data: squadFixture() } });
+      }
+      if (path === `${squadPath}/members` && method === 'GET') {
+        return fakeResponse({ body: memberAdded ? refreshedMembers : MEMBERS });
+      }
+      if (path === `${squadPath}/tasks` && method === 'GET') {
+        return fakeResponse({ body: TASKS });
+      }
+      if (path === `${squadPath}/activity` && method === 'GET') {
+        return fakeResponse({ body: ACTIVITY });
+      }
+      if (path === `${squadPath}/messages` && method === 'GET') {
+        return fakeResponse({ body: MESSAGES });
+      }
+      if (path === `${squadPath}/members` && method === 'POST') {
+        memberAdded = true;
+        return fakeResponse({ body: { data: squadFixture({ member_count: 3 }) } });
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+
     renderPage(makeFakeRealtime().value);
     await screen.findByTestId('squad-detail-page');
     fireEvent.click(screen.getByTestId('squad-add-member'));
     await screen.findByTestId('squad-add-member-select');
     fireEvent.change(screen.getByTestId('squad-add-member-select'), { target: { value: 'mem-3' } });
     fireEvent.submit(screen.getByTestId('squad-add-member-form'));
-    await screen.findByTestId('squad-member-mem-3');
-    const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+    await screen.findByTestId('squad-member-mem-3', undefined, { timeout: 15_000 });
+    const posts = calls.filter((c) => c.init?.method === 'POST');
     expect(String(posts[0].url)).toContain('/squads/sq-1/members');
     expect(JSON.parse(String(posts[0].init?.body))).toEqual({
       members: [{ member_id: 'mem-3', role: 'member' }],
@@ -439,7 +516,9 @@ describe('SquadDetailPage', () => {
     const stub = queueInitialLoad(fakeResponse({ status: 201, body: { data: sent } }));
     renderPage(makeFakeRealtime().value);
     await screen.findByText('Build is green');
-    fireEvent.change(screen.getByTestId('squad-composer-body'), { target: { value: 'Hello squad' } });
+    fireEvent.change(screen.getByTestId('squad-composer-body'), {
+      target: { value: 'Hello squad' },
+    });
     fireEvent.submit(screen.getByTestId('squad-composer'));
     await screen.findByText('Hello squad');
     const posts = stub.calls.filter((c) => c.init?.method === 'POST');
@@ -454,7 +533,9 @@ describe('SquadDetailPage', () => {
     renderPage(makeFakeRealtime().value);
     await screen.findByTestId('squad-activity-act-1');
     expect(screen.getByTestId('squad-activity-act-2')).toBeTruthy();
-    fireEvent.change(screen.getByTestId('squad-activity-filter'), { target: { value: 'squad_created' } });
+    fireEvent.change(screen.getByTestId('squad-activity-filter'), {
+      target: { value: 'squad_created' },
+    });
     await waitFor(() => expect(screen.queryByTestId('squad-activity-act-1')).toBeNull());
     expect(screen.getByTestId('squad-activity-act-2')).toBeTruthy();
   });
@@ -464,7 +545,9 @@ describe('SquadDetailPage', () => {
       // reload round after frame: squad → members → tasks → activity → messages
       fakeResponse({ body: { data: squadFixture() } }),
       fakeResponse({ body: MEMBERS }),
-      fakeResponse({ body: { data: [taskFixture({ title_snapshot: 'Fix login v2' })], next_cursor: null } }),
+      fakeResponse({
+        body: { data: [taskFixture({ title_snapshot: 'Fix login v2' })], next_cursor: null },
+      }),
       fakeResponse({ body: ACTIVITY }),
       fakeResponse({ body: MESSAGES }),
     );

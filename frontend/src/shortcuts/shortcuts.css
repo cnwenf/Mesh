@@ -169,7 +169,7 @@
   inset-block: 0;
   inline-size: 40%;
   border-radius: var(--radius-full);
-  background-color: var(--color-primary);
+  background-color: var(--color-accent);
   animation: mesh-palette-progress 1.2s ease-in-out infinite;
 }
 
@@ -569,28 +569,28 @@
 }
 
 .mesh-palette__badge--status {
-  color: var(--color-info);
-  border-color: var(--color-info);
+  color: var(--color-info-fg);
+  border-color: var(--color-info-border);
 }
 
 .mesh-palette__badge--info {
-  color: var(--color-info);
-  border-color: var(--color-info);
+  color: var(--color-info-fg);
+  border-color: var(--color-info-border);
 }
 
 .mesh-palette__badge--success {
-  color: var(--color-success);
-  border-color: var(--color-success);
+  color: var(--color-success-fg);
+  border-color: var(--color-success-border);
 }
 
 .mesh-palette__badge--warn {
-  color: var(--color-warn);
-  border-color: var(--color-warn);
+  color: var(--color-warning-fg);
+  border-color: var(--color-warning-border);
 }
 
 .mesh-palette__badge--danger {
-  color: var(--color-danger);
-  border-color: var(--color-danger);
+  color: var(--color-danger-fg);
+  border-color: var(--color-danger-border);
 }
 
 /* 状态区:offline 提示 / error + 重试 / no-results(§4.2) */
@@ -609,9 +609,9 @@
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-danger);
+  border: 1px solid var(--color-danger-border);
   border-radius: var(--radius-md);
-  color: var(--color-danger);
+  color: var(--color-danger-fg);
   font-size: var(--font-size-sm);
 }
 
@@ -630,8 +630,8 @@
 
 .mesh-palette__retry:hover,
 .mesh-palette__create:hover {
-  border-color: var(--color-info);
-  color: var(--color-info);
+  border-color: var(--color-info-border);
+  color: var(--color-info-fg);
 }
 
 .mesh-palette__retry:focus-visible,

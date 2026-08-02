@@ -1,12 +1,13 @@
 import { act, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, Route, Routes, useNavigate, useParams } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { MeshApiError } from '../../api/errors';
 import { ThemeProvider, ToastProvider } from '../../design';
 import { I18nProvider } from '../../i18n';
 import { RealtimeContext } from '../../shell/AppShell';
 import type { RealtimeContextValue } from '../../shell/AppShell';
+import { useAuthStore } from '../../state/authStore';
 import { renderWithProviders } from '../../test-utils/render';
 import { WorkspaceProvider, useWorkspace, workspaceChannel } from '../WorkspaceProvider';
 import type { ReactNode } from 'react';
@@ -33,7 +34,9 @@ const DETAIL = {
 function stubClient(...responses: Array<{ status: number; body: unknown }>) {
   const fetchImpl = vi.fn();
   for (const response of responses) {
-    fetchImpl.mockImplementationOnce(() => Promise.resolve(jsonResponse(response.status, response.body)));
+    fetchImpl.mockImplementationOnce(() =>
+      Promise.resolve(jsonResponse(response.status, response.body)),
+    );
   }
   return {
     fetchImpl,
@@ -78,6 +81,19 @@ function RouteDrivenProvider(props: { client: unknown; children: ReactNode }): R
   );
 }
 
+function WorkspaceRouteProbe(): React.JSX.Element {
+  const navigate = useNavigate();
+  const { workspaceSlug } = useParams();
+  return (
+    <>
+      <span data-testid="route-workspace-slug">{workspaceSlug}</span>
+      <button type="button" data-testid="switch-to-beta" onClick={() => navigate('/w/beta')}>
+        beta
+      </button>
+    </>
+  );
+}
+
 function Probe(): React.JSX.Element {
   const context = useWorkspace();
   return (
@@ -87,7 +103,10 @@ function Probe(): React.JSX.Element {
       <span data-testid="probe-owner">{String(context.isOwner)}</span>
       <span data-testid="probe-name">{context.workspace?.name ?? ''}</span>
       <span data-testid="probe-slug">{context.workspace?.slug ?? ''}</span>
-      <span data-testid="probe-locale">{String(context.workspace?.settings.default_locale ?? '')}</span>
+      <span data-testid="probe-error-code">{context.error?.code ?? ''}</span>
+      <span data-testid="probe-locale">
+        {String(context.workspace?.settings.default_locale ?? '')}
+      </span>
       <button type="button" data-testid="probe-refresh" onClick={() => void context.refresh()}>
         refresh
       </button>
@@ -138,6 +157,14 @@ function renderProvider(
   client: unknown,
   realtime?: RealtimeContextValue | null,
 ): ReturnType<typeof render> {
+  return render(providerTree(slug, client, realtime));
+}
+
+function providerTree(
+  slug: string,
+  client: unknown,
+  realtime?: RealtimeContextValue | null,
+): React.JSX.Element {
   const provider = (
     <WorkspaceProvider slug={slug} client={client as never}>
       <Probe />
@@ -149,20 +176,30 @@ function renderProvider(
     ) : (
       provider
     );
-  return render(
+  return (
     <MemoryRouter initialEntries={[`/w/${slug}`]}>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+        <I18nProvider
+          workspaceDefaultLocale={null}
+          reporter={{ report: () => undefined, reported: [] }}
+        >
           <ToastProvider regionLabel="notifications">{tree}</ToastProvider>
         </I18nProvider>
       </ThemeProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
 }
 
 describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.getState().setToken(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    useAuthStore.getState().setToken(null);
   });
 
   it('by-slug 加载成功 → ready + 角色派生', async () => {
@@ -199,6 +236,16 @@ describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
     });
     await waitFor(() => expect(screen.getByTestId('probe-status').textContent).toBe('ready'));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('非 API 异常 → 统一映射为 unknown error', async () => {
+    const client = {
+      request: vi.fn().mockRejectedValue(new Error('transport exploded')),
+    };
+    renderProvider('acme', client);
+
+    await waitFor(() => expect(screen.getByTestId('probe-status').textContent).toBe('error'));
+    expect(screen.getByTestId('probe-error-code').textContent).toBe('unknown');
   });
 
   it('member 角色 → isAdmin/isOwner 均为 false', async () => {
@@ -239,7 +286,10 @@ describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
     render(
       <MemoryRouter initialEntries={['/w/old-acme/settings']}>
         <ThemeProvider>
-          <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+          <I18nProvider
+            workspaceDefaultLocale={null}
+            reporter={{ report: () => undefined, reported: [] }}
+          >
             <ToastProvider regionLabel="notifications">
               <Routes>
                 <Route
@@ -263,6 +313,149 @@ describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
     // 规范化后 URL 指向当前 slug,设置子路由仍在
     await waitFor(() => expect(screen.getByTestId('at-settings')).toBeTruthy());
     await waitFor(() => expect(screen.getByTestId('probe-slug').textContent).toBe('acme-corp'));
+  });
+
+  it('切换 slug 时不会用上一工作区的暂存数据回滚路由', async () => {
+    const beta = { ...DETAIL, id: 'ws-2', name: 'Beta', slug: 'beta' };
+    const { client, fetchImpl } = stubClient({ status: 200, body: { data: DETAIL } });
+    let resolveBeta: ((response: Response) => void) | undefined;
+    fetchImpl.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveBeta = resolve;
+        }),
+    );
+    // 旧数据若错误地把路由推回 acme，会触发第三次加载；给它响应以暴露稳定回滚结果。
+    fetchImpl.mockImplementationOnce(() => Promise.resolve(jsonResponse(200, { data: DETAIL })));
+    render(
+      <MemoryRouter initialEntries={['/w/acme']}>
+        <ThemeProvider>
+          <I18nProvider
+            workspaceDefaultLocale={null}
+            reporter={{ report: () => undefined, reported: [] }}
+          >
+            <ToastProvider regionLabel="notifications">
+              <Routes>
+                <Route
+                  path="/w/:workspaceSlug"
+                  element={
+                    <RouteDrivenProvider client={client}>
+                      <WorkspaceRouteProbe />
+                      <Probe />
+                    </RouteDrivenProvider>
+                  }
+                />
+              </Routes>
+            </ToastProvider>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('probe-slug').textContent).toBe('acme'));
+    act(() => screen.getByTestId('switch-to-beta').click());
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    await act(async () => undefined);
+    const slugWhileBetaLoads = screen.getByTestId('route-workspace-slug').textContent;
+    await act(async () => {
+      resolveBeta?.(jsonResponse(200, { data: beta }));
+    });
+
+    expect(slugWhileBetaLoads).toBe('beta');
+    await waitFor(() => expect(screen.getByTestId('probe-slug').textContent).toBe('beta'));
+  });
+
+  it('快速切换 slug 时丢弃旧请求的迟到成功响应', async () => {
+    const beta = { ...DETAIL, id: 'ws-2', name: 'Beta', slug: 'beta' };
+    const { client, fetchImpl } = stubClient();
+    let resolveAcme: ((response: Response) => void) | undefined;
+    fetchImpl.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveAcme = resolve;
+        }),
+    );
+    fetchImpl.mockImplementationOnce(() => Promise.resolve(jsonResponse(200, { data: beta })));
+
+    render(
+      <MemoryRouter initialEntries={['/w/acme']}>
+        <ThemeProvider>
+          <I18nProvider
+            workspaceDefaultLocale={null}
+            reporter={{ report: () => undefined, reported: [] }}
+          >
+            <ToastProvider regionLabel="notifications">
+              <Routes>
+                <Route
+                  path="/w/:workspaceSlug"
+                  element={
+                    <RouteDrivenProvider client={client}>
+                      <WorkspaceRouteProbe />
+                      <Probe />
+                    </RouteDrivenProvider>
+                  }
+                />
+              </Routes>
+            </ToastProvider>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    act(() => screen.getByTestId('switch-to-beta').click());
+    await waitFor(() => expect(screen.getByTestId('probe-slug').textContent).toBe('beta'));
+
+    await act(async () => {
+      resolveAcme?.(jsonResponse(200, { data: DETAIL }));
+    });
+
+    expect(screen.getByTestId('route-workspace-slug').textContent).toBe('beta');
+    expect(screen.getByTestId('probe-slug').textContent).toBe('beta');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('WS 重连时以现有游标轮询 REST 对账并注入真实帧', async () => {
+    const { client } = stubClient({ status: 200, body: { data: DETAIL } });
+    const realtime = createFakeRealtime('connected');
+    realtime.client.getCursor.mockReturnValue(7);
+    useAuthStore.getState().setToken('jwt-test');
+    const restFetch = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            channel: workspaceChannel('ws-1'),
+            seq: 8,
+            event: 'workspace.updated',
+            payload: { workspace_id: 'ws-1', changes: { name: 'Polled' } },
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    vi.stubGlobal('fetch', restFetch);
+    const view = renderProvider('acme', client, realtime.value);
+    await waitFor(() => expect(screen.getByTestId('probe-status').textContent).toBe('ready'));
+
+    vi.useFakeTimers();
+    view.rerender(
+      providerTree('acme', client, {
+        state: 'reconnecting',
+        client: realtime.value.client,
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersToNextTimerAsync();
+    });
+
+    expect(restFetch).toHaveBeenCalledWith(
+      expect.stringContaining('channel=workspace%3Aws-1&since=7'),
+      expect.objectContaining({ headers: { Authorization: 'Bearer jwt-test' } }),
+    );
+    expect(realtime.client.ingestReconciledEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: workspaceChannel('ws-1'), seq: 8 }),
+    );
+    view.unmount();
   });
 
   it('realtime workspace.updated → changes 浅合并进上下文(settings 键级合并)', async () => {
@@ -302,7 +495,10 @@ describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
     render(
       <MemoryRouter initialEntries={['/w/acme']}>
         <ThemeProvider>
-          <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+          <I18nProvider
+            workspaceDefaultLocale={null}
+            reporter={{ report: () => undefined, reported: [] }}
+          >
             <ToastProvider regionLabel="notifications">
               <RealtimeContext.Provider value={realtime.value}>
                 <WorkspaceProvider slug="acme" client={client as never}>

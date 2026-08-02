@@ -269,6 +269,23 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  if (
+    path === `/api/v1/workspaces/${WORKSPACE_ID}/members/${MEMBER_HUMAN_ID}` &&
+    req.method === 'GET'
+  ) {
+    sendJson(
+      res,
+      200,
+      envelope({
+        ...MEMBERS[0],
+        display_override: null,
+        disabled_at: null,
+        counts: { open_issues_assigned: 0 },
+      }),
+    );
+    return;
+  }
+
   if (path === '/api/v1/inbox/unread-count' && req.method === 'GET') {
     sendJson(res, 200, envelope({ count: 3 }));
     return;

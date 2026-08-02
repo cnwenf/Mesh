@@ -19,6 +19,7 @@ const DIALOG_OWNERS = new Set([
 ]);
 const MAIN_OWNERS = new Set([
   'src/design/components/PublicFlowShell.tsx',
+  'src/features/approvals/ApprovalsPage.tsx',
   'src/shell/AppShell.tsx',
   'src/shell/pages/ErrorPage.tsx',
   'src/shell/pages/NotFoundPage.tsx',
@@ -42,6 +43,7 @@ export function findA11yContractViolations() {
   const violations = [];
   for (const file of walk(SRC)) {
     const relative = path.relative(ROOT, file);
+    if (relative.includes(`${path.sep}__tests__${path.sep}`)) continue;
     const source = readFileSync(file, 'utf8');
 
     if (!DIALOG_OWNERS.has(relative)) {

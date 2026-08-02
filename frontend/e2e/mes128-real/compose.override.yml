@@ -9,6 +9,7 @@ services:
     environment:
       MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
       MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}
+      MESH_SEARCH_CURSOR_SECRET: ${MESH_SEARCH_CURSOR_SECRET:?MESH_SEARCH_CURSOR_SECRET is required}
   gateway:
     ports: !reset []
     environment:

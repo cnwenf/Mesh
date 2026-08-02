@@ -6,6 +6,7 @@
  * - user_code 未命中 → 统一 not_found(不区分原因)。
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../../../i18n';
@@ -167,15 +168,16 @@ describe('DeviceAuthorizationPage', () => {
     ['approve', 'Approval failed — try again.'],
     ['deny', 'Denial failed — try again.'],
   ] as const)('shows the %s request error', async (action, message) => {
+    const user = userEvent.setup();
     apiState.confirmation = TWO_WS;
     apiState[`${action}ShouldThrow`] = true;
     renderPage();
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'FAIL-CODE' } });
-    fireEvent.click((screen.getAllByRole('button') as HTMLButtonElement[])[0]);
+    await user.type(screen.getByRole('textbox'), 'FAIL-CODE');
+    await user.click(screen.getByRole('button', { name: 'Check code' }));
     await waitFor(() => expect(screen.getByRole('note')).toBeTruthy());
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'ws-1' } });
-    fireEvent.click(
-      (screen.getAllByRole('button') as HTMLButtonElement[])[action === 'approve' ? 1 : 2],
+    await user.selectOptions(screen.getByRole('combobox'), 'ws-1');
+    await user.click(
+      screen.getByRole('button', { name: action === 'approve' ? 'Approve' : 'Deny' }),
     );
     expect(await screen.findByText(message)).toBeTruthy();
   });

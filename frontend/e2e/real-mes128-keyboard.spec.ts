@@ -406,7 +406,15 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   ]);
   await page.getByTestId('topbar-brand').focus();
   await page.keyboard.press('c');
-  await expect(page).toHaveURL(/\/issues\?create=1/);
+  // 新 main 的规范深链契约在多工作区且无 active workspace 时先进入
+  // workspace picker。继续用键盘选择首个工作区，保留 ?create=1 意图。
+  await expect(page).toHaveURL(/\/workspace-picker\?next=/);
+  const firstWorkspaceChoice = page.getByTestId(`ws-picker-${firstSlug}`);
+  await expect(firstWorkspaceChoice).toBeVisible();
+  await firstWorkspaceChoice.focus();
+  await expect(firstWorkspaceChoice).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/w/${firstSlug}/issues\\?create=1`));
   await issuePageLoadedPromise;
   await expect(page.getByTestId('issues-skeleton')).toBeHidden();
   const createTitle = page.getByTestId('issue-create-title');
@@ -543,6 +551,10 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
     { timeout: RESPONSE_TIMEOUT },
   );
   await page.keyboard.type(secondIssueTitle);
+  // 产品模式在首字符后把查询与焦点交接给完整命令面板；后续键盘导航
+  // 应断言面板内 combobox，而非已清空的顶栏入口。
+  const paletteInput = page.getByRole('dialog').getByRole('combobox');
+  await expect(paletteInput).toBeFocused();
   const searchResponse = await searchResponsePromise;
   expect(searchResponse.status()).toBe(200);
   const searchData =
@@ -557,7 +569,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   });
   // 顶栏搜索的键盘契约要求先用方向键显式选择结果，再由 Enter 激活。
   await page.keyboard.press('ArrowDown');
-  await expect(searchInput).toHaveAttribute(
+  await expect(paletteInput).toHaveAttribute(
     'aria-activedescendant',
     `palette-opt-issue:${secondIssue.id}`,
   );

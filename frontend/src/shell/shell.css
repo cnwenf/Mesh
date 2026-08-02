@@ -775,7 +775,7 @@
 }
 
 .mesh-ws-picker__card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
 }
 
 .mesh-ws-picker__card:focus-visible {
@@ -836,6 +836,14 @@
   display: flex;
   gap: var(--space-2);
   flex-shrink: 0;
+}
+
+/* 设置资源入口在精细指针下同样保持完整 44px 命中区（WCAG 2.2 §2.5.8）。 */
+.mesh-ws-settings__resource-link {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 44px;
+  min-block-size: 44px;
 }
 
 /* ===== 成员详情资料卡(§3.4 规范深链)===== */

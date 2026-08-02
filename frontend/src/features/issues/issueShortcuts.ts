@@ -46,7 +46,6 @@ export function registerIssueContextShortcuts(
   options: RegisterIssueContextShortcutsOptions,
 ): () => void {
   const registry = useShortcutRegistry.getState();
-  registry.setContexts(['issue']);
   const actions = [
     {
       id: 'issue.edit',
@@ -85,7 +84,7 @@ export function registerIssueContextShortcuts(
       run: () => focus('issue-detail-milestone'),
     },
     {
-      id: 'issue.comment.submit',
+      id: 'issue.submit.comment',
       combo: 'mod+enter',
       label: options.labels.submitComment,
       run: () =>
@@ -103,6 +102,5 @@ export function registerIssueContextShortcuts(
   return () => {
     unregisterShortcuts();
     for (const unregister of unregisterCommands) unregister();
-    registry.setContexts([]);
   };
 }

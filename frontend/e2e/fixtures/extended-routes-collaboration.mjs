@@ -549,19 +549,6 @@ export function handleExtendedCollaborationRoute(req, res, url) {
     return true;
   }
 
-  // Both identifier resolver routes call the same workspace-scoped endpoint.
-  if (
-    path ===
-    `/api/v1/workspaces/${WORKSPACE_ID}/issues/by-identifier/${IDENTIFIER_ISSUE.identifier}`
-  ) {
-    sendJson(res, 200, single(IDENTIFIER_ISSUE));
-    return true;
-  }
-  if (path === `/api/v1/issues/${IDENTIFIER_ISSUE.id}/vcs-links`) {
-    sendJson(res, 200, list([]));
-    return true;
-  }
-
   // Agent overview plus the GETs used by its history and skills tabs.
   if (path === `/api/v1/workspaces/${WORKSPACE_ID}/agents/${AGENT.id}`) {
     sendJson(res, 200, single(AGENT));

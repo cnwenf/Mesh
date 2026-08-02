@@ -29,6 +29,7 @@ umask 077
   echo "MESH_STORAGE_SECRET_KEY=$(gen_secret)"
   echo "MESH_JWT_SECRET=$(gen_secret)"
   echo "MESH_DEVICE_CODE_PEPPER=$(gen_secret)"
+  echo "MESH_SEARCH_CURSOR_SECRET=$(gen_secret)"
   echo 'MESH_AUTH_MODE=production'
   echo 'MESH_SESSION_COOKIE_SECURE=false'
   echo 'MESH_API_PORT=18420'

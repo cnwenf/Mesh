@@ -22,7 +22,6 @@ import { applyIssueListFrame } from '../../features/issues/realtime';
 import type { IssueSummary } from '../../features/issues/types';
 import { activeWorkspace, fetchMe } from '../../features/members/api';
 import type { MeResponse, Membership } from '../../features/members/types';
-import { OnboardingChecklist } from '../../features/onboarding';
 import { listProjects } from '../../features/projects/api';
 import type { ProjectSummary } from '../../features/projects/types';
 import { listWorkspaceApprovals, listWorkspaceExecutions } from '../../features/runtimes/api';
@@ -567,9 +566,8 @@ function IssueFeedSection(props: IssueFeedSectionProps): React.JSX.Element {
                 title={t('home.feedEmptyTitle')}
                 description={t('home.feedEmptyDescription')}
               />
-              {/* 无数据进 onboarding(design-quality §3.2 首页行):清单自管显隐,
-                  完成/dismiss 后自动收起;有数据的工作台不渲染本分支(无演示内容)。 */}
-              <OnboardingChecklist />
+              {/* 清单由 AppShell 在主内容顶部统一渲染；空工作台只表达
+                  此页的空态，避免同一 onboarding 进度卡在首页重复出现。 */}
             </div>
           ) : (
             <ul className="mesh-home__issue-list" data-testid="home-issue-list">

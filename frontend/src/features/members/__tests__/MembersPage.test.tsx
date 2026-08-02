@@ -243,7 +243,7 @@ describe('MembersPage', () => {
 
     await user.click(screen.getByTestId('member-open-mem-h'));
     const drawer = await screen.findByTestId('member-drawer');
-    expect(drawer).toHaveTextContent('Jane Doe');
+    expect(screen.getByRole('dialog', { name: 'Jane Doe' })).toBeInTheDocument();
     expect(drawer).toHaveTextContent('3'); // open_issues_assigned
   });
 

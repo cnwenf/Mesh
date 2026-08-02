@@ -18,7 +18,6 @@
  */
 /* eslint-disable react-refresh/only-export-components -- 纯工具与列组件同模块契约 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
 import { Icon } from '../../design';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
@@ -469,7 +468,6 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     onQuickCreate,
     highlightCardId,
   } = props;
-  const navigate = useNavigate();
   const t = useT();
   const boardRef = useRef<HTMLDivElement>(null);
   // 形态切换基准为视口模式(§8.1 模式表 compact = 0–599px),matchMedia 即时
@@ -508,55 +506,6 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     [cardsByKey],
   );
 
-  const moveSelectionVertical = useCallback(
-    (delta: -1 | 1) => {
-      setSelection((current) => {
-        if (current === null) return firstSelection();
-        const base = current;
-        if (base === null) return null;
-        const cards = cardsByKey[base.columnKey] ?? [];
-        const index = Math.max(0, Math.min(cards.length - 1, base.index + delta));
-        const card = cards[index];
-        return card === undefined ? base : { cardId: card.id, columnKey: base.columnKey, index };
-      });
-    },
-    [cardsByKey, firstSelection],
-  );
-
-  const moveSelectionHorizontal = useCallback(
-    (delta: -1 | 1) => {
-      setSelection((current) => {
-        if (current === null) return firstSelection();
-        const base = current;
-        if (base === null) return null;
-        let columnIndex = columnKeys.indexOf(base.columnKey) + delta;
-        while (columnIndex >= 0 && columnIndex < columnKeys.length) {
-          const columnKey = columnKeys[columnIndex];
-          if (columnKey === undefined) break;
-          const cards = cardsByKey[columnKey] ?? [];
-          if (cards.length > 0) {
-            const index = Math.min(base.index, cards.length - 1);
-            const card = cards[index];
-            if (card !== undefined) return { cardId: card.id, columnKey, index };
-          }
-          columnIndex += delta;
-        }
-        return base;
-      });
-    },
-    [cardsByKey, columnKeys, firstSelection],
-  );
-
-  const withSelectedCard = useCallback(
-    (action: ((card: BoardSelection) => void) | undefined) => {
-      const target = selection ?? firstSelection();
-      if (target === null) return;
-      if (selection === null) setSelection(target);
-      action?.(target);
-    },
-    [selection, firstSelection],
-  );
-
   // 选中态变化后把真实 DOM 焦点送到卡片；虚拟窗口通过 activeCardId 保证该卡挂载。
   useEffect(() => {
     if (selection === null) return;
@@ -574,91 +523,32 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     if (!exists) setSelection(firstSelection());
   }, [cardsByKey, selection, firstSelection]);
 
-  const focusQuickCreate = useCallback(() => {
-    const target = selection ?? firstSelection();
-    const columnKey = target?.columnKey ?? columns[0]?.key;
-    if (columnKey === undefined) return;
-    boardRef.current
-      ?.querySelector<HTMLInputElement>(`[data-testid="quick-add-${CSS.escape(columnKey)}"]`)
-      ?.focus();
-  }, [selection, firstSelection, columns]);
-
-  // search-command-palette.md §4.3:生产页面实际激活 board context，命令面板与帮助层
-  // 共用同一注册源；离页注销。J/K/H/L 提供不与既有拖拽移动模式冲突的网格选择路径。
+  // search-command-palette.md §4.3:BoardPage owns the keyboard handlers and page context.
+  // Palette commands delegate to those exact registered actions, avoiding a second business path.
   useEffect(() => {
     const registry = useShortcutRegistry.getState();
-    registry.setContexts(['board']);
-    const actions = [
-      {
-        id: 'board.select.previous',
-        combo: 'k',
-        label: t('shortcuts.boardPrevious'),
-        run: () => moveSelectionVertical(-1),
-      },
-      {
-        id: 'board.select.next',
-        combo: 'j',
-        label: t('shortcuts.boardNext'),
-        run: () => moveSelectionVertical(1),
-      },
-      {
-        id: 'board.select.left',
-        combo: 'h',
-        label: t('shortcuts.boardLeft'),
-        run: () => moveSelectionHorizontal(-1),
-      },
-      {
-        id: 'board.select.right',
-        combo: 'l',
-        label: t('shortcuts.boardRight'),
-        run: () => moveSelectionHorizontal(1),
-      },
-      { id: 'board.create', combo: 'c', label: t('shortcuts.boardCreate'), run: focusQuickCreate },
-      {
-        id: 'board.status',
-        combo: 's',
-        label: t('shortcuts.boardStatus'),
-        run: () => withSelectedCard((card) => navigate(`/issues/${card.cardId}?focus=status`)),
-      },
-      {
-        id: 'board.assignee',
-        combo: 'a',
-        label: t('shortcuts.boardAssignee'),
-        run: () => withSelectedCard((card) => navigate(`/issues/${card.cardId}?focus=assignee`)),
-      },
-      {
-        id: 'board.open',
-        combo: 'enter',
-        label: t('shortcuts.boardOpen'),
-        run: () => withSelectedCard((card) => navigate(`/issues/${card.cardId}`)),
-      },
-      {
-        id: 'board.filter',
-        combo: 'f',
-        label: t('shortcuts.boardFilter'),
-        run: () =>
-          document.querySelector<HTMLButtonElement>('[data-testid="panel-toggle-filter"]')?.click(),
-      },
-    ] as const;
-    const unregisterShortcuts = registry.registerShortcuts(
-      actions.map((action) => ({ ...action, group: 'board' as const })),
-    );
-    const unregisterCommands = actions.map((action) =>
-      registry.registerCommand({ ...action, group: 'board' as const }),
-    );
+    const command = (id: string, label: string) =>
+      registry.registerCommand({
+        id,
+        label,
+        group: 'board',
+        run: () => registry.shortcuts.find((shortcut) => shortcut.id === id)?.run(),
+      });
+    const unregisterCommands = [
+      command('board.move.up.vim', t('shortcuts.boardPrevious')),
+      command('board.move.down.vim', t('shortcuts.boardNext')),
+      command('board.move.left.vim', t('shortcuts.boardLeft')),
+      command('board.move.right.vim', t('shortcuts.boardRight')),
+      command('board.new.card', t('shortcuts.boardCreate')),
+      command('board.change.status', t('shortcuts.boardStatus')),
+      command('board.change.assignee', t('shortcuts.boardAssignee')),
+      command('board.open.card', t('shortcuts.boardOpen')),
+      command('board.filter', t('shortcuts.boardFilter')),
+    ];
     return () => {
-      unregisterShortcuts();
       for (const unregister of unregisterCommands) unregister();
-      registry.setContexts([]);
     };
-  }, [
-    t,
-    moveSelectionVertical,
-    moveSelectionHorizontal,
-    focusQuickCreate,
-    withSelectedCard,
-    navigate,
-  ]);
+  }, [t]);
 
   const computePosition = useCallback(
     (columnKey: string, index: number | null) =>

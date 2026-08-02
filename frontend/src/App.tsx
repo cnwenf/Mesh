@@ -63,7 +63,6 @@ import { DeviceAuthorizationPage } from './features/device/DeviceAuthorizationPa
 import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
 import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
-import { NotFoundPage } from './shell/pages/NotFoundPage';
 import { OAuthCallbackPage } from './shell/pages/OAuthCallbackPage';
 import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
@@ -386,7 +385,6 @@ function ShellProviders(): React.JSX.Element {
                   <Route path="*" element={<FlatRouteMigration />} />
                 </Route>
               </Route>
-              <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </ErrorBoundary>
           <CommandPalette

@@ -5,8 +5,8 @@
  *
  * 拖拽经指针事件模拟(jsdom 无 PointerEvent/布局,见 dragTestUtils 说明)。
  */
-import { useState } from 'react';
-import { useLocation } from 'react-router';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShortcutProvider } from '../../../shortcuts/ShortcutProvider';
@@ -74,6 +74,29 @@ function LocationProbe(): React.JSX.Element {
   return <output data-testid="location-probe">{`${location.pathname}${location.search}`}</output>;
 }
 
+/** Production-like parent owner: BoardPage owns keyboard handlers and board context. */
+function BoardOpenShortcutOwner(): null {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const registry = useShortcutRegistry.getState();
+    registry.setContexts(['global', 'board']);
+    const unregister = registry.registerShortcuts([
+      {
+        id: 'board.open.card',
+        combo: 'enter',
+        label: 'Open card',
+        group: 'board',
+        run: () => navigate('/issues/a'),
+      },
+    ]);
+    return () => {
+      unregister();
+      registry.setContexts([]);
+    };
+  }, [navigate]);
+  return null;
+}
+
 /** 两列(todo 源 / done 目标)+ 矩形 mock,返回拖拽起点卡。 */
 function setupDragScene() {
   const onDropCard = vi.fn();
@@ -124,87 +147,69 @@ describe('BoardColumns 渲染', () => {
     expect(cardA).toHaveAttribute('aria-keyshortcuts');
   });
 
-  it('挂载时激活 board 上下文并注册 Spec 全量快捷键，卸载即复位', () => {
+  it('仅注册 palette 命令，保留 BoardPage 所有的上下文与快捷键', () => {
+    useShortcutRegistry.getState().setContexts(['global', 'board']);
     const view = render({ cardsByKey: { todo: [card('a', 1)] } });
-    expect(useShortcutRegistry.getState().activeContexts).toEqual(['board']);
+    expect(useShortcutRegistry.getState().activeContexts).toEqual(['global', 'board']);
     expect(
       useShortcutRegistry
         .getState()
-        .shortcuts.filter((entry) => entry.group === 'board')
-        .map((entry) => entry.combo)
+        .commands.filter((entry) => entry.group === 'board')
+        .map((entry) => entry.id)
         .sort(),
-    ).toEqual(['a', 'c', 'enter', 'f', 'h', 'j', 'k', 'l', 's'].sort());
+    ).toEqual(
+      [
+        'board.move.up.vim',
+        'board.move.down.vim',
+        'board.move.left.vim',
+        'board.move.right.vim',
+        'board.new.card',
+        'board.change.status',
+        'board.change.assignee',
+        'board.open.card',
+        'board.filter',
+      ].sort(),
+    );
+    expect(useShortcutRegistry.getState().shortcuts).toEqual([]);
 
     view.unmount();
-    expect(useShortcutRegistry.getState().activeContexts).toEqual([]);
-    expect(
-      useShortcutRegistry.getState().shortcuts.filter((entry) => entry.group === 'board'),
-    ).toEqual([]);
+    expect(useShortcutRegistry.getState().activeContexts).toEqual(['global', 'board']);
+    expect(useShortcutRegistry.getState().commands).toEqual([]);
   });
 
-  it('J/K/H/L 选择卡片，C 聚焦当前列快速创建', () => {
-    render({
-      columns: [column({ key: 'todo' }), column({ key: 'done', label: 'board.category.done' })],
-      cardsByKey: { todo: [card('a', 1), card('b', 2)], done: [card('c', 1)] },
-    });
-    const run = (combo: string): void => {
-      const shortcut = useShortcutRegistry
-        .getState()
-        .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo);
-      expect(shortcut).toBeDefined();
-      act(() => shortcut?.run());
-    };
-
-    run('j');
-    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
-    run('j');
-    expect(screen.getByTestId('board-card-b')).toHaveAttribute('aria-current', 'true');
-    run('l');
-    expect(screen.getByTestId('board-card-c')).toHaveFocus();
-
-    run('c');
-    expect(screen.getByTestId('quick-add-done')).toHaveFocus();
-  });
-
-  it('页面默认动作直接走 issue 深链与真实筛选按钮，无需 BoardPage 包装回调', () => {
-    const filterClick = vi.fn();
-    renderWithProviders(
-      <>
-        <button type="button" data-testid="panel-toggle-filter" onClick={filterClick} />
-        <LocationProbe />
-        <BoardColumns
-          columns={[column()]}
-          groupBy="state_category"
-          cardsByKey={{ todo: [card('a', 1)] }}
-          canWrite
-          dragEnabled
-          onToggleCollapse={vi.fn()}
-          onDropCard={vi.fn()}
-          onQuickCreate={vi.fn()}
-        />
-      </>,
-      { route: '/board' },
+  it('palette 命令委托给 BoardPage 注册的同 id handler', () => {
+    const ids = [
+      'board.move.up.vim',
+      'board.move.down.vim',
+      'board.move.left.vim',
+      'board.move.right.vim',
+      'board.new.card',
+      'board.change.status',
+      'board.change.assignee',
+      'board.open.card',
+      'board.filter',
+    ] as const;
+    const runs = ids.map(() => vi.fn());
+    useShortcutRegistry.getState().registerShortcuts(
+      ids.map((id, index) => ({
+        id,
+        combo: `test-${index}`,
+        label: id,
+        group: 'board' as const,
+        run: runs[index]!,
+      })),
     );
-    const run = (combo: string): void => {
-      act(() =>
-        useShortcutRegistry
-          .getState()
-          .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
-          ?.run(),
-      );
-    };
+    render({ cardsByKey: { todo: [card('a', 1)] } });
 
-    run('s');
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/a?focus=status');
-    run('a');
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/a?focus=assignee');
-    run('enter');
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/a');
-    run('f');
-    expect(filterClick).toHaveBeenCalledTimes(1);
+    for (const [index, id] of ids.entries()) {
+      const command = useShortcutRegistry.getState().commands.find((entry) => entry.id === id);
+      expect(command).toBeDefined();
+      act(() => command?.run());
+      expect(runs[index]).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it('网格导航跳过空列并在边界夹紧，数据删除选中卡后回到首卡', () => {
+  it('聚焦卡片建立本地可见选中态，数据删除选中卡后回到首卡', () => {
     const columns = [
       column({ key: 'todo' }),
       column({ key: 'empty', label: 'Empty' }),
@@ -237,57 +242,31 @@ describe('BoardColumns 渲染', () => {
       );
     }
     renderWithProviders(<RefreshHarness />);
-    const run = (combo: string): void => {
-      act(() =>
-        useShortcutRegistry
-          .getState()
-          .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
-          ?.run(),
-      );
-    };
-
-    run('j');
-    run('k');
-    run('h');
-    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
-    run('j');
-    run('j');
+    fireEvent.focus(screen.getByTestId('board-card-b'));
     expect(screen.getByTestId('board-card-b')).toHaveAttribute('aria-current', 'true');
-    run('l');
-    expect(screen.getByTestId('board-card-c')).toHaveFocus();
-    run('l');
-    expect(screen.getByTestId('board-card-c')).toHaveFocus();
 
     fireEvent.click(screen.getByTestId('remove-selected-card'));
     expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
   });
 
-  it('空看板上的快捷键与未提供回调都是安全 no-op', () => {
+  it('父页面尚未注册 handler 时 palette 命令是安全 no-op', () => {
     render({ columns: [], cardsByKey: {} });
-    for (const combo of ['j', 'k', 'h', 'l', 'c', 's', 'a', 'enter', 'f']) {
-      expect(() => {
-        act(() =>
-          useShortcutRegistry
-            .getState()
-            .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
-            ?.run(),
-        );
-      }).not.toThrow();
+    const commands = useShortcutRegistry
+      .getState()
+      .commands.filter((entry) => entry.group === 'board');
+    expect(commands).toHaveLength(9);
+    for (const command of commands) {
+      expect(() => act(() => command.run())).not.toThrow();
     }
   });
 
-  it('未提供可选动作时，选中卡的 S/A/Enter/F 也不会抛错', () => {
+  it('卡片 focus 与 pointerdown 均同步本地选中态', () => {
     render({ cardsByKey: { todo: [card('a', 1)] } });
-    fireEvent.focus(screen.getByTestId('board-card-a'));
-    for (const combo of ['s', 'a', 'enter', 'f']) {
-      act(() =>
-        useShortcutRegistry
-          .getState()
-          .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
-          ?.run(),
-      );
-    }
-    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
+    const cardA = screen.getByTestId('board-card-a');
+    fireEvent.focus(cardA);
+    expect(cardA).toHaveAttribute('aria-current', 'true');
+    fireEvent.pointerDown(cardA, { pointerId: 1, pointerType: 'mouse', button: 0 });
+    expect(cardA).toHaveAttribute('aria-current', 'true');
   });
 
   it('紧凑视口通过单泳道渲染列体', () => {
@@ -661,6 +640,7 @@ describe('BoardColumns ↔ 快捷键分发仲裁(§4.3.1 一键一 handler:移�
     const onDropCard = vi.fn();
     renderWithProviders(
       <ShortcutProvider isMac={false}>
+        <BoardOpenShortcutOwner />
         <LocationProbe />
         <BoardColumns
           columns={[
@@ -685,7 +665,7 @@ describe('BoardColumns ↔ 快捷键分发仲裁(§4.3.1 一键一 handler:移�
     };
   }
 
-  it('移动模式中 Enter 只确认移动,不触发 board.open(一次按键一个 handler)', () => {
+  it('移动模式中 Enter 只确认移动,不触发 board.open.card(一次按键一个 handler)', () => {
     const { onDropCard, cardA, location } = setupArbitration();
     fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 进入移动模式
     fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 选目标列 in_progress
@@ -705,7 +685,7 @@ describe('BoardColumns ↔ 快捷键分发仲裁(§4.3.1 一键一 handler:移�
     expect(location).toHaveTextContent('/board');
   });
 
-  it('非移动模式 Enter 打开卡片:board.open 正常触发(既有行为不回归)', () => {
+  it('非移动模式 Enter 打开卡片:board.open.card 正常触发(既有行为不回归)', () => {
     const { onDropCard, cardA, location } = setupArbitration();
     fireEvent.keyDown(cardA, { key: 'Enter' });
     expect(location).toHaveTextContent('/issues/a');

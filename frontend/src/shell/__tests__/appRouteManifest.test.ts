@@ -82,7 +82,7 @@ function componentName(element: string): string {
 function routeKind(pattern: string, element: string): AppRouteKind {
   if (pattern === '*') return 'not_found';
   if (element.startsWith('<Navigate')) return 'redirect';
-  if (element.startsWith('<IssueByIdentifierRedirect')) return 'resolver_redirect';
+  if (element.startsWith('<WorkspaceIssueByIdentifierRedirect')) return 'resolver_redirect';
   return 'page';
 }
 
@@ -154,14 +154,16 @@ describe('App route manifest (fail closed)', () => {
       kind,
       ...(redirectTo === undefined ? {} : { redirectTo }),
     }));
-    expect(declared).toEqual(actual);
+    const byPattern = (left: ExtractedRoute, right: ExtractedRoute): number =>
+      left.pattern.localeCompare(right.pattern) || left.access.localeCompare(right.access);
+    expect([...declared].sort(byPattern)).toEqual([...actual].sort(byPattern));
   });
 
-  it('uses unique IDs/patterns and a matching concrete sample for every route', () => {
+  it('uses unique IDs/access-qualified patterns and a matching concrete sample for every route', () => {
     expect(new Set(APP_ROUTE_MANIFEST.map(({ id }) => id)).size).toBe(APP_ROUTE_MANIFEST.length);
-    expect(new Set(APP_ROUTE_MANIFEST.map(({ pattern }) => pattern)).size).toBe(
-      APP_ROUTE_MANIFEST.length,
-    );
+    expect(
+      new Set(APP_ROUTE_MANIFEST.map(({ pattern, access }) => `${access}:${pattern}`)).size,
+    ).toBe(APP_ROUTE_MANIFEST.length);
     for (const route of APP_ROUTE_MANIFEST) {
       expect(
         matchPath(

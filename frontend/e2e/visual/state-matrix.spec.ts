@@ -46,6 +46,50 @@ const LONG_TEXT =
   '这是一个用于验证极长内容不会制造横向滚动或遮挡关键操作的确定性标题——' +
   'MES-128-long-content-with-an-unbroken-segment-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const LONG_TIMEZONE = 'America/Argentina/ComodRivadavia';
+const ISSUE_UUID = '0d3a1f7c-9b2e-4c5a-8f1d-6e7b8c9a0d1e';
+
+const LONG_ISSUE = {
+  id: ISSUE_UUID,
+  workspace_id: 'ws-1',
+  project_id: null,
+  project: null,
+  identifier_namespace_key: 'MESH',
+  number: 1,
+  identifier: 'MESH-1',
+  title: LONG_TEXT,
+  description: LONG_TEXT,
+  status: {
+    id: 'st-todo',
+    project_id: null,
+    name: 'Todo',
+    category: 'todo',
+    color: null,
+    position: 0,
+    is_default: true,
+    allowed_transitions: [],
+    created_at: '2026-07-25T08:00:00.000Z',
+    updated_at: '2026-07-25T08:00:00.000Z',
+  },
+  status_id: 'st-todo',
+  state_category: 'todo',
+  priority: 'high',
+  assignee: { id: 'member-human-1', name: 'Ana', member_type: 'human' },
+  assignee_id: 'member-human-1',
+  reporter: { id: 'member-human-1', name: 'Ana', member_type: 'human' },
+  reporter_id: 'member-human-1',
+  estimate: null,
+  estimate_unit: null,
+  due_date: null,
+  start_date: null,
+  milestone_id: null,
+  cycle_id: null,
+  parent_id: null,
+  position: 0,
+  completed_at: null,
+  version: 1,
+  created_at: '2026-07-25T08:00:00.000Z',
+  updated_at: '2026-07-25T08:00:00.000Z',
+};
 
 type PageName = (typeof PAGE_NAMES)[number];
 type VisualState = (typeof REQUIRED_STATES)[number];
@@ -266,7 +310,7 @@ const DATA_FIXTURES: Record<Exclude<PageName, '登录' | '设置'>, DataPageFixt
     longRules: [
       {
         path: '/api/v1/workspaces/ws-1/issues',
-        transform: updateFirstList({ title: LONG_TEXT }),
+        transform: mapData(() => [LONG_ISSUE]),
       },
     ],
     long: async (page) => expect(page.getByText(LONG_TEXT, { exact: true })).toBeVisible(),
@@ -279,7 +323,7 @@ const DATA_FIXTURES: Record<Exclude<PageName, '登录' | '设置'>, DataPageFixt
     longRules: [
       {
         path: '/api/v1/workspaces/ws-1/issues',
-        transform: updateFirstList({ title: LONG_TEXT }),
+        transform: mapData(() => [LONG_ISSUE]),
       },
     ],
     long: async (page) => expect(page.getByText(LONG_TEXT, { exact: true })).toBeVisible(),
@@ -296,21 +340,21 @@ const DATA_FIXTURES: Record<Exclude<PageName, '登录' | '设置'>, DataPageFixt
     long: async (page) => expect(page.getByText(LONG_TEXT, { exact: true })).toBeVisible(),
   },
   'issue 详情': {
-    primaryPath: '/api/v1/issues/issue-1',
+    primaryPath: `/api/v1/issues/${ISSUE_UUID}`,
     loading: (page) => page.locator('.mesh-skeleton'),
     emptyRules: [
       {
-        path: '/api/v1/issues/issue-1',
+        path: `/api/v1/issues/${ISSUE_UUID}`,
         transform: mapData((value) => ({
           ...record(value),
           children_progress: { total: 0, done: 0 },
         })),
       },
-      { path: '/api/v1/issues/issue-1/children', transform: emptyList },
-      { path: '/api/v1/issues/issue-1/dependencies', transform: emptyList },
-      { path: '/api/v1/issues/issue-1/activity', transform: emptyList },
-      { path: '/api/v1/issues/issue-1/comments', transform: emptyList },
-      { path: '/api/v1/issues/issue-1/attachments', transform: emptyList },
+      { path: `/api/v1/issues/${ISSUE_UUID}/children`, transform: emptyList },
+      { path: `/api/v1/issues/${ISSUE_UUID}/dependencies`, transform: emptyList },
+      { path: `/api/v1/issues/${ISSUE_UUID}/activity`, transform: emptyList },
+      { path: `/api/v1/issues/${ISSUE_UUID}/comments`, transform: emptyList },
+      { path: `/api/v1/issues/${ISSUE_UUID}/attachments`, transform: emptyList },
     ],
     empty: async (page) => {
       await expect(page.getByTestId('comments-empty')).toBeVisible();
@@ -320,7 +364,7 @@ const DATA_FIXTURES: Record<Exclude<PageName, '登录' | '设置'>, DataPageFixt
     },
     longRules: [
       {
-        path: '/api/v1/issues/issue-1',
+        path: `/api/v1/issues/${ISSUE_UUID}`,
         transform: mapData((value) => ({
           ...record(value),
           title: LONG_TEXT,
@@ -328,7 +372,7 @@ const DATA_FIXTURES: Record<Exclude<PageName, '登录' | '设置'>, DataPageFixt
         })),
       },
       {
-        path: '/api/v1/issues/issue-1/comments',
+        path: `/api/v1/issues/${ISSUE_UUID}/comments`,
         transform: updateFirstList({ body: LONG_TEXT, content: LONG_TEXT }),
       },
     ],
