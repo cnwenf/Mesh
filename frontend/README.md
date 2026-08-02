@@ -6,17 +6,17 @@ Mesh 的 Web 单页应用(SPA)。本目录是阶段 1·B 的前端地基:工程�
 
 Spec(§3.2)不约束前端框架,仅要求 SPA、乐观更新 + 服务端版本校验、WebSocket 增量合并、离线降级轮询。选型与理由:
 
-| 选型 | 理由 |
-| --- | --- |
-| **React 19 + TypeScript 5** | 生态最成熟、类型安全的组件模型;团队招聘与社区资料成本最低 |
-| **Vite 6** | 开发启动/HMR 快,生产构建(Rollup)成熟;Vitest 同源配置 |
-| **react-router 8** | 事实标准路由;支持规范深链(§6.12 深链模式);v7 收口 6.x 开放重定向审计项(GHSA-wrjc-x8rr-h8h6 / GHSA-337j-9hxr-rhxg),v8 清零 RSC CSRF 审计项(GHSA-qwww-vcr4-c8h2);v8 起 import 自 `react-router`(`react-router-dom` 包已移除),要求 React ≥19.2.7 / Node ≥22.22.0 |
-| **zustand 5** | 轻量全局状态(偏好/鉴权/实时状态),无 Provider 嵌套负担,易测试 |
-| **react-intl 7** | 原生 ICU MessageFormat,直接满足 §6.18 的 CLDR 复数/占位符要求 |
-| **原生 Intl API** | 日期/数字/相对时间/时区本地化零依赖(§6.18 时区化仅展示层) |
-| **原生 CSS 自定义属性(设计 token)** | 「暗色 = 整组语义 token 替换」(§6.12)与 CSS 变量模型天然同构,无运行时开销 |
-| **Vitest + Testing Library** | 与 Vite 同源;jsdom 组件测试;v8 覆盖率 ≥90% 门禁 |
-| **Playwright** | 真实浏览器 e2e(主题/语言/快捷键/增量合并/断线重放逐项真实操作验证) |
+| 选型                                | 理由                                                                                                                                                                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **React 19 + TypeScript 5**         | 生态最成熟、类型安全的组件模型;团队招聘与社区资料成本最低                                                                                                                                                                                                     |
+| **Vite 6**                          | 开发启动/HMR 快,生产构建(Rollup)成熟;Vitest 同源配置                                                                                                                                                                                                          |
+| **react-router 8**                  | 事实标准路由;支持规范深链(§6.12 深链模式);v7 收口 6.x 开放重定向审计项(GHSA-wrjc-x8rr-h8h6 / GHSA-337j-9hxr-rhxg),v8 清零 RSC CSRF 审计项(GHSA-qwww-vcr4-c8h2);v8 起 import 自 `react-router`(`react-router-dom` 包已移除),要求 React ≥19.2.7 / Node ≥22.22.0 |
+| **zustand 5**                       | 轻量全局状态(偏好/鉴权/实时状态),无 Provider 嵌套负担,易测试                                                                                                                                                                                                  |
+| **react-intl 7**                    | 原生 ICU MessageFormat,直接满足 §6.18 的 CLDR 复数/占位符要求                                                                                                                                                                                                 |
+| **原生 Intl API**                   | 日期/数字/相对时间/时区本地化零依赖(§6.18 时区化仅展示层)                                                                                                                                                                                                     |
+| **原生 CSS 自定义属性(设计 token)** | 「暗色 = 整组语义 token 替换」(§6.12)与 CSS 变量模型天然同构,无运行时开销                                                                                                                                                                                     |
+| **Vitest + Testing Library**        | 与 Vite 同源;jsdom 组件测试;v8 覆盖率 ≥90% 门禁                                                                                                                                                                                                               |
+| **Playwright**                      | 真实浏览器 e2e(主题/语言/快捷键/增量合并/断线重放逐项真实操作验证)                                                                                                                                                                                            |
 
 数据获取不引入额外库:§6.14 的包络解析、游标分页、乐观并发与 409 收敛由 `src/api` 的自研契约层实现(机制骨架 + 测试,业务接入在各模块 Issue)。
 
@@ -72,6 +72,58 @@ npx playwright test --config playwright.real.config.ts
 
 > 注:后端 v0.1.0 未开 CORS(生产经 nginx 反代同源部署),该联调配置以
 > `--disable-web-security` 启动浏览器,仅联调验证用途。
+
+### 钉钉集成真实栈验证
+
+`e2e/real-dingtalk-ui.spec.ts` 与 `playwright.mes90.config.ts` 使用真实 Mesh API、
+PostgreSQL、Redis、worker 与浏览器验证钉钉集成管理面：创建/编辑双接收模式、接收诊断与
+测试发送分离、数据库持久显式重连、授权队列和私有项目负向、审批 API 真源自动对账及
+精确 `approval_id` 深链。四组合固定为 1440×900 与 390×844 的 light/dark，并对队列卡片
+正文和辅助文字做运行时 WCAG AA 对比度断言。
+
+浏览器功能链经 compose 内部、无宿主端口的受控 OAPI 对端执行首次认领所有权证明：只有测试生成的
+`dingapp<suffix>` / `MES90-<suffix>-DingTalk-Secret!7` 精确关系可通过，错误 secret 必须返回 422 且
+不落集成行。随后创建 Stream 集成、验证显式重连 API/数据库状态并切换 HTTP 模式发送真实签名回调；
+测试发送仍走真实出站客户端并落到受控对端的失败路径。该替身只替代外部 OAPI，不 mock 任何 Mesh
+路由，也不声称建立了真实企业 Stream。物理重连另由后端
+`tests/e2e/test_dingtalk_e2e.py::test_explicit_reconnect_api_replaces_live_socket_real_e2e`
+在真实 worker 进程、PostgreSQL、Redis 与强制证书校验的 TLS/WSS gateway 下断言旧 socket 关闭、
+`connections/open` 重跑和新 socket 活跃。真实测试企业上的 Stream 建连、群消息、卡片点击与结果
+回推仍须使用独立企业凭据复验并留存平台侧证据，不得用本地结果替代该验收门禁。
+
+配置不提供 API/WS 默认值，并以 `reuseExistingServer=false` 启动当前 Vite；端口已有旧进程时直接
+失败，避免混用其他栈。默认执行四组合视觉门：
+
+```bash
+# 仓库根目录；首次运行先用 ./scripts/gen-dev-secrets.sh 生成强随机 .env。
+# API/worker 都必须拿到可从浏览器打开的绝对站点基址。
+MESH_API_PORT=18090 \
+MESH_WS_PORT=18091 \
+MESH_STORAGE_PORT=19090 \
+MESH_STORAGE_CONSOLE_PORT=19091 \
+MESH_STORAGE_PUBLIC_ENDPOINT=http://127.0.0.1:19090 \
+MESH_APP_BASE_URL=http://127.0.0.1:18090 \
+docker compose -p mes90e2e \
+  -f docker-compose.yml \
+  -f frontend/e2e/mes90/compose.override.yml \
+  up -d --build postgres redis minio api worker gateway mes90-dingtalk-oapi
+
+MES90_API_BASE=http://127.0.0.1:18090 \
+MES90_WS_BASE=ws://127.0.0.1:18091 \
+npx playwright test --config playwright.mes90.config.ts
+```
+
+完整功能链只运行一个 desktop-light project，并额外要求显式指定它直接检查的 PostgreSQL/Redis
+容器（也可改用对应 host/password 变量）：
+
+```bash
+MES90_SUITE=functional \
+MES90_API_BASE=http://127.0.0.1:18090 \
+MES90_WS_BASE=ws://127.0.0.1:18091 \
+MES90_PG_CONTAINER=mes90e2e-postgres-1 \
+MES90_REDIS_CONTAINER=mes90e2e-redis-1 \
+npx playwright test --config playwright.mes90.config.ts
+```
 
 ## 质量命令
 

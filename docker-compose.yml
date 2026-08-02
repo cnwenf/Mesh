@@ -141,7 +141,9 @@ services:
       MESH_SMTP_PASSWORD: ${MESH_SMTP_PASSWORD:-}
       MESH_SMTP_FROM: ${MESH_SMTP_FROM:-noreply@mesh.local}
       MESH_SMTP_USE_TLS: ${MESH_SMTP_USE_TLS:-true}
-      MESH_APP_BASE_URL: ${MESH_APP_BASE_URL:-}
+      # Absolute browser origin used by email and external approval cards.
+      # Relative DingTalk links resolve against DingTalk and are rejected.
+      MESH_APP_BASE_URL: ${MESH_APP_BASE_URL:?MESH_APP_BASE_URL is required (scripts/gen-dev-secrets.sh for local dev)}
       # Object storage for attachments (attachment.md §3). The internal
       # endpoint is the compose-network address; the public endpoint is what a
       # browser can reach — presigned URLs must be signed against the public
@@ -178,6 +180,9 @@ services:
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+      # The worker emits DingTalk approval cards, so it needs the same public
+      # browser origin as the API callback lifecycle writer.
+      MESH_APP_BASE_URL: ${MESH_APP_BASE_URL:?MESH_APP_BASE_URL is required (scripts/gen-dev-secrets.sh for local dev)}
       # The attachment processing worker reads quarantine objects for MIME
       # sniffing / SHA-256 / AV scan / thumbnails (attachment.md §3.3) — it
       # uses the internal compose-network endpoint.

@@ -2,20 +2,24 @@
 
 A real HTTP server on 127.0.0.1 (ThreadingHTTPServer) that records every
 request and answers with scriptable payloads — the worker / API processes
-talk to it over real sockets via ``MESH_DINGTALK_API_BASE``. Nothing on
-the contract path is mocked: the adapter's token flow, classification and
-redaction run for real against this peer.
+talk to it over real sockets via ``MESH_DINGTALK_API_BASE`` and
+``MESH_DINGTALK_OAPI_BASE``. Nothing on the contract path is mocked: the
+adapter's credential proof, token flow, classification and redaction run for
+real against this peer.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import socket
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
+LEGACY_GETTOKEN_PATH = "/gettoken"
 TOKEN_PATH = "/v1.0/oauth2/accessToken"
 GROUP_SEND_PATH = "/v1.0/robot/groupMessages/send"
 DIRECT_SEND_PATH = "/v1.0/robot/oToMessages/batchSend"
@@ -33,6 +37,7 @@ class FakeDingTalkState:
     send_status: int = 200
     send_body: dict[str, Any] | None = None
     card_status: int = 200
+    expected_app_secret: str | None = None
     # FIFO one-shot overrides: (status, body); falls back to the defaults.
     send_queue: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
     requests: list[dict[str, Any]] = field(default_factory=list)
@@ -129,6 +134,21 @@ def _make_handler(state: FakeDingTalkState):
         def do_PUT(self):  # noqa: N802
             self._handle("PUT")
 
+        def do_GET(self):  # noqa: N802
+            parsed = urlsplit(self.path)
+            if parsed.path != LEGACY_GETTOKEN_PATH:
+                self._reply(404, {"errcode": 404, "errmsg": "not found"})
+                return
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            app_key = (query.get("appkey") or [""])[0]
+            presented = (query.get("appsecret") or [""])[0]
+            expected = state.expected_app_secret or ""
+            state.record("GET", parsed.path, {"appkey": app_key}, self.headers)
+            if app_key and expected and hmac.compare_digest(presented, expected):
+                self._reply(200, {"errcode": 0, "access_token": "ownership-proof"})
+                return
+            self._reply(200, {"errcode": 40089, "errmsg": "invalid app credentials"})
+
     return Handler
 
 
@@ -138,10 +158,12 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def start_fake_dingtalk() -> tuple[ThreadingHTTPServer, str, FakeDingTalkState]:
+def start_fake_dingtalk(
+    *, expected_app_secret: str | None = None
+) -> tuple[ThreadingHTTPServer, str, FakeDingTalkState]:
     """Start the fake platform on a free loopback port. Returns
     (server, base_url, state)."""
-    state = FakeDingTalkState()
+    state = FakeDingTalkState(expected_app_secret=expected_app_secret)
     server = ThreadingHTTPServer(("127.0.0.1", _free_port()), _make_handler(state))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -30,12 +30,8 @@ def _settings_kwargs(db_url: str, redis_url: str, **overrides) -> dict:
         "jwt_secret": "runtime-routes-signing-secret-0000000000",
         "daemon_tls_required": False,
         "runtime_lease_seconds": 120,
-        "storage_endpoint": os.environ.get(
-            "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"
-        ),
-        "storage_public_endpoint": os.environ.get(
-            "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"
-        ),
+        "storage_endpoint": os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"),
+        "storage_public_endpoint": os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"),
         "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
         "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
         "storage_bucket": "mesh-routes-test",
@@ -68,9 +64,7 @@ async def _world(client: httpx.AsyncClient, suffix: str) -> tuple[str, str, str]
         "/api/v1/auth/register",
         json={"email": email, "password": "Routes-Test-12345", "display_name": "Routes"},
     )
-    login = await client.post(
-        "/api/v1/auth/login", json={"email": email, "password": "Routes-Test-12345"}
-    )
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Routes-Test-12345"})
     token = login.json()["data"]["access_token"]
     ws = (
         await client.post(
@@ -161,9 +155,7 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
     # 404 on non-UUID / unknown ids.
     bad = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/not-a-uuid", headers=auth)
     assert bad.status_code == 404
-    unknown = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/runtimes/{uuid.uuid4()}", headers=auth
-    )
+    unknown = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{uuid.uuid4()}", headers=auth)
     assert unknown.status_code == 404
 
     # Activate → pause (token revoked) → resume → rotate → delete.
@@ -174,9 +166,7 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
         headers={"Authorization": f"Bearer {daemon_token}"},
     )
     assert hb.status_code == 200
-    paused = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}:pause", json={}, headers=auth
-    )
+    paused = await app_client.post(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}:pause", json={}, headers=auth)
     assert paused.json()["data"]["status"] == "paused"
     dead_hb = await app_client.post(
         f"/api/v1/daemon/runtimes/{rid}:heartbeat",
@@ -194,13 +184,9 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
     new_token = rotated.json()["data"]["runtime_token"]
     assert new_token.startswith("mesh_rt_")
     # Per-runtime execution history endpoint.
-    history = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}/executions", headers=auth
-    )
+    history = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}/executions", headers=auth)
     assert history.status_code == 200
-    deleted = await app_client.delete(
-        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth
-    )
+    deleted = await app_client.delete(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth)
     assert deleted.status_code == 204
     gone = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth)
     assert gone.status_code == 404
@@ -215,9 +201,7 @@ async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
     rid = created["id"]
 
     # Empty queue → 204.
-    empty = await app_client.post(
-        f"/api/v1/daemon/runtimes/{rid}/executions:claim", json={}, headers=dh
-    )
+    empty = await app_client.post(f"/api/v1/daemon/runtimes/{rid}/executions:claim", json={}, headers=dh)
     assert empty.status_code == 204
 
     execution = await _enqueue_direct(session_factory, ws_id, agent_id)
@@ -308,9 +292,7 @@ async def test_daemon_tls_gate_403(db_url, redis_url, session_factory):
     from mesh.api.app import create_app
     from mesh.config import load_settings
 
-    app = create_app(
-        load_settings(**_settings_kwargs(db_url, redis_url, daemon_tls_required=True))
-    )
+    app = create_app(load_settings(**_settings_kwargs(db_url, redis_url, daemon_tls_required=True)))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -321,9 +303,7 @@ async def test_daemon_tls_gate_403(db_url, redis_url, session_factory):
     assert resp.json()["error"]["code"] == "tls_required"
 
 
-async def test_console_executions_cancel_freeze_credentials_approvals(
-    app_client, session_factory
-):
+async def test_console_executions_cancel_freeze_credentials_approvals(app_client, session_factory):
     token, ws_id, agent_id = await _world(app_client, "exec")
     auth = {"Authorization": f"Bearer {token}"}
     created = await _runtime(app_client, token, ws_id)
@@ -346,9 +326,7 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     cred_id = cred.json()["data"]["id"]
     listing = await app_client.get(f"/api/v1/workspaces/{ws_id}/credentials", headers=auth)
     assert listing.json()["data"][0]["value"] == "***"
-    missing = await app_client.delete(
-        f"/api/v1/workspaces/{ws_id}/credentials/{uuid.uuid4()}", headers=auth
-    )
+    missing = await app_client.delete(f"/api/v1/workspaces/{ws_id}/credentials/{uuid.uuid4()}", headers=auth)
     assert missing.status_code == 404
 
     # Claim an execution that carries the credential; refetch rotates; freeze
@@ -391,18 +369,12 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     execs = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions", headers=auth)
     assert execs.status_code == 200
     assert len(execs.json()["data"]) == 1
-    filtered = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/executions?status=completed", headers=auth
-    )
+    filtered = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions?status=completed", headers=auth)
     assert filtered.json()["data"] == []
-    detail = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}", headers=auth
-    )
+    detail = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions/{execution.id}", headers=auth)
     assert detail.status_code == 200
     assert detail.json()["data"]["credentials"][0]["value"] == "***"
-    missing_exec = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/executions/{uuid.uuid4()}", headers=auth
-    )
+    missing_exec = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions/{uuid.uuid4()}", headers=auth)
     assert missing_exec.status_code == 404
 
     # Cancel a queued execution via console; cancel again → idempotent.
@@ -421,13 +393,9 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     assert cancel_missing.status_code == 404
 
     # Approvals console surface: list / get / approve 404 / decide flow.
-    empty_inbox = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth
-    )
+    empty_inbox = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth)
     assert empty_inbox.status_code == 200
-    missing_appr = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/approvals/{uuid.uuid4()}", headers=auth
-    )
+    missing_appr = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals/{uuid.uuid4()}", headers=auth)
     assert missing_appr.status_code == 404
 
     # Build a pending approval through the daemon protocol, then approve it.
@@ -453,14 +421,12 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     )
     assert appr.status_code == 200, appr.text
     approval_id = appr.json()["data"]["id"]
-    inbox = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth
-    )
+    inbox = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth)
     assert [a["id"] for a in inbox.json()["data"]] == [approval_id]
-    got = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}", headers=auth
-    )
+    assert inbox.json()["data"][0]["execution_status"] == "awaiting_approval"
+    got = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}", headers=auth)
     assert got.json()["data"]["status"] == "pending"
+    assert got.json()["data"]["execution_status"] == "awaiting_approval"
     approved = await app_client.post(
         f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/approve",
         json={"comment": "ok"},
@@ -472,6 +438,7 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
         f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/reject", json={}, headers=auth
     )
     assert again.json()["data"]["status"] == "approved"
+    assert again.json()["data"]["execution_status"] == "queued"
 
     # Daemon approval error paths: missing/404.
     appr_404 = await app_client.post(
@@ -517,12 +484,8 @@ async def test_execution_channel_checker(session_factory):
         execution_id = execution.id
 
     checker = make_execution_channel_checker(session_factory)
-    member_principal = Principal(
-        subject=str(world_user_id), workspace_ids=frozenset({ws_id})
-    )
-    outsider_principal = Principal(
-        subject=str(world_user_id), workspace_ids=frozenset({uuid.uuid4()})
-    )
+    member_principal = Principal(subject=str(world_user_id), workspace_ids=frozenset({ws_id}))
+    outsider_principal = Principal(subject=str(world_user_id), workspace_ids=frozenset({uuid.uuid4()}))
     assert await checker(member_principal, f"execution:{execution_id}")
     assert await checker(member_principal, f"execution:{execution_id}:logs")
     # Other workspace's principal: not a member of the execution's workspace.

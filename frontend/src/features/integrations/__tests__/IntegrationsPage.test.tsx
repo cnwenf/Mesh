@@ -2,7 +2,7 @@
  * IntegrationsPage 组件测试(integrations.md §4.1):连接器目录 + 集成表 +
  * 添加/OAuth + 启停/删除 + RBAC 只读 + oauth 回跳横幅 + 行级实时重拉。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -114,6 +114,7 @@ interface SetupOptions {
   readonly bindings?: unknown[];
   readonly projects?: unknown[];
   readonly withMembership?: boolean;
+  readonly createErrorCode?: string;
 }
 
 function setup(opts: SetupOptions = {}): Recorded[] {
@@ -149,6 +150,21 @@ function setup(opts: SetupOptions = {}): Recorded[] {
       return fakeResponse({ body: { data: integrations, next_cursor: null } });
     if (method === 'POST' && url.endsWith(':test'))
       return fakeResponse({ body: { data: { health_state: 'healthy', detail: null } } });
+    if (method === 'POST' && url.includes('/integrations') && opts.createErrorCode !== undefined)
+      return fakeResponse({
+        status: opts.createErrorCode.endsWith('_unavailable')
+          ? 502
+          : opts.createErrorCode === 'dingtalk_credentials_invalid'
+            ? 422
+            : 409,
+        body: {
+          error: {
+            code: opts.createErrorCode,
+            message: 'neutral backend message',
+            details: {},
+          },
+        },
+      });
     if (method === 'POST' && url.includes('/integrations'))
       return fakeResponse({
         body: { data: { integration: INTEGRATION, secret_accepted: true } },
@@ -163,9 +179,11 @@ function setup(opts: SetupOptions = {}): Recorded[] {
 }
 
 type FrameListener = (frame: RealtimeEventFrame) => void;
+type ErrorListener = (frame: { code: string; channel?: string }) => void;
 
 function makeRealtime() {
   const listeners = new Set<FrameListener>();
+  const errorListeners = new Set<ErrorListener>();
   const subscribed: string[] = [];
   const value: RealtimeContextValue = {
     state: 'connected',
@@ -178,6 +196,10 @@ function makeRealtime() {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      onError: (listener: ErrorListener) => {
+        errorListeners.add(listener);
+        return () => errorListeners.delete(listener);
+      },
     },
   } as unknown as RealtimeContextValue;
   return {
@@ -185,6 +207,9 @@ function makeRealtime() {
     subscribed,
     emit(frame: RealtimeEventFrame) {
       listeners.forEach((listener) => listener(frame));
+    },
+    emitError(frame: { code: string; channel?: string }) {
+      errorListeners.forEach((listener) => listener(frame));
     },
   };
 }
@@ -346,6 +371,43 @@ describe('IntegrationsPage', () => {
     );
   });
 
+  it.each([
+    [
+      'dingtalk_app_key_conflict',
+      'This DingTalk app key is already owned by another workspace.',
+    ],
+    [
+      'dingtalk_route_conflict',
+      'This DingTalk corp and robot route is already configured.',
+    ],
+    [
+      'dingtalk_app_credential_conflict',
+      'Integrations sharing this DingTalk app must use the same credential.',
+    ],
+    [
+      'dingtalk_stream_config_conflict',
+      'Integrations sharing this DingTalk app must use the same Stream reconnect policy.',
+    ],
+    [
+      'dingtalk_credentials_invalid',
+      'DingTalk rejected these app credentials. Check the app key and app secret.',
+    ],
+    [
+      'dingtalk_credential_verification_unavailable',
+      'Mesh could not verify the DingTalk credentials. Try again when DingTalk is reachable.',
+    ],
+  ])('renders the localized admission error %s', async (code, expectedMessage) => {
+    setup({ createErrorCode: code });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-create')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-create'));
+    await userEvent.type(screen.getByTestId('integration-add-name'), 'Admission check');
+    await userEvent.click(screen.getByTestId('integration-add-submit'));
+
+    expect(await screen.findByText(expectedMessage)).toBeInTheDocument();
+    expect(screen.queryByText(`error.${code}`)).toBeNull();
+  });
+
   it('rejects invalid config JSON without posting', async () => {
     const calls = setup();
     renderPage();
@@ -427,17 +489,95 @@ describe('IntegrationsPage', () => {
     await waitFor(() => expect(screen.getByTestId('integration-name-int-1')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('workspace:ws-1:integrations'));
     const initial = calls.filter((call) => call.url.includes('/integrations?')).length;
-    realtime.emit({
-      channel: 'workspace:ws-1:integrations',
-      event: 'integration.updated',
-      seq: 2,
-      payload: {},
-    } as unknown as RealtimeEventFrame);
+    act(() => {
+      realtime.emit({
+        channel: 'workspace:ws-1:integrations',
+        event: 'integration.updated',
+        seq: 2,
+        payload: {},
+      } as unknown as RealtimeEventFrame);
+    });
     await waitFor(() =>
       expect(calls.filter((call) => call.url.includes('/integrations?')).length).toBeGreaterThan(
         initial,
       ),
     );
+  });
+
+  it('polls list truth with a healthy socket and no project bindings', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const calls = setup({ bindings: [] });
+    const realtime = makeRealtime();
+    const view = renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-name-int-1')).toBeInTheDocument());
+    await waitFor(() => expect(realtime.subscribed).toContain('workspace:ws-1:integrations'));
+    const initial = calls.filter((call) => call.url.includes('/integrations?')).length;
+
+    const pollingCallback = intervalSpy.mock.calls.find(([, delay]) => delay === 4000)?.[0];
+    expect(pollingCallback).toBeTypeOf('function');
+    act(() => {
+      if (typeof pollingCallback === 'function') pollingCallback();
+    });
+
+    await waitFor(() =>
+      expect(calls.filter((call) => call.url.includes('/integrations?')).length).toBeGreaterThan(
+        initial,
+      ),
+    );
+    view.unmount();
+  });
+
+  it('subscribes visible project binding channels and reloads on their event frames', async () => {
+    const calls = setup({
+      role: 'member',
+      projects: [{ id: 'project-visible' }],
+      bindings: [
+        { ...BINDING, id: 'b-visible', scope: 'project', project_id: 'project-visible' },
+        { ...BINDING, id: 'b-private', scope: 'project', project_id: 'project-private' },
+      ],
+    });
+    const realtime = makeRealtime();
+    renderPage(realtime);
+
+    await waitFor(() => expect(realtime.subscribed).toContain('project:project-visible'));
+    expect(realtime.subscribed).not.toContain('project:project-private');
+    const initial = calls.filter((call) => call.url.includes('/integrations?')).length;
+    act(() => {
+      realtime.emit({
+        channel: 'project:project-visible',
+        event: 'integration.event_ingested',
+        seq: 3,
+        payload: { integration_id: 'int-1' },
+      } as unknown as RealtimeEventFrame);
+    });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.url.includes('/integrations?')).length).toBeGreaterThan(
+        initial,
+      ),
+    );
+  });
+
+  it('bounds list project subscriptions and polls when visible bindings exceed the socket cap', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    setup({
+      bindings: Array.from({ length: 140 }, (_, index) => ({
+        ...BINDING,
+        id: `binding-${index}`,
+        scope: 'project',
+        project_id: `project-${index.toString().padStart(3, '0')}`,
+        external_ref: `C${index}`,
+      })),
+    });
+    const realtime = makeRealtime();
+    const view = renderPage(realtime);
+
+    await waitFor(() =>
+      expect(realtime.subscribed.filter((channel) => channel.startsWith('project:'))).toHaveLength(
+        128,
+      ),
+    );
+    expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 4000);
+    view.unmount();
   });
 
   it('shows the empty state without integrations', async () => {
@@ -583,12 +723,14 @@ describe('IntegrationsPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-toggle-int-1')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('workspace:ws-1:integrations'));
-    realtime.emit({
-      channel: 'workspace:other',
-      event: 'integration.updated',
-      seq: 1,
-      payload: {},
-    } as unknown as RealtimeEventFrame);
+    act(() => {
+      realtime.emit({
+        channel: 'workspace:other',
+        event: 'integration.updated',
+        seq: 1,
+        payload: {},
+      } as unknown as RealtimeEventFrame);
+    });
     await userEvent.click(screen.getByTestId('integration-toggle-int-1'));
     await userEvent.click(screen.getByTestId('integration-toggle-confirm'));
     await waitFor(() => expect(screen.getByText(/internal error/i)).toBeInTheDocument());

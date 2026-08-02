@@ -84,6 +84,9 @@ const LIST_EVENTS: ReadonlySet<string> = new Set([
   'integration.updated',
   'integration.event_ingested',
 ]);
+// Reserve half the gateway's default 256-channel budget for shell and other
+// pages. Overflow and rejected subscriptions use server-filtered REST polling.
+const MAX_PROJECT_REALTIME_SUBSCRIPTIONS = 128;
 
 function newClient(): MeshApiClient {
   return new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
@@ -341,6 +344,7 @@ export function IntegrationsPage(): React.JSX.Element {
   const [membership, setMembership] = useState<Membership | null>(null);
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   const [bindingCounts, setBindingCounts] = useState<Record<string, number>>({});
+  const [eventProjectIds, setEventProjectIds] = useState<readonly string[]>([]);
   const [streamStatuses, setStreamStatuses] = useState<Record<string, DingTalkStreamStatus>>({});
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -365,6 +369,7 @@ export function IntegrationsPage(): React.JSX.Element {
         if (workspace === null) {
           setMembership(null);
           setIntegrations([]);
+          setEventProjectIds([]);
           return;
         }
         setMembership(workspace);
@@ -376,7 +381,7 @@ export function IntegrationsPage(): React.JSX.Element {
             : listAllVisibleProjects(client, workspace.workspace_id),
         ]);
         const visibleProjectIds = new Set(visibleProjects?.map((project) => project.id) ?? []);
-        const [counts, streamEntries] = await Promise.all([
+        const [bindingEntries, streamEntries] = await Promise.all([
           Promise.all(
             listing.data.map(async (integration) => {
               const bindings = await listBindings(client, workspace.workspace_id, integration.id);
@@ -387,7 +392,15 @@ export function IntegrationsPage(): React.JSX.Element {
                       binding.scope === 'workspace' ||
                       (binding.project_id !== null && visibleProjectIds.has(binding.project_id)),
                   );
-              return [integration.id, visibleBindings.length] as const;
+              return [
+                integration.id,
+                visibleBindings.length,
+                visibleBindings.flatMap((binding) =>
+                  binding.scope === 'project' && binding.project_id !== null
+                    ? [binding.project_id]
+                    : [],
+                ),
+              ] as const;
             }),
           ),
           Promise.all(
@@ -433,13 +446,21 @@ export function IntegrationsPage(): React.JSX.Element {
         ]);
         if (cancelled) return;
         setIntegrations(listing.data);
-        setBindingCounts(Object.fromEntries(counts));
+        setBindingCounts(
+          Object.fromEntries(
+            bindingEntries.map(([integrationId, count]) => [integrationId, count]),
+          ),
+        );
+        setEventProjectIds(
+          [...new Set(bindingEntries.flatMap(([, , projectIds]) => projectIds))].sort(),
+        );
         setStreamStatuses(Object.fromEntries(streamEntries.filter((entry) => entry !== null)));
         setErrorKey(null);
       } catch (error) {
         if (cancelled) return;
         setErrorKey(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown');
         setIntegrations(null);
+        setEventProjectIds([]);
       }
     })();
     return () => {
@@ -449,17 +470,33 @@ export function IntegrationsPage(): React.JSX.Element {
 
   useEffect(() => {
     if (realtime === null || membership === null) return;
-    const channel = workspaceIntegrationsChannel(membership.workspace_id);
-    realtime.client.subscribe(channel);
+    const channels = [
+      workspaceIntegrationsChannel(membership.workspace_id),
+      ...eventProjectIds
+        .slice(0, MAX_PROJECT_REALTIME_SUBSCRIPTIONS)
+        .map((projectId) => `project:${projectId}`),
+    ];
+    const channelSet = new Set(channels);
+    for (const channel of channels) realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
-      if (frame.channel !== channel) return;
+      if (!channelSet.has(frame.channel)) return;
       if (LIST_EVENTS.has(frame.event)) setReloadKey((key) => key + 1);
     });
     return () => {
       unsubscribe();
-      realtime.client.unsubscribe(channel);
+      for (const channel of channels) realtime.client.unsubscribe(channel);
     };
-  }, [realtime, membership]);
+  }, [realtime, membership, eventProjectIds]);
+
+  useEffect(() => {
+    // Keep a low-frequency REST truth read while realtime is healthy too:
+    // unattributable rejected callbacks deliberately emit no workspace or
+    // project frame, yet owners/admins must still see their latest state.
+    const interval = window.setInterval(() => {
+      setReloadKey((key) => key + 1);
+    }, env.pollingIntervalMs);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const dismissOAuth = useCallback((): void => {
     setSearchParams(

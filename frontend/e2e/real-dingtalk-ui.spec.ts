@@ -1,31 +1,36 @@
 /**
  * MES-90 DingTalk frontend acceptance against the real Mesh API.
  *
- * Prerequisite: the compose API/worker/gateway stack is running on 8000/8081.
- * Playwright starts the current Vite frontend through playwright.real.config.ts.
- * No route is mocked: integration creation/editing, binding, signed inbound
- * callbacks, queue reads/cancellation, and the outbound failure diagnostic all
- * hit the real backend and database. Fake DingTalk credentials intentionally
- * exercise the real `upstream_error` path because this test owns no enterprise
- * DingTalk application.
+ * Prerequisite: the compose API/worker/gateway stack is exposed through
+ * MES90_API_BASE / MES90_WS_BASE. Playwright starts the current Vite frontend
+ * through playwright.mes90.config.ts.
+ * No Mesh route is mocked: integration creation/editing, binding, signed
+ * inbound callbacks, queue reads/cancellation, and outbound diagnostics all hit
+ * the real backend and database. A compose-internal OAPI peer proves the exact
+ * synthetic app-key/secret relation for first claim and rejects a wrong secret;
+ * later sends exercise the real `upstream_error` path. This is controlled local
+ * acceptance, not evidence of a live DingTalk test enterprise.
  */
+import { Buffer } from 'node:buffer';
 import { createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, Locator, Page, Response as PageResponse } from '@playwright/test';
 import { injectSession } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const API_BASE = process.env.MES90_API_BASE ?? 'http://127.0.0.1:8000';
+const WS_BASE = (process.env.MES90_WS_BASE ?? 'ws://127.0.0.1:8081').replace(/\/$/, '');
 const EVIDENCE_DIR = process.env.MES90_EVIDENCE_DIR ?? resolve(HERE, 'evidence', 'mes90-dingtalk');
 
 interface World {
   readonly token: string;
   readonly memberToken: string;
   readonly workspaceId: string;
+  readonly workspaceSlug: string;
   readonly agentId: string;
   readonly privateProjectId: string;
   readonly appKey: string;
@@ -69,8 +74,87 @@ interface IntegrationCreateResponse {
 
 type OutboxPayload = Readonly<Record<string, unknown>>;
 
+interface JsonHttpResponse {
+  status(): number;
+  json(): Promise<unknown>;
+}
+
+interface ListedIntegration {
+  readonly id: string;
+  readonly events_7d: number;
+}
+
+interface ListedIntegrationEvent {
+  readonly id: string;
+  readonly external_event_id: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+}
+
+type VisualTheme = 'light' | 'dark';
+
+const VISUAL_MATRIX = {
+  'desktop-light': { theme: 'light', viewport: { width: 1440, height: 900 } },
+  'desktop-dark': { theme: 'dark', viewport: { width: 1440, height: 900 } },
+  'phone-light': { theme: 'light', viewport: { width: 390, height: 844 } },
+  'phone-dark': { theme: 'dark', viewport: { width: 390, height: 844 } },
+} as const satisfies Readonly<
+  Record<
+    string,
+    { readonly theme: VisualTheme; readonly viewport: { width: number; height: number } }
+  >
+>;
+
 function authHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
+}
+
+function approvalOutTrackId(approvalId: string, integrationId: string): string {
+  const uuidToken = (value: string): string =>
+    Buffer.from(value.replaceAll('-', ''), 'hex').toString('base64url');
+  return `mesh-appr2-${uuidToken(approvalId)}.${uuidToken(integrationId)}`;
+}
+
+async function probeRealtimeSubscription(
+  page: Page,
+  token: string,
+  channel: string,
+): Promise<Record<string, unknown>> {
+  return page.evaluate(
+    ({ wsUrl, accessToken, requestedChannel }) =>
+      new Promise<Record<string, unknown>>((resolveProbe, rejectProbe) => {
+        const socket = new WebSocket(wsUrl);
+        const timeout = window.setTimeout(() => {
+          socket.close();
+          rejectProbe(new Error(`realtime subscription probe timed out: ${requestedChannel}`));
+        }, 15_000);
+        const finish = (frame: Record<string, unknown>): void => {
+          window.clearTimeout(timeout);
+          socket.close();
+          resolveProbe(frame);
+        };
+        socket.addEventListener('open', () => {
+          socket.send(JSON.stringify({ op: 'auth', token: accessToken }));
+        });
+        socket.addEventListener('message', (event) => {
+          const frame = JSON.parse(String(event.data)) as Record<string, unknown>;
+          if (frame.op === 'auth_ok') {
+            socket.send(JSON.stringify({ op: 'subscribe', channel: requestedChannel }));
+            return;
+          }
+          if (
+            frame.channel === requestedChannel &&
+            ['error', 'subscribed'].includes(String(frame.op))
+          ) {
+            finish(frame);
+          }
+        });
+        socket.addEventListener('error', () => {
+          window.clearTimeout(timeout);
+          rejectProbe(new Error(`realtime subscription probe failed: ${requestedChannel}`));
+        });
+      }),
+    { wsUrl: `${WS_BASE}/ws`, accessToken: token, requestedChannel: channel },
+  );
 }
 
 function runPostgresQuery(sql: string): string {
@@ -133,7 +217,7 @@ function readImSendPayloads(workspaceId: string): OutboxPayload[] {
   return rows.split('\n').map((row) => JSON.parse(row) as OutboxPayload);
 }
 
-async function expectJsonStatus(response: APIResponse, expected: number): Promise<unknown> {
+async function expectJsonStatus(response: JsonHttpResponse, expected: number): Promise<unknown> {
   const body = await response.json().catch(() => null);
   expect(response.status(), JSON.stringify(body)).toBe(expected);
   return body;
@@ -240,6 +324,7 @@ async function provisionWorld(request: APIRequestContext): Promise<World> {
     token,
     memberToken: memberLoginBody.data.access_token,
     workspaceId: workspaceBody.data.id,
+    workspaceSlug: `mes90-dt-${suffix}`,
     agentId: agentBody.data.id,
     privateProjectId: privateProjectBody.data.id,
     appKey,
@@ -456,6 +541,122 @@ async function readQueueSummary(
   return body.data;
 }
 
+function persistStreamDownFixture(integrationId: string): void {
+  if (!/^[0-9a-f-]{36}$/i.test(integrationId)) throw new Error('invalid integration id');
+  const state = runPostgresQuery(
+    `UPDATE integrations
+       SET stream_state = jsonb_build_object(
+         'state', 'down',
+         'last_attempt_at', '1970-01-01T00:00:00+00:00',
+         'backoff_seconds', 17
+       )
+     WHERE id = '${integrationId}'
+     RETURNING stream_state->>'state'`,
+  )
+    .trim()
+    .split('\n')[0];
+  expect(state).toBe('down');
+}
+
+async function injectSessionWithTheme(
+  page: Page,
+  token: string,
+  theme: VisualTheme,
+): Promise<void> {
+  await injectSession(page, token);
+  await page.addInitScript((mode: VisualTheme) => {
+    window.localStorage.setItem(
+      'mesh.settings.v1',
+      JSON.stringify({
+        state: { preferences: { theme: mode, locale: 'en', timezone: 'UTC' } },
+        version: 2,
+      }),
+    );
+  }, theme);
+}
+
+function parseRgb(value: string): readonly [number, number, number] {
+  const channels =
+    value
+      .match(/[\d.]+/g)
+      ?.slice(0, 3)
+      .map(Number) ?? [];
+  if (channels.length !== 3 || channels.some((channel) => !Number.isFinite(channel))) {
+    throw new Error(`unsupported computed color: ${value}`);
+  }
+  return channels as unknown as readonly [number, number, number];
+}
+
+function relativeLuminance(value: string): number {
+  const linear = parseRgb(value).map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const light = Math.max(relativeLuminance(foreground), relativeLuminance(background));
+  const dark = Math.min(relativeLuminance(foreground), relativeLuminance(background));
+  return (light + 0.05) / (dark + 0.05);
+}
+
+async function seedVisualQueue(
+  request: APIRequestContext,
+  world: World,
+): Promise<{ integrationId: string; conversationKey: string }> {
+  const created = await request.post(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations`,
+    {
+      headers: authHeaders(world.token),
+      data: {
+        kind: 'im_dingtalk',
+        name: `MES-90 visual ${world.corpId}`,
+        config: {
+          app_key: world.appKey,
+          corp_id: world.corpId,
+          robot_code: world.appKey,
+          receive_mode: 'http',
+          inbound_queue: 'serial_conversation',
+          verbosity: 'progress',
+          ack_template: 'MES-90 visual received',
+        },
+        secret: world.appSecret,
+      },
+    },
+  );
+  const createdBody = (await expectJsonStatus(created, 201)) as IntegrationCreateResponse;
+  const integrationId = createdBody.data.integration.id;
+
+  await expectJsonStatus(
+    await request.post(
+      `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations/${integrationId}/bindings`,
+      {
+        headers: authHeaders(world.token),
+        data: {
+          external_ref: world.conversationId,
+          scope: 'workspace',
+          match_config: { trigger_on: ['mention'] },
+          bound_agent_id: world.agentId,
+        },
+      },
+    ),
+    201,
+  );
+  const inbound = await sendDingTalkCallback(request, world, 'MES-90 queue contrast evidence', 900);
+  expect(inbound.process_status).toBe('dispatched');
+  await expect
+    .poll(async () => (await readQueue(request, world, integrationId)).length, {
+      timeout: 45_000,
+      intervals: [100, 250, 500, 1000],
+    })
+    .toBeGreaterThan(0);
+  return {
+    integrationId,
+    conversationKey: `dingtalk:${world.corpId}:${world.conversationId}`,
+  };
+}
+
 async function screenshot(page: Page, name: string): Promise<void> {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: resolve(EVIDENCE_DIR, name), fullPage: true });
@@ -472,7 +673,7 @@ async function dismissToasts(page: Page): Promise<void> {
   }
 }
 
-test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card preview', async ({
+test('@mes90-functional DingTalk dual-mode setup, signed queue lifecycle, commands, and card preview', async ({
   browser,
   page,
   request,
@@ -480,8 +681,44 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
   test.setTimeout(180_000);
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   const world = await provisionWorld(request);
+  // The compose OAPI peer rejects the wrong secret, and the API must not let
+  // that failed proof reserve the app key before the real UI submission.
+  const rejectedClaim = await request.post(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations`,
+    {
+      headers: authHeaders(world.token),
+      data: {
+        kind: 'im_dingtalk',
+        name: 'MES-90 invalid first claim',
+        config: {
+          app_key: world.appKey,
+          corp_id: world.corpId,
+          robot_code: world.appKey,
+          receive_mode: 'stream',
+        },
+        secret: `${world.appSecret}-wrong`,
+      },
+    },
+  );
+  const rejectedBody = (await expectJsonStatus(rejectedClaim, 422)) as {
+    error: { code: string };
+  };
+  expect(rejectedBody.error.code).toBe('dingtalk_credentials_invalid');
+  const afterRejectedClaim = (await expectJsonStatus(
+    await request.get(`${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations`, {
+      headers: authHeaders(world.token),
+    }),
+    200,
+  )) as { data: unknown[] };
+  expect(afterRejectedClaim.data).toHaveLength(0);
   await page.setViewportSize({ width: 1440, height: 1100 });
   await injectSession(page, world.token);
+  const ownerRealtimeFrames: string[] = [];
+  const ownerRealtimeSentFrames: string[] = [];
+  page.on('websocket', (socket) => {
+    socket.on('framereceived', (event) => ownerRealtimeFrames.push(String(event.payload)));
+    socket.on('framesent', (event) => ownerRealtimeSentFrames.push(String(event.payload)));
+  });
 
   await page.goto('/integrations');
   await expect(page.getByTestId('integrations-page')).toBeVisible({ timeout: 30_000 });
@@ -523,11 +760,63 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
   await expect(page.getByTestId(`integration-row-${integrationId}`)).toBeVisible({
     timeout: 30_000,
   });
+  // Establish a deterministic persisted failure state so the real UI exposes
+  // the explicit reconnect action even when a local Stream gateway happens to
+  // accept the synthetic app key. The reconnect itself is exercised solely
+  // through the browser and the production API.
+  persistStreamDownFixture(integrationId);
   await page.getByTestId(`integration-detail-${integrationId}`).click();
   await expect(page.getByTestId('integration-detail')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('dingtalk-receive-mode')).toContainText(/Stream/);
-  await expect(page.getByTestId('dingtalk-stream-state')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('dingtalk-stream-state')).toContainText(/Down|已断开/, {
+    timeout: 30_000,
+  });
   await screenshot(page, '01-stream-created.png');
+
+  const reconnectResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/integrations/${integrationId}:reconnect`) &&
+      response.request().method() === 'POST',
+  );
+  const reconnectStatusResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/integrations/${integrationId}/stream-status`) &&
+      response.request().method() === 'GET',
+  );
+  await page.getByTestId('dingtalk-reconnect').click();
+  const reconnectResponse = await reconnectResponsePromise;
+  const reconnectBody = (await expectJsonStatus(reconnectResponse, 202)) as {
+    data: { accepted: boolean };
+  };
+  expect(reconnectBody.data.accepted).toBe(true);
+
+  const persistedReconnectState = JSON.parse(
+    runPostgresQuery(
+      `SELECT stream_state::text FROM integrations WHERE id = '${integrationId}'`,
+    ).trim(),
+  ) as {
+    state: string;
+    last_attempt_at: string;
+    backoff_seconds: number;
+    reconnect_request_id: string;
+  };
+  expect(persistedReconnectState).toMatchObject({
+    state: 'reconnecting',
+    backoff_seconds: 0,
+  });
+  expect(persistedReconnectState.last_attempt_at).not.toBe('1970-01-01T00:00:00+00:00');
+  expect(persistedReconnectState.reconnect_request_id).toMatch(/^[0-9a-f-]{36}$/i);
+
+  const reconnectStatusResponse = await reconnectStatusResponsePromise;
+  const reconnectStatusBody = (await expectJsonStatus(reconnectStatusResponse, 200)) as {
+    data: { state: string; last_attempt_at: string; backoff_seconds: number };
+  };
+  expect(reconnectStatusBody.data).toMatchObject({
+    state: 'reconnecting',
+    backoff_seconds: 0,
+  });
+  expect(reconnectStatusBody.data.last_attempt_at).toBe(persistedReconnectState.last_attempt_at);
+  await expect(page.getByTestId('dingtalk-stream-state')).toContainText(/Reconnecting|重连中/);
 
   const diagnosticResponsePromise = page.waitForResponse(
     (response) =>
@@ -902,8 +1191,38 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
   };
   expect(approvalRequestBody.data.status).toBe('pending');
   const approvalId = approvalRequestBody.data.id;
+
+  // Load the pending approval from the real source of truth before simulating
+  // the external signed card click. The UI must observe the terminal result by
+  // polling; this test never clicks its manual refresh action.
+  await page.getByTestId('integration-tab-queue').click();
+  await expect(page.getByTestId('integration-queue-panel')).toBeVisible({ timeout: 30_000 });
+  let approvalReadCount = 0;
+  const recordApprovalRead = (response: PageResponse): void => {
+    if (
+      response.url().endsWith(`/workspaces/${world.workspaceId}/approvals/${approvalId}`) &&
+      response.request().method() === 'GET'
+    ) {
+      approvalReadCount += 1;
+    }
+  };
+  page.on('response', recordApprovalRead);
+  await page.getByTestId('dingtalk-approval-id').fill(approvalId);
+  const approvalLoadResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/workspaces/${world.workspaceId}/approvals/${approvalId}`) &&
+      response.request().method() === 'GET',
+  );
+  await page.getByTestId('dingtalk-approval-load').click();
+  await expectJsonStatus(await approvalLoadResponsePromise, 200);
+  const approvalPreview = page.getByTestId('dingtalk-card-preview');
+  await expect(approvalPreview).toContainText(approvalId);
+  await expect(approvalPreview).toContainText('Deploy MES-90 service');
+  await expect(approvalPreview).toContainText(/Pending|待审批/);
+  expect(approvalReadCount).toBe(1);
+
   const approvalCardPayload = {
-    outTrackId: `mesh-appr-${approvalId.replaceAll('-', '')}`,
+    outTrackId: approvalOutTrackId(approvalId, integrationId),
     corpId: world.corpId,
     userId: world.ownerStaffId,
     userIdType: 'staffId',
@@ -923,6 +1242,10 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
   };
   expect(cardApprovedBody.cardData.cardParamMap.status_text).toContain('已批准');
   expect(cardApprovedBody.cardData.cardParamMap.buttons_disabled).toBe('true');
+  await expect(approvalPreview).toContainText(/Approved|已批准/, { timeout: 15_000 });
+  expect(approvalReadCount).toBeGreaterThanOrEqual(2);
+  await expect(page.getByTestId('dingtalk-approval-refresh')).toBeVisible();
+  page.off('response', recordApprovalRead);
   await expectJsonStatus(
     await request.post(`${API_BASE}/api/v1/integrations/dingtalk/cards`, {
       headers: signedHeaders(world.appSecret),
@@ -949,8 +1272,47 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
   expect(forbiddenCardBody.cardData.cardParamMap.status_text).toContain('无权限');
 
   // A private-project binding produces a real queue row for the owner. The
-  // ordinary project outsider receives only a redacted invalidation and sees
-  // neither the row via API/UI nor the private binding in the UI.
+  // ordinary project outsider receives only a redacted queue invalidation,
+  // never a ledger-event frame, and sees neither the row via API/UI nor the
+  // private binding in the UI.
+  // The owner first opens the real event ledger. Its server-filtered binding
+  // list drives a project-channel subscription; the callback below must then
+  // add the ledger row without a manual refresh.
+  await page.getByTestId('integration-tab-events').click();
+  await expect(page.getByTestId('event-ledger')).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(
+      () =>
+        ownerRealtimeSentFrames.some((raw) => {
+          try {
+            const frame = JSON.parse(raw) as { op?: string; channel?: string };
+            return (
+              frame.op === 'subscribe' && frame.channel === `project:${world.privateProjectId}`
+            );
+          } catch {
+            return false;
+          }
+        }),
+      { timeout: 15_000, intervals: [100, 250, 500] },
+    )
+    .toBe(true);
+  const ownerEventRows = page.locator('[data-testid^="event-row-"]');
+  const ownerEventCountBefore = await ownerEventRows.count();
+  const ownerFrameStart = ownerRealtimeFrames.length;
+
+  // A second, direct socket proves an outsider cannot subscribe to the
+  // private project channel even though the user belongs to the workspace.
+  const forbiddenProjectSubscription = await probeRealtimeSubscription(
+    memberPage,
+    world.memberToken,
+    `project:${world.privateProjectId}`,
+  );
+  expect(forbiddenProjectSubscription).toMatchObject({
+    op: 'error',
+    code: 'forbidden',
+    channel: `project:${world.privateProjectId}`,
+  });
+
   const memberFrameStart = memberRealtimeFrames.length;
   const privateResult = await sendDingTalkCallback(
     request,
@@ -960,6 +1322,29 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
     world.privateConversationId,
   );
   expect(privateResult.process_status).toBe('dispatched');
+  await expect
+    .poll(
+      () =>
+        ownerRealtimeFrames.slice(ownerFrameStart).some((raw) => {
+          try {
+            const frame = JSON.parse(raw) as {
+              channel?: string;
+              event?: string;
+              payload?: Record<string, unknown>;
+            };
+            return (
+              frame.channel === `project:${world.privateProjectId}` &&
+              frame.event === 'integration.event_ingested' &&
+              frame.payload?.integration_id === integrationId
+            );
+          } catch {
+            return false;
+          }
+        }),
+      { timeout: 30_000, intervals: [100, 250, 500, 1000] },
+    )
+    .toBe(true);
+  await expect(ownerEventRows).toHaveCount(ownerEventCountBefore + 1, { timeout: 30_000 });
   await expect
     .poll(
       async () =>
@@ -1006,17 +1391,117 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
     payload: Record<string, unknown>;
   };
   expect(privateFrame.payload).not.toHaveProperty('conversation_key');
+  await memberPage.waitForTimeout(500);
+  const leakedEventFrames = memberRealtimeFrames.slice(memberFrameStart).filter((raw) => {
+    try {
+      const frame = JSON.parse(raw) as {
+        event?: string;
+        payload?: Record<string, unknown>;
+      };
+      return frame.event === 'integration.event_ingested';
+    } catch {
+      return false;
+    }
+  });
+  expect(leakedEventFrames).toEqual([]);
+
+  // Project visibility must be applied before every read shape: binding rows,
+  // event-ledger payloads, and the connected-list 7-day aggregate. Comparing
+  // owner/member responses catches both row leaks and aggregate side channels.
+  const ownerBindingsResponse = await request.get(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations/${integrationId}/bindings`,
+    { headers: authHeaders(world.token) },
+  );
+  const ownerBindingsBody = (await expectJsonStatus(ownerBindingsResponse, 200)) as {
+    data: Array<{ id: string }>;
+  };
+  const memberBindingsResponse = await request.get(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations/${integrationId}/bindings`,
+    { headers: authHeaders(world.memberToken) },
+  );
+  const memberBindingsBody = (await expectJsonStatus(memberBindingsResponse, 200)) as {
+    data: Array<{ id: string; external_ref: string; project_id: string | null }>;
+  };
+  expect(ownerBindingsBody.data.map((binding) => binding.id)).toEqual(
+    expect.arrayContaining([bindBody.data.id, privateBindBody.data.id]),
+  );
+  expect(memberBindingsBody.data).toEqual([
+    expect.objectContaining({
+      id: bindBody.data.id,
+      external_ref: world.conversationId,
+      project_id: null,
+    }),
+  ]);
+  expect(JSON.stringify(memberBindingsBody)).not.toContain(world.privateConversationId);
+  expect(JSON.stringify(memberBindingsBody)).not.toContain(world.privateProjectId);
+
+  const ownerEventsResponse = await request.get(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations/${integrationId}/events`,
+    { headers: authHeaders(world.token), params: { limit: 200 } },
+  );
+  const ownerEventsBody = (await expectJsonStatus(ownerEventsResponse, 200)) as {
+    data: ListedIntegrationEvent[];
+  };
+  const memberEventsResponse = await request.get(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations/${integrationId}/events`,
+    { headers: authHeaders(world.memberToken), params: { limit: 200 } },
+  );
+  const memberEventsBody = (await expectJsonStatus(memberEventsResponse, 200)) as {
+    data: ListedIntegrationEvent[];
+  };
+  const privateExternalEventId = String(privateResult.event_id);
+  const ownerPrivateEvent = ownerEventsBody.data.find(
+    (event) => event.external_event_id === privateExternalEventId,
+  );
+  expect(ownerPrivateEvent).toBeDefined();
+  expect(JSON.stringify(ownerPrivateEvent?.payload)).toContain('MES-90 private project incident');
+  expect(JSON.stringify(ownerPrivateEvent?.payload)).toContain(world.privateConversationId);
+  expect(
+    memberEventsBody.data.some((event) => event.external_event_id === privateExternalEventId),
+  ).toBe(false);
+  expect(JSON.stringify(memberEventsBody)).not.toContain('MES-90 private project incident');
+  expect(JSON.stringify(memberEventsBody)).not.toContain(world.privateConversationId);
+
+  const ownerIntegrationsResponse = await request.get(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations`,
+    { headers: authHeaders(world.token), params: { limit: 200 } },
+  );
+  const ownerIntegrationsBody = (await expectJsonStatus(ownerIntegrationsResponse, 200)) as {
+    data: ListedIntegration[];
+  };
+  const memberIntegrationsResponse = await request.get(
+    `${API_BASE}/api/v1/workspaces/${world.workspaceId}/integrations`,
+    { headers: authHeaders(world.memberToken), params: { limit: 200 } },
+  );
+  const memberIntegrationsBody = (await expectJsonStatus(memberIntegrationsResponse, 200)) as {
+    data: ListedIntegration[];
+  };
+  const ownerIntegration = ownerIntegrationsBody.data.find((item) => item.id === integrationId);
+  const memberIntegration = memberIntegrationsBody.data.find((item) => item.id === integrationId);
+  expect(ownerIntegration).toBeDefined();
+  expect(memberIntegration).toBeDefined();
+  expect(ownerIntegration!.events_7d).toBe(memberIntegration!.events_7d + 1);
+  expect(memberIntegration!.events_7d).toBe(memberEventsBody.data.length);
 
   await memberPage.goto('/integrations');
   await expect(memberPage.getByTestId(`integration-name-${integrationId}`)).toBeVisible({
     timeout: 30_000,
   });
   await expect(memberPage.getByTestId(`integration-bindings-${integrationId}`)).toHaveText('1');
+  await expect(memberPage.getByTestId(`integration-events7d-${integrationId}`)).toHaveText(
+    String(memberIntegration!.events_7d),
+  );
   await memberPage.goto(`/integrations/${integrationId}`);
   await expect(memberPage.getByTestId('integration-detail')).toBeVisible({ timeout: 30_000 });
   await memberPage.getByTestId('integration-tab-bindings').click();
   await expect(memberPage.getByTestId(`binding-row-${bindBody.data.id}`)).toBeVisible();
   await expect(memberPage.getByTestId(`binding-row-${privateBindBody.data.id}`)).toHaveCount(0);
+  await memberPage.getByTestId('integration-tab-events').click();
+  await expect(memberPage.getByTestId('event-ledger')).toBeVisible();
+  await expect(memberPage.locator('[data-testid^="event-row-"]')).toHaveCount(
+    memberEventsBody.data.length,
+  );
+  await expect(memberPage.getByText('MES-90 private project incident')).toHaveCount(0);
   await memberPage.getByTestId('integration-tab-queue').click();
   await expect(memberPage.getByTestId('integration-queue-panel')).toBeVisible();
   await expect(memberPage.getByText('MES-90 private project incident')).toHaveCount(0);
@@ -1042,17 +1527,112 @@ test('DingTalk dual-mode setup, signed queue lifecycle, commands, and card previ
   await page.getByTestId('dingtalk-command-help-button').click();
   await expect(page.getByTestId('dingtalk-command-preview')).toHaveText('/help');
 
-  // Preview terminal card semantics: controls stay disabled and failed/expired
-  // states point back to Mesh, which remains the source of truth.
-  await expect(page.getByTestId('dingtalk-card-approve')).toBeEnabled();
-  await page.getByTestId('dingtalk-card-state').selectOption('expired');
-  await expect(page.getByTestId('dingtalk-card-approve')).toBeDisabled();
-  await expect(page.getByTestId('dingtalk-card-reject')).toBeDisabled();
-  await expect(page.getByTestId('dingtalk-card-fallback')).toBeVisible();
-  await expect(page.getByTestId('dingtalk-card-preview')).toContainText(/source|真源|Mesh/);
+  // The Queue tab was unmounted while the event ledger was open. Reload the
+  // exact record and prove the terminal callback truth survives in the server,
+  // rather than relying on a tab-local preview. Its fallback is a real deep
+  // link to this exact approval, not a generic approval inbox route.
+  await page.getByTestId('dingtalk-approval-id').fill(approvalId);
+  const approvalReloadResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/workspaces/${world.workspaceId}/approvals/${approvalId}`) &&
+      response.request().method() === 'GET',
+  );
+  await page.getByTestId('dingtalk-approval-load').click();
+  await expectJsonStatus(await approvalReloadResponsePromise, 200);
+  await expect(page.getByTestId('dingtalk-card-preview')).toContainText(/Approved|已批准/);
+  const approvalFallback = page.getByTestId('dingtalk-card-fallback');
+  const expectedApprovalPath = `/w/${world.workspaceSlug}/approvals?approval_id=${approvalId}`;
+  await expect(approvalFallback).toHaveAttribute('href', expectedApprovalPath);
   await screenshotElement(
     page.locator('.mesh-integrations__interaction-guide'),
-    '07-commands-and-card-terminal.png',
+    '09-real-approval-auto-refresh.png',
   );
   await memberContext.close();
+
+  await approvalFallback.click();
+  await expect(page).toHaveURL(
+    new RegExp(`/w/${world.workspaceSlug}/approvals\\?approval_id=${approvalId}$`),
+  );
+  await expect(page.getByTestId('approvals-focused-detail')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId(`approval-card-${approvalId}`)).toContainText(
+    'Deploy MES-90 service',
+  );
+  await expect(page.getByTestId(`approval-status-${approvalId}`)).toContainText(/Approved|已批准/);
+  await screenshot(page, '10-exact-approval-deep-link.png');
+});
+
+test('@mes90-visual real queue card keeps WCAG AA contrast across the four UI combinations', async ({
+  page,
+  request,
+}, testInfo) => {
+  const projectName = testInfo.project.name as keyof typeof VISUAL_MATRIX;
+  const variant = VISUAL_MATRIX[projectName] as
+    (typeof VISUAL_MATRIX)[keyof typeof VISUAL_MATRIX] | undefined;
+  test.skip(variant === undefined, 'run with playwright.mes90.config.ts');
+  if (variant === undefined) return;
+
+  test.setTimeout(120_000);
+  expect(page.viewportSize()).toEqual(variant.viewport);
+  const world = await provisionWorld(request);
+  await expectJsonStatus(
+    await request.patch(`${API_BASE}/api/v1/users/me`, {
+      headers: authHeaders(world.token),
+      data: { settings: { theme: variant.theme } },
+    }),
+    200,
+  );
+  const visualWorld = await seedVisualQueue(request, world);
+  await injectSessionWithTheme(page, world.token, variant.theme);
+  await page.goto(`/integrations/${visualWorld.integrationId}`);
+  await expect(page.getByTestId('integration-detail')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', variant.theme);
+  await page.getByTestId('integration-tab-queue').click();
+  await expect(page.getByTestId('integration-queue-panel')).toBeVisible({ timeout: 30_000 });
+
+  const queueCard = page.getByTestId(`queue-conversation-${visualWorld.conversationKey}`);
+  await expect(queueCard).toContainText('MES-90 queue contrast evidence', { timeout: 30_000 });
+  const colors = await queueCard.evaluate((element) => {
+    const cardStyle = window.getComputedStyle(element);
+    const textElement = element.querySelector('.mesh-integrations__queue-excerpt');
+    const metaElement = element.querySelector('.mesh-integrations__queue-meta');
+    const mutedElement = element.querySelector('.mesh-integrations__muted');
+    if (textElement === null || metaElement === null || mutedElement === null) {
+      throw new Error('queue card text fixtures are incomplete');
+    }
+    return {
+      background: cardStyle.backgroundColor,
+      inherited: cardStyle.color,
+      excerpt: window.getComputedStyle(textElement).color,
+      meta: window.getComputedStyle(metaElement).color,
+      muted: window.getComputedStyle(mutedElement).color,
+    };
+  });
+  expect(colors.background).not.toBe('rgba(0, 0, 0, 0)');
+  const contrastEvidence: Record<string, number> = {};
+  for (const [label, foreground] of Object.entries(colors).filter(
+    ([label]) => label !== 'background',
+  )) {
+    const ratio = contrastRatio(foreground, colors.background);
+    contrastEvidence[label] = Number(ratio.toFixed(3));
+    expect(ratio, `${projectName} ${label} contrast ${ratio.toFixed(3)}`).toBeGreaterThanOrEqual(
+      4.5,
+    );
+  }
+  console.log(
+    `MES90_CONTRAST ${JSON.stringify({
+      project: projectName,
+      theme: variant.theme,
+      viewport: variant.viewport,
+      ratios: contrastEvidence,
+    })}`,
+  );
+
+  const evidenceDirectory = resolve(EVIDENCE_DIR, 'matrix', projectName);
+  mkdirSync(evidenceDirectory, { recursive: true });
+  await queueCard.scrollIntoViewIfNeeded();
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({
+    path: resolve(evidenceDirectory, 'queue-viewport.png'),
+    fullPage: false,
+  });
 });

@@ -15,7 +15,12 @@ import {
 } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import { dingtalkCallbackUrl, getDingTalkStreamStatus, testDingTalkSend } from './api';
+import {
+  dingtalkCallbackUrl,
+  getDingTalkStreamStatus,
+  reconnectDingTalkStream,
+  testDingTalkSend,
+} from './api';
 import { DINGTALK_STREAM_STATE_TONE, formatRelativeTime, toDingTalkStreamState } from './format';
 import type {
   DingTalkReceiveMode,
@@ -63,6 +68,7 @@ export function DingTalkOverviewPanel(props: DingTalkOverviewPanelProps): React.
   const mode = receiveMode(integration);
   const [diagnosticKey, setDiagnosticKey] = useState(0);
   const [diagnosing, setDiagnosing] = useState(false);
+  const [reconnectBusy, setReconnectBusy] = useState(false);
   const [streamStatus, setStreamStatus] = useState<DingTalkStreamStatus | null>(null);
   const [diagnosticErrorKey, setDiagnosticErrorKey] = useState<string | null>(null);
   const [testOpen, setTestOpen] = useState(false);
@@ -153,6 +159,25 @@ export function DingTalkOverviewPanel(props: DingTalkOverviewPanelProps): React.
     }
   }, [toast, t]);
 
+  const requestReconnect = useCallback(async (): Promise<void> => {
+    setReconnectBusy(true);
+    try {
+      await reconnectDingTalkStream(newClient(), workspaceId, integration.id);
+      toast.addToast(t('integrations.dingtalk.reconnectRequested'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
+      setDiagnosticKey((key) => key + 1);
+    } catch (error) {
+      toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
+    } finally {
+      setReconnectBusy(false);
+    }
+  }, [workspaceId, integration.id, toast, t]);
+
   const lastFrameRelative =
     streamStatus?.last_frame_at === null || streamStatus?.last_frame_at === undefined
       ? null
@@ -232,16 +257,34 @@ export function DingTalkOverviewPanel(props: DingTalkOverviewPanelProps): React.
           {(streamStatus.state === 'down' || streamStatus.state === 'reconnecting') && (
             <div data-testid="dingtalk-stream-alert">
               <Banner tone={streamStatus.state === 'down' ? 'danger' : 'warn'}>
-                {t(
-                  streamStatus.state === 'down'
-                    ? 'integrations.dingtalk.streamDown'
-                    : 'integrations.dingtalk.streamReconnecting',
-                  { seconds: streamStatus.backoff_seconds ?? 0 },
-                )}{' '}
+                <span>
+                  {t(
+                    streamStatus.state === 'down'
+                      ? 'integrations.dingtalk.streamDown'
+                      : 'integrations.dingtalk.streamReconnecting',
+                    { seconds: streamStatus.backoff_seconds ?? 0 },
+                  )}
+                </span>
                 {isAdmin && (
-                  <Button variant="secondary" size="sm" onClick={onEdit}>
-                    {t('integrations.dingtalk.editConfig')}
-                  </Button>
+                  <span className="mesh-integrations__toolbar">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      isLoading={reconnectBusy}
+                      onClick={() => void requestReconnect()}
+                      data-testid="dingtalk-reconnect"
+                    >
+                      {t('integrations.dingtalk.reconnect')}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={onEdit}
+                      data-testid="dingtalk-edit-config"
+                    >
+                      {t('integrations.dingtalk.editConfig')}
+                    </Button>
+                  </span>
                 )}
               </Banner>
             </div>

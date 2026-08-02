@@ -12079,6 +12079,18 @@ paths:
       tags:
       - integrations
       summary: Create Integration
+      description: 'Create an integration.
+
+
+        A DingTalk app key''s first claim is serialized globally and proven with a
+
+        side-effect-free platform credential check before any row is committed.
+
+        Later integrations may share that app only inside its owner workspace and
+
+        must share one credential and Stream reconnect policy while keeping a
+
+        unique ``(corp_id, robot_code)`` route.'
       operationId: create_integration_api_v1_workspaces__workspace_id__integrations_post
       parameters:
       - name: workspace_id
@@ -12102,12 +12114,13 @@ paths:
                 type: object
                 additionalProperties: true
                 title: Response Create Integration Api V1 Workspaces  Workspace Id  Integrations Post
+        '409':
+          description: 'Name conflict, or DingTalk app ownership/group conflict: `dingtalk_app_key_conflict`,
+            `dingtalk_route_conflict`, `dingtalk_app_credential_conflict`, or `dingtalk_stream_config_conflict`.'
         '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+          description: Request validation or first-claim proof rejection (`dingtalk_credentials_invalid`).
+        '502':
+          description: First-claim proof could not reach DingTalk (`dingtalk_credential_verification_unavailable`).
   /api/v1/workspaces/{workspace_id}/integrations/{integration_id}:
     get:
       tags:
@@ -12147,6 +12160,7 @@ paths:
       tags:
       - integrations
       summary: Patch Integration
+      description: Update an integration while preserving DingTalk app-group invariants.
       operationId: patch_integration_api_v1_workspaces__workspace_id__integrations__integration_id__patch
       parameters:
       - name: workspace_id
@@ -12177,12 +12191,13 @@ paths:
                 additionalProperties: true
                 title: Response Patch Integration Api V1 Workspaces  Workspace Id  Integrations  Integration
                   Id  Patch
+        '409':
+          description: 'Name conflict, or DingTalk app ownership/group conflict: `dingtalk_app_key_conflict`,
+            `dingtalk_route_conflict`, `dingtalk_app_credential_conflict`, or `dingtalk_stream_config_conflict`.'
         '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+          description: Request validation or first-claim proof rejection (`dingtalk_credentials_invalid`).
+        '502':
+          description: First-claim proof could not reach DingTalk (`dingtalk_credential_verification_unavailable`).
     delete:
       tags:
       - integrations
@@ -12226,6 +12241,9 @@ paths:
       tags:
       - integrations
       summary: Rotate Integration Secret
+      description: 'Rotate a credential once; DingTalk rotation updates every sibling that
+
+        shares the app key inside the owner workspace.'
       operationId: rotate_integration_secret_api_v1_workspaces__workspace_id__integrations__integration_id__rotate_secret_post
       parameters:
       - name: workspace_id
@@ -12391,6 +12409,47 @@ paths:
                 additionalProperties: true
                 title: Response Integration Stream Status Api V1 Workspaces  Workspace Id  Integrations  Integration
                   Id  Stream Status Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}:reconnect:
+    post:
+      tags:
+      - integrations
+      summary: Reconnect Integration Stream
+      description: 'Wake the DingTalk Stream lock owner and rebuild its connection.
+
+
+        The durable reconnect marker is written to every active Stream sibling in
+
+        the app-key group so the physical shared connection has one truth.'
+      operationId: reconnect_integration_stream_api_v1_workspaces__workspace_id__integrations__integration_id__reconnect_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Reconnect Integration Stream Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Reconnect Post
         '422':
           description: Validation Error
           content:

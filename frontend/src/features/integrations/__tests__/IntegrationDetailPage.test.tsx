@@ -73,6 +73,8 @@ interface Recorded {
 }
 
 interface SetupFlags {
+  readonly bindings?: unknown[];
+  readonly failBindingsOnce?: boolean;
   readonly failPatch?: boolean;
   readonly failRotate?: boolean;
   readonly failReloadGet?: boolean;
@@ -83,6 +85,7 @@ interface SetupFlags {
 function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Recorded[] {
   const calls: Recorded[] = [];
   let getCount = 0;
+  let bindingsGetCount = 0;
   const me = makeMe(flags.role ?? 'owner');
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -109,6 +112,16 @@ function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Reco
           },
         },
       });
+    }
+    if (url.endsWith('/integrations/int-1/bindings')) {
+      bindingsGetCount += 1;
+      if (flags.failBindingsOnce && bindingsGetCount === 1) {
+        return fakeResponse({
+          status: 503,
+          body: { error: { code: 'service_unavailable', message: 'retry' } },
+        });
+      }
+      return fakeResponse({ body: { data: flags.bindings ?? [], next_cursor: null } });
     }
     if (method === 'PATCH') {
       if (flags.failPatch)
@@ -143,9 +156,11 @@ function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Reco
 }
 
 type FrameListener = (frame: RealtimeEventFrame) => void;
+type ErrorListener = (frame: { code: string; channel?: string }) => void;
 
 function makeRealtime() {
   const listeners = new Set<FrameListener>();
+  const errorListeners = new Set<ErrorListener>();
   const subscribed: string[] = [];
   const value: RealtimeContextValue = {
     state: 'connected',
@@ -158,6 +173,10 @@ function makeRealtime() {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      onError: (listener: ErrorListener) => {
+        errorListeners.add(listener);
+        return () => errorListeners.delete(listener);
+      },
     },
   } as unknown as RealtimeContextValue;
   return {
@@ -166,6 +185,9 @@ function makeRealtime() {
     emit(frame: RealtimeEventFrame) {
       listeners.forEach((listener) => listener(frame));
     },
+    emitError(frame: { code: string; channel?: string }) {
+      errorListeners.forEach((listener) => listener(frame));
+    },
   };
 }
 
@@ -173,6 +195,7 @@ function renderPage(realtime?: ReturnType<typeof makeRealtime>) {
   return renderWithProviders(
     <RealtimeContext.Provider value={realtime ? realtime.value : null}>
       <Routes>
+        <Route path="/integrations" element={<div>integrations</div>} />
         <Route path="/integrations/:integrationId" element={<IntegrationDetailPage />} />
       </Routes>
     </RealtimeContext.Provider>,
@@ -271,18 +294,194 @@ describe('IntegrationDetailPage', () => {
     const initial = calls.filter(
       (call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET',
     ).length;
-    realtime.emit({
-      channel: 'integration:int-1',
-      event: 'integration.updated',
-      seq: 2,
-      payload: {},
-    } as unknown as RealtimeEventFrame);
+    act(() => {
+      realtime.emit({
+        channel: 'integration:int-1',
+        event: 'integration.updated',
+        seq: 2,
+        payload: {},
+      } as unknown as RealtimeEventFrame);
+    });
     await waitFor(() =>
       expect(
         calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET')
           .length,
       ).toBeGreaterThan(initial),
     );
+  });
+
+  it('subscribes authorized project bindings and refetches the ledger on project frames', async () => {
+    const calls = setup(INTEGRATION, {
+      bindings: [
+        {
+          id: 'binding-project',
+          integration_id: 'int-1',
+          provider: 'slack',
+          provider_tenant_key: 'T1',
+          scope: 'project',
+          project_id: 'project-visible',
+          external_ref: 'C1',
+          match_config: {},
+          bound_agent_id: null,
+          status: 'active',
+          created_at: '2026-08-01T00:00:00Z',
+          updated_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+    });
+    const realtime = makeRealtime();
+    renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-events')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-events'));
+    await waitFor(() => expect(realtime.subscribed).toContain('project:project-visible'));
+    const initial = calls.filter((call) => call.url.includes('/integrations/int-1/events')).length;
+
+    act(() => {
+      realtime.emit({
+        channel: 'project:project-visible',
+        event: 'integration.event_ingested',
+        seq: 4,
+        payload: { integration_id: 'int-1' },
+      } as unknown as RealtimeEventFrame);
+    });
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.url.includes('/integrations/int-1/events')).length,
+      ).toBeGreaterThan(initial),
+    );
+  });
+
+  it('polls ledger truth with a healthy socket and no project bindings', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const calls = setup(INTEGRATION, { bindings: [] });
+    const realtime = makeRealtime();
+    const view = renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-events')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-events'));
+    await waitFor(() => expect(screen.getByTestId('event-ledger')).toBeInTheDocument());
+    const initial = calls.filter((call) => call.url.includes('/integrations/int-1/events')).length;
+
+    const pollingCallback = intervalSpy.mock.calls.find(([, delay]) => delay === 4000)?.[0];
+    expect(pollingCallback).toBeTypeOf('function');
+    act(() => {
+      if (typeof pollingCallback === 'function') pollingCallback();
+    });
+
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.url.includes('/integrations/int-1/events')).length,
+      ).toBeGreaterThan(initial),
+    );
+    view.unmount();
+  });
+
+  it('bounds project subscriptions and polls when the visible binding set exceeds the socket cap', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const bindings = Array.from({ length: 140 }, (_, index) => ({
+      id: `binding-${index}`,
+      integration_id: 'int-1',
+      provider: 'slack',
+      provider_tenant_key: 'T1',
+      scope: 'project',
+      project_id: `project-${index.toString().padStart(3, '0')}`,
+      external_ref: `C${index}`,
+      match_config: {},
+      bound_agent_id: null,
+      status: 'active',
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+    }));
+    setup(INTEGRATION, { bindings });
+    const realtime = makeRealtime();
+    const view = renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-events')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-events'));
+
+    await waitFor(() =>
+      expect(realtime.subscribed.filter((channel) => channel.startsWith('project:'))).toHaveLength(
+        128,
+      ),
+    );
+    expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 4000);
+    view.unmount();
+  });
+
+  it('polls the ledger when the gateway rejects a project subscription at capacity', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    setup(INTEGRATION, {
+      bindings: [
+        {
+          id: 'binding-project',
+          integration_id: 'int-1',
+          provider: 'slack',
+          provider_tenant_key: 'T1',
+          scope: 'project',
+          project_id: 'project-visible',
+          external_ref: 'C1',
+          match_config: {},
+          bound_agent_id: null,
+          status: 'active',
+          created_at: '2026-08-01T00:00:00Z',
+          updated_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+    });
+    const realtime = makeRealtime();
+    const view = renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-events')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-events'));
+    await waitFor(() => expect(realtime.subscribed).toContain('project:project-visible'));
+
+    act(() => {
+      realtime.emitError({
+        code: 'too_many_subscriptions',
+        channel: 'project:project-visible',
+      });
+    });
+    await waitFor(() => expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 4000));
+    view.unmount();
+  });
+
+  it('polls and retries project bindings after a transient binding read failure', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const calls = setup(INTEGRATION, {
+      failBindingsOnce: true,
+      bindings: [
+        {
+          id: 'binding-project',
+          integration_id: 'int-1',
+          provider: 'slack',
+          provider_tenant_key: 'T1',
+          scope: 'project',
+          project_id: 'project-visible',
+          external_ref: 'C1',
+          match_config: {},
+          bound_agent_id: null,
+          status: 'active',
+          created_at: '2026-08-01T00:00:00Z',
+          updated_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+    });
+    const realtime = makeRealtime();
+    const view = renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-events')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-events'));
+    await waitFor(() => expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 4000));
+
+    const pollingCallback = intervalSpy.mock.calls.find(([, delay]) => delay === 4000)?.[0];
+    expect(pollingCallback).toBeTypeOf('function');
+    act(() => {
+      if (typeof pollingCallback === 'function') pollingCallback();
+    });
+
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.url.endsWith('/integrations/int-1/bindings')).length,
+      ).toBeGreaterThanOrEqual(2),
+    );
+    await waitFor(() => expect(realtime.subscribed).toContain('project:project-visible'));
+    view.unmount();
   });
 
   it('shows the error state when the integration cannot load', async () => {
@@ -373,18 +572,20 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    realtime.emit({
-      channel: 'workspace:other',
-      event: 'integration.updated',
-      seq: 1,
-      payload: {},
-    } as unknown as RealtimeEventFrame);
-    realtime.emit({
-      channel: 'integration:int-1',
-      event: 'integration.event_ingested',
-      seq: 2,
-      payload: {},
-    } as unknown as RealtimeEventFrame);
+    act(() => {
+      realtime.emit({
+        channel: 'workspace:other',
+        event: 'integration.updated',
+        seq: 1,
+        payload: {},
+      } as unknown as RealtimeEventFrame);
+      realtime.emit({
+        channel: 'integration:int-1',
+        event: 'integration.event_ingested',
+        seq: 2,
+        payload: {},
+      } as unknown as RealtimeEventFrame);
+    });
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
   });
 
@@ -394,12 +595,14 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    realtime.emit({
-      channel: 'integration:int-1',
-      event: 'integration.updated',
-      seq: 3,
-      payload: {},
-    } as unknown as RealtimeEventFrame);
+    act(() => {
+      realtime.emit({
+        channel: 'integration:int-1',
+        event: 'integration.updated',
+        seq: 3,
+        payload: {},
+      } as unknown as RealtimeEventFrame);
+    });
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
   });
 
@@ -437,8 +640,10 @@ describe('IntegrationDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     const { unmount } = renderPage();
-    resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await act(async () => {
+      resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     unmount();
     resolveGet?.(fakeResponse({ body: { data: INTEGRATION } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -461,8 +666,10 @@ describe('IntegrationDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     const { unmount } = renderPage();
-    resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await act(async () => {
+      resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     unmount();
     resolveGet?.(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }),
@@ -642,7 +849,20 @@ describe('IntegrationDetailPage', () => {
   });
 
   it('edits DingTalk through structured fields and never writes a secret-like config key', async () => {
-    const calls = setup(DINGTALK_INTEGRATION);
+    const calls = setup({
+      ...DINGTALK_INTEGRATION,
+      config: {
+        ...DINGTALK_INTEGRATION.config,
+        robot_code: 'ding-custom-robot',
+        stream_reconnect: {
+          base_seconds: 3,
+          max_seconds: 120,
+          heartbeat_timeout_seconds: 45,
+        },
+        card_template_id: 'mesh.custom.approval',
+        app_secret_ref: '***',
+      },
+    });
     renderPage();
     await waitFor(() => expect(screen.getByTestId('integration-edit')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('integration-edit'));
@@ -674,6 +894,13 @@ describe('IntegrationDetailPage', () => {
       inbound_queue: 'serial_conversation',
       verbosity: 'progress',
       ack_template: '✅ 已接收，处理中',
+      robot_code: 'ding-custom-robot',
+      stream_reconnect: {
+        base_seconds: 3,
+        max_seconds: 120,
+        heartbeat_timeout_seconds: 45,
+      },
+      card_template_id: 'mesh.custom.approval',
     });
     expect(Object.keys(body.config).some((key) => /secret/i.test(key))).toBe(false);
   });

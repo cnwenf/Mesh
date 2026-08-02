@@ -79,6 +79,9 @@ function setupStream(status = 200): Recorded[] {
     if (url.endsWith('/test-send')) {
       return fakeResponse({ body: { data: { status: 'sent', conversation_ref: 'cid-test' } } });
     }
+    if (url.endsWith('/integrations/int-dt:reconnect') && method === 'POST') {
+      return fakeResponse({ status: 202, body: { data: { accepted: true } } });
+    }
     return fakeResponse({ body: { data: {} } });
   }) as typeof fetch);
   return calls;
@@ -123,16 +126,71 @@ describe('DingTalkOverviewPanel', () => {
   });
 
   it('renders a persisted down state and reconnect backoff from a 503 diagnostic envelope', async () => {
-    setupStream(503);
+    const calls = setupStream(503);
+    const onEdit = vi.fn();
     renderWithProviders(
-      <DingTalkOverviewPanel workspaceId="ws-1" integration={DINGTALK} isAdmin onEdit={vi.fn()} />,
+      <DingTalkOverviewPanel workspaceId="ws-1" integration={DINGTALK} isAdmin onEdit={onEdit} />,
     );
 
     await waitFor(() =>
       expect(screen.getByTestId('dingtalk-stream-state')).toHaveTextContent(/Down/i),
     );
     expect(screen.getByTestId('dingtalk-stream-alert')).toHaveTextContent('32');
-    expect(screen.getByTestId('dingtalk-stream-alert')).toHaveTextContent(/Edit configuration/i);
+    const reconnect = screen.getByTestId('dingtalk-reconnect');
+    const edit = screen.getByTestId('dingtalk-edit-config');
+    expect(reconnect).toHaveTextContent(/Reconnect/i);
+    expect(edit).toHaveTextContent(/Edit configuration/i);
+    expect(reconnect).not.toBe(edit);
+
+    await userEvent.click(reconnect);
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.endsWith('/api/v1/workspaces/ws-1/integrations/int-dt:reconnect') &&
+            call.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByText(/Reconnect requested/i)).toBeInTheDocument());
+
+    await userEvent.click(edit);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps reconnect failures actionable without opening edit configuration', async () => {
+    const onEdit = vi.fn();
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/stream-status')) {
+        return fakeResponse({
+          status: 503,
+          body: {
+            error: {
+              code: 'stream_channel_unavailable',
+              message: 'down',
+              details: { state: 'down', backoff_seconds: 8 },
+            },
+          },
+        });
+      }
+      if (url.endsWith('/integrations/int-dt:reconnect') && init?.method === 'POST') {
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'reconnect failed' } },
+        });
+      }
+      return fakeResponse({ body: { data: {} } });
+    }) as typeof fetch);
+
+    renderWithProviders(
+      <DingTalkOverviewPanel workspaceId="ws-1" integration={DINGTALK} isAdmin onEdit={onEdit} />,
+    );
+    await waitFor(() => expect(screen.getByTestId('dingtalk-reconnect')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('dingtalk-reconnect'));
+    await waitFor(() => expect(screen.getByText(/internal error/i)).toBeInTheDocument());
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(screen.getByTestId('dingtalk-edit-config')).toBeEnabled();
   });
 
   it('shows the HTTP callback without requesting Stream diagnostics and copies it', async () => {

@@ -73,6 +73,9 @@ MESH_JWT_SECRET=${JWT_SECRET}
 
 # Local development auth mode (safe ONLY while ports stay loopback-bound).
 MESH_AUTH_MODE=dev
+
+# Absolute browser origin for email and external approval-card deep links.
+MESH_APP_BASE_URL=http://127.0.0.1:8000
 EOF
 
 echo "Wrote ${ENV_FILE} (mode $(stat -c '%a' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp' "${ENV_FILE}"))."

@@ -91,10 +91,34 @@ def test_app_database_url_defaults_to_none():
 
 
 def test_app_database_url_override():
-    settings = load_settings(
-        **REQUIRED, app_database_url="postgresql+asyncpg://app:pw@h:5432/db"
-    )
+    settings = load_settings(**REQUIRED, app_database_url="postgresql+asyncpg://app:pw@h:5432/db")
     assert settings.app_database_url == "postgresql+asyncpg://app:pw@h:5432/db"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "mesh.example.com",
+        "/mesh",
+        "ftp://mesh.example.com",
+        "https://user:password@mesh.example.com",
+        "https://mesh.example.com?tenant=one",
+        "https://mesh.example.com/#fragment",
+    ],
+)
+def test_app_base_url_rejects_non_absolute_or_ambiguous_origins(value):
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings(**REQUIRED, app_base_url=value)
+    assert "app_base_url" in excinfo.value.detail
+
+
+def test_app_base_url_accepts_http_loopback_and_https_subpath():
+    assert load_settings(**REQUIRED, app_base_url="http://127.0.0.1:8000/").app_base_url == (
+        "http://127.0.0.1:8000"
+    )
+    assert load_settings(**REQUIRED, app_base_url="https://mesh.example.com/root/").app_base_url == (
+        "https://mesh.example.com/root"
+    )
 
 
 # --- Shared auth fail-safe (auth.md §5.5: keys not in code/repo) -------------
@@ -197,9 +221,7 @@ def test_validate_infra_settings_accepts_strong_credentials_in_production():
 
 def test_validate_infra_settings_rejects_unauthenticated_redis_in_production():
     # No password in the Redis URL — the exact shape of the MES-83 incident.
-    settings = load_settings(
-        **{**STRONG_INFRA, "redis_url": "redis://redis:6379/0"}, auth_mode="production"
-    )
+    settings = load_settings(**{**STRONG_INFRA, "redis_url": "redis://redis:6379/0"}, auth_mode="production")
     with pytest.raises(ConfigError) as excinfo:
         validate_infra_settings(settings)
     assert "redis_url" in excinfo.value.missing_fields
@@ -328,6 +350,8 @@ def test_validate_infra_settings_reports_every_weak_field_at_once():
         "storage_secret_key",
     }
     assert "MESH_" in excinfo.value.detail  # actionable env-var guidance
+
+
 # --- MES-80: device-code increment settings (auth.md §2.4.2 / §3.8 / cli.md) --
 
 

@@ -147,9 +147,7 @@ async def get_runtime(
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     service = _service(request)
-    data = await service.get_runtime(
-        workspace_id=context.workspace.id, runtime_id=_path_uuid(runtime_id)
-    )
+    data = await service.get_runtime(workspace_id=context.workspace.id, runtime_id=_path_uuid(runtime_id))
     return {"data": data}
 
 
@@ -399,11 +397,7 @@ async def stream_execution_logs(
             terminal = status in ("completed", "failed", "timeout", "cancelled")
             if terminal and not payload["lines"]:
                 yield (
-                    "data: "
-                    + json.dumps(
-                        {"type": "end", "status": status, "final_offset": cursor}
-                    )
-                    + "\n\n"
+                    "data: " + json.dumps({"type": "end", "status": status, "final_offset": cursor}) + "\n\n"
                 )
                 return
             yield (
@@ -489,7 +483,7 @@ async def list_approvals(
 ) -> dict:
     from sqlalchemy import select
 
-    from mesh.db.models.runtime import Approval
+    from mesh.db.models.runtime import Approval, TaskExecution
     from mesh.db.tenant import set_tenant_context
 
     async with request.app.state.session_factory() as session:
@@ -503,8 +497,31 @@ async def list_approvals(
             stmt = stmt.where(Approval.status == "pending")
         stmt = stmt.order_by(Approval.requested_at.desc()).limit(100)
         rows = (await session.execute(stmt)).scalars().all()
+        execution_ids = {
+            approval.subject_execution_id for approval in rows if approval.subject_execution_id is not None
+        }
+        execution_statuses = (
+            dict(
+                (
+                    await session.execute(
+                        select(TaskExecution.id, TaskExecution.status).where(
+                            TaskExecution.workspace_id == context.workspace.id,
+                            TaskExecution.id.in_(execution_ids),
+                        )
+                    )
+                ).all()
+            )
+            if execution_ids
+            else {}
+        )
         return {
-            "data": [approvals_mod._approval_response(a, execution_status=None) for a in rows],
+            "data": [
+                approvals_mod._approval_response(
+                    approval,
+                    execution_status=execution_statuses.get(approval.subject_execution_id),
+                )
+                for approval in rows
+            ],
             "next_cursor": None,
         }
 
@@ -518,7 +535,7 @@ async def get_approval(
 ) -> dict:
     from sqlalchemy import select
 
-    from mesh.db.models.runtime import Approval
+    from mesh.db.models.runtime import Approval, TaskExecution
     from mesh.db.tenant import set_tenant_context
 
     async with request.app.state.session_factory() as session:
@@ -533,7 +550,15 @@ async def get_approval(
         ).scalar_one_or_none()
         if approval is None:
             raise NotFoundError("approval not found")
-        return {"data": approvals_mod._approval_response(approval, execution_status=None)}
+        execution_status = None
+        if approval.subject_execution_id is not None:
+            execution_status = await session.scalar(
+                select(TaskExecution.status).where(
+                    TaskExecution.id == approval.subject_execution_id,
+                    TaskExecution.workspace_id == context.workspace.id,
+                )
+            )
+        return {"data": approvals_mod._approval_response(approval, execution_status=execution_status)}
 
 
 @router.post("/workspaces/{workspace_id}/approvals/{approval_id}/approve")

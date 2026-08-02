@@ -5,7 +5,8 @@ results, rate-limit backoff, card lifecycle, diagnostics split, redaction).
 
 The test double is a real HTTP server on loopback (nothing on the contract
 path is mocked): worker processes talk to it over real sockets via the
-deployment-time ``MESH_DINGTALK_API_BASE`` environment variable.
+deployment-time ``MESH_DINGTALK_API_BASE`` / ``MESH_DINGTALK_OAPI_BASE``
+environment variables.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ from mesh.db.models.runtime import Approval, TaskExecution
 from mesh.integrations.ack import elect_ack_leader
 from mesh.integrations.im_outbound import IM_SEND_EVENT_TYPE, chunk_idempotency_key
 from mesh.outbox.service import emit_event
-from tests.e2e.dingtalk_fake_server import start_fake_dingtalk
+from tests.e2e.dingtalk_fake_server import LEGACY_GETTOKEN_PATH, start_fake_dingtalk
 from tests.e2e.test_integrations_e2e import poll_until, setup_world
 
 pytestmark = pytest.mark.e2e
@@ -61,7 +62,7 @@ WORKER_LOGS = []
 
 @pytest.fixture(scope="module")
 def fake_dingtalk():
-    server, base_url, state = start_fake_dingtalk()
+    server, base_url, state = start_fake_dingtalk(expected_app_secret=APP_SECRET)
     yield base_url, state
     server.shutdown()
     server.server_close()
@@ -92,6 +93,7 @@ def _base_env() -> dict:
     env["MESH_DATABASE_URL"] = get_test_database_url()
     env["MESH_REDIS_URL"] = get_test_redis_url()
     env["MESH_AUTH_MODE"] = "dev"
+    env["MESH_APP_BASE_URL"] = "http://mesh.test"
     env.setdefault("MESH_DEVICE_CODE_PEPPER", "e2e-device-code-pepper-0123456789")
     import re as _re
 
@@ -109,10 +111,11 @@ def _base_env() -> dict:
 
 @pytest_asyncio.fixture(scope="module")
 async def dt_api_server(provision_database, fake_dingtalk):
-    """Real API server with MESH_DINGTALK_API_BASE pointing at the double."""
+    """Real API server with both DingTalk API bases pointing at the double."""
     fake_base, _state = fake_dingtalk
     env = _base_env()
     env["MESH_DINGTALK_API_BASE"] = fake_base
+    env["MESH_DINGTALK_OAPI_BASE"] = fake_base
     env.setdefault("MESH_SESSION_COOKIE_SECURE", "false")
     env.setdefault("MESH_AUTH_RATE_LIMIT", "100000")
 
@@ -153,6 +156,7 @@ async def dt_api_server(provision_database, fake_dingtalk):
 def _spawn_worker(fake_base: str, log_path: str, **extra_env) -> subprocess.Popen:
     env = _base_env()
     env["MESH_DINGTALK_API_BASE"] = fake_base
+    env["MESH_DINGTALK_OAPI_BASE"] = fake_base
     env["MESH_OUTBOX_POLL_INTERVAL"] = "0.2"
     env["MESH_IM_SEND_POLL_INTERVAL"] = "0.2"
     env["MESH_IM_RATE_LIMIT_BASE_SECONDS"] = "0.3"
@@ -265,6 +269,9 @@ async def test_e2e_test_send_and_stream_status_split(dt_api_server, fake_dingtal
     _base_url, state = fake_dingtalk
     async with httpx.AsyncClient(base_url=dt_api_server, timeout=15) as client:
         world = await _make_world(client, "send")
+        ownership_proofs = state.calls(LEGACY_GETTOKEN_PATH)
+        assert len(ownership_proofs) == 1
+        assert ownership_proofs[0]["body"] == {"appkey": "dingkey-send"}
         auth = {"Authorization": f"Bearer {world['token']}"}
         base = f"/api/v1/workspaces/{world['ws_id']}/integrations/{world['integration_id']}"
         # receive channel DOWN — must not affect outbound

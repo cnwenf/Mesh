@@ -92,9 +92,7 @@ async def request_tool_approval(
                 code="invalid_state_transition",
                 details={"status": execution.status},
             )
-        attempt = await _load_daemon_attempt(
-            session, attempt_id=attempt_id, runtime=runtime
-        )
+        attempt = await _load_daemon_attempt(session, attempt_id=attempt_id, runtime=runtime)
         if attempt.execution_id != execution.id:
             raise BusinessRuleError(
                 "attempt does not belong to this execution",
@@ -128,13 +126,17 @@ async def request_tool_approval(
         requester = None
         if execution.agent_id is not None:
             requester = (
-                await session.execute(
-                    select(Member).where(
-                        Member.workspace_id == workspace_id,
-                        Member.agent_id == execution.agent_id,
+                (
+                    await session.execute(
+                        select(Member).where(
+                            Member.workspace_id == workspace_id,
+                            Member.agent_id == execution.agent_id,
+                        )
                     )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
         if requester is None:
             raise BusinessRuleError(
                 "execution has no agent roster member to request approval",
@@ -237,7 +239,15 @@ async def decide_approval(
             raise NotFoundError("approval not found")
 
         if approval.status != "pending":
-            return _approval_response(approval, execution_status=None)  # idempotent
+            execution_status = None
+            if approval.subject_execution_id is not None:
+                execution_status = await session.scalar(
+                    select(TaskExecution.status).where(
+                        TaskExecution.id == approval.subject_execution_id,
+                        TaskExecution.workspace_id == workspace_id,
+                    )
+                )
+            return _approval_response(approval, execution_status=execution_status)  # idempotent
 
         if member.member_type != "human":
             raise ForbiddenError("agents cannot approve")
@@ -307,9 +317,7 @@ async def decide_approval(
             # autopilot_action subject (README §6.10): approve resumes the
             # parked run (waiting_approval → running, executor dispatches);
             # reject cancels it.
-            run_status = await apply_approval_decision(
-                session, approval=approval, approve=approve, now=now
-            )
+            run_status = await apply_approval_decision(session, approval=approval, approve=approve, now=now)
 
         await emit_realtime(
             session,
@@ -320,13 +328,9 @@ async def decide_approval(
                 "approval_id": str(approval.id),
                 "decision": approval.status,
                 "execution_id": (
-                    str(approval.subject_execution_id)
-                    if approval.subject_execution_id
-                    else None
+                    str(approval.subject_execution_id) if approval.subject_execution_id else None
                 ),
-                "run_id": (
-                    str(approval.subject_run_id) if approval.subject_run_id else None
-                ),
+                "run_id": (str(approval.subject_run_id) if approval.subject_run_id else None),
                 "run_status": run_status,
             },
             idempotency_key=f"approval:{approval.id}:decided",
@@ -398,9 +402,7 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
         from mesh.db.models.autopilot import Autopilot, AutopilotRun
 
         run = (
-            await session.execute(
-                select(AutopilotRun).where(AutopilotRun.id == approval.subject_run_id)
-            )
+            await session.execute(select(AutopilotRun).where(AutopilotRun.id == approval.subject_run_id))
         ).scalar_one_or_none()
         if run is not None:
             # Trigger path: the member who manually triggered the run, or the
@@ -408,9 +410,7 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
             if run.triggered_by is not None and run.triggered_by == member.id:
                 return
             rule = (
-                await session.execute(
-                    select(Autopilot).where(Autopilot.id == run.autopilot_id)
-                )
+                await session.execute(select(Autopilot).where(Autopilot.id == run.autopilot_id))
             ).scalar_one_or_none()
             if rule is not None:
                 if rule.created_by == member.id:
@@ -435,15 +435,19 @@ async def cancel_pending_approvals(
 ) -> int:
     """Execution cancelled while awaiting approval → close the pending row."""
     pending = (
-        await session.execute(
-            select(Approval).where(
-                Approval.workspace_id == workspace_id,
-                Approval.subject_type == "tool_call",
-                Approval.subject_execution_id == execution_id,
-                Approval.status == "pending",
+        (
+            await session.execute(
+                select(Approval).where(
+                    Approval.workspace_id == workspace_id,
+                    Approval.subject_type == "tool_call",
+                    Approval.subject_execution_id == execution_id,
+                    Approval.status == "pending",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for approval in pending:
         approval.status = "cancelled"
         approval.decided_at = now
@@ -457,9 +461,7 @@ def _approval_response(approval: Approval, *, execution_status: str | None) -> d
         "subject_execution_id": (
             str(approval.subject_execution_id) if approval.subject_execution_id else None
         ),
-        "subject_task_id": (
-            str(approval.subject_task_id) if approval.subject_task_id else None
-        ),
+        "subject_task_id": (str(approval.subject_task_id) if approval.subject_task_id else None),
         "status": approval.status,
         "action_summary": approval.action_summary,
         "requested_at": approval.requested_at.isoformat(),

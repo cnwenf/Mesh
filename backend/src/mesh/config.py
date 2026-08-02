@@ -11,7 +11,7 @@ from datetime import timedelta
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_REALTIME_RETENTION_DAYS = 7
@@ -83,6 +83,31 @@ WEAK_SECRET_DENYLIST: frozenset[str] = frozenset(
 )
 # Below this length a secret is rejected outright regardless of content.
 MIN_SECRET_LENGTH = 16
+
+
+def normalize_app_base_url(value: str | None) -> str | None:
+    """Validate and normalize the public browser origin used in links.
+
+    A deployment subpath is supported, but credentials, query strings, and
+    fragments are forbidden because callers append security-sensitive routes.
+    """
+    if value is None or value == "":
+        return None
+    raw = str(value)
+    if raw != raw.strip():
+        raise ValueError("app_base_url must not contain surrounding whitespace")
+    parsed = urlsplit(raw)
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("app_base_url has an invalid port") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("app_base_url must be an absolute http(s) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("app_base_url must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("app_base_url must not contain a query or fragment")
+    return raw.rstrip("/")
 
 
 class ConfigError(RuntimeError):
@@ -191,6 +216,11 @@ class Settings(BaseSettings):
     smtp_timeout: float = Field(default=10.0, gt=0)
     # Base URL used to build verification/reset links in outgoing email.
     app_base_url: str | None = None
+
+    @field_validator("app_base_url", mode="before")
+    @classmethod
+    def _validate_app_base_url(cls, value: str | None) -> str | None:
+        return normalize_app_base_url(value)
 
     # OAuth (auth.md §1.2 A5/A6). Comma-separated exact-match allowlist of
     # redirect URIs for the dev ``mock`` provider (M1: open-redirect prevention).

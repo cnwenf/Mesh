@@ -5,8 +5,9 @@ the unified ``approvals`` entity (README §6.10 — the approval state and
 decision semantics live there, never here):
 
 - PUSH: ``POST /v1.0/card/instances/createAndDeliver`` with
-  ``cardTemplateId`` + ``outTrackId`` (derived from the approval id — the
-  callback's lookup key) + ``openSpaceId`` (IM_GROUP / IM_ROBOT) +
+  ``cardTemplateId`` + ``outTrackId`` (derived from the approval id and source
+  integration id — the callback's unambiguous lookup key) + ``openSpaceId``
+  (IM_GROUP / IM_ROBOT) +
   ``cardData`` + ``callbackType`` (STREAM preferred — reuses the module's
   long connection). ``sampleActionCard*`` (traditional ActionCards: no
   callback, no update capability) is FORBIDDEN for approval cards —
@@ -36,11 +37,14 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.config import normalize_app_base_url
 from mesh.db.models.integration import Integration
 from mesh.db.models.runtime import Approval, TaskExecution
+from mesh.db.models.workspace import Workspace
 from mesh.errors import ForbiddenError, MeshError, NotFoundError
 from mesh.integrations.cards import extract_action, resolve_clicker_member
 from mesh.integrations.dingtalk_api import (
@@ -66,6 +70,7 @@ from mesh.runtime.approvals import decide_approval
 logger = logging.getLogger("mesh.integrations.dingtalk_cards")
 
 OUT_TRACK_PREFIX = "mesh-appr-"
+OUT_TRACK_V2_PREFIX = "mesh-appr2-"
 
 # §3.2 DingTalk row — the OFFICIAL timestamp tolerance (±3600s). Written in
 # stone: narrowing it rejects legitimate callbacks (the platform signs with
@@ -99,20 +104,60 @@ _MESH_FALLBACK_LABEL = "回 Mesh 处理"
 # ---------------------------------------------------------------------------
 
 
-def derive_out_track_id(approval_id: uuid.UUID) -> str:
-    """Stable per-card id derived from the approval — the callback uses it
-    to look the approval back up (also the update idempotency key)."""
-    return f"{OUT_TRACK_PREFIX}{uuid.UUID(str(approval_id)).hex}"
+def _uuid_token(value: uuid.UUID) -> str:
+    return base64.urlsafe_b64encode(uuid.UUID(str(value)).bytes).decode().rstrip("=")
 
 
-def parse_out_track_id(out_track_id: str) -> uuid.UUID | None:
+def _uuid_from_token(value: str) -> uuid.UUID | None:
+    try:
+        raw = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+        return uuid.UUID(bytes=raw) if len(raw) == 16 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def derive_out_track_id(
+    approval_id: uuid.UUID,
+    integration_id: uuid.UUID | None = None,
+) -> str:
+    """Stable card identity, optionally anchored to its source integration.
+
+    V2 stays below DingTalk's 64-character bound while carrying both UUIDs.
+    The legacy approval-only form remains parseable for already-issued cards,
+    but new deliveries always provide ``integration_id``.
+    """
+    approval_id = uuid.UUID(str(approval_id))
+    if integration_id is None:
+        return f"{OUT_TRACK_PREFIX}{approval_id.hex}"
+    return f"{OUT_TRACK_V2_PREFIX}{_uuid_token(approval_id)}.{_uuid_token(uuid.UUID(str(integration_id)))}"
+
+
+def parse_out_track_context(out_track_id: str) -> tuple[uuid.UUID, uuid.UUID | None] | None:
     raw = str(out_track_id or "")
+    if raw.startswith(OUT_TRACK_V2_PREFIX):
+        tokens = raw[len(OUT_TRACK_V2_PREFIX) :].split(".")
+        if len(tokens) != 2:
+            return None
+        approval_id = _uuid_from_token(tokens[0])
+        integration_id = _uuid_from_token(tokens[1])
+        if approval_id is None or integration_id is None:
+            return None
+        return approval_id, integration_id
     if not raw.startswith(OUT_TRACK_PREFIX):
         return None
     try:
-        return uuid.UUID(raw[len(OUT_TRACK_PREFIX):])
+        return uuid.UUID(raw[len(OUT_TRACK_PREFIX) :]), None
     except ValueError:
         return None
+
+
+def parse_out_track_id(out_track_id: str) -> uuid.UUID | None:
+    context = parse_out_track_context(out_track_id)
+    return context[0] if context is not None else None
 
 
 def open_space_id(
@@ -138,9 +183,7 @@ def assert_not_action_card(template_or_msg_key: str) -> None:
     approval cards. Code-path assertion on every approval-card push."""
     value = str(template_or_msg_key or "")
     if value.startswith("sampleActionCard"):
-        raise AssertionError(
-            f"approval cards must not use {value!r} (no callback/update capability)"
-        )
+        raise AssertionError(f"approval cards must not use {value!r} (no callback/update capability)")
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +210,7 @@ def build_approval_card_param_map(
     estimated_cost = str(summary.get("estimated_cost") or "")
     tools_summary = str(summary.get("tools_summary") or summary.get("resume_hint") or "")
     expires_at = approval.expires_at.isoformat() if approval.expires_at else ""
-    resume_hint = (
-        f"批准后将由 agent 从审批点恢复：待执行 {tools_summary}" if tools_summary else ""
-    )
+    resume_hint = f"批准后将由 agent 从审批点恢复：待执行 {tools_summary}" if tools_summary else ""
     return {
         "title": f"Mesh 审批请求 · {action}" if action else "Mesh 审批请求",
         "agent_name": agent_name,
@@ -213,9 +254,7 @@ def lifecycle_response(
     }
     if state == CARD_STATE_LOADING:
         if user_id:
-            body["userPrivateData"] = {
-                user_id: {"cardParamMap": {"status_text": "处理中…"}}
-            }
+            body["userPrivateData"] = {user_id: {"cardParamMap": {"status_text": "处理中…"}}}
         return body
     if state == CARD_STATE_APPROVED:
         status_text = _APPROVED_TEXT.format(approver=approver_name, decided_at=decided_at)
@@ -354,12 +393,12 @@ async def push_approval_card(
             conversation_type=target.conversation_type,
             open_conversation_id=target.external_ref,
         )
-    card_param_map = build_approval_card_param_map(
-        approval, agent_name=agent_name, detail_url=detail_url
-    )
+    if target.integration_id is None:
+        return SendOutcome(SEND_STATUS_FAILED, reason="invalid_configuration")
+    card_param_map = build_approval_card_param_map(approval, agent_name=agent_name, detail_url=detail_url)
     body = {
         "cardTemplateId": card_template_id,
-        "outTrackId": derive_out_track_id(approval.id),
+        "outTrackId": derive_out_track_id(approval.id, target.integration_id),
         "openSpaceId": space,
         "callbackType": callback_type,
         "cardData": {"cardParamMap": card_param_map},
@@ -411,6 +450,39 @@ async def _member_display_name(session: AsyncSession, member: Any) -> str:
     return str(member.id)
 
 
+async def _approval_detail_url(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    app_base_url: str,
+) -> str:
+    """Build the actual frontend approval route from deployment config.
+
+    The browser route is slug-based; workspace UUID API paths are not valid
+    frontend deep links. DingTalk renders links outside Mesh, so a relative
+    path would resolve against DingTalk and is never returned.
+    """
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        return ""
+    path = (
+        f"/w/{quote(str(workspace.slug), safe='')}/approvals?approval_id={quote(str(approval_id), safe='')}"
+    )
+    try:
+        base = normalize_app_base_url(app_base_url) or ""
+    except ValueError:
+        base = ""
+    return f"{base}{path}" if base else ""
+
+
+def _has_valid_app_base_url(app_base_url: str) -> bool:
+    try:
+        return normalize_app_base_url(app_base_url) is not None
+    except ValueError:
+        return False
+
+
 async def handle_dingtalk_card_callback(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -418,7 +490,7 @@ async def handle_dingtalk_card_callback(
     integration: Integration,
     payload: dict[str, Any],
     now: datetime,
-    detail_url_base: str = "",
+    app_base_url: str = "",
 ) -> tuple[int, dict[str, Any]]:
     """Full card-callback pipeline. Returns (status, bare-JSON body) — the
     body always carries the §4.4 lifecycle writeback where applicable (the
@@ -429,7 +501,16 @@ async def handle_dingtalk_card_callback(
 
     clicker = extract_dingtalk_clicker(payload, integration)
     action = extract_dingtalk_action(payload)
-    if clicker is None or action is None:
+    track_context = parse_out_track_context(str(payload.get("outTrackId") or ""))
+    track_approval_id = track_context[0] if track_context is not None else None
+    track_integration_id = track_context[1] if track_context is not None else None
+    if (
+        clicker is None
+        or action is None
+        or track_approval_id is None
+        or track_approval_id != action[0]
+        or (track_integration_id is not None and track_integration_id != integration.id)
+    ):
         return 400, _bare_error("invalid_request", "malformed card callback payload")
     provider, tenant_key, external_user_key = clicker
     approval_id, approve = action
@@ -456,8 +537,28 @@ async def handle_dingtalk_card_callback(
             )
         except Exception:  # noqa: BLE001 — audit must not break the response
             logger.exception("dingtalk card callback denial audit failed")
-        return status, lifecycle_response(
-            CARD_STATE_FORBIDDEN, user_id=user_id
+        return status, lifecycle_response(CARD_STATE_FORBIDDEN, user_id=user_id)
+
+    # HTTP location is intentionally status-agnostic until after the caller
+    # proves the app secret, so an unauthenticated probe cannot distinguish a
+    # disabled integration. Once authenticated, disabled is a hard inbound
+    # boundary: audit the rejection and leave approval truth untouched.
+    if integration.status != "active":
+        await _denial("integration_disabled", status=401)
+        return 401, _bare_error(
+            "integration_disabled",
+            "integration is disabled; card callbacks are rejected",
+        )
+
+    # Card links are opened outside Mesh. Without an absolute deployment
+    # origin, both a terminal writeback and a successful decision would leave
+    # the operator with an unusable relative fallback. Fail before touching
+    # approval truth and retain a durable denial reason for operators.
+    if not _has_valid_app_base_url(app_base_url):
+        await _denial("app_base_url_missing", status=500)
+        return 500, _bare_error(
+            "integration_misconfigured",
+            "MESH_APP_BASE_URL is required for DingTalk approval cards",
         )
 
     # Chain link 1+2: external identity → users.id → workspace roster row.
@@ -475,21 +576,19 @@ async def handle_dingtalk_card_callback(
     if approval is None or approval.workspace_id != workspace_id:
         return 404, _bare_error("not_found", "approval not found")
     agent_name = await _agent_name_for_approval(session, approval)
-    detail_url = (
-        f"{detail_url_base}/workspaces/{workspace_id}/approvals/{approval_id}"
-        if detail_url_base
-        else ""
+    detail_url = await _approval_detail_url(
+        session,
+        workspace_id=workspace_id,
+        approval_id=approval_id,
+        app_base_url=app_base_url,
     )
 
     # Expired approvals: no decision, explicit lifecycle card.
     if approval.status == "expired":
-        return 200, lifecycle_response(
-            CARD_STATE_EXPIRED, user_id=user_id, detail_url=detail_url
-        )
+        return 200, lifecycle_response(CARD_STATE_EXPIRED, user_id=user_id, detail_url=detail_url)
 
     # Chain link 3: the unified approval endpoint applies the §6.10
     # permission row; repeat clicks no-op there (idempotent).
-    already_decided = approval.status != "pending"
     try:
         result = await decide_approval(
             session_factory,
@@ -509,18 +608,20 @@ async def handle_dingtalk_card_callback(
             approval_id,
             exc.code,
         )
-        return 500, lifecycle_response(
-            CARD_STATE_FAILED, user_id=user_id, detail_url=detail_url
-        )
+        return 500, lifecycle_response(CARD_STATE_FAILED, user_id=user_id, detail_url=detail_url)
 
-    decided_approve = str(result.get("status") or "") == "approved"
     approver_name = await _member_display_name(session, member)
     decided_at = str(result.get("decided_at") or "")
-    if already_decided:
-        # Repeat click: keep the terminal text (no-op, no error).
-        state = CARD_STATE_APPROVED if decided_approve else CARD_STATE_REJECTED
-    else:
-        state = CARD_STATE_APPROVED if approve else CARD_STATE_REJECTED
+    # The row-locked decision result is the only lifecycle truth. Both
+    # callbacks may have observed ``pending`` before opposite clicks race;
+    # deriving from request intent would let the loser overwrite the card
+    # with the opposite of the committed approval state.
+    state = {
+        "approved": CARD_STATE_APPROVED,
+        "rejected": CARD_STATE_REJECTED,
+        "expired": CARD_STATE_EXPIRED,
+        "cancelled": CARD_STATE_FAILED,
+    }.get(str(result.get("status") or ""), CARD_STATE_FAILED)
     return 200, lifecycle_response(
         state,
         user_id=user_id,
@@ -545,6 +646,8 @@ async def push_card_from_event(
     session: AsyncSession,
     adapter: Any,
     payload: dict[str, Any],
+    *,
+    app_base_url: str = "",
 ) -> SendOutcome:
     """Push the approval card described by an ``im.send`` ``kind='card'``
     event. ``callbackType`` aligns with the integration's receive mode
@@ -552,6 +655,11 @@ async def push_card_from_event(
     """
     from mesh.integrations.im_outbound import target_from_payload
 
+    # A relative detail URL is invalid in the external DingTalk client. Keep
+    # the delivery in Mesh's retry/failure ledger and never call the platform
+    # when the deployment origin is absent.
+    if not _has_valid_app_base_url(app_base_url):
+        return SendOutcome(SEND_STATUS_FAILED, reason="invalid_configuration")
     try:
         approval_id = uuid.UUID(str(payload.get("approval_id") or ""))
         workspace_id = uuid.UUID(str(payload.get("workspace_id") or ""))
@@ -566,11 +674,11 @@ async def push_card_from_event(
     callback_type = "HTTP" if str(config.get("receive_mode")) == "http" else "STREAM"
     card_template_id = str(config.get("card_template_id") or DEFAULT_CARD_TEMPLATE_ID)
     agent_name = await _agent_name_for_approval(session, approval)
-    detail_url_base = str(payload.get("detail_url_base") or "")
-    detail_url = (
-        f"{detail_url_base}/workspaces/{workspace_id}/approvals/{approval_id}"
-        if detail_url_base
-        else ""
+    detail_url = await _approval_detail_url(
+        session,
+        workspace_id=workspace_id,
+        approval_id=approval_id,
+        app_base_url=app_base_url,
     )
     target = target_from_payload(payload, workspace_id, integration_id)
     return await push_approval_card(
@@ -601,6 +709,7 @@ __all__ = [
     "handle_dingtalk_card_callback",
     "lifecycle_response",
     "open_space_id",
+    "parse_out_track_context",
     "parse_out_track_id",
     "push_approval_card",
     "push_card_from_event",

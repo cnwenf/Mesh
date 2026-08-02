@@ -111,9 +111,12 @@ Playwright / 现有 FastAPI + PostgreSQL + Redis 真实栈。
 - [x] `/btw <补充>`、`/stop [原因]`、`/help` 输入 affordance 与复制反馈；明确命令在钉钉内输入、
       不进任务队列。
 - [x] 展示 ack `✅ 已接收，处理中`、排队位置、`正在停止`/`已停止` 两段状态文案。
-- [x] 审批卡预览覆盖 loading、批准/拒绝成功并禁按钮、重复 no-op、过期、无权、失败；过期/失败
-      提供 `[回 Mesh 处理]`；通知卡显示 final_only/progress 差异。
-- [x] 卡片预览只呈现状态，不发审批写请求，不伪造成审批真源。
+- [x] 删除本地生命周期 Select；输入具体 Approval ID 后只读审批 API 真源，呈现
+      `status`、`execution_status` 与 `action_summary`，覆盖 loading/empty/error/retry/稀疏字段。
+- [x] pending 审批每 4 秒自动对账，真实卡片回调落库后无需第二次点击即可转终态；终态、清空
+      ID 与卸载均停止轮询。`[回 Mesh 处理]` 深链携同一 `approval_id` 并由审批页直接读取该记录。
+- [x] 卡片预览不发审批写请求、不持有决定；通知卡由 execution_status 真源呈现并同时说明
+      final_only/progress 配置差异。
 
 ## Task 6：i18n、样式与文档
 
@@ -129,7 +132,8 @@ Playwright / 现有 FastAPI + PostgreSQL + Redis 真实栈。
 
 - [x] 中英文键集同步，所有用户可见文案外部化。
 - [x] 桌面/平板/手机响应式队列卡与预览；语义色只用 design tokens；状态不只靠颜色。
-- [x] 文档补钉钉 UI、诊断分离、队列失效 refetch 与权限边界。
+- [x] 文档补钉钉 UI、诊断分离、持久显式重连、审批真源轮询/深链、队列失效 refetch 与
+      bindings/events/counts 的服务端 project 权限边界。
 
 ## Task 7：真实 e2e、覆盖率、评审与交付
 
@@ -146,11 +150,30 @@ Playwright / 现有 FastAPI + PostgreSQL + Redis 真实栈。
       `/btw` 上下文追加、`/stop` 两阶段状态、签名卡片回调与 queue realtime refetch；逐步截图。
 - [ ] 使用真实钉钉测试企业复验 Stream 建连、平台侧 ack/最终结果和卡片点击（本地测试不伪称该外部平台门禁已完成）。
 - [x] 私有项目负向：无项目可见性的普通成员 API/UI 均看不到队列项；project WS payload 不携
-      conversation_key；普通成员无 audit 入口。
+      conversation_key；普通成员无 audit 入口，且收不到私有项目的 `integration.event_ingested` 帧。
+- [x] 真实项目实时正负链：owner 打开 Events tab 后订阅授权 project 频道，签名回调无需手动刷新
+      即新增 ledger 行；outsider 以独立真实 WebSocket 直订私有 project 得到 forbidden。
+- [x] 真实 worker 显式重连：浏览器写入持久 reconnect marker；后端真实进程 + TLS/WSS gateway
+      e2e 进一步断言旧 socket 关闭、重跑 connections/open 且新 socket 活跃。
+- [x] app_key 级 advisory lock 改为全组原子所有权；两个 manager/独立 PostgreSQL session 断言
+      一方取得共享 app_key 全部集成、另一方为零，杜绝多 worker 分片建双连接。
+- [x] 共享连接按 `(chatbotCorpId, robotCode)` 复合身份精确路由并在歧义时 fail closed；路由身份热更新
+      纳入连接指纹；退避取消和 cancel-before-first-step 的锁释放均由 shutdown 可等待收尾。
 - [x] 运行 integration 模块定向 Vitest，再运行 `npm run lint`、`npm run typecheck`、
       `npm run test:coverage`、变更覆盖率校验、`npm run build`、关键 Playwright。
 - [x] 完成前系统化审查：密钥泄露、项目隔离、失效通知、本地 patch、全文泄露、可访问性、
       移动端、i18n、无硬编码颜色/emoji 图标。
-- [x] 请求代码评审；处理反馈后重新验证。
-- [ ] 配置 cnwenf 提交身份与禁用 hooks，提交、检查无 co-author，push 并创建含 `Closes MES-90`
-      的 draft PR；将 PR URL 写入 issue metadata，发布唯一最终评论，状态转 `in_review`。
+- [x] 首轮代码评审已完成并明确阻断项；已修复绑定/事件台账私有项目泄露、审批本地假状态、
+      缺失显式重连与移动暗色对比度问题。
+- [x] 修复后复审项已补回归：事件实时帧按快照授权路由；API/worker `stream_state` 写入行锁合并；
+      真实管理任务关闭并重建物理连接；审批响应读取关联执行状态；切换审批 ID 取消陈旧加载态。
+- [x] 最终代码重建隔离栈后，功能 Playwright 1/1、桌面/手机 × light/dark 4/4 通过；最低
+      运行时 WCAG AA 对比度 5.499:1，证据截图已刷新。
+- [x] 安全收口：钉钉 config 闭合校验并禁止外部 `app_secret_ref`；API/worker 强制绝对
+      `MESH_APP_BASE_URL`；HTTP/Stream 每次副作用前按当前 integration 真值校验；审批卡 V2
+      `outTrackId` 绑定源 integration；审批 optimistic race 与手动/定时轮询竞态均补回归。
+- [x] 浏览器栈增加 compose 内部受控 OAPI 所有权证明对端：错误 secret 422 且零落库，精确合成
+      凭据可完成首次认领；明确该门只替换外部 OAPI，不等同真实钉钉测试企业联调。
+- [x] 修复后完成全量门禁并重新请求代码评审；复审无 P0/P1 阻断项。
+- [x] 配置 cnwenf 提交身份与禁用 hooks，提交、检查无 co-author，force-with-lease 更新现有含
+      `Closes MES-90` 的 draft PR；真实测试企业凭据仍缺失时保持 draft。

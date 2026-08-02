@@ -209,6 +209,28 @@ export async function getDingTalkStreamStatus(
   );
 }
 
+export interface DingTalkReconnectResult {
+  readonly accepted: boolean;
+}
+
+/**
+ * 请求 Stream worker 立即结束当前退避并重新建连。
+ *
+ * 前端契约：POST /workspaces/{ws}/integrations/{id}:reconnect → 202
+ * `{data:{accepted:true}}`；后端实现需限制为 admin/owner + im_dingtalk Stream 模式。
+ */
+export async function reconnectDingTalkStream(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+): Promise<DingTalkReconnectResult> {
+  return client.request<DingTalkReconnectResult>(
+    'POST',
+    `${integrationPath(workspaceId, integrationId)}:reconnect`,
+    { body: {} },
+  );
+}
+
 export interface ListQueueItemsParams {
   readonly state?: string;
   readonly conversationKey?: string;

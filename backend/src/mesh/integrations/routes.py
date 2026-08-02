@@ -108,6 +108,7 @@ async def list_integrations(
         workspace_id=context.workspace.id,
         integration_ids=[row.id for row in page.items],
         since=datetime.now(UTC) - timedelta(days=EVENTS_WINDOW_DAYS),
+        viewer=context.member,
     )
     return {
         "data": [render_integration(row, events_7d=counts.get(row.id, 0)) for row in page.items],
@@ -115,7 +116,30 @@ async def list_integrations(
     }
 
 
-@router.post("/workspaces/{workspace_id}/integrations", status_code=201)
+@router.post(
+    "/workspaces/{workspace_id}/integrations",
+    status_code=201,
+    responses={
+        409: {
+            "description": (
+                "Name conflict, or DingTalk app ownership/group conflict: "
+                "`dingtalk_app_key_conflict`, `dingtalk_route_conflict`, "
+                "`dingtalk_app_credential_conflict`, or "
+                "`dingtalk_stream_config_conflict`."
+            )
+        },
+        422: {
+            "description": (
+                "Request validation or first-claim proof rejection (`dingtalk_credentials_invalid`)."
+            )
+        },
+        502: {
+            "description": (
+                "First-claim proof could not reach DingTalk (`dingtalk_credential_verification_unavailable`)."
+            )
+        },
+    },
+)
 async def create_integration(
     request: Request,
     response: Response,
@@ -124,6 +148,14 @@ async def create_integration(
     context: WorkspaceContext = Depends(require_workspace("integration:manage")),
     user: User = Depends(get_current_user),
 ) -> dict:
+    """Create an integration.
+
+    A DingTalk app key's first claim is serialized globally and proven with a
+    side-effect-free platform credential check before any row is committed.
+    Later integrations may share that app only inside its owner workspace and
+    must share one credential and Stream reconnect policy while keeping a
+    unique ``(corp_id, robot_code)`` route.
+    """
     await _rate_limit_write(request, user, response)
     created = await _service(request).create_integration(
         workspace_id=context.workspace.id,
@@ -152,7 +184,29 @@ async def get_integration(
     return {"data": render_integration(integration)}
 
 
-@router.patch("/workspaces/{workspace_id}/integrations/{integration_id}")
+@router.patch(
+    "/workspaces/{workspace_id}/integrations/{integration_id}",
+    responses={
+        409: {
+            "description": (
+                "Name conflict, or DingTalk app ownership/group conflict: "
+                "`dingtalk_app_key_conflict`, `dingtalk_route_conflict`, "
+                "`dingtalk_app_credential_conflict`, or "
+                "`dingtalk_stream_config_conflict`."
+            )
+        },
+        422: {
+            "description": (
+                "Request validation or first-claim proof rejection (`dingtalk_credentials_invalid`)."
+            )
+        },
+        502: {
+            "description": (
+                "First-claim proof could not reach DingTalk (`dingtalk_credential_verification_unavailable`)."
+            )
+        },
+    },
+)
 async def patch_integration(
     request: Request,
     response: Response,
@@ -162,6 +216,7 @@ async def patch_integration(
     context: WorkspaceContext = Depends(require_workspace("integration:manage")),
     user: User = Depends(get_current_user),
 ) -> dict:
+    """Update an integration while preserving DingTalk app-group invariants."""
     await _rate_limit_write(request, user, response)
     return {
         "data": await _service(request).update_integration(
@@ -207,6 +262,8 @@ async def rotate_integration_secret(
     context: WorkspaceContext = Depends(require_workspace("integration:manage")),
     user: User = Depends(get_current_user),
 ) -> dict:
+    """Rotate a credential once; DingTalk rotation updates every sibling that
+    shares the app key inside the owner workspace."""
     await _rate_limit_write(request, user, response)
     return {
         "data": await _service(request).rotate_secret(
@@ -290,6 +347,32 @@ async def integration_stream_status(
     }
 
 
+@router.post(
+    "/workspaces/{workspace_id}/integrations/{integration_id}:reconnect",
+    status_code=202,
+)
+async def reconnect_integration_stream(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Wake the DingTalk Stream lock owner and rebuild its connection.
+
+    The durable reconnect marker is written to every active Stream sibling in
+    the app-key group so the physical shared connection has one truth.
+    """
+    await _rate_limit_write(request, user, response)
+    return {
+        "data": await _service(request).request_stream_reconnect(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+        )
+    }
+
+
 # ---------------------------------------------------------------------------
 # Bindings
 # ---------------------------------------------------------------------------
@@ -306,6 +389,7 @@ async def list_bindings(
         "data": await _service(request).list_bindings(
             workspace_id=context.workspace.id,
             integration_id=_path_uuid(integration_id, what="integration"),
+            viewer=context.member,
         )
     }
 
@@ -409,6 +493,7 @@ async def list_events(
     page = await _service(request).list_events(
         workspace_id=context.workspace.id,
         integration_id=_path_uuid(integration_id, what="integration"),
+        viewer=context.member,
         signature_status=signature_status,
         process_status=process_status,
         cursor=cursor,

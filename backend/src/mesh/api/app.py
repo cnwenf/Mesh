@@ -218,9 +218,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.auth_service = AuthService(session_factory, settings, deliver=mailer.deliver)
     # Device-code authorization (auth.md §2.4.2/§3.1.1, cli.md §3.2): shares
     # the auth service so the token exchange mints cli sessions atomically.
-    app.state.device_code_service = DeviceCodeService(
-        session_factory, settings, app.state.auth_service
-    )
+    app.state.device_code_service = DeviceCodeService(session_factory, settings, app.state.auth_service)
     app.state.rate_limiter = RateLimiter(app.state.redis)
     # OAuth: vendor-neutral provider registry. Dev registers an in-process mock
     # provider so the full code+PKCE round-trip is testable without a vendor;
@@ -290,9 +288,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.chat_engine = ChatGenerationEngine(
         app.state.redis,
         session_factory,
-        provider=ScriptedGenerationProvider(
-            chunk_delay_seconds=settings.chat_generation_chunk_delay_seconds
-        ),
+        provider=ScriptedGenerationProvider(chunk_delay_seconds=settings.chat_generation_chunk_delay_seconds),
         buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
     )
     app.state.favorites_service = FavoritesService(session_factory)
@@ -327,9 +323,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
         installation_service=app.state.skill_installation_service,
     )
-    register_skill_context_resolver(
-        app.state.skill_binding_service.collect_enqueue_context
-    )
+    register_skill_context_resolver(app.state.skill_binding_service.collect_enqueue_context)
     register_skill_matching_resolver(make_matching_resolver())
     app.state.runtime_service = RuntimeService(session_factory, settings)
     # Squad module (squad.md): orchestration unit — leader decompose / dispatch /
@@ -339,9 +333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # comment_service injection: §S8/§4.3-7 parent-issue summary writeback on
     # the synchronous (human-leader) aggregation path (shared idempotency key
     # with the relay writeback — no duplicates across the two paths).
-    app.state.squad_task_service = SquadTaskService(
-        session_factory, comment_service=comment_service
-    )
+    app.state.squad_task_service = SquadTaskService(session_factory, comment_service=comment_service)
     # Autopilot module (autopilot.md): rules / runs / inbound webhooks. The
     # signing secret derives from jwt_secret (same ciphertext-only contract
     # as runtime_credentials, README §6.16).
@@ -352,7 +344,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Search module (search-command-palette.md §3): six-type object search
     # with in-query visibility + signed keyset cursor; read-only.
     app.state.search_service = SearchService(session_factory, settings)
-    app.state.integration_service = IntegrationService(session_factory, settings.jwt_secret)
+    app.state.integration_service = IntegrationService(
+        session_factory,
+        settings.jwt_secret,
+        dingtalk_oapi_base=settings.dingtalk_oapi_base,
+    )
     # Verification codes for external-identity linking are delivered to the
     # claimed external account's DM (dev: Redis dev-outbox, tests read it).
     app.state.identity_code_delivery = RedisDevCodeDelivery(app.state.redis)

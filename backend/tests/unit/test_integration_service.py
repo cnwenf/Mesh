@@ -21,8 +21,16 @@ from tests.unit.integrations_support import TEST_SIGNING_SECRET, seed_world
 pytestmark = pytest.mark.unit
 
 
-def make_service(session_factory) -> IntegrationService:
-    return IntegrationService(session_factory, TEST_SIGNING_SECRET)
+async def _valid_dingtalk_credentials(_config, _secret):
+    return "healthy", None
+
+
+def make_service(session_factory, *, verifier=None) -> IntegrationService:
+    return IntegrationService(
+        session_factory,
+        TEST_SIGNING_SECRET,
+        dingtalk_credential_verifier=verifier or _valid_dingtalk_credentials,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +380,10 @@ async def test_event_counts_since_counts_per_integration(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     now = datetime.now(UTC)
+    from mesh.db.models.member import Member
+
+    async with session_factory() as session:
+        viewer = await session.get(Member, world["member"])
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, world["ws"])
         # Two recent events on the slack integration, one old, one on github.
@@ -416,10 +428,16 @@ async def test_event_counts_since_counts_per_integration(session_factory):
         workspace_id=world["ws"],
         integration_ids=[world["integ_slack"], world["integ_github"]],
         since=now - timedelta(days=7),
+        viewer=viewer,
     )
     assert counts[world["integ_slack"]] == 2, "only events within the window"
     assert counts[world["integ_github"]] == 1
-    assert await service.event_counts_since(workspace_id=world["ws"], integration_ids=[], since=now) == {}
+    assert (
+        await service.event_counts_since(
+            workspace_id=world["ws"], integration_ids=[], since=now, viewer=viewer
+        )
+        == {}
+    )
 
 
 async def test_event_ledger_filterable(session_factory):
@@ -428,7 +446,11 @@ async def test_event_ledger_filterable(session_factory):
     from datetime import UTC, datetime
 
     from mesh.db.models.integration import IntegrationEvent
+    from mesh.db.models.member import Member
     from mesh.db.tenant import set_tenant_context
+
+    async with session_factory() as session:
+        viewer = await session.get(Member, world["member"])
 
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, world["ws"])
@@ -454,6 +476,7 @@ async def test_event_ledger_filterable(session_factory):
     page = await service.list_events(
         workspace_id=world["ws"],
         integration_id=world["integ_slack"],
+        viewer=viewer,
         process_status="rejected",
     )
     assert len(page.items) == 1
@@ -581,11 +604,14 @@ async def test_create_dingtalk_defaults_inbound_queue_to_serial(session_factory)
         creator=await _member(session_factory, world),
         kind="im_dingtalk",
         name="dt-default",
-        config={"corp_id": "dingcorp0771"},
+        config={"app_key": "dingapp0771", "corp_id": "dingcorp0771"},
+        secret="dt-default-secret",
     )
     async with session_factory() as session:
         row = await session.scalar(select(Integration).where(Integration.name == "dt-default"))
     assert row.config["inbound_queue"] == "serial_conversation"
+    assert row.config["receive_mode"] == "stream"
+    assert row.config["verbosity"] == "final_only"
 
 
 async def test_create_dingtalk_explicit_inbound_queue_wins_over_default(session_factory):
@@ -597,11 +623,228 @@ async def test_create_dingtalk_explicit_inbound_queue_wins_over_default(session_
         creator=await _member(session_factory, world),
         kind="im_dingtalk",
         name="dt-parallel",
-        config={"corp_id": "dingcorp0772", "inbound_queue": "parallel"},
+        config={
+            "app_key": "dingapp0772",
+            "corp_id": "dingcorp0772",
+            "inbound_queue": "parallel",
+        },
+        secret="dt-parallel-secret",
     )
     async with session_factory() as session:
         row = await session.scalar(select(Integration).where(Integration.name == "dt-parallel"))
     assert row.config["inbound_queue"] == "parallel"
+
+
+async def test_dingtalk_app_key_cannot_be_claimed_by_another_workspace(session_factory):
+    first_world = await seed_world(session_factory)
+    second_world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    config = {
+        "app_key": "dingSHAREDAPP001",
+        "corp_id": "dingcorpOWNER",
+        "robot_code": "dingrobotOWNER",
+        "receive_mode": "stream",
+    }
+    await service.create_integration(
+        workspace_id=first_world["ws"],
+        creator=await _member(session_factory, first_world),
+        kind="im_dingtalk",
+        name="owner-app",
+        config=config,
+        secret="shared-app-secret",
+    )
+
+    with pytest.raises(ConflictError) as excinfo:
+        await service.create_integration(
+            workspace_id=second_world["ws"],
+            creator=await _member(session_factory, second_world),
+            kind="im_dingtalk",
+            name="foreign-app",
+            config={**config, "corp_id": "dingcorpFOREIGN"},
+            secret="different-secret",
+        )
+    assert excinfo.value.code == "dingtalk_app_key_conflict"
+
+
+async def test_invalid_first_claim_cannot_reserve_dingtalk_app_key(session_factory):
+    attacker = await seed_world(session_factory)
+    owner = await seed_world(session_factory)
+
+    async def verify(_config, secret):
+        return (
+            ("healthy", None)
+            if secret == "real-owner-secret"
+            else (
+                "auth_failed",
+                "errcode_40089",
+            )
+        )
+
+    service = make_service(session_factory, verifier=verify)
+    config = {
+        "app_key": "dingPROOFOFPOSSESSION",
+        "corp_id": "dingcorpOWNER",
+        "robot_code": "dingrobotOWNER",
+        "receive_mode": "stream",
+    }
+    with pytest.raises(BusinessRuleError) as invalid:
+        await service.create_integration(
+            workspace_id=attacker["ws"],
+            creator=await _member(session_factory, attacker),
+            kind="im_dingtalk",
+            name="fake-first-claim",
+            config=config,
+            secret="fake-secret",
+        )
+    assert invalid.value.code == "dingtalk_credentials_invalid"
+
+    claimed = await service.create_integration(
+        workspace_id=owner["ws"],
+        creator=await _member(session_factory, owner),
+        kind="im_dingtalk",
+        name="verified-owner",
+        config=config,
+        secret="real-owner-secret",
+    )
+    assert claimed["integration"]["workspace_id"] == str(owner["ws"])
+
+
+async def test_dingtalk_shared_app_requires_same_secret_and_unique_route(session_factory):
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    base = {
+        "app_key": "dingSHAREDAPP002",
+        "corp_id": "dingcorpONE",
+        "robot_code": "dingrobotONE",
+        "receive_mode": "stream",
+    }
+    await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="shared-one",
+        config=base,
+        secret="one-secret",
+    )
+
+    with pytest.raises(ConflictError) as secret_error:
+        await service.create_integration(
+            workspace_id=world["ws"],
+            creator=await _member(session_factory, world),
+            kind="im_dingtalk",
+            name="shared-wrong-secret",
+            config={**base, "corp_id": "dingcorpTWO", "robot_code": "dingrobotTWO"},
+            secret="wrong-secret",
+        )
+    assert secret_error.value.code == "dingtalk_app_credential_conflict"
+
+    with pytest.raises(ConflictError) as route_error:
+        await service.create_integration(
+            workspace_id=world["ws"],
+            creator=await _member(session_factory, world),
+            kind="im_dingtalk",
+            name="shared-duplicate-route",
+            config=base,
+            secret="one-secret",
+        )
+    assert route_error.value.code == "dingtalk_route_conflict"
+
+    allowed = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="shared-two",
+        config={**base, "corp_id": "dingcorpTWO", "robot_code": "dingrobotTWO"},
+        secret="one-secret",
+    )
+    assert allowed["integration"]["name"] == "shared-two"
+
+
+async def test_dingtalk_shared_stream_app_requires_one_reconnect_policy(session_factory):
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    base = {
+        "app_key": "dingSHAREDRECONNECT",
+        "receive_mode": "stream",
+        "stream_reconnect": {
+            "base_seconds": 3,
+            "max_seconds": 120,
+            "heartbeat_timeout_seconds": 45,
+        },
+    }
+    await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="reconnect-policy-owner",
+        config={**base, "corp_id": "dingcorpONE", "robot_code": "dingrobotONE"},
+        secret="shared-secret",
+    )
+
+    with pytest.raises(ConflictError) as excinfo:
+        await service.create_integration(
+            workspace_id=world["ws"],
+            creator=await _member(session_factory, world),
+            kind="im_dingtalk",
+            name="reconnect-policy-conflict",
+            config={
+                **base,
+                "corp_id": "dingcorpTWO",
+                "robot_code": "dingrobotTWO",
+                "stream_reconnect": {
+                    "base_seconds": 4,
+                    "max_seconds": 120,
+                    "heartbeat_timeout_seconds": 45,
+                },
+            },
+            secret="shared-secret",
+        )
+    assert excinfo.value.code == "dingtalk_stream_config_conflict"
+
+
+async def test_dingtalk_shared_app_rotate_and_reconnect_are_group_scoped(session_factory):
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    base = {
+        "app_key": "dingSHAREDAPP003",
+        "receive_mode": "stream",
+    }
+    first = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="group-first",
+        config={**base, "corp_id": "dingcorpONE", "robot_code": "dingrobotONE"},
+        secret="old-shared-secret",
+    )
+    second = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="group-second",
+        config={**base, "corp_id": "dingcorpTWO", "robot_code": "dingrobotTWO"},
+        secret="old-shared-secret",
+    )
+    first_id = uuid.UUID(first["integration"]["id"])
+    second_id = uuid.UUID(second["integration"]["id"])
+
+    await service.rotate_secret(
+        workspace_id=world["ws"], integration_id=second_id, secret="new-shared-secret"
+    )
+    async with session_factory() as session:
+        rows = [await session.get(Integration, item_id) for item_id in (first_id, second_id)]
+    assert [service.decrypt_integration_secret(row) for row in rows] == [
+        "new-shared-secret",
+        "new-shared-secret",
+    ]
+
+    await service.request_stream_reconnect(workspace_id=world["ws"], integration_id=second_id)
+    async with session_factory() as session:
+        rows = [await session.get(Integration, item_id) for item_id in (first_id, second_id)]
+    reconnect_ids = {(row.stream_state or {}).get("reconnect_request_id") for row in rows}
+    assert len(reconnect_ids) == 1
+    assert None not in reconnect_ids
+    assert all((row.stream_state or {}).get("state") == "reconnecting" for row in rows)
 
 
 async def test_create_slack_carries_no_inbound_queue_default(session_factory):
@@ -617,9 +860,7 @@ async def test_create_slack_carries_no_inbound_queue_default(session_factory):
         config={"team_id": "T_NODEFAULT"},
     )
     async with session_factory() as session:
-        row = await session.scalar(
-            select(Integration).where(Integration.name == "slack-no-default")
-        )
+        row = await session.scalar(select(Integration).where(Integration.name == "slack-no-default"))
     assert "inbound_queue" not in (row.config or {})
 
 
@@ -636,13 +877,21 @@ async def test_update_dingtalk_wholesale_config_rematerializes_serial_default(
         creator=await _member(session_factory, world),
         kind="im_dingtalk",
         name="dt-update",
-        config={"corp_id": "dingcorp0773", "inbound_queue": "parallel"},
+        config={
+            "app_key": "dingapp0773",
+            "corp_id": "dingcorp0773",
+            "inbound_queue": "parallel",
+        },
+        secret="dt-update-secret",
     )
     integration_id = uuid.UUID(created["integration"]["id"])
     await service.update_integration(
         workspace_id=world["ws"],
         integration_id=integration_id,
-        config={"corp_id": "dingcorp0773"},  # no inbound_queue this time
+        config={
+            "app_key": "dingapp0773",
+            "corp_id": "dingcorp0773",
+        },  # no inbound_queue this time
     )
     async with session_factory() as session:
         row = await session.get(Integration, integration_id)
@@ -672,25 +921,23 @@ async def test_api_created_dingtalk_default_config_enqueues_serial_pending(
         creator=await _member(session_factory, world),
         kind="im_dingtalk",
         name="dt-behavior",
-        config={"corp_id": "dingcorp0001"},  # matches the fixture payload corp
+        config={
+            "app_key": "dingappkey0001",
+            "corp_id": "dingcorp0001",
+        },  # matches the fixture payload corp
+        secret="dt-behavior-secret",
     )
     integration_id = uuid.UUID(created["integration"]["id"])
-    await make_dingtalk_binding(
-        session_factory, world={**world, "integ_dingtalk": integration_id}
-    )
+    await make_dingtalk_binding(session_factory, world={**world, "integ_dingtalk": integration_id})
 
     from mesh.integrations.dingtalk import normalize_message_payload
 
-    envelope = normalize_message_payload(
-        dingtalk_message_payload(), max_chars=4000, channel="http"
-    )
+    envelope = normalize_message_payload(dingtalk_message_payload(), max_chars=4000, channel="http")
     assert isinstance(envelope, VerifiedEnvelope)
     async with session_factory() as session:
         integration = await session.get(Integration, integration_id)
     async with session_factory() as session, session.begin():
-        result = await ingest_verified_event(
-            session, integration=integration, envelope=envelope, now=NOW
-        )
+        result = await ingest_verified_event(session, integration=integration, envelope=envelope, now=NOW)
     assert result.process_status == "dispatched"
 
     from mesh.db.models.integration import IntegrationMessageQueue

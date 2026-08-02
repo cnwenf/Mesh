@@ -78,6 +78,7 @@ from mesh.integrations.queue_keys import (
     build_conversation_key,
     conversation_delivery_fields,
 )
+from mesh.integrations.visibility import resolve_event_visibility
 from mesh.outbox.service import emit_event, emit_realtime
 
 logger = logging.getLogger("mesh.integrations.ingest")
@@ -115,9 +116,7 @@ _IM_SETTINGS_FIELDS: tuple[tuple[str, object], ...] = (
     ("context_append_max_chars", 32000),
 )
 
-_IM_SETTINGS_DEFAULTS = SimpleNamespace(
-    **{name: default for name, default in _IM_SETTINGS_FIELDS}
-)
+_IM_SETTINGS_DEFAULTS = SimpleNamespace(**{name: default for name, default in _IM_SETTINGS_FIELDS})
 
 
 def _resolve_im_settings(settings: Any) -> Any:
@@ -149,18 +148,14 @@ class IngestResult:
     deduped: bool = False
 
 
-def enqueue_idempotency_key(
-    *, agent_id: uuid.UUID, binding_id: uuid.UUID, external_event_id: str
-) -> str:
+def enqueue_idempotency_key(*, agent_id: uuid.UUID, binding_id: uuid.UUID, external_event_id: str) -> str:
     """README §6.9 / integrations.md §3.2: sha256(agent|binding|external_event).
 
     Identical formula to ``message_queue.execution_idempotency_key`` (the
     queue path's copy; a unit test pins the two equal). Kept here for the
     VCS direct §6.9 path in inbound.py, which never touches the queue.
     """
-    return hashlib.sha256(
-        f"{agent_id}|{binding_id}|{external_event_id}".encode()
-    ).hexdigest()
+    return hashlib.sha256(f"{agent_id}|{binding_id}|{external_event_id}".encode()).hexdigest()
 
 
 def audit_payload(payload: dict[str, Any], process_status: str) -> dict[str, Any]:
@@ -202,6 +197,8 @@ async def store_event(
     signature_status: str,
     process_status: str,
     now: datetime,
+    visibility_scope: str = "unknown",
+    project_id_snapshot: uuid.UUID | None = None,
 ) -> IntegrationEvent:
     """Insert one ledger row (dedup key: integration_id + external_event_id)."""
     event = IntegrationEvent(
@@ -212,6 +209,8 @@ async def store_event(
         payload=audit_payload(payload, process_status),
         signature_status=signature_status,
         process_status=process_status,
+        visibility_scope=visibility_scope,
+        project_id_snapshot=project_id_snapshot,
         received_at=now,
         created_at=now,
         updated_at=now,
@@ -226,19 +225,27 @@ async def match_bindings(
     *,
     workspace_id: uuid.UUID,
     integration: Integration,
+    provider: str,
+    provider_tenant_key: str,
     external_ref: str,
 ) -> list[IntegrationBinding]:
     """Active bindings whose external_ref equals the event's external object."""
     rows = (
-        await session.execute(
-            select(IntegrationBinding).where(
-                IntegrationBinding.workspace_id == workspace_id,
-                IntegrationBinding.integration_id == integration.id,
-                IntegrationBinding.external_ref == external_ref,
-                IntegrationBinding.status == "active",
+        (
+            await session.execute(
+                select(IntegrationBinding).where(
+                    IntegrationBinding.workspace_id == workspace_id,
+                    IntegrationBinding.integration_id == integration.id,
+                    IntegrationBinding.provider == provider,
+                    IntegrationBinding.provider_tenant_key == provider_tenant_key,
+                    IntegrationBinding.external_ref == external_ref,
+                    IntegrationBinding.status == "active",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -284,15 +291,15 @@ async def _reject_rate_limited(
     payload (MES-122), derived from the FULL pre-truncation raw payload.
     """
     event_row.process_status = "rejected"
+    event_row.visibility_scope = "unknown"
+    event_row.project_id_snapshot = None
     event_row.payload = {
         **audit_payload(event_row.payload or {}, "rejected"),
         "_mesh_reject_reason": "rate_limited",  # survives truncation (structured)
     }
     event_row.updated_at = now
     await session.flush()
-    if redis is not None and await rate_limit_hint_allowed(
-        redis, conversation_key=conversation_key
-    ):
+    if redis is not None and await rate_limit_hint_allowed(redis, conversation_key=conversation_key):
         await emit_event(
             session,
             workspace_id=integration.workspace_id,
@@ -301,16 +308,12 @@ async def _reject_rate_limited(
                 "kind": "rate_limit_hint",
                 "integration_id": str(integration.id),
                 "conversation_key": conversation_key,
-                **conversation_delivery_fields(
-                    envelope.raw_payload, actor_key=envelope.sender_key
-                ),
+                **conversation_delivery_fields(envelope.raw_payload, actor_key=envelope.sender_key),
                 "text": _RATE_LIMIT_HINT_TEXT,
             },
             idempotency_key=f"im-hint:{event_row.id}",
         )
-    logger.warning(
-        "inbound rate-limited: event %s conversation %s", event_row.id, conversation_key
-    )
+    logger.warning("inbound rate-limited: event %s conversation %s", event_row.id, conversation_key)
     return IngestResult(
         status_code=200,
         body={
@@ -341,6 +344,8 @@ async def _reject_malformed_payload(
     label is the signature/auth layer's; the signature here already
     verified, the payload shape is what failed, §3.5 semantics)."""
     event_row.process_status = "rejected"
+    event_row.visibility_scope = "unknown"
+    event_row.project_id_snapshot = None
     # Re-run the §3.2 16KiB truncation on the flip (stored as 'received'
     # with the full payload — rejected rows keep only the forensic head).
     event_row.payload = {
@@ -418,9 +423,7 @@ async def ingest_verified_event(
             # repeated event, same body → already audited (dedup key); any
             # other constraint violation is logged, never disguised as dedup.
             if not _violates_constraint(exc, "uq_integration_event_dedup"):
-                logger.exception(
-                    "disabled-rejection audit insert failed on a non-dedup constraint"
-                )
+                logger.exception("disabled-rejection audit insert failed on a non-dedup constraint")
         return IngestResult(
             status_code=401,
             body={
@@ -432,6 +435,15 @@ async def ingest_verified_event(
             },
             process_status="rejected",
         )
+
+    visibility_scope, project_id_snapshot = await resolve_event_visibility(
+        session,
+        workspace_id=workspace_id,
+        integration_id=integration.id,
+        provider=envelope.provider,
+        provider_tenant_key=envelope.provider_tenant_key,
+        external_ref=envelope.external_ref,
+    )
 
     # Dedup INSERT — first writer wins; conflict → idempotent 200, never
     # dispatched twice (§6.9). The real msgId occupies the dedup slot (also
@@ -448,6 +460,8 @@ async def ingest_verified_event(
                 signature_status="valid",
                 process_status="received",
                 now=now,
+                visibility_scope=visibility_scope,
+                project_id_snapshot=project_id_snapshot,
             )
     except IntegrityError as exc:
         # ONLY the dedup key maps to idempotent 200; any other constraint
@@ -465,15 +479,6 @@ async def ingest_verified_event(
             deduped=True,
         )
 
-    await _emit_event_ingested(
-        session,
-        workspace_id=workspace_id,
-        integration=integration,
-        event_row=event_row,
-        envelope=envelope,
-        process_status="received",
-    )
-
     # msgtype matrix gate: non-text (or empty text) → audit-only (processed;
     # no trigger, no queue, no ack, no counters — §3.2 matrix / C-1).
     im_text = (envelope.text or "").strip()
@@ -482,6 +487,14 @@ async def ingest_verified_event(
         _mark_payload(event_row, "_mesh_trigger_skipped", "non_text")
         event_row.updated_at = now
         await session.flush()
+        await _emit_event_ingested(
+            session,
+            workspace_id=workspace_id,
+            integration=integration,
+            event_row=event_row,
+            envelope=envelope,
+            process_status="processed",
+        )
         return IngestResult(
             status_code=200,
             body={
@@ -501,9 +514,7 @@ async def ingest_verified_event(
             envelope.provider, envelope.provider_tenant_key, envelope.external_ref
         )
     except ValidationError:
-        return await _reject_malformed_payload(
-            session, envelope=envelope, event_row=event_row, now=now
-        )
+        return await _reject_malformed_payload(session, envelope=envelope, event_row=event_row, now=now)
 
     # Sender-less messages are audit-only: never enqueued — authorization
     # would be impossible and queue items must carry a resolvable triple.
@@ -512,6 +523,14 @@ async def ingest_verified_event(
         _mark_payload(event_row, "_mesh_trigger_skipped", "no_sender_identity")
         event_row.updated_at = now
         await session.flush()
+        await _emit_event_ingested(
+            session,
+            workspace_id=workspace_id,
+            integration=integration,
+            event_row=event_row,
+            envelope=envelope,
+            process_status="matched",
+        )
         return IngestResult(
             status_code=200,
             body={
@@ -544,6 +563,14 @@ async def ingest_verified_event(
         event_row.updated_at = now
         await session.flush()
         if outcome.passthrough_text is None:
+            await _emit_event_ingested(
+                session,
+                workspace_id=workspace_id,
+                integration=integration,
+                event_row=event_row,
+                envelope=envelope,
+                process_status="processed",
+            )
             return IngestResult(
                 status_code=200,
                 body={
@@ -561,19 +588,28 @@ async def ingest_verified_event(
         session,
         workspace_id=workspace_id,
         integration=integration,
+        provider=envelope.provider,
+        provider_tenant_key=envelope.provider_tenant_key,
         external_ref=envelope.external_ref,
     )
     if len(bindings) > 1:
         # Ambiguous routing → audit + alert, trigger NOTHING (§5.4).
         logger.error(
-            "multiple bindings matched inbound event %s (integration %s) — "
-            "dispatch suppressed",
+            "multiple bindings matched inbound event %s (integration %s) — dispatch suppressed",
             event_row.id,
             integration.id,
         )
         event_row.process_status = "matched"
         event_row.updated_at = now
         await session.flush()
+        await _emit_event_ingested(
+            session,
+            workspace_id=workspace_id,
+            integration=integration,
+            event_row=event_row,
+            envelope=envelope,
+            process_status="matched",
+        )
         return IngestResult(
             status_code=200,
             body={
@@ -588,6 +624,14 @@ async def ingest_verified_event(
     if not bindings:
         event_row.updated_at = now
         await session.flush()
+        await _emit_event_ingested(
+            session,
+            workspace_id=workspace_id,
+            integration=integration,
+            event_row=event_row,
+            envelope=envelope,
+            process_status="received",
+        )
         return IngestResult(
             status_code=200,
             body={
@@ -611,17 +655,28 @@ async def ingest_verified_event(
         extra=dict(envelope.extra),
     )
     bound_agent = str(binding.bound_agent_id) if binding.bound_agent_id else None
-    if not binding_matches(
-        envelope.provider,
-        match_config,
-        match_event,
-        bot_mentioned=envelope.bot_mentioned,
-        is_direct_message=envelope.is_direct_message,
-        bound_agent_id=bound_agent,
-    ) or binding.bound_agent_id is None:
+    if (
+        not binding_matches(
+            envelope.provider,
+            match_config,
+            match_event,
+            bot_mentioned=envelope.bot_mentioned,
+            is_direct_message=envelope.is_direct_message,
+            bound_agent_id=bound_agent,
+        )
+        or binding.bound_agent_id is None
+    ):
         event_row.process_status = "matched"  # audit only (§6.9)
         event_row.updated_at = now
         await session.flush()
+        await _emit_event_ingested(
+            session,
+            workspace_id=workspace_id,
+            integration=integration,
+            event_row=event_row,
+            envelope=envelope,
+            process_status="matched",
+        )
         return IngestResult(
             status_code=200,
             body={
@@ -633,14 +688,20 @@ async def ingest_verified_event(
             event_id=event_row.id,
         )
 
-    agent = await session.scalar(
-        select(Agent).where(Agent.id == binding.bound_agent_id)
-    )
+    agent = await session.scalar(select(Agent).where(Agent.id == binding.bound_agent_id))
     if agent is None or agent.lifecycle_status != "active":
         # Agent soft-deleted / paused → audit only (§6.9).
         event_row.process_status = "matched"
         event_row.updated_at = now
         await session.flush()
+        await _emit_event_ingested(
+            session,
+            workspace_id=workspace_id,
+            integration=integration,
+            event_row=event_row,
+            envelope=envelope,
+            process_status="matched",
+        )
         return IngestResult(
             status_code=200,
             body={
@@ -714,9 +775,7 @@ async def ingest_verified_event(
             now=now,
         )
     except ValidationError:
-        return await _reject_malformed_payload(
-            session, envelope=envelope, event_row=event_row, now=now
-        )
+        return await _reject_malformed_payload(session, envelope=envelope, event_row=event_row, now=now)
 
     item = result.item
     # 'dispatched' = "in the conversation queue AND dispatch is determined"
@@ -771,33 +830,60 @@ async def _emit_event_ingested(
     envelope: VerifiedEnvelope,
     process_status: str,
 ) -> None:
-    await emit_realtime(
+    await emit_event_ingested_realtime(
         session,
         workspace_id=workspace_id,
-        channel=f"workspace:{workspace_id}:integrations",
-        event="integration.event_ingested",
-        data={
-            "event_id": str(event_row.id),
-            "integration_id": str(integration.id),
-            "event_type": envelope.event_type,
-            "signature_status": "valid",
-            "process_status": process_status,
-        },
-        idempotency_key=f"integration-event:{event_row.id}:{process_status}",
+        integration_id=integration.id,
+        event_row=event_row,
+        event_type=envelope.event_type,
+        process_status=process_status,
     )
-    await emit_realtime(
-        session,
-        workspace_id=workspace_id,
-        channel=f"integration:{integration.id}",
-        event="integration.event_ingested",
-        data={
-            "event_id": str(event_row.id),
-            "event_type": envelope.event_type,
-            "signature_status": "valid",
-            "process_status": process_status,
-        },
-        idempotency_key=f"integration-event:{event_row.id}:{process_status}:detail",
-    )
+
+
+async def emit_event_ingested_realtime(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    integration_id: uuid.UUID,
+    event_row: IntegrationEvent,
+    event_type: str,
+    process_status: str,
+) -> None:
+    """Publish one event update only to channels matching its snapshot.
+
+    Workspace events retain the workspace summary and integration-detail
+    frames.  Project events use the project resource channel, whose
+    subscription authorizer applies the same project visibility contract as
+    the ledger query.  Unknown or malformed snapshots fail closed and emit no
+    frame, preventing count/timing disclosure outside manager-only audits.
+    """
+    targets: list[tuple[str, str]]
+    if event_row.visibility_scope == "workspace" and event_row.project_id_snapshot is None:
+        targets = [
+            (f"workspace:{workspace_id}:integrations", "workspace"),
+            (f"integration:{integration_id}", "detail"),
+        ]
+    elif event_row.visibility_scope == "project" and event_row.project_id_snapshot is not None:
+        targets = [(f"project:{event_row.project_id_snapshot}", "project")]
+    else:
+        return
+
+    data = {
+        "event_id": str(event_row.id),
+        "integration_id": str(integration_id),
+        "event_type": event_type,
+        "signature_status": "valid",
+        "process_status": process_status,
+    }
+    for channel, suffix in targets:
+        await emit_realtime(
+            session,
+            workspace_id=workspace_id,
+            channel=channel,
+            event="integration.event_ingested",
+            data=data,
+            idempotency_key=(f"integration-event:{event_row.id}:{process_status}:{suffix}"),
+        )
 
 
 __all__ = [
@@ -808,6 +894,7 @@ __all__ = [
     "REJECTED_PAYLOAD_MAX_BYTES",
     "audit_payload",
     "enqueue_idempotency_key",
+    "emit_event_ingested_realtime",
     "ingest_verified_event",
     "match_bindings",
     "store_event",

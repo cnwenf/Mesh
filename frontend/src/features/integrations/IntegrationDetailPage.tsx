@@ -187,7 +187,11 @@ export function IntegrationDetailPage(): React.JSX.Element {
     if (membership === null || integration === null) return;
     let configObject: Record<string, unknown>;
     if (integration.kind === 'im_dingtalk') {
+      const nonSecretConfig = Object.fromEntries(
+        Object.entries(integration.config).filter(([key]) => !key.endsWith('_ref')),
+      );
       configObject = {
+        ...nonSecretConfig,
         app_key: editDingTalkAppKey.trim(),
         corp_id: editDingTalkCorpId.trim(),
         receive_mode: editDingTalkReceiveMode,
@@ -520,6 +524,8 @@ export function IntegrationDetailPage(): React.JSX.Element {
             onRefreshConsumed={consumeQueueRefresh}
           />
           <DingTalkInteractionGuide
+            workspaceId={membership.workspace_id}
+            workspaceSlug={membership.workspace_slug}
             verbosity={integration.config.verbosity === 'progress' ? 'progress' : 'final_only'}
             ackTemplate={String(integration.config.ack_template ?? DINGTALK_DEFAULT_ACK_TEMPLATE)}
           />

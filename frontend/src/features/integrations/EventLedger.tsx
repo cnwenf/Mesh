@@ -10,13 +10,17 @@ import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api
 import { Banner, EmptyState, ErrorState, Select, Skeleton, StatusDot } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import { listIntegrationEvents } from './api';
+import { useRealtimeContext } from '../../shell/AppShell';
+import { listBindings, listIntegrationEvents } from './api';
 import { PROCESS_STATUS_TONE, SIGNATURE_STATUS_TONE, formatRelativeTime } from './format';
 import type { IntegrationEvent } from './types';
 import './integrations.css';
 
 const STATUS_ALL = 'all';
 const PAGE_LIMIT = 50;
+// Leave half of the gateway's default 256-channel budget for shell and other
+// page subscriptions. Overflow and channel errors fall back to REST polling.
+const MAX_PROJECT_REALTIME_SUBSCRIPTIONS = 128;
 
 function newClient(): MeshApiClient {
   return new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
@@ -37,7 +41,9 @@ export interface EventLedgerProps {
 export function EventLedger(props: EventLedgerProps): React.JSX.Element {
   const { workspaceId, integrationId, reloadKey = 0 } = props;
   const t = useT();
+  const realtime = useRealtimeContext();
   const [events, setEvents] = useState<IntegrationEvent[] | null>(null);
+  const [eventProjectIds, setEventProjectIds] = useState<readonly string[]>([]);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [localReloadKey, setLocalReloadKey] = useState(0);
   const [signatureFilter, setSignatureFilter] = useState(STATUS_ALL);
@@ -67,6 +73,61 @@ export function EventLedger(props: EventLedgerProps): React.JSX.Element {
       cancelled = true;
     };
   }, [workspaceId, integrationId, signatureFilter, processFilter, reloadKey, localReloadKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listBindings(newClient(), workspaceId, integrationId)
+      .then((listing) => {
+        if (cancelled) return;
+        setEventProjectIds(
+          [
+            ...new Set(
+              listing.data.flatMap((binding) =>
+                binding.scope === 'project' && binding.project_id !== null
+                  ? [binding.project_id]
+                  : [],
+              ),
+            ),
+          ].sort(),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, integrationId, reloadKey, localReloadKey]);
+
+  useEffect(() => {
+    if (realtime === null || eventProjectIds.length === 0) return;
+    const channels = eventProjectIds
+      .slice(0, MAX_PROJECT_REALTIME_SUBSCRIPTIONS)
+      .map((projectId) => `project:${projectId}`);
+    const channelSet = new Set(channels);
+    for (const channel of channels) realtime.client.subscribe(channel);
+    const unsubscribe = realtime.client.onFrame((frame) => {
+      if (
+        channelSet.has(frame.channel) &&
+        frame.event === 'integration.event_ingested' &&
+        frame.payload.integration_id === integrationId
+      ) {
+        setLocalReloadKey((key) => key + 1);
+      }
+    });
+    return () => {
+      unsubscribe();
+      for (const channel of channels) realtime.client.unsubscribe(channel);
+    };
+  }, [realtime, eventProjectIds, integrationId]);
+
+  useEffect(() => {
+    // Realtime frames are an acceleration path, not the source of truth.
+    // Unknown/rejected callbacks intentionally have no attributable frame,
+    // so a low-frequency REST read must continue even on a healthy socket.
+    const interval = window.setInterval(() => {
+      setLocalReloadKey((key) => key + 1);
+    }, env.pollingIntervalMs);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const nowMs = Date.now();
   const locale = navigator.language;
@@ -109,7 +170,9 @@ export function EventLedger(props: EventLedgerProps): React.JSX.Element {
           onRetry={() => setLocalReloadKey((key) => key + 1)}
         />
       )}
-      {events === null && errorKey === null && <Skeleton loadingLabel={t('integrations.loading')} />}
+      {events === null && errorKey === null && (
+        <Skeleton loadingLabel={t('integrations.loading')} />
+      )}
       {events !== null && events.length === 0 && (
         <EmptyState title={t('integrations.events.empty')} description="" />
       )}
@@ -134,7 +197,9 @@ export function EventLedger(props: EventLedgerProps): React.JSX.Element {
                   event={event}
                   modifier={modifier}
                   expanded={expanded}
-                  timeLabel={formatRelativeTime(event.received_at, nowMs, locale) ?? event.received_at}
+                  timeLabel={
+                    formatRelativeTime(event.received_at, nowMs, locale) ?? event.received_at
+                  }
                   onToggle={() => setExpandedId(expanded ? null : event.id)}
                 />
               );

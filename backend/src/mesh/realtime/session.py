@@ -38,6 +38,7 @@ from sqlalchemy import func, select
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
 from mesh.db.tenant import set_tenant_context
 from mesh.realtime.auth import Authenticator, ChannelAuthorizer, Principal
+from mesh.realtime.channels import parse_channel
 from mesh.realtime.pubsub import RedisSubscriber
 
 logger = logging.getLogger("mesh.realtime")
@@ -207,9 +208,7 @@ class RealtimeSession:
 
     async def _authenticate(self) -> bool:
         try:
-            first = await asyncio.wait_for(
-                self._transport.receive_json(), timeout=self._auth_timeout
-            )
+            first = await asyncio.wait_for(self._transport.receive_json(), timeout=self._auth_timeout)
         except TimeoutError:
             with contextlib.suppress(Exception):
                 await self._send_error("unauthorized", "authentication timed out")
@@ -291,9 +290,7 @@ class RealtimeSession:
         # Python — isinstance would let them through to the replay SQL, where
         # they abort the connection. Negative seq values are meaningless.
         if resume_from is not None and (type(resume_from) is not int or resume_from < 0):
-            await self._send_error(
-                "validation_error", "resume_from must be a non-negative integer"
-            )
+            await self._send_error("validation_error", "resume_from must be a non-negative integer")
             return
 
         # Per-connection subscription cap (M4): re-subscribing an already
@@ -367,6 +364,8 @@ class RealtimeSession:
 
         next_seq = resume_from
         while True:
+            if not await self._resource_subscription_still_authorized(channel):
+                return
             async with self._session_factory() as session:
                 await set_tenant_context(session, owner_workspace)
                 rows = (
@@ -378,6 +377,11 @@ class RealtimeSession:
                     )
                 ).all()
             for seq, event, payload in rows:
+                # A role/grant can be revoked while this page is being sent.
+                # Reauthorize at the actual row-delivery boundary so a large
+                # replay page cannot leak its remaining project events.
+                if not await self._resource_subscription_still_authorized(channel):
+                    return
                 await self._send(
                     {
                         "op": FRAME_EVENT,
@@ -401,6 +405,34 @@ class RealtimeSession:
             )
         await self._send({"op": FRAME_SUBSCRIBED, "channel": channel, "last_seq": last_seq})
 
+    async def _resource_subscription_still_authorized(self, channel: str) -> bool:
+        """Re-check mutable project access before replay/live delivery.
+
+        Subscription-time authorization is insufficient for project privacy:
+        visibility, membership, and guest grants can change while a WebSocket
+        remains connected. Project channels therefore fail closed at the
+        delivery boundary and are removed as soon as their checker denies the
+        current principal.
+        """
+        info = parse_channel(channel)
+        # This delivery-time check was introduced for private-project event
+        # privacy. Applying a full DB authorization pass to every agent,
+        # execution, chat, and data-job frame would create an O(frame×viewer)
+        # query regression across unrelated realtime products.
+        if info is None or info.entity != "project":
+            return True
+        principal = self._state.principal
+        if principal is not None and await self._authorizer.authorize(principal, channel) is not None:
+            return True
+        self._state.subscriptions.discard(channel)
+        await self._note_view_presence(channel, None, joined=False)
+        await self._send_error(
+            "forbidden",
+            "authorization changed; subscription removed",
+            channel=channel,
+        )
+        return False
+
     async def _pump(self) -> None:
         """Forward Redis fan-out frames to subscribed channels."""
         subscriber = self._subscriber_factory()
@@ -410,7 +442,8 @@ class RealtimeSession:
                 if self._closed.is_set():
                     return
                 if channel in self._state.subscriptions:
-                    await self._send(frame)
+                    if await self._resource_subscription_still_authorized(channel):
+                        await self._send(frame)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -419,9 +452,7 @@ class RealtimeSession:
             # with resume_from and replays from realtime_events (§6.7 recovery).
             logger.exception("fan-out pump failed")
             with contextlib.suppress(Exception):
-                await self._send_error(
-                    "service_unavailable", "realtime fan-out failed; please reconnect"
-                )
+                await self._send_error("service_unavailable", "realtime fan-out failed; please reconnect")
             self._closed.set()
             with contextlib.suppress(Exception):
                 await self._transport.close()

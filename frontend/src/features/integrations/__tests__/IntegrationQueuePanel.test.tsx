@@ -1,13 +1,25 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
+import { contrastRatio, WCAG_AA_RATIO } from '../../../design';
 import { renderWithProviders } from '../../../test-utils/render';
 import { IntegrationQueuePanel } from '../IntegrationQueuePanel';
 import type { QueueRefreshRequest } from '../IntegrationQueuePanel';
 
 const CONVERSATION = 'dingtalk:dingCorp01:cid6EUvB2O8qVF2RYQtHTKEsg==';
+const INTEGRATIONS_CSS = readFileSync(
+  path.resolve(process.cwd(), 'src/features/integrations/integrations.css'),
+  'utf8',
+);
+const TOKENS_CSS = readFileSync(path.resolve(process.cwd(), 'src/design/tokens.css'), 'utf8');
+const TOKENS_DARK_CSS = readFileSync(
+  path.resolve(process.cwd(), 'src/design/tokens-dark.css'),
+  'utf8',
+);
 
 const BASE_ITEMS = [
   {
@@ -161,7 +173,17 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  document.querySelector('[data-integration-style-test]')?.remove();
+  document.documentElement.removeAttribute('data-theme');
 });
+
+function resolveComputedColor(element: Element, property: 'color' | 'background-color'): string {
+  const computed = getComputedStyle(element).getPropertyValue(property).trim();
+  const variable = /^var\((--[\w-]+)(?:,\s*([^)]+))?\)$/.exec(computed);
+  if (variable === null) return computed;
+  const token = getComputedStyle(document.documentElement).getPropertyValue(variable[1]).trim();
+  return token !== '' ? token : (variable[2]?.trim() ?? '');
+}
 
 function renderPanel(
   refreshRequest: QueueRefreshRequest = { key: 0, conversationKeys: [] },
@@ -240,6 +262,35 @@ function BurstRefreshHarness(): React.JSX.Element {
 }
 
 describe('IntegrationQueuePanel', () => {
+  it('uses defined semantic tokens and keeps queue-card text WCAG AA in a 390x844 dark viewport', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 });
+    document.documentElement.dataset.theme = 'dark';
+    const style = document.createElement('style');
+    style.dataset.integrationStyleTest = 'true';
+    style.textContent = `${TOKENS_CSS}\n${TOKENS_DARK_CSS}\n${INTEGRATIONS_CSS}`;
+    document.head.append(style);
+
+    setup();
+    renderPanel();
+    const card = await screen.findByTestId(`queue-conversation-${CONVERSATION}`);
+    document.documentElement.dataset.theme = 'dark';
+    const meta = card.querySelector('.mesh-integrations__queue-meta');
+    expect(meta).not.toBeNull();
+    expect(window.innerWidth).toBe(390);
+    expect(window.innerHeight).toBe(844);
+    expect(INTEGRATIONS_CSS).not.toMatch(/var\(--mesh-/);
+
+    const background = resolveComputedColor(card, 'background-color');
+    const text = resolveComputedColor(card, 'color');
+    const muted = resolveComputedColor(meta as Element, 'color');
+    expect(background).not.toBe('');
+    expect(text).not.toBe('');
+    expect(muted).not.toBe('');
+    expect(contrastRatio(text, background)).toBeGreaterThanOrEqual(WCAG_AA_RATIO);
+    expect(contrastRatio(muted, background)).toBeGreaterThanOrEqual(WCAG_AA_RATIO);
+  });
+
   it('groups authorized queue items by conversation and exposes only sanitized excerpts', async () => {
     setup();
     renderPanel();

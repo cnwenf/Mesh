@@ -20,6 +20,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -32,6 +35,41 @@ from mesh.skill.ssrf import PinnedTarget, Resolver, SourceUnreachableError, reso
 
 if TYPE_CHECKING:
     import httpx
+
+
+class _HttpxSensitiveQueryFilter(logging.Filter):
+    """Redact credential-like URL query values before httpx INFO records
+    reach any handler.
+
+    Some vendor protocols still require credentials in a query string (the
+    legacy DingTalk ``/gettoken`` endpoint). httpx logs the complete request
+    URL at INFO, so transport TLS alone is insufficient: the record itself
+    must be sanitized globally and synchronously at its source.
+    """
+
+    _SENSITIVE_QUERY = re.compile(
+        r"(?i)([?&](?:"
+        r"appsecret|app_secret|clientsecret|client_secret|secret|"
+        r"access_token|refresh_token|token|api_key|apikey|"
+        r"signature|sign|ticket|code"
+        r")=)([^&\s\"]*)"
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = self._SENSITIVE_QUERY.sub(r"\1***", message)
+        if redacted != message:
+            # The original plaintext may live in ``record.args``; replacing
+            # both fields ensures downstream formatters/handlers cannot
+            # reconstruct it.
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+_httpx_logger = logging.getLogger("httpx")
+if not any(isinstance(item, _HttpxSensitiveQueryFilter) for item in _httpx_logger.filters):
+    _httpx_logger.addFilter(_HttpxSensitiveQueryFilter())
 
 # integrations.md §2.3 — kind → normalized provider.
 KIND_TO_PROVIDER: dict[str, str] = {
@@ -401,9 +439,7 @@ def dingtalk_verify(
     )
 
     effective = max(tolerance, DINGTALK_SIGNATURE_TOLERANCE)
-    return verify_callback_signature(
-        app_secret=app_secret, headers=headers, now=now, tolerance=effective
-    )
+    return verify_callback_signature(app_secret=app_secret, headers=headers, now=now, tolerance=effective)
 
 
 def dingtalk_tenant_key_from_config(config: dict[str, Any]) -> str:
@@ -515,15 +551,127 @@ def validate_instance_url(url: str) -> None:
 def validate_integration_config(kind: str, config: dict[str, Any] | None) -> None:
     """Per-kind config guards applied at EVERY config write (§6.16).
 
-    Currently: GitLab self-hosted ``instance_url`` must pass
-    :func:`validate_instance_url`. Kinds without user-controlled outbound
-    targets (platform APIs are hardcoded whitelisted hosts) pass through.
+    GitLab self-hosted ``instance_url`` must pass
+    :func:`validate_instance_url`. DingTalk uses a closed config shape so a
+    direct API client cannot bypass first-claim credential proof with an empty
+    app key, smuggle a runtime gateway override, or feed unbounded reconnect
+    values into the Stream worker.
     """
     config = config or {}
     if kind == "vcs_gitlab":
         instance_url = config.get("instance_url")
         if instance_url:
             validate_instance_url(str(instance_url))
+    elif kind == "im_dingtalk":
+        _validate_dingtalk_config(config)
+
+
+_DINGTALK_CONFIG_KEYS = frozenset(
+    {
+        "app_key",
+        "corp_id",
+        "robot_code",
+        "receive_mode",
+        "callback_base",
+        "ack_template",
+        "inbound_queue",
+        "verbosity",
+        "stream_reconnect",
+        "card_template_id",
+    }
+)
+_DINGTALK_RECONNECT_KEYS = frozenset({"base_seconds", "max_seconds", "heartbeat_timeout_seconds"})
+
+
+def _invalid_dingtalk_config(field: str, message: str) -> None:
+    raise ValidationError(
+        message,
+        code="invalid_request",
+        details={"field": field},
+    )
+
+
+def _validate_dingtalk_identifier(config: dict[str, Any], field: str) -> None:
+    value = config.get(field)
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > 200:
+        _invalid_dingtalk_config(field, f"DingTalk {field} must be a non-empty trimmed string")
+
+
+def _validate_dingtalk_config(config: dict[str, Any]) -> None:
+    unknown = sorted(set(config) - _DINGTALK_CONFIG_KEYS)
+    if unknown:
+        _invalid_dingtalk_config(unknown[0], "unsupported DingTalk integration config field")
+
+    _validate_dingtalk_identifier(config, "app_key")
+    _validate_dingtalk_identifier(config, "corp_id")
+    if "robot_code" in config:
+        _validate_dingtalk_identifier(config, "robot_code")
+
+    mode = config.get("receive_mode", "stream")
+    if mode not in {"stream", "http"}:
+        _invalid_dingtalk_config("receive_mode", "DingTalk receive_mode must be stream or http")
+    queue = config.get("inbound_queue", "serial_conversation")
+    if queue not in {"serial_conversation", "parallel"}:
+        _invalid_dingtalk_config(
+            "inbound_queue",
+            "DingTalk inbound_queue must be serial_conversation or parallel",
+        )
+    verbosity = config.get("verbosity", "final_only")
+    if verbosity not in {"final_only", "progress"}:
+        _invalid_dingtalk_config("verbosity", "DingTalk verbosity must be final_only or progress")
+
+    for config_field in ("ack_template", "callback_base"):
+        value = config.get(config_field)
+        if value is not None and not isinstance(value, str):
+            _invalid_dingtalk_config(config_field, f"DingTalk {config_field} must be a string")
+    for config_field in ("card_template_id",):
+        value = config.get(config_field)
+        if value is not None and (not isinstance(value, str) or not value):
+            _invalid_dingtalk_config(
+                config_field,
+                f"DingTalk {config_field} must be a non-empty string",
+            )
+
+    reconnect = config.get("stream_reconnect")
+    if reconnect is None:
+        return
+    if not isinstance(reconnect, dict):
+        _invalid_dingtalk_config("stream_reconnect", "DingTalk stream_reconnect must be an object")
+    unknown_reconnect = sorted(set(reconnect) - _DINGTALK_RECONNECT_KEYS)
+    if unknown_reconnect:
+        invalid_field = f"stream_reconnect.{unknown_reconnect[0]}"
+        _invalid_dingtalk_config(invalid_field, "unsupported Stream reconnect field")
+
+    limits = {
+        "base_seconds": 300.0,
+        "max_seconds": 300.0,
+        "heartbeat_timeout_seconds": 3600.0,
+    }
+    defaults = {
+        "base_seconds": 2.0,
+        "max_seconds": 300.0,
+        "heartbeat_timeout_seconds": 90.0,
+    }
+    values: dict[str, float] = {}
+    for config_field, maximum in limits.items():
+        value = reconnect.get(config_field, defaults[config_field])
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+            or float(value) > maximum
+        ):
+            _invalid_dingtalk_config(
+                f"stream_reconnect.{config_field}",
+                f"DingTalk {config_field} must be finite and within (0, {maximum:g}]",
+            )
+        values[config_field] = float(value)
+    if values["max_seconds"] < values["base_seconds"]:
+        _invalid_dingtalk_config(
+            "stream_reconnect.max_seconds",
+            "DingTalk max_seconds must be greater than or equal to base_seconds",
+        )
 
 
 # ---------------------------------------------------------------------------
