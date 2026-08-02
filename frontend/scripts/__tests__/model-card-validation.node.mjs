@@ -2103,6 +2103,22 @@ test('rejects skipped and fixme Playwright cases as release evidence', () => {
   assert.ok(errors.some((error) => error.includes('capture.testTitle was not found')));
 });
 
+test('pins the repository model card to the accepted MES-142 blueprint revision', () => {
+  const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const card = JSON.parse(
+    readFileSync(join(frontendRoot, 'model-card/mes108-react-migration.json'), 'utf8'),
+  );
+
+  assert.deepEqual(card.baseline, {
+    issue: 'MES-142',
+    pullRequest: 100,
+    revision: 'b4d579f436121a92cd2684ccd9e86af41004d71d',
+    disposition: 'active',
+    adoption: 'authoritative',
+    supersededBy: null,
+  });
+});
+
 test('accepts and renders the repository model card with extensions and legacy routes', () => {
   const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const card = JSON.parse(

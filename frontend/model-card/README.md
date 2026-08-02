@@ -1,6 +1,6 @@
 # MES-108 React 迁移模型卡
 
-`mes108-react-migration.json` 是固定设计输入到真实 React 前端的机器可读迁移台账。Schema v2 将输入生命周期与 release 决策分开：MES-142 / PR #100 的固定 revision 以 `cancelled + partial-input` 保留，既不丢失可复核输入，也不把取消误当成产品批准。模型卡逐项记录页面、React 扩展页、规范与兼容路由、组件、设计令牌、状态、输入方式、测试及视觉证据。
+`mes108-react-migration.json` 是固定设计输入到真实 React 前端的机器可读迁移台账。Schema v2 将输入生命周期与 release 决策分开：MES-142 / PR #100 的固定 revision 现以 `active + authoritative` 作为迁移基线；这只确认设计输入可用，不代表 React 页面已获产品发布批准。模型卡逐项记录页面、React 扩展页、规范与兼容路由、组件、设计令牌、状态、输入方式、测试及视觉证据。
 
 本门禁仅验证模型卡台账的结构、迁移状态与证据绑定完整性，不承担 clean-room 来源与品牌红线扫描；后者由仓库级 `.github/workflows/source-provenance.yml` 独立、fail-closed 地把守。
 

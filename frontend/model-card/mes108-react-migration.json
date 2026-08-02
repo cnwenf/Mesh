@@ -4,9 +4,9 @@
   "baseline": {
     "issue": "MES-142",
     "pullRequest": 100,
-    "revision": "a82df9ab382223c125b77635c94f228024384518",
-    "disposition": "cancelled",
-    "adoption": "partial-input",
+    "revision": "b4d579f436121a92cd2684ccd9e86af41004d71d",
+    "disposition": "active",
+    "adoption": "authoritative",
     "supersededBy": null
   },
   "releasePolicy": {

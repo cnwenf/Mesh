@@ -7,8 +7,8 @@
 
 ## 基线与门禁
 
-- 固定设计输入：MES-142 / PR #100 @ `a82df9ab382223c125b77635c94f228024384518`
-- 输入生命周期：**cancelled**；采用方式：**partial-input**
+- 固定设计输入：MES-142 / PR #100 @ `b4d579f436121a92cd2684ccd9e86af41004d71d`
+- 输入生命周期：**active**；采用方式：**authoritative**
 - Release 批准：**尚未确认**；批准不写入模型卡，必须来自当前 PR 上仓库 owner 的外部决策评论，并绑定 head、模型卡摘要与固定输入 revision。
 - 主题：`light`<br>`dark`
 - 固定视口：`390x844`<br>`1440x900`
