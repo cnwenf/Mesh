@@ -64,11 +64,27 @@ jobs:
       - name: Validate inventories and generated documentation
         run: node scripts/verify-model-card.mjs --mode audit
 
-      - name: Enforce release gate after prototype confirmation
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+
+      - name: Fetch pinned static prototype revision
+        working-directory: .
         shell: bash
         run: |
-          if node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('model-card/mes108-react-migration.json', 'utf8')); process.exit(card.blueprint.confirmed === true ? 0 : 1)"; then
-            node scripts/verify-model-card.mjs --mode release
-          else
-            echo "Prototype confirmation is pending; structural audit remains authoritative."
-          fi
+          revision="$(node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('frontend/model-card/mes108-react-migration.json', 'utf8')); process.stdout.write(card.blueprint.revision)")"
+          git fetch --no-tags --depth=1 origin "$revision"
+
+      - name: Enforce release gate
+        run: node scripts/verify-model-card.mjs --mode release

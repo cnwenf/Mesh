@@ -2,6 +2,8 @@
 
 `mes108-react-migration.json` 是静态原型到真实 React 前端的机器可读迁移台账。它固定原型 revision，并逐项记录页面、React 扩展页、规范与兼容路由、组件、设计令牌、状态、输入方式、测试及视觉证据。
 
+本门禁仅验证模型卡台账的结构、迁移状态与证据绑定完整性，不承担 clean-room 来源与品牌红线扫描；后者由仓库级 `.github/workflows/source-provenance.yml` 独立、fail-closed 地把守。
+
 结构审计允许诚实保留 `pending`，用于在迁移期间阻止清单和源码漂移：
 
 ```bash

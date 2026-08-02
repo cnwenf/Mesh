@@ -826,6 +826,30 @@ test('renders deterministic Markdown with the confirmation gate and page matrix'
   assert.equal(markdown, renderModelCardMarkdown(card));
 });
 
+test('keeps the release workflow fail closed and documents the provenance boundary', () => {
+  const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+  const workflow = readFileSync(
+    join(repositoryRoot, '.github/workflows/mes108-model-card.yml'),
+    'utf8',
+  );
+  const guide = readFileSync(join(repositoryRoot, 'frontend/model-card/README.md'), 'utf8');
+
+  assert.match(workflow, /\n  release:\n/u);
+  const releaseJob = workflow.slice(workflow.indexOf('\n  release:\n'));
+  assert.match(
+    releaseJob,
+    /- name: Enforce release gate\n\s+run: node scripts\/verify-model-card\.mjs --mode release\s*$/mu,
+  );
+  assert.doesNotMatch(releaseJob, /^\s*(?:if|continue-on-error):/mu);
+  assert.doesNotMatch(releaseJob, /if node -e/u);
+  assert.doesNotMatch(releaseJob, /Prototype confirmation is pending/u);
+  assert.match(
+    guide,
+    /仅验证模型卡台账的结构、迁移状态与证据绑定完整性，不承担 clean-room 来源与品牌红线扫描/u,
+  );
+  assert.match(guide, /\.github\/workflows\/source-provenance\.yml/u);
+});
+
 test('parses model-card CLI modes and rejects unknown arguments', () => {
   assert.deepEqual(parseArguments([]), { mode: 'audit', write: false });
   assert.deepEqual(parseArguments(['--write', '--mode', 'release']), {
