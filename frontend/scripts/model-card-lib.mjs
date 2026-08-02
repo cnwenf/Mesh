@@ -1970,7 +1970,7 @@ export function renderModelCardMarkdown(card) {
     `- 输入方式：${codeList(card.dimensions.inputModes ?? [])}`,
     `- 固定环境：${escapeCell(card.visualEnvironment?.browser)} / ${escapeCell(card.visualEnvironment?.locale)} / ${escapeCell(card.visualEnvironment?.timezone)} / DPR ${escapeCell(card.visualEnvironment?.deviceScaleFactor)} / ${escapeCell(card.visualEnvironment?.fontFixture)}`,
     '',
-    '静态输入被取消或部分采用不等于 release 批准；外部 owner 门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。',
+    '任何输入生命周期与采用方式均不等于 release 批准；外部 owner 门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。',
     '',
     '## 页面映射',
     '',

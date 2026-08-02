@@ -2408,6 +2408,8 @@ test('renders deterministic Markdown with the confirmation gate and page matrix'
 
   assert.match(markdown, /MES-108 React 迁移模型卡/);
   assert.match(markdown, /尚未确认/);
+  assert.match(markdown, /任何输入生命周期与采用方式均不等于 release 批准/);
+  assert.doesNotMatch(markdown, /静态输入被取消或部分采用不等于 release 批准/);
   assert.match(markdown, /\| Blueprint page \| React route/);
   assert.match(markdown, /视觉矩阵/);
   assert.match(markdown, new RegExp(BLUEPRINT_PAGE_IDS[0]));

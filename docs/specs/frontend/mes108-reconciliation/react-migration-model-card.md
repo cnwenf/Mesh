@@ -16,7 +16,7 @@
 - 输入方式：`mouse`<br>`keyboard`<br>`touch`
 - 固定环境：Chromium / zh-CN / UTC / DPR 1 / e2e/fixtures/fonts
 
-静态输入被取消或部分采用不等于 release 批准；外部 owner 门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。
+任何输入生命周期与采用方式均不等于 release 批准；外部 owner 门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。
 
 ## 页面映射
 
