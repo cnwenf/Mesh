@@ -5,8 +5,8 @@ not carry a trustworthy authorization source, so only owner/admin readers may
 see them.  Project ids are immutable audit snapshots and deliberately have no
 foreign key, allowing them to survive project deletion.
 
-Revision ID: 0036
-Revises: 0035
+Revision ID: 0038
+Revises: 0037
 Create Date: 2026-08-01
 """
 
@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0036"
-down_revision = "0035"
+revision = "0038"
+down_revision = "0037"
 branch_labels = None
 depends_on = None
 

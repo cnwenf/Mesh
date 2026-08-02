@@ -2074,7 +2074,7 @@ CREATE TABLE integrations (
 CREATE UNIQUE INDEX uq_integrations_ws_name ON integrations(workspace_id, name) WHERE deleted_at IS NULL;
 CREATE INDEX idx_integrations_ws_kind ON integrations(workspace_id, kind) WHERE deleted_at IS NULL;
 
--- MES-90 / migration 0037:the API role is RLS-restricted and therefore needs
+-- MES-90 / migration 0039:the API role is RLS-restricted and therefore needs
 -- one deliberately narrow cross-tenant ownership lookup after acquiring the
 -- transaction advisory lock for ``dingtalk_app_owner:<app_key>``.  Upgrade
 -- preflight aborts when any active app_key already spans multiple workspaces;

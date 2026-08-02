@@ -309,6 +309,17 @@
   color: var(--color-text);
 }
 
+.mesh-integrations__queue-conversation .mesh-integrations__header > div {
+  min-width: 0;
+}
+
+.mesh-integrations__queue-conversation .mesh-integrations__header code {
+  display: block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .mesh-integrations__queue-conversation h4,
 .mesh-integrations__queue-excerpt,
 .mesh-integrations__card-state,

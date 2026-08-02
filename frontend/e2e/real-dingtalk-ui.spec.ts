@@ -790,23 +790,6 @@ test('@mes90-functional DingTalk dual-mode setup, signed queue lifecycle, comman
   };
   expect(reconnectBody.data.accepted).toBe(true);
 
-  const persistedReconnectState = JSON.parse(
-    runPostgresQuery(
-      `SELECT stream_state::text FROM integrations WHERE id = '${integrationId}'`,
-    ).trim(),
-  ) as {
-    state: string;
-    last_attempt_at: string;
-    backoff_seconds: number;
-    reconnect_request_id: string;
-  };
-  expect(persistedReconnectState).toMatchObject({
-    state: 'reconnecting',
-    backoff_seconds: 0,
-  });
-  expect(persistedReconnectState.last_attempt_at).not.toBe('1970-01-01T00:00:00+00:00');
-  expect(persistedReconnectState.reconnect_request_id).toMatch(/^[0-9a-f-]{36}$/i);
-
   const reconnectStatusResponse = await reconnectStatusResponsePromise;
   const reconnectStatusBody = (await expectJsonStatus(reconnectStatusResponse, 200)) as {
     data: { state: string; last_attempt_at: string; backoff_seconds: number };
@@ -815,7 +798,26 @@ test('@mes90-functional DingTalk dual-mode setup, signed queue lifecycle, comman
     state: 'reconnecting',
     backoff_seconds: 0,
   });
-  expect(reconnectStatusBody.data.last_attempt_at).toBe(persistedReconnectState.last_attempt_at);
+  const statusAttemptAt = Date.parse(reconnectStatusBody.data.last_attempt_at);
+  expect(statusAttemptAt).not.toBeNaN();
+
+  // Read the durable marker after the status response. The real Stream worker
+  // is allowed to begin another attempt concurrently, so its timestamp can
+  // advance between these two observations; requiring byte-for-byte equality
+  // would freeze a live process at an impossible instant. The database must
+  // retain the request marker and never move the attempt clock backwards.
+  const persistedReconnectState = JSON.parse(
+    runPostgresQuery(
+      `SELECT stream_state::text FROM integrations WHERE id = '${integrationId}'`,
+    ).trim(),
+  ) as {
+    last_attempt_at: string;
+    reconnect_request_id: string;
+  };
+  expect(persistedReconnectState.reconnect_request_id).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(Date.parse(persistedReconnectState.last_attempt_at)).toBeGreaterThanOrEqual(
+    statusAttemptAt,
+  );
   await expect(page.getByTestId('dingtalk-stream-state')).toContainText(/Reconnecting|重连中/);
 
   const diagnosticResponsePromise = page.waitForResponse(
@@ -1591,6 +1593,19 @@ test('@mes90-visual real queue card keeps WCAG AA contrast across the four UI co
 
   const queueCard = page.getByTestId(`queue-conversation-${visualWorld.conversationKey}`);
   await expect(queueCard).toContainText('MES-90 queue contrast evidence', { timeout: 30_000 });
+  const conversationKeyLayout = await queueCard
+    .locator('code')
+    .first()
+    .evaluate((element) => {
+      const keyBounds = element.getBoundingClientRect();
+      const cardBounds = element.closest('section')?.getBoundingClientRect();
+      if (cardBounds === undefined) throw new Error('queue conversation card is missing');
+      return { keyRight: keyBounds.right, cardRight: cardBounds.right };
+    });
+  expect(
+    conversationKeyLayout.keyRight,
+    `${projectName} conversation key must stay inside the queue card`,
+  ).toBeLessThanOrEqual(conversationKeyLayout.cardRight);
   const colors = await queueCard.evaluate((element) => {
     const cardStyle = window.getComputedStyle(element);
     const textElement = element.querySelector('.mesh-integrations__queue-excerpt');
