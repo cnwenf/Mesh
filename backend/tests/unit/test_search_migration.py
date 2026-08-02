@@ -240,7 +240,7 @@ def test_0037_backfills_legacy_0036_search_contract(db_url):
         database_engine = create_engine(_sync_url(database_url))
 
         # Reproduce databases that consumed the original 0035 before these
-        # two late search-contract functions and the ledger ACL fix existed.
+        # two late search-contract functions and the ACL fixes existed.
         with database_engine.begin() as connection:
             connection.exec_driver_sql(
                 "DROP FUNCTION public.mesh_search_text_score(TEXT, TEXT)"
@@ -252,6 +252,41 @@ def test_0037_backfills_legacy_0036_search_contract(db_url):
                 "GRANT ALL PRIVILEGES ON TABLE mesh_search_ext_ledger "
                 "TO PUBLIC, mesh_app"
             )
+            connection.exec_driver_sql(
+                "GRANT EXECUTE ON FUNCTION public.mesh_member_search_name(UUID) "
+                "TO PUBLIC, mesh_app"
+            )
+            workspace_id = connection.execute(
+                text(
+                    "INSERT INTO workspaces (name, slug) "
+                    "VALUES ('Legacy ACL', 'legacy-acl') RETURNING id"
+                )
+            ).scalar_one()
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users (email, display_name) "
+                    "VALUES ('legacy-acl@example.test', 'Before Name') RETURNING id"
+                )
+            ).scalar_one()
+            member_id = connection.execute(
+                text(
+                    "INSERT INTO members (workspace_id, member_type, user_id, role) "
+                    "VALUES (:workspace_id, 'human', :user_id, 'member') RETURNING id"
+                ),
+                {"workspace_id": workspace_id, "user_id": user_id},
+            ).scalar_one()
+            legacy_helper_acl_count = connection.exec_driver_sql(
+                "SELECT count(*) "
+                "FROM pg_proc p "
+                "CROSS JOIN LATERAL aclexplode(COALESCE("
+                "p.proacl, acldefault('f', p.proowner))) acl "
+                "LEFT JOIN pg_roles r ON r.oid = acl.grantee "
+                "WHERE p.oid = "
+                "'public.mesh_member_search_name(uuid)'::regprocedure "
+                "AND acl.privilege_type = 'EXECUTE' "
+                "AND (acl.grantee = 0 OR r.rolname = 'mesh_app')"
+            ).scalar_one()
+            assert legacy_helper_acl_count == 2
 
         command.upgrade(config, "0037")
 
@@ -275,6 +310,54 @@ def test_0037_backfills_legacy_0036_search_contract(db_url):
                 "AND (acl.grantee = 0 OR r.rolname = 'mesh_app')"
             ).scalar_one()
             assert unauthorized_acl_count == 0
+
+            unauthorized_helper_acl_count = connection.exec_driver_sql(
+                "SELECT count(*) "
+                "FROM pg_proc p "
+                "CROSS JOIN LATERAL aclexplode(COALESCE("
+                "p.proacl, acldefault('f', p.proowner))) acl "
+                "LEFT JOIN pg_roles r ON r.oid = acl.grantee "
+                "WHERE p.oid = "
+                "'public.mesh_member_search_name(uuid)'::regprocedure "
+                "AND acl.privilege_type = 'EXECUTE' "
+                "AND (acl.grantee = 0 OR r.rolname = 'mesh_app')"
+            ).scalar_one()
+            assert unauthorized_helper_acl_count == 0
+
+            owner_projection = connection.execute(
+                text("SELECT public.mesh_member_search_name(:member_id)"),
+                {"member_id": member_id},
+            ).scalar_one()
+            assert owner_projection == "before name"
+
+        # A global app-role user update carries no tenant GUC. Its SECURITY
+        # DEFINER trigger must still reach the owner-only helper and update the
+        # projection even though the caller cannot invoke that helper directly.
+        with database_engine.begin() as connection:
+            connection.exec_driver_sql("SET LOCAL ROLE mesh_app")
+            result = connection.execute(
+                text("UPDATE users SET display_name = 'After Rename' WHERE id = :user_id"),
+                {"user_id": user_id},
+            )
+            assert result.rowcount == 1
+
+        with database_engine.connect() as connection:
+            updated_projection = connection.execute(
+                text("SELECT search_name FROM members WHERE id = :member_id"),
+                {"member_id": member_id},
+            ).scalar_one()
+            assert updated_projection == "after rename"
+
+        with database_engine.connect() as connection:
+            transaction = connection.begin()
+            connection.exec_driver_sql("SET LOCAL ROLE mesh_app")
+            with pytest.raises(DBAPIError) as exc_info:
+                connection.execute(
+                    text("SELECT public.mesh_member_search_name(:member_id)"),
+                    {"member_id": member_id},
+                )
+            assert getattr(exc_info.value.orig, "sqlstate", None) == "42501"
+            transaction.rollback()
 
         with database_engine.connect() as connection:
             transaction = connection.begin()
