@@ -30,5 +30,6 @@ htmlcov/
 
 # Node — never commit dependencies or build caches
 node_modules/
+frontend-prototype/visual-artifacts/
 docker-compose.override.yml
 dump.rdb

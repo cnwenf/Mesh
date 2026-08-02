@@ -24,9 +24,12 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | [docs/specs/](docs/specs/) | Spec 文档(所有实现的唯一依据) |
 | [backend/](backend/) | Python 后端(FastAPI REST + realtime 网关 + outbox/projector worker) |
 | [frontend/](frontend/) | Web 前端(React 19 + Vite 单页应用:真实产品 UI——工作区仪表盘首页、登录、看板、issue、成员、技能库等;设计系统 / 实时契约 / i18n 基线;详见 [frontend/README.md](frontend/README.md)) |
+| [frontend-prototype/](frontend-prototype/) | 可双击浏览的零运行时依赖静态交互蓝图；覆盖 24 个页面路由、亮暗主题、桌面/手机布局与关键交互，并提供 96 组合真实浏览器结构检查和截图证据采集 |
 | [tests/](tests/) | 文档级校验脚本(事件词汇、名册入口等) |
 
 开发任何功能前,请先阅读对应的功能 Spec;Spec 是本仓库所有实现的唯一依据。
+
+静态交互蓝图可直接打开 `frontend-prototype/index.html`；验证方式见 [frontend-prototype/README.md](frontend-prototype/README.md)，其中 `npm test` 同时执行真实交互、安全回归、四组合逐页布局检查与 ≥90% V8 函数/行/字节覆盖率门禁。
 
 ## 实现状态
 

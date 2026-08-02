@@ -471,7 +471,7 @@
         <span class="u-spacer"></span>
         <button class="quiet-action working-count" type="button"><span class="presence-dot"></span><strong>0</strong><small>working</small></button>
         ${button("Filter", "filter", "filter-placeholder")}
-        ${button("Manual", "sort", "filter-placeholder")}
+        ${button("Manual", "sort", "sort-issues")}
         ${button("Board", "board", "filter-placeholder")}
       </div>
       <div class="board-viewport board-viewport--workspace">
@@ -871,7 +871,7 @@
 
   function automationsPage() {
     return `<div class="page-layout">
-      ${pageBar("Autopilot")}
+      ${pageBar("Autopilot", "zap", { actions: button("新建自动化", "plus", "create-automation", "primary") })}
       <div class="page-scroll"><div class="page-content">
         <div class="page-intro"><div class="page-intro__copy"><h1>自动化</h1><p>让重复工作按计划、Webhook 或人工触发自动执行。</p></div></div>
         <div class="toolbar surface-card" style="margin-bottom:12px;border-radius:10px"><div class="segmented"><button class="is-active">全部</button><button>已启用</button><button>已暂停</button></div><span class="u-spacer"></span>${button("运行记录", "clock", "automation-runs")}</div>
@@ -903,8 +903,8 @@
     ];
     const selected = notifications[state.inboxSelected];
     return `<div class="page-layout">
-      ${pageBar("Inbox")}
-      <div class="split-workspace">
+      ${pageBar("Inbox", "inbox", { actions: button("全部已读", "check", "mark-read") })}
+      <div class="split-workspace ${selected ? "has-selection" : ""}">
         <div class="split-list">
           <div class="inbox-filter"><div class="workspace-tabs"><button class="is-active">Inbox</button><button>Archive</button></div><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button">${icon("filter", "icon--sm")}</button></div>
           ${notifications
@@ -920,9 +920,11 @@
           ${
             selected
               ? `<div class="notification-detail">
+                  <button class="mobile-detail-back" type="button" data-action="back-to-inbox-list">${icon("chevron", "icon--sm")}<span>Inbox</span></button>
                   <div class="notification-detail__eyebrow">MES-147 · COMMENT</div>
                   <h1>${selected[1]}</h1>
                   <div class="notification-detail__meta">${avatar(selected[0])}<span>${people[selected[0]].name}</span><span>·</span><span>${selected[3]}前</span></div>
+                  <div class="notification-detail__actions">${button("打开 Issue", "arrow", "open-selected-issue", "primary")}${button("归档", "inbox", "archive-notification")}</div>
                   <div class="notification-quote">
                     <p>${selected[2]}</p>
                     <pre><code>.board-column__head {
@@ -952,7 +954,7 @@
     ];
     return `<div class="page-layout">
       ${pageBar("Chat")}
-      <div class="chat-shell">
+      <div class="chat-shell ${state.chatSelected >= 0 ? "has-selection" : ""}">
         <aside class="chat-sessions">
           <div class="chat-sessions__head"><strong>Conversations</strong><span class="u-spacer"></span>${button("New", "plus", "new-chat", "outline")}</div>
           ${sessions.map(([title, agent, time], index) => `<button class="session-item ${state.chatSelected === index ? "is-active" : ""}" type="button" data-action="select-chat" data-index="${index}"><div class="session-item__title">${title}</div><div class="session-item__meta"><span>${agent}</span><span>${time}</span></div></button>`).join("")}
@@ -961,7 +963,7 @@
           state.chatSelected < 0
             ? `<section class="chat-room chat-room--empty"><div class="split-placeholder"><span>${icon("chat", "icon--lg")}</span><p>Select a conversation to start chatting</p></div></section>`
             : `<section class="chat-room">
-                <header class="chat-room__head">${avatar("agent")}<div><strong>Mesh 工程师</strong><span class="u-success">Online</span></div><span class="u-spacer"></span><span class="meta-pill">${icon("link", "icon--sm")}MES-147</span><button class="ui-button ui-button--icon" type="button">${icon("more")}</button></header>
+                <header class="chat-room__head"><button class="mobile-detail-back mobile-detail-back--compact" type="button" data-action="back-to-chat-list" aria-label="返回会话列表">${icon("chevron", "icon--sm")}</button>${avatar("agent")}<div><strong>Mesh 工程师</strong><span class="u-success">Online</span></div><span class="u-spacer"></span><span class="meta-pill">${icon("link", "icon--sm")}MES-147</span><button class="ui-button ui-button--icon" type="button">${icon("more")}</button></header>
                 <div class="chat-messages"><div class="chat-thread" data-chat-thread>
                   ${state.messages
                     .map(
@@ -1064,7 +1066,7 @@
       </section>`;
     }
     return `<div class="page-layout">
-      ${pageBar("Settings")}
+      ${pageBar("Settings", "settings", { actions: button("保存", "check", "save-settings", "primary") })}
       <div class="settings-layout">
         <nav class="settings-nav">
           <div class="settings-nav__title">My Account</div>
@@ -1225,25 +1227,28 @@
       ["action:theme", "打开主题偏好", "palette", ""],
     ].filter((command) => command[1].toLowerCase().includes(query));
     openDialog(`
-      <div class="command-field">${icon("search", "command-search-icon")}<input class="command-input" data-command-input placeholder="搜索页面、Issue 或运行命令…" value="${escapeHtml(state.commandQuery)}" autofocus /></div>
-      <div class="command-list">
+      <div class="command-field">${icon("search", "command-search-icon")}<input class="command-input" data-command-input role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" aria-activedescendant="${commands.length ? "command-option-0" : ""}" autocomplete="off" placeholder="搜索页面、Issue 或运行命令…" value="${escapeHtml(state.commandQuery)}" autofocus /></div>
+      <div class="command-list" id="command-results" role="listbox" aria-label="命令结果">
         <div class="command-group-title">${query ? "搜索结果" : "建议"}</div>
-        ${commands.length ? commands.map(([route, label, iconName, key]) => `<button class="command-item" type="button" data-command-route="${route}">${icon(iconName)}<span>${label}</span>${key ? `<kbd class="shortcut">${key}</kbd>` : ""}</button>`).join("") : `<div class="no-results" style="min-height:130px">没有匹配的命令</div>`}
+        ${commands.length ? commands.map(([route, label, iconName, key], index) => `<button class="command-item ${index === 0 ? "is-highlighted" : ""}" id="command-option-${index}" type="button" role="option" aria-selected="${index === 0}" data-command-route="${route}">${icon(iconName)}<span>${label}</span>${key ? `<kbd class="shortcut">${key}</kbd>` : ""}</button>`).join("") : `<div class="no-results" style="min-height:130px">没有匹配的命令</div>`}
       </div>
       <div class="dialog__foot" style="justify-content:flex-start;color:var(--ink-soft);font-size:11px"><kbd class="shortcut">↑↓</kbd><span>选择</span><kbd class="shortcut">↵</kbd><span>打开</span><kbd class="shortcut">esc</kbd><span>关闭</span></div>
     `, "dialog--command");
   }
 
-  function profileDialog() {
-    openDialog(`
-      <div class="dialog__body">
-        <div class="roster-person" style="padding:4px 3px 12px">${avatar("you", true)}<div class="roster-person__copy"><div class="roster-person__name">李然</div><div class="roster-person__email">demo.user@example.test</div></div></div>
-        <div class="workspace-menu">
-          <button class="command-item" type="button" data-action="go-profile">${icon("my")}个人资料</button>
-          <button class="command-item u-danger" type="button" data-route="login">${icon("logout")}退出登录</button>
-        </div>
-      </div>
-    `);
+  function moveCommandSelection(direction) {
+    const input = overlayRoot.querySelector("[data-command-input]");
+    const options = [...overlayRoot.querySelectorAll('[role="option"]')];
+    if (!input || !options.length) return;
+    const current = Math.max(0, options.findIndex((option) => option.getAttribute("aria-selected") === "true"));
+    const next = (current + direction + options.length) % options.length;
+    options.forEach((option, index) => {
+      const selected = index === next;
+      option.classList.toggle("is-highlighted", selected);
+      option.setAttribute("aria-selected", String(selected));
+    });
+    input.setAttribute("aria-activedescendant", options[next].id);
+    options[next].scrollIntoView({ block: "nearest" });
   }
 
   function mobileDrawer() {
@@ -1297,14 +1302,6 @@
     if (!actionTarget) return;
     const action = actionTarget.dataset.action;
     const actions = {
-      "toggle-theme": () => {
-        const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-        document.documentElement.dataset.theme = theme;
-        localStorage.setItem("mesh-prototype-theme", theme);
-        render();
-        closeOverlay();
-        showToast(theme === "dark" ? "已切换到暗色主题" : "已切换到亮色主题");
-      },
       "open-create-issue": createIssueDialog,
       "board-column-menu": () => boardColumnMenu(actionTarget),
       "open-workspaces": workspaceDialog,
@@ -1316,12 +1313,6 @@
         commandDialog();
       },
       "mobile-menu": mobileDrawer,
-      "profile-menu": profileDialog,
-      "workspace-settings": () => {
-        state.settingsTab = "general";
-        setRoute("settings");
-        closeOverlay();
-      },
       "create-project": () => showToast("项目创建面板已就绪", "静态原型中使用示例项目展示布局。"),
       "invite-member": () => showToast("邀请已复制", "邀请链接有效期为 7 天。"),
       "create-agent": () => showToast("智能体创建向导已打开", "选择职责、运行时与 Skills 后即可加入团队。"),
@@ -1334,24 +1325,21 @@
         state.inboxSelected = Number(actionTarget.dataset.index || 0);
         render();
       },
+      "back-to-inbox-list": () => {
+        state.inboxSelected = -1;
+        render();
+      },
       "select-chat": () => {
         state.chatSelected = Number(actionTarget.dataset.index || 0);
+        render();
+      },
+      "back-to-chat-list": () => {
+        state.chatSelected = -1;
         render();
       },
       "settings-tab": () => {
         state.settingsTab = actionTarget.dataset.tab;
         render();
-      },
-      "set-theme": () => {
-        const requested = actionTarget.dataset.theme;
-        const theme = requested === "system"
-          ? matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-          : requested;
-        document.documentElement.dataset.theme = theme;
-        if (requested === "system") localStorage.removeItem("mesh-prototype-theme");
-        else localStorage.setItem("mesh-prototype-theme", theme);
-        render();
-        showToast(requested === "system" ? "主题将跟随系统" : `已切换到${theme === "dark" ? "暗色" : "亮色"}主题`);
       },
       "toggle-switch": () => {
         const next = actionTarget.getAttribute("aria-checked") !== "true";
@@ -1363,25 +1351,8 @@
         render();
         showToast(state.automations[index].enabled ? "自动化已启用" : "自动化已暂停", state.automations[index].name);
       },
-      "select-workspace": () => {
-        const workspace = availableWorkspaces.find(
-          ([code, name]) => code === actionTarget.dataset.code && name === actionTarget.dataset.name,
-        );
-        if (!workspace) {
-          showToast("无法切换工作区", "工作区标识无效。");
-          return;
-        }
-        [state.workspaceCode, state.workspace] = workspace;
-        closeOverlay();
-        render();
-        showToast(`已切换到 ${state.workspace}`);
-      },
       "go-chat": () => setRoute("chat"),
       "go-skills": () => setRoute("skills"),
-      "go-profile": () => {
-        state.settingsTab = "profile";
-        setRoute("settings");
-      },
       "save-settings": () => showToast("设置已保存"),
       "retry-state": () => {
         actionTarget.disabled = true;
@@ -1397,7 +1368,6 @@
       "filter-placeholder": () => showToast("筛选菜单", "静态原型保留了完整的触发与反馈状态。"),
       "automation-runs": () => showToast("运行记录", "最近 30 天共运行 182 次，成功率 96.2%。"),
       "export-data": () => showToast("导出任务已创建", "CSV 文件准备完成后会出现在收件箱。"),
-      "logout-others": () => showToast("其他设备已退出", "当前会话保持登录。"),
       "new-chat": () => showToast("已创建新对话", "选择一个智能体开始协作。"),
       "project-settings": () => {
         state.settingsTab = "general";
@@ -1407,7 +1377,7 @@
       "edit-skill": () => showToast("Skill 编辑器已打开"),
       "bind-skill": () => showToast("已打开智能体选择器"),
     };
-    (actions[action] || (() => {}))();
+    if (actions[action]) actions[action]();
   });
 
   overlayRoot.addEventListener("click", (event) => {
@@ -1455,17 +1425,6 @@
       closeOverlay();
       render();
       showToast(`已切换到 ${state.workspace}`);
-    } else if (actionTarget.dataset.action === "toggle-theme") {
-      const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-      document.documentElement.dataset.theme = theme;
-      localStorage.setItem("mesh-prototype-theme", theme);
-      closeOverlay();
-      render();
-      showToast("主题已切换");
-    } else if (actionTarget.dataset.action === "go-profile") {
-      state.settingsTab = "profile";
-      closeOverlay();
-      setRoute("settings");
     }
   });
 
@@ -1484,12 +1443,6 @@
       commandDialog();
       const input = overlayRoot.querySelector("[data-command-input]");
       input.setSelectionRange(input.value.length, input.value.length);
-    }
-    if (event.target.matches("[data-filter-issues]")) {
-      const query = event.target.value.toLowerCase();
-      root.querySelectorAll(".data-table tbody tr").forEach((row) => {
-        row.hidden = !row.textContent.toLowerCase().includes(query);
-      });
     }
   });
 
@@ -1605,6 +1558,17 @@
   });
 
   document.addEventListener("keydown", (event) => {
+    const commandInput = event.target.closest("[data-command-input]");
+    if (commandInput && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      moveCommandSelection(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (commandInput && event.key === "Enter") {
+      event.preventDefault();
+      overlayRoot.querySelector('[role="option"][aria-selected="true"]')?.click();
+      return;
+    }
     const inField = event.target.matches("input, textarea, select, [contenteditable='true']");
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();

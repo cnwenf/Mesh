@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node smoke-test.mjs"
+    "test": "node smoke-test.mjs",
+    "test:visual": "node visual-test.mjs"
   },
   "engines": {
     "node": ">=20"
