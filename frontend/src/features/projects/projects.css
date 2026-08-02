@@ -63,7 +63,7 @@
 }
 
 .mesh-projects__card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
 }
 
 .mesh-projects__card-head {
@@ -134,8 +134,8 @@
   inline-size: 1.75rem;
   block-size: 1.75rem;
   border-radius: 50%;
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
@@ -152,7 +152,7 @@
 .mesh-projects__progress-fill {
   display: block;
   block-size: 100%;
-  background: var(--color-primary);
+  background: var(--color-accent);
   border-radius: var(--radius-sm);
 }
 
@@ -223,7 +223,7 @@
   display: inline-flex;
   align-items: center;
   padding: var(--space-2) var(--space-3);
-  color: var(--color-primary);
+  color: var(--color-accent);
   font-size: var(--font-size-sm);
 }
 
@@ -510,6 +510,6 @@
 }
 
 .mesh-projects__health-button:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }

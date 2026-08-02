@@ -334,7 +334,7 @@
 /* 状态类别语义色(经语义 token;暗色集整体替换) */
 .mesh-board__dot--backlog { background: var(--color-text-muted); }
 .mesh-board__dot--todo { background: var(--color-info); }
-.mesh-board__dot--in_progress { background: var(--color-primary); }
+.mesh-board__dot--in_progress { background: var(--color-accent); }
 .mesh-board__dot--in_review { background: var(--color-warn); }
 .mesh-board__dot--blocked { background: var(--color-danger); }
 .mesh-board__dot--done { background: var(--color-success); }

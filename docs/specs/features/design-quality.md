@@ -221,7 +221,7 @@
 - `Runtimes` → **运行环境**
 - 不再出现两个同名“自动化”。
 
-桌面展开侧栏宽 240px；折叠 rail 宽 64px。图标始终存在，展开态显示文字。当前项使用浅强调背景 + 强文字 + 3px 边缘指示，不使用整块高饱和色作为唯一信号。
+桌面展开侧栏宽 256px；折叠 rail 宽 64px。图标始终存在，展开态显示文字。当前项使用浅强调背景 + 强文字 + 3px 边缘指示，不使用整块高饱和色作为唯一信号。
 
 ### 4.2 顶栏
 
@@ -275,28 +275,37 @@
 
 下表为实施起始值；合入前 MUST 通过仓库对比度脚本，必要时只调整值、不改变语义名。
 
-| Token                      | Light                | Dark              | 用途             |
-| -------------------------- | -------------------- | ----------------- | ---------------- |
-| `--color-canvas`           | `#F7F8FA`            | `#0F1115`         | 应用背景         |
-| `--color-surface`          | `#FFFFFF`            | `#171A21`         | 主内容表面       |
-| `--color-surface-subtle`   | `#F1F3F5`            | `#1D212A`         | 次级区域         |
-| `--color-surface-raised`   | `#FFFFFF`            | `#222732`         | 菜单、浮层、卡片 |
-| `--color-surface-hover`    | `#F4F5F7`            | `#252B36`         | hover            |
-| `--color-surface-pressed`  | `#E9ECF0`            | `#2B3240`         | pressed          |
-| `--color-surface-selected` | `#EEF2FF`            | `#24263F`         | selected         |
-| `--color-text-strong`      | `#16181D`            | `#F4F6F8`         | 标题和主数据     |
-| `--color-text`             | `#2B2F36`            | `#D7DBE0`         | 正文             |
-| `--color-text-muted`       | `#667085`            | `#9AA3AF`         | 辅助信息         |
-| `--color-text-disabled`    | `#98A2B3`            | `#697386`         | 禁用态           |
-| `--color-border-subtle`    | `#EAECF0`            | `#252B35`         | 轻分隔           |
-| `--color-border`           | `#D7DCE3`            | `#343C49`         | 控件与卡片边界   |
-| `--color-border-strong`    | `#B8C0CC`            | `#4A5565`         | 强分隔           |
-| `--color-accent`           | `#4F46E5`            | `#818CF8`         | 主操作、链接     |
-| `--color-accent-hover`     | `#4338CA`            | `#A5B4FC`         | 主操作 hover     |
-| `--color-accent-pressed`   | `#3730A3`            | `#6366F1`         | 主操作 pressed   |
-| `--color-accent-soft`      | `#EEF2FF`            | `#24263F`         | 选中背景         |
-| `--color-focus-ring`       | `#2563EB`            | `#93C5FD`         | 焦点环           |
-| `--color-scrim`            | `rgba(15,23,42,.52)` | `rgba(0,0,0,.72)` | 遮罩             |
+| Token                           | Light                | Dark                     | 用途               |
+| ------------------------------- | -------------------- | ------------------------ | ------------------ |
+| `--color-canvas`                | `#FBFBFB`            | `#111114`                | 主内容画布         |
+| `--color-bg`                    | `#F3F3F4`            | `#0C0C0E`                | 应用壳层背景       |
+| `--color-surface`               | `#FFFFFF`            | `#18181B`                | 主内容表面         |
+| `--color-surface-subtle`        | `#F4F4F5`            | `#1E1E21`                | 次级区域           |
+| `--color-surface-raised`        | `#FFFFFF`            | `#1E1E21`                | 菜单、浮层、卡片   |
+| `--color-surface-hover`         | `#F4F4F5`            | `#27272A`                | hover              |
+| `--color-surface-pressed`       | `#D4D4D8`            | `#3F3F46`                | pressed/禁用表面   |
+| `--color-surface-selected`      | `#EEEEF0`            | `#2D2D31`                | selected           |
+| `--color-text-strong`           | `#09090B`            | `#FAFAFA`                | 标题和主数据       |
+| `--color-text`                  | `#09090B`            | `#FAFAFA`                | 正文               |
+| `--color-text-muted`            | `#64636E`            | `#9F9FA9`                | 辅助信息           |
+| `--color-text-faint-base`       | `#81818B`            | `#7F7F89`                | 原型弱文字追溯值   |
+| `--color-text-disabled`         | `#81818B`            | `#7F7F89`                | 非活动控件兼容值   |
+| `--color-placeholder`           | `#64636E`            | `#9F9FA9`                | 启用输入占位文字   |
+| `--color-control-disabled-text` | `#8B8B94`            | `#8B8B94`                | 禁用控件文字       |
+| `--color-border-subtle`         | `#ECECEF`            | `rgb(255 255 255 / 6%)`  | 轻分隔             |
+| `--color-border`                | `#E4E4E7`            | `rgb(255 255 255 / 10%)` | 控件与卡片边界     |
+| `--color-border-strong`         | `#D4D4D8`            | `rgb(255 255 255 / 15%)` | 强分隔与强调边界   |
+| `--color-input-border-base`     | `#E4E4E7`            | `rgb(255 255 255 / 15%)` | 原型输入边界追溯值 |
+| `--color-input-border`          | `#8B8B94`            | `#71717A`                | 启用输入边界       |
+| `--color-input-border-hover`    | `#71717A`            | `#8B8B94`                | 输入 hover 边界    |
+| `--color-primary`               | `#18181B`            | `#E4E4E7`                | 中性主操作         |
+| `--color-primary-contrast`      | `#FAFAFA`            | `#18181B`                | 主操作前景         |
+| `--color-accent`                | `#206DC4`            | `#4390EE`                | 品牌链接、焦点强调 |
+| `--color-accent-hover`          | `#1B5DA8`            | `#68A7F3`                | 品牌强调 hover     |
+| `--color-accent-pressed`        | `#174F8F`            | `#2F7FDC`                | 品牌强调 pressed   |
+| `--color-accent-soft`           | `#EEF7FF`            | `#1E2939`                | 品牌浅底           |
+| `--color-focus-ring`            | `#2563EB`            | `#93C5FD`                | 焦点环             |
+| `--color-scrim`                 | `rgba(15,23,42,.52)` | `rgba(0,0,0,.72)`        | 遮罩               |
 
 状态色必须拆为 `fg/bg/border` 三元组：
 
@@ -307,6 +316,8 @@
 - `neutral`：草稿、未知、未开始。
 
 状态色不允许同时充当优先级色或成员色。图表配色（含状态语义映射、类别系列扩展与双主题校准）统一遵循 `theme.md` §4.4 与 `analytics.md` §4.5，本节不另设并行规则。
+
+MES-108 接受基线的品牌、状态、弱文字、输入边界及类别原始值由 `*-base` / `--color-category-*` 精确保留，供模型卡追溯；业务组件不得直接消费这些 reference token。原始状态浅底、启用 placeholder 或控件边界低于 WCAG 门槛时，组件必须使用经 `AA_CONTRAST_PAIRS` 实测的语义值，不能为像素接近而降低可访问性门禁；这些视觉偏差在 owner / 像素证据确认前保持模型卡 `pending`。
 
 ### 5.3 间距与布局
 
@@ -319,8 +330,8 @@
 | `space-2`   | 8px  | 控件内部         |
 | `space-3`   | 12px | 行内组           |
 | `space-4`   | 16px | 卡片、手机页边距 |
-| `space-5`   | 20px | 紧凑分区         |
-| `space-6`   | 24px | 标准分区         |
+| `space-5`   | 24px | 紧凑分区         |
+| `space-6`   | 32px | 标准分区         |
 | `space-8`   | 32px | 页面段落         |
 | `space-10`  | 40px | 大段落           |
 | `space-12`  | 48px | 页面顶部         |
@@ -328,7 +339,7 @@
 
 布局变量：
 
-- `--shell-sidebar-expanded: 240px`
+- `--shell-sidebar-expanded: 256px`
 - `--shell-sidebar-collapsed: 64px`
 - `--page-gutter-compact: 16px`
 - `--page-gutter-medium: 24px`
@@ -340,7 +351,7 @@
 
 ### 5.4 圆角、边框和阴影
 
-- 圆角：`radius-xs 4px`、`sm 6px`、`md 8px`、`lg 12px`、`xl 16px`、`full 999px`。
+- 圆角：`radius-xs 4px`、`sm 6px`、`md 8px`、`lg 10px`、`xl 14px`、`full 999px`。
 - 边框：`1px` 常规；选中指示可用 `2px`；禁止用多层重边框制造层级。
 - 阴影：
   - `shadow-1`：轻浮起菜单/卡片。
@@ -360,9 +371,9 @@
 
 标准 easing：
 
-- 进入：`cubic-bezier(.2,.8,.2,1)`
-- 退出：`cubic-bezier(.4,0,1,1)`
-- 移动：`cubic-bezier(.2,0,0,1)`
+- 进入：`cubic-bezier(0.22, 1, 0.36, 1)`
+- 退出：`cubic-bezier(0.22, 1, 0.36, 1)`
+- 移动：`cubic-bezier(0.22, 1, 0.36, 1)`
 
 `prefers-reduced-motion: reduce` 下，非必要动画缩短至近零；拖拽位置、加载进度和焦点仍必须可辨。
 
@@ -372,11 +383,12 @@
 
 ### 6.1 字体配对
 
-- Display/标题：`Manrope`（Latin）+ `Noto Sans SC`（CJK）。
-- UI/正文：`Inter`（Latin）+ `Noto Sans SC`（CJK）。
-- 代码/日志/标识：`JetBrains Mono` + `SFMono-Regular` + `Consolas`。
-- 字体必须自托管并按 Latin/CJK 子集加载；首屏只加载常用 400/500/600，700 按页面需要加载。
+- Display/标题与 UI/正文：自托管 `Inter`（Latin）+ 系统 CJK 回退（`PingFang SC` / `Microsoft YaHei`）。
+- 代码/日志/标识：`SFMono-Regular` + `Consolas` + `Liberation Mono`。
+- `Inter` 字体文件必须自托管并按 Latin 子集加载；首屏只加载常用 400/500/600，700 按页面需要加载。系统 CJK 回退不随产品包分发。
 - 字体失败时回退系统字体，不允许阻断页面或导致不可交互的长时间 FOIT。
+
+MES-108 当前只完成字体栈映射；产品包尚未引入经许可证核验的 Inter 文件与 `@font-face`，因此 `--font-ui` reconciliation 和 `font-loading` 风险保持 `pending`，不得用系统回退字体冒充已校准。
 
 ### 6.2 Type scale
 
@@ -435,7 +447,7 @@
 
 ### 7.3 Button
 
-变体：primary、secondary、ghost、danger；尺寸：sm 28、md 36、lg 44。
+变体：primary、secondary、ghost、danger；尺寸：sm 28、md 36、lg 44。primary 使用中性 `--color-primary`；品牌链接、选中强调与焦点使用独立 accent 系。
 
 每个变体 MUST 定义：
 

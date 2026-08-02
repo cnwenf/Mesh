@@ -136,8 +136,8 @@
 }
 
 .mesh-labels__swatch:has(input:checked) {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
 }
 
 /* 透明 input 覆盖整个色块作为命中目标(鼠标/键盘/AT 均可达)。 */

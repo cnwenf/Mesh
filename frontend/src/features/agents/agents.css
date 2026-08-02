@@ -26,8 +26,8 @@
 }
 
 .mesh-agents-wizard__step--active {
-  color: var(--color-primary-contrast);
-  background: var(--color-primary);
+  color: var(--color-accent-contrast);
+  background: var(--color-accent);
 }
 
 .mesh-agents-wizard__body {

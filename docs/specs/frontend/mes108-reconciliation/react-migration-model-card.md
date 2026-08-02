@@ -135,56 +135,60 @@
 
 | Static token | React semantic token | Strategy | Reconciliation |
 | --- | --- | --- | --- |
-| `--shell` | `--color-bg` | calibrate | pending |
-| `--canvas` | `--color-canvas` | calibrate | pending |
-| `--surface` | `--color-surface` | calibrate | pending |
-| `--raised` | `--color-surface-raised` | calibrate | pending |
-| `--hover` | `--color-surface-hover` | calibrate | pending |
-| `--selected` | `--color-surface-selected` | calibrate | pending |
-| `--ink` | `--color-text-strong` | calibrate | pending |
-| `--ink-soft` | `--color-text-muted` | calibrate | pending |
-| `--ink-faint` | `--color-text-disabled` | calibrate | pending |
-| `--line` | `--color-border-subtle` | calibrate | pending |
-| `--line-strong` | `--color-border` | calibrate | pending |
-| `--input-line` | `--color-border` | calibrate | pending |
-| `--primary` | `--color-accent` | calibrate | pending |
-| `--primary-ink` | `--color-accent-contrast` | calibrate | pending |
-| `--disabled` | `--color-surface-pressed` | calibrate | pending |
-| `--disabled-ink` | `--color-text-disabled` | calibrate | pending |
-| `--brand` | `--color-accent` | calibrate | pending |
-| `--brand-soft` | `--color-accent-soft` | calibrate | pending |
-| `--success` | `--color-success-fg` | calibrate | pending |
-| `--success-soft` | `--color-success-bg` | calibrate | pending |
-| `--warning` | `--color-warning-fg` | calibrate | pending |
-| `--warning-soft` | `--color-warning-bg` | calibrate | pending |
-| `--danger` | `--color-danger-fg` | calibrate | pending |
-| `--danger-soft` | `--color-danger-bg` | calibrate | pending |
-| `--info` | `--color-info-fg` | calibrate | pending |
-| `--info-soft` | `--color-info-bg` | calibrate | pending |
-| `--violet` | `--color-avatar-h5-bg` | calibrate | pending |
-| `--orange` | `--color-avatar-h3-bg` | calibrate | pending |
-| `--shadow-surface` | `--shadow-1` | calibrate | pending |
-| `--shadow-menu` | `--shadow-2` | calibrate | pending |
-| `--shadow-float` | `--shadow-3` | calibrate | pending |
-| `--radius-xs` | `--radius-xs` | calibrate | pending |
-| `--radius-sm` | `--radius-sm` | calibrate | pending |
-| `--radius-md` | `--radius-md` | calibrate | pending |
-| `--radius-lg` | `--radius-lg` | calibrate | pending |
-| `--radius-xl` | `--radius-xl` | calibrate | pending |
-| `--radius-round` | `--radius-full` | calibrate | pending |
-| `--sidebar-size` | `--shell-sidebar-expanded` | calibrate | pending |
-| `--page-header` | `--space-12` | calibrate | pending |
-| `--ease` | `--ease-enter`<br>`--ease-exit`<br>`--ease-move` | calibrate | pending |
+| `--shell` | `--color-bg` | calibrate | calibrated |
+| `--canvas` | `--color-canvas` | calibrate | calibrated |
+| `--surface` | `--color-surface` | calibrate | calibrated |
+| `--raised` | `--color-surface-raised` | calibrate | calibrated |
+| `--hover` | `--color-surface-hover` | calibrate | calibrated |
+| `--selected` | `--color-surface-selected` | calibrate | calibrated |
+| `--ink` | `--color-text-strong` | calibrate | calibrated |
+| `--ink-soft` | `--color-text-muted` | calibrate | calibrated |
+| `--ink-faint` | `--color-text-faint-base` | calibrate | calibrated |
+| `--line` | `--color-border-subtle` | calibrate | calibrated |
+| `--line-strong` | `--color-border` | calibrate | calibrated |
+| `--input-line` | `--color-input-border-base` | calibrate | calibrated |
+| `--primary` | `--color-primary` | calibrate | calibrated |
+| `--primary-ink` | `--color-primary-contrast` | calibrate | calibrated |
+| `--disabled` | `--color-surface-pressed` | calibrate | calibrated |
+| `--disabled-ink` | `--color-control-disabled-text` | calibrate | calibrated |
+| `--brand` | `--color-brand-base` | calibrate | calibrated |
+| `--brand-soft` | `--color-brand-soft-base` | calibrate | calibrated |
+| `--success` | `--color-success-base` | calibrate | calibrated |
+| `--success-soft` | `--color-success-soft-base` | calibrate | calibrated |
+| `--warning` | `--color-warning-base` | calibrate | calibrated |
+| `--warning-soft` | `--color-warning-soft-base` | calibrate | calibrated |
+| `--danger` | `--color-danger-base` | calibrate | calibrated |
+| `--danger-soft` | `--color-danger-soft-base` | calibrate | calibrated |
+| `--info` | `--color-info-base` | calibrate | calibrated |
+| `--info-soft` | `--color-info-soft-base` | calibrate | calibrated |
+| `--violet` | `--color-category-violet` | calibrate | calibrated |
+| `--orange` | `--color-category-orange` | calibrate | calibrated |
+| `--shadow-surface` | `--shadow-1` | calibrate | calibrated |
+| `--shadow-menu` | `--shadow-2` | calibrate | calibrated |
+| `--shadow-float` | `--shadow-3` | calibrate | calibrated |
+| `--radius-xs` | `--radius-xs` | calibrate | calibrated |
+| `--radius-sm` | `--radius-sm` | calibrate | calibrated |
+| `--radius-md` | `--radius-md` | calibrate | calibrated |
+| `--radius-lg` | `--radius-lg` | calibrate | calibrated |
+| `--radius-xl` | `--radius-xl` | calibrate | calibrated |
+| `--radius-round` | `--radius-full` | calibrate | calibrated |
+| `--sidebar-size` | `--shell-sidebar-expanded` | calibrate | calibrated |
+| `--page-header` | `--space-12` | calibrate | calibrated |
+| `--ease` | `--ease-enter`<br>`--ease-exit`<br>`--ease-move` | calibrate | calibrated |
 | `--font-ui` | `--font-family` | calibrate | pending |
-| `--font-mono` | `--font-family-mono` | calibrate | pending |
+| `--font-mono` | `--font-family-mono` | calibrate | calibrated |
 
 ## 已知校准差异
 
-- **shell-width**：侧栏 256px → --shell-sidebar-expanded 为 240px（pending）
+- **shell-width**：侧栏 256px → --shell-sidebar-expanded 为 256px（calibrated）
 - **responsive-breakpoint**：移动壳层断点 720px → 现有壳层断点 599px（pending）
 - **header-topology**：页面内 48px page bar → 全局 TopBar 与页面 PageHeader 分层（pending）
-- **primary-action**：中性主按钮 → indigo accent 主按钮（pending）
-- **surface-and-radius**：canvas/surface/selected 与 10px/14px 圆角 → 语义表面与 12px/16px 圆角（pending）
+- **primary-action**：中性主按钮 → 中性 primary 主按钮；品牌链接与焦点使用独立 accent（calibrated）
+- **surface-and-radius**：canvas/surface/selected 与 10px/14px 圆角 → 语义表面与 10px/14px 圆角已逐值校准（calibrated）
+- **state-color-contrast**：状态原始色及浅色组合 → *-base 精确保留原始色；组件使用满足 WCAG AA 的 *-fg 与不透明暗色 *-bg，等待差异验收（pending）
+- **input-border-contrast**：输入边界 #e4e4e7 / 15% 白 → *-base 精确保留原值；启用字段使用满足 WCAG 1.4.11 3:1 的语义边界，等待差异验收（pending）
+- **faint-text-contrast**：弱化文字 #81818b / #7f7f89 → *-base 精确保留原值；启用 placeholder 与可见弱文案使用满足正文 AA 的语义色，等待差异验收（pending）
+- **font-loading**：自托管 Inter 可变字体 → 字体栈已映射，但产品包尚无经许可证核验的 Inter 资产与 @font-face 加载证明（pending）
 
 ## 自动与人工边界
 

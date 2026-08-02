@@ -104,7 +104,7 @@
 }
 
 .mesh-approvals__comment-input:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 

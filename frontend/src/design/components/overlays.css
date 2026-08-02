@@ -79,7 +79,7 @@
 }
 
 .mesh-menu__item:disabled {
-  color: var(--color-text-disabled);
+  color: var(--color-control-disabled-text);
   cursor: not-allowed;
 }
 

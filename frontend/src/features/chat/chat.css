@@ -251,8 +251,8 @@
 .mesh-chat__ai-badge {
   padding: 0 var(--space-1);
   border-radius: var(--radius-sm);
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
   font-size: var(--font-size-sm);
 }
 
@@ -381,7 +381,7 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
-  border-left: 3px solid var(--color-primary);
+  border-left: 3px solid var(--color-accent);
   background: var(--color-surface-raised);
   font-size: var(--font-size-sm);
 }
@@ -634,7 +634,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-0-5);
-  color: var(--color-primary);
+  color: var(--color-accent);
 }
 
 /* ---- 消息附件扫描闸门(§4.2 / attachment.md §3) ---- */

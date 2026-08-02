@@ -1783,7 +1783,7 @@ test('release summary decomposes unresolved records and expanded visual cells', 
   );
 
   const errors = validateModelCard(card, { frontendRoot, mode: 'release' });
-  const summary = errors.find((error) => error.startsWith('release gate: 144 unresolved item(s)'));
+  const summary = errors.find((error) => error.startsWith('release gate: 104 unresolved item(s)'));
   assert.ok(summary);
   for (const fragment of [
     'reconciliation=28',
@@ -1791,8 +1791,8 @@ test('release summary decomposes unresolved records and expanded visual cells', 
     'interactions=30',
     'visualEvidence=28 group(s)/412 cell(s)',
     'components=5',
-    'tokens=42',
-    'calibrationRisks=5',
+    'tokens=1',
+    'calibrationRisks=6',
   ]) {
     assert.ok(summary.includes(fragment), fragment);
   }
@@ -2117,6 +2117,37 @@ test('pins the repository model card to the accepted MES-142 blueprint revision'
     adoption: 'authoritative',
     supersededBy: null,
   });
+
+  const fontUiToken = card.tokens.find((token) => token.blueprint === '--font-ui');
+  assert.equal(fontUiToken?.reconciliation, 'pending');
+  assert.equal(
+    card.tokens
+      .filter((token) => token.blueprint !== '--font-ui')
+      .every((token) => token.reconciliation === 'calibrated'),
+    true,
+    'only the runtime-loaded Inter font remains pending in the token foundation',
+  );
+  assert.equal(
+    card.calibrationRisks.find((risk) => risk.id === 'state-color-contrast')?.status,
+    'pending',
+  );
+  assert.equal(card.calibrationRisks.find((risk) => risk.id === 'font-loading')?.status, 'pending');
+  assert.equal(
+    card.calibrationRisks.find((risk) => risk.id === 'input-border-contrast')?.status,
+    'pending',
+  );
+  assert.equal(
+    card.calibrationRisks.find((risk) => risk.id === 'faint-text-contrast')?.status,
+    'pending',
+  );
+  const tokenDestination = Object.fromEntries(
+    card.tokens.map((token) => [token.blueprint, token.react]),
+  );
+  assert.deepEqual(tokenDestination['--primary'], ['--color-primary']);
+  assert.deepEqual(tokenDestination['--input-line'], ['--color-input-border-base']);
+  assert.deepEqual(tokenDestination['--ink-faint'], ['--color-text-faint-base']);
+  assert.deepEqual(tokenDestination['--disabled-ink'], ['--color-control-disabled-text']);
+  assert.deepEqual(tokenDestination['--warning'], ['--color-warning-base']);
 });
 
 test('accepts and renders the repository model card with extensions and legacy routes', () => {

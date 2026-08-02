@@ -9,7 +9,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | [docs/specs/README.md](docs/specs/README.md) | **整体项目 Spec**:产品定位、整体架构、技术栈、模块总览,并索引全部功能 Spec |
 | [docs/specs/features/](docs/specs/features/) | 每个功能一份 Spec:功能描述、数据模型、接口设计、UI/UX、验收标准 |
 | [backend/README.md](backend/README.md) | 后端工程骨架与全局契约基础设施(分层、outbox/realtime 唯一写入路径、多租户构件) |
-| [frontend/model-card/README.md](frontend/model-card/README.md) | MES-108 固定设计输入到 React 的机器可读页面、路由、组件、令牌与视觉证据门禁；在精确 PR head 上运行 Playwright、重算截图摘要与 RGBA 像素差异，并将输入生命周期和外部 owner release 批准分离 |
+| [frontend/model-card/README.md](frontend/model-card/README.md) | MES-108 固定设计输入到 React 的机器可读页面、路由、组件、令牌与视觉证据门禁；共享色彩与布局、中性主操作、256px 壳层及 10px/14px 圆角已校准，字体加载、可访问性偏差、余下页面与真实证据继续由精确 PR head 的 fail-closed 门禁跟踪 |
 | [docs/research/](docs/research/) | 各模块的设计调研记录(功能 / 数据模型 / 接口 / UI / UX 四维度) |
 
 ## 技术栈

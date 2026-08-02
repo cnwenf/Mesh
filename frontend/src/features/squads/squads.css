@@ -24,7 +24,7 @@
 }
 
 .mesh-squads__back {
-  color: var(--color-primary);
+  color: var(--color-accent);
   text-decoration: none;
   font-size: var(--font-size-sm);
 }
@@ -69,7 +69,7 @@
 }
 
 .mesh-squads__card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
   transform: translateY(calc(-1 * var(--space-1) / 2));
 }
 
@@ -85,7 +85,7 @@
 }
 
 .mesh-squads__card-link:hover .mesh-squads__card-name {
-  color: var(--color-primary);
+  color: var(--color-accent);
 }
 
 .mesh-squads__card-link:focus-visible {
@@ -217,7 +217,7 @@
 }
 
 .mesh-squads__task-link {
-  color: var(--color-primary);
+  color: var(--color-accent);
   text-decoration: none;
 }
 
@@ -270,14 +270,14 @@
 }
 
 .mesh-squads__tab:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
   color: var(--color-text);
 }
 
 .mesh-squads__tab[aria-selected='true'] {
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
-  border-color: var(--color-primary);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border-color: var(--color-accent);
 }
 
 .mesh-squads__tab:focus-visible {
@@ -468,8 +468,8 @@
 }
 
 .mesh-squads__segmented-btn[aria-selected='true'] {
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
 }
 
 .mesh-squads__segmented-btn:focus-visible {
@@ -499,7 +499,7 @@
 }
 
 .mesh-squads__kanban-col--over {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
   background: var(--color-surface-raised);
 }
 
@@ -539,7 +539,7 @@
 }
 
 .mesh-squads__kanban-card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
   box-shadow: var(--shadow-raised);
 }
 
@@ -605,7 +605,7 @@
   padding: 1px;
   border-radius: 50%;
   background: var(--color-surface);
-  color: var(--color-primary);
+  color: var(--color-accent);
 }
 
 .mesh-squads__avatar-leader {

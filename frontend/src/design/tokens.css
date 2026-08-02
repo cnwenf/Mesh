@@ -1,69 +1,91 @@
 /* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
 :root {
   /* 表面层级(design-quality.md §5.2:canvas→surface→raised 三层 + 交互表面) */
-  --color-canvas: #f7f8fa;
-  --color-bg: #f7f8fa;
+  --color-canvas: #fbfbfb;
+  --color-bg: #f3f3f4;
   --color-surface: #ffffff;
-  --color-surface-subtle: #f1f3f5;
+  --color-surface-subtle: #f4f4f5;
   --color-surface-raised: #ffffff;
-  --color-surface-hover: #f4f5f7;
-  --color-surface-pressed: #e9ecf0;
-  --color-surface-selected: #eef2ff;
-  --color-surface-sunken: #f1f5f9;
+  --color-surface-hover: #f4f4f5;
+  --color-surface-pressed: #d4d4d8;
+  --color-surface-selected: #eeeef0;
+  --color-surface-sunken: #f3f3f4;
 
   /* 文本层级(strong/text/muted/disabled 四级) */
-  --color-text-strong: #16181d;
-  --color-text: #2b2f36;
-  --color-text-muted: #5f6980;
-  --color-text-disabled: #98a2b3;
+  --color-text-strong: #09090b;
+  --color-text: #09090b;
+  --color-text-muted: #64636e;
+  --color-text-disabled: #81818b;
+  --color-text-faint-base: #81818b;
+  --color-placeholder: #64636e;
+  --color-control-disabled-text: #8b8b94;
 
   /* 边界(subtle/border/strong 三级) */
-  --color-border-subtle: #eaecf0;
-  --color-border: #d7dce3;
-  --color-border-strong: #b8c0cc;
+  --color-border-subtle: #ececef;
+  --color-border: #e4e4e7;
+  --color-border-strong: #d4d4d8;
+  --color-input-border-base: #e4e4e7;
+  --color-input-border: #8b8b94;
+  --color-input-border-hover: #71717a;
 
-  /* 品牌强调色(accent 系,旧 primary 系别名见下) */
-  --color-accent: #4f46e5;
-  --color-accent-hover: #4338ca;
-  --color-accent-pressed: #3730a3;
-  --color-accent-soft: #eef2ff;
+  /* 接受基线原始色(精确追溯;组件使用下方经 AA 校准的语义色) */
+  --color-brand-base: #2171cc;
+  --color-brand-soft-base: #eaf3fd;
+  --color-success-base: #1c882d;
+  --color-success-soft-base: #eaf7ec;
+  --color-warning-base: #dca400;
+  --color-warning-soft-base: #fff7da;
+  --color-danger-base: #e7000b;
+  --color-danger-soft-base: #fff0f1;
+  --color-info-base: #0072d5;
+  --color-info-soft-base: #eaf4ff;
+  --color-category-violet: #7958d8;
+  --color-category-orange: #e4761b;
+
+  /* 品牌强调色(accent 系经 AA 校准,与中性 primary 主操作分离) */
+  --color-accent: #206dc4;
+  --color-accent-hover: #1b5da8;
+  --color-accent-pressed: #174f8f;
+  --color-accent-soft: #eef7ff;
   --color-accent-contrast: #ffffff;
 
-  /* 旧主色别名(迁移期保留一个发布周期,取值与 accent 系一致) */
-  --color-primary: #4f46e5;
-  --color-primary-contrast: #ffffff;
-  --color-primary-bg: #eef2ff;
+  /* 中性主操作(primary 系;品牌链接/焦点不得复用) */
+  --color-primary: #18181b;
+  --color-primary-contrast: #fafafa;
+  --color-primary-bg: #eeeef0;
+  --color-primary-hover: color-mix(in srgb, var(--color-primary) 84%, transparent);
+  --color-primary-pressed: color-mix(in srgb, var(--color-primary) 84%, transparent);
 
   /* 状态色三元组(fg/bg/border;颜色不作唯一信号,组件须配图标+文案) */
-  --color-success-fg: #15803d;
-  --color-success-bg: #dcfce7;
-  --color-success-border: #86efac;
-  --color-warning-fg: #92400e;
-  --color-warning-bg: #fef3c7;
-  --color-warning-border: #fcd34d;
-  --color-danger-fg: #b91c1c;
-  --color-danger-bg: #fee2e2;
-  --color-danger-border: #fca5a5;
-  --color-info-fg: #075985;
-  --color-info-bg: #e0f2fe;
-  --color-info-border: #7dd3fc;
-  --color-neutral-fg: #475467;
-  --color-neutral-bg: #f2f4f7;
-  --color-neutral-border: #d0d5dd;
+  --color-success-fg: #187c29;
+  --color-success-bg: #eaf7ec;
+  --color-success-border: #8bcf95;
+  --color-warning-fg: #896500;
+  --color-warning-bg: #fff7da;
+  --color-warning-border: #e4c95f;
+  --color-danger-fg: #dc000a;
+  --color-danger-bg: #fff0f1;
+  --color-danger-border: #ef9da2;
+  --color-info-fg: #006bc7;
+  --color-info-bg: #eaf4ff;
+  --color-info-border: #8cc5ef;
+  --color-neutral-fg: #64636e;
+  --color-neutral-bg: #f4f4f5;
+  --color-neutral-border: #d4d4d8;
 
   /* 危险按钮交互态(组件级令牌:default/hover/pressed) */
-  --color-danger-hover: #991b1b;
-  --color-danger-pressed: #7f1d1d;
+  --color-danger-hover: #c70009;
+  --color-danger-pressed: #ad0008;
 
   /* 旧状态色别名(迁移期保留,取值与三元组 fg/bg 一致;-bg 键即三元组同名键,不重复声明) */
-  --color-danger: #b91c1c;
+  --color-danger: #dc000a;
   --color-danger-contrast: #ffffff;
-  --color-warn: #92400e;
+  --color-warn: #896500;
   --color-warn-contrast: #ffffff;
-  --color-warn-bg: #fef3c7;
-  --color-success: #15803d;
+  --color-warn-bg: #fff7da;
+  --color-success: #187c29;
   --color-success-contrast: #ffffff;
-  --color-info: #075985;
+  --color-info: #006bc7;
   --color-info-contrast: #ffffff;
 
   /* 头像稳定配色(姓名 hash 取色,h0–h7 八组;亮/暗各自校准非简单反色) */
@@ -123,7 +145,7 @@
   --space-16: 64px;
 
   /* 布局变量(外壳/页边距/内容宽度,主题无关) */
-  --shell-sidebar-expanded: 240px;
+  --shell-sidebar-expanded: 256px;
   --shell-sidebar-collapsed: 64px;
   --page-gutter-compact: 16px;
   --page-gutter-medium: 24px;
@@ -137,8 +159,8 @@
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
   --radius-full: 999px;
 
   /* 字号(旧三档兼容) */
@@ -177,16 +199,16 @@
   --font-weight-semibold: 600;
   --font-weight-display: 650;
 
-  /* 字体配对(design-quality.md §6.1:Display=Manrope+CJK,UI=Inter+CJK,等宽=JetBrains Mono;自托管字体文件随页面批次加载,未加载时回退系统栈) */
-  --font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-family-display: 'Manrope', 'Inter', system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-family-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+  /* 字体配对(design-quality.md §6.1:Display/UI=Inter+CJK,等宽=SFMono;字体不可用时回退系统栈) */
+  --font-family: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-family-display: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-family-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
 
   /* 阴影(design-quality.md §5.4:1 轻浮起 / 2 浮层 / 3 对话框;暗色配合边框使用) */
-  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.1);
-  --shadow-2: 0 2px 4px rgba(15, 23, 42, 0.06), 0 4px 8px rgba(15, 23, 42, 0.08);
-  --shadow-3: 0 4px 8px rgba(15, 23, 42, 0.08), 0 12px 32px rgba(15, 23, 42, 0.16);
-  --shadow-raised: 0 4px 16px rgba(15, 23, 42, 0.16);
+  --shadow-1: 0 1px 2px rgb(15 23 42 / 4%), 0 1px 1px rgb(15 23 42 / 3%);
+  --shadow-2: 0 8px 24px rgb(15 23 42 / 8%), 0 2px 6px rgb(15 23 42 / 5%);
+  --shadow-3: 0 16px 40px rgb(15 23 42 / 14%), 0 3px 10px rgb(15 23 42 / 8%);
+  --shadow-raised: 0 8px 24px rgb(15 23 42 / 8%), 0 2px 6px rgb(15 23 42 / 5%);
 
   /* 动效时长(design-quality.md §5.5:instant/fast/standard/deliberate/slow;旧 duration-* 兼容) */
   --motion-instant: 0ms;
@@ -198,9 +220,9 @@
   --duration-slow: 300ms;
 
   /* 动效缓动(进入/退出/移动三条标准曲线) */
-  --ease-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
-  --ease-move: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-move: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* z-index 层级(base/sticky/dropdown/overlay/toast,禁业务自造近似值) */
   --z-base: 0;

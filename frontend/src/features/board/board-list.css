@@ -181,7 +181,7 @@
 }
 
 .mesh-board-list__assignee-empty {
-  color: var(--color-text-disabled);
+  color: var(--color-text-muted);
 }
 
 .mesh-board-list__updated {

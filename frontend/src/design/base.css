@@ -47,6 +47,14 @@ textarea {
   color: inherit;
 }
 
+/* 启用表单的占位文字必须使用经 AA 校验的语义色；显式 opacity 避免
+   浏览器默认透明度把同一 token 渲染成不可预测的更弱颜色。 */
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-placeholder);
+  opacity: 1;
+}
+
 img,
 svg {
   display: block;
@@ -77,7 +85,10 @@ svg {
   :root,
   :root[data-theme='dark'] {
     --color-border: var(--color-text);
+    --color-input-border: var(--color-text);
+    --color-input-border-hover: var(--color-text);
     --color-text-muted: var(--color-text);
+    --color-placeholder: var(--color-text);
   }
 }
 
@@ -140,9 +151,15 @@ input:-webkit-autofill:focus {
     --color-text: CanvasText;
     --color-text-muted: GrayText;
     --color-text-disabled: GrayText;
+    --color-text-faint-base: GrayText;
+    --color-placeholder: GrayText;
+    --color-control-disabled-text: GrayText;
     --color-border-subtle: CanvasText;
     --color-border: CanvasText;
     --color-border-strong: CanvasText;
+    --color-input-border-base: ButtonBorder;
+    --color-input-border: ButtonBorder;
+    --color-input-border-hover: ButtonBorder;
     --color-accent: LinkText;
     --color-accent-hover: LinkText;
     --color-accent-pressed: LinkText;

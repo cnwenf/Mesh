@@ -26,7 +26,7 @@
 
 .mesh-data-view__crumbs li:not(:last-child)::after {
   content: '/';
-  color: var(--color-text-disabled);
+  color: var(--color-text-muted);
 }
 
 .mesh-data-view__crumbs a {

@@ -10,6 +10,15 @@
 node scripts/verify-model-card.mjs --mode audit
 ```
 
+共享视觉基础可先在真实 API / 数据库上做双视口浏览器冒烟；默认连接
+`127.0.0.1:8000` 与 `127.0.0.1:8081`，也可用 `MES108_API_BASE` / `MES108_WS_BASE`
+覆盖。该命令只验证运行中 React 应用的亮暗令牌、主操作与响应式壳层，不生成、
+替代或批准下文的像素基线：
+
+```bash
+npm run test:e2e:mes108
+```
+
 更新 JSON 后，重新生成评审文档并复查：
 
 ```bash
@@ -37,7 +46,7 @@ node scripts/verify-model-card.mjs \
 
 发布门禁会对缺少当前 head 的 owner 批准、`pending`、`blocked` 或缺少真实证据直接失败。模型卡内的 `confirmed` / `approved` 字段不能代替外部批准，旧 `blueprint.confirmed` 和内联 `releaseApproval` 会被拒绝。不要为了通过检查改写状态；应先补齐固定环境下的真实浏览器操作、截图与差异关闭证据，再更新模型卡。
 
-release 摘要会同时报告未决记录与实际视觉单元数。当前 144 个未决记录由 28 个 reconciliation、6 个状态、30 个交互、28 个视觉证据组（展开为 412 个适用像素单元）、5 个组件、42 个令牌及 5 个校准风险组成；不能把 28 个视觉组误报成 28 张截图。
+release 摘要会同时报告未决记录与实际视觉单元数。共享色彩与布局令牌基础已完成校准；当前 104 个未决记录由 28 个 reconciliation、6 个状态、30 个交互、28 个视觉证据组（展开为 412 个适用像素单元）、5 个组件、1 个字体令牌及 6 个校准风险组成；不能把 28 个视觉组误报成 28 张截图。状态色、启用输入边界和 placeholder 为满足 WCAG 使用了独立语义值，原型值由 `*-base` 精确保留；这些差异与尚未加载的 Inter 字体均保持 fail-closed `pending`。
 
 视觉状态为 `verified` 时，`artifacts` 必须逐格绑定 `viewport`、`theme`、`state`、`path` 与文件 `sha256`；每格只能使用 `e2e/evidence/mes108/` 下路径和内容摘要均全局唯一的 PNG。验证器会解析 PNG 签名、chunk CRC、像素数据与实际尺寸，拒绝空文件、伪后缀、损坏图片及尺寸冒充。每项还必须包含：
 

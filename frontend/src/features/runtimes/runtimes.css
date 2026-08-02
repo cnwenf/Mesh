@@ -106,7 +106,7 @@
 
 .mesh-runtimes__load-fill {
   height: 100%;
-  background: var(--color-primary);
+  background: var(--color-accent);
 }
 
 .mesh-runtimes__load-text {
@@ -300,8 +300,8 @@
 }
 
 .mesh-runtimes-wizard__step--active {
-  color: var(--color-primary-contrast);
-  background: var(--color-primary);
+  color: var(--color-accent-contrast);
+  background: var(--color-accent);
 }
 
 .mesh-runtimes-wizard__body {
@@ -408,7 +408,7 @@
 }
 
 .mesh-runtimes-wizard__link {
-  color: var(--color-primary);
+  color: var(--color-accent);
   text-align: center;
 }
 
@@ -499,8 +499,8 @@
 }
 
 .mesh-executions__tab[aria-selected='true'] {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
 }
 
 .mesh-executions__tab:focus-visible {

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WCAG_AA_LARGE_RATIO, WCAG_AA_RATIO, contrastRatio } from '../contrast';
@@ -14,6 +14,11 @@ const tokensPrintCss = readFileSync(
   path.resolve(process.cwd(), 'src/design/tokens-print.css'),
   'utf8',
 );
+const componentsCss = readFileSync(
+  path.resolve(process.cwd(), 'src/design/components/components.css'),
+  'utf8',
+);
+const baseCss = readFileSync(path.resolve(process.cwd(), 'src/design/base.css'), 'utf8');
 
 /** 生成产物的首行「禁止手改」标记(gen-tokens.mjs 契约)。 */
 const GENERATED_HEADER =
@@ -27,7 +32,156 @@ function assertMirror(css: string, tokens: Readonly<Record<string, string>>): vo
   }
 }
 
+function cssFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const target = path.join(directory, entry.name);
+    return entry.isDirectory() ? cssFiles(target) : entry.name.endsWith('.css') ? [target] : [];
+  });
+}
+
 describe('设计 token(README §6.12 主题契约)', () => {
+  it('MES-108 接受基线在语义层保留明暗表面、品牌与中性主操作的独立设计事实', () => {
+    expect(LIGHT_TOKENS).toMatchObject({
+      '--color-bg': '#f3f3f4',
+      '--color-canvas': '#fbfbfb',
+      '--color-surface': '#ffffff',
+      '--color-surface-raised': '#ffffff',
+      '--color-surface-hover': '#f4f4f5',
+      '--color-surface-selected': '#eeeef0',
+      '--color-text-strong': '#09090b',
+      '--color-text': '#09090b',
+      '--color-text-muted': '#64636e',
+      '--color-text-disabled': '#81818b',
+      '--color-text-faint-base': '#81818b',
+      '--color-placeholder': '#64636e',
+      '--color-control-disabled-text': '#8b8b94',
+      '--color-border-subtle': '#ececef',
+      '--color-border': '#e4e4e7',
+      '--color-input-border-base': '#e4e4e7',
+      '--color-input-border': '#8b8b94',
+      '--color-input-border-hover': '#71717a',
+      '--color-primary': '#18181b',
+      '--color-primary-contrast': '#fafafa',
+      '--color-brand-base': '#2171cc',
+      '--color-brand-soft-base': '#eaf3fd',
+      '--color-surface-pressed': '#d4d4d8',
+      '--color-success-base': '#1c882d',
+      '--color-success-soft-base': '#eaf7ec',
+      '--color-warning-base': '#dca400',
+      '--color-warning-soft-base': '#fff7da',
+      '--color-danger-base': '#e7000b',
+      '--color-danger-soft-base': '#fff0f1',
+      '--color-info-base': '#0072d5',
+      '--color-info-soft-base': '#eaf4ff',
+      '--color-category-violet': '#7958d8',
+      '--color-category-orange': '#e4761b',
+      '--shadow-1': '0 1px 2px rgb(15 23 42 / 4%), 0 1px 1px rgb(15 23 42 / 3%)',
+      '--shadow-2': '0 8px 24px rgb(15 23 42 / 8%), 0 2px 6px rgb(15 23 42 / 5%)',
+      '--shadow-3': '0 16px 40px rgb(15 23 42 / 14%), 0 3px 10px rgb(15 23 42 / 8%)',
+      '--radius-lg': '10px',
+      '--radius-xl': '14px',
+      '--shell-sidebar-expanded': '256px',
+      '--ease-enter': 'cubic-bezier(0.22, 1, 0.36, 1)',
+      '--ease-exit': 'cubic-bezier(0.22, 1, 0.36, 1)',
+      '--ease-move': 'cubic-bezier(0.22, 1, 0.36, 1)',
+      '--font-family':
+        "'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+      '--font-family-mono': "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+    });
+
+    expect(DARK_TOKENS).toMatchObject({
+      '--color-bg': '#0c0c0e',
+      '--color-canvas': '#111114',
+      '--color-surface': '#18181b',
+      '--color-surface-raised': '#1e1e21',
+      '--color-surface-hover': '#27272a',
+      '--color-surface-selected': '#2d2d31',
+      '--color-text-strong': '#fafafa',
+      '--color-text': '#fafafa',
+      '--color-text-muted': '#9f9fa9',
+      '--color-text-disabled': '#7f7f89',
+      '--color-text-faint-base': '#7f7f89',
+      '--color-placeholder': '#9f9fa9',
+      '--color-control-disabled-text': '#8b8b94',
+      '--color-border-subtle': 'rgb(255 255 255 / 6%)',
+      '--color-border': 'rgb(255 255 255 / 10%)',
+      '--color-input-border-base': 'rgb(255 255 255 / 15%)',
+      '--color-input-border': '#71717a',
+      '--color-input-border-hover': '#8b8b94',
+      '--color-primary': '#e4e4e7',
+      '--color-primary-contrast': '#18181b',
+      '--color-brand-base': '#4390ee',
+      '--color-brand-soft-base': 'rgb(67 144 238 / 14%)',
+      '--color-surface-pressed': '#3f3f46',
+      '--color-success-base': '#4aa651',
+      '--color-success-soft-base': 'rgb(74 166 81 / 14%)',
+      '--color-warning-base': '#cb9400',
+      '--color-warning-soft-base': 'rgb(203 148 0 / 15%)',
+      '--color-danger-base': '#ff6467',
+      '--color-danger-soft-base': 'rgb(255 100 103 / 14%)',
+      '--color-info-base': '#0f92f7',
+      '--color-info-soft-base': 'rgb(15 146 247 / 14%)',
+      '--color-category-violet': '#a78bfa',
+      '--color-category-orange': '#fb923c',
+      '--shadow-1': '0 1px 2px rgb(0 0 0 / 20%), 0 1px 1px rgb(0 0 0 / 16%)',
+      '--shadow-2': '0 10px 28px rgb(0 0 0 / 30%), 0 2px 8px rgb(0 0 0 / 18%)',
+      '--shadow-3': '0 20px 48px rgb(0 0 0 / 46%), 0 4px 12px rgb(0 0 0 / 28%)',
+    });
+
+    expect(LIGHT_TOKENS['--color-primary']).not.toBe(LIGHT_TOKENS['--color-accent']);
+    expect(LIGHT_TOKENS['--color-warning-base']).not.toBe(LIGHT_TOKENS['--color-warning-fg']);
+    expect(LIGHT_TOKENS['--color-input-border-base']).not.toBe(
+      LIGHT_TOKENS['--color-input-border'],
+    );
+    expect(LIGHT_TOKENS['--color-text-faint-base']).not.toBe(LIGHT_TOKENS['--color-placeholder']);
+    expect(LIGHT_TOKENS['--color-text-disabled']).not.toBe(
+      LIGHT_TOKENS['--color-control-disabled-text'],
+    );
+  });
+
+  it('MES-108 主按钮、输入边界和禁用文字消费各自的语义 token', () => {
+    expect(componentsCss).toMatch(
+      /\.mesh-button--primary\s*\{[^}]*background-color:\s*var\(--color-primary\);[^}]*color:\s*var\(--color-primary-contrast\);/s,
+    );
+    expect(componentsCss).toMatch(
+      /\.mesh-field__control\s*\{[^}]*border:\s*1px solid var\(--color-input-border\);/s,
+    );
+    expect(componentsCss).toMatch(
+      /\.mesh-field__control:hover:not\(:disabled, :focus\)\s*\{[^}]*border-color:\s*var\(--color-input-border-hover\);/s,
+    );
+    expect(componentsCss).toMatch(
+      /\.mesh-field__control:disabled\s*\{[^}]*color:\s*var\(--color-control-disabled-text\);/s,
+    );
+    expect(componentsCss).toMatch(
+      /\.mesh-field__control::placeholder\s*\{[^}]*color:\s*var\(--color-placeholder\);/s,
+    );
+    expect(baseCss).toMatch(
+      /input::placeholder,\s*textarea::placeholder\s*\{[^}]*color:\s*var\(--color-placeholder\);[^}]*opacity:\s*1;/s,
+    );
+    expect(componentsCss).toMatch(
+      /\.mesh-button:disabled\s*\{[^}]*background-color:\s*var\(--color-surface-pressed\);[^}]*color:\s*var\(--color-control-disabled-text\);/s,
+    );
+    expect(componentsCss).toMatch(
+      /\.mesh-button:active:not\(:disabled\)\s*\{[^}]*transform:\s*translateY\(1px\);/s,
+    );
+  });
+
+  it('MES-108 中性 primary 仅由共享主操作消费，品牌、选中、状态与链接使用 accent', () => {
+    const designRoot = path.resolve(process.cwd(), 'src');
+    const forbidden = cssFiles(designRoot)
+      .map((file) => ({ file, normalized: file.split(path.sep).join('/') }))
+      .filter(({ normalized }) => !normalized.endsWith('/design/components/components.css'))
+      .filter(({ normalized }) => !/\/design\/tokens(?:-dark|-print)?\.css$/u.test(normalized))
+      .flatMap(({ file }) => {
+        const source = readFileSync(file, 'utf8');
+        return source.includes('var(--color-primary)') ||
+          source.includes('var(--color-primary-contrast)')
+          ? [path.relative(process.cwd(), file)]
+          : [];
+      });
+    expect(forbidden).toEqual([]);
+  });
+
   it('tokens.css 在 :root 声明亮色集,且与 tokenValues.ts 逐项一致(单一事实源防漂移)', () => {
     expect(tokensCss).toMatch(/:root\s*\{/);
     assertMirror(tokensCss, LIGHT_TOKENS);

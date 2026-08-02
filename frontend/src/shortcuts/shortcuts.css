@@ -62,8 +62,8 @@
 }
 
 .mesh-palette__option--active {
-  background-color: var(--color-primary);
-  color: var(--color-primary-contrast);
+  background-color: var(--color-accent);
+  color: var(--color-accent-contrast);
 }
 
 .mesh-palette__empty {
@@ -105,7 +105,7 @@
 }
 
 .mesh-palette__option--active .mesh-palette__option-icon {
-  color: var(--color-primary-contrast);
+  color: var(--color-accent-contrast);
 }
 
 .mesh-palette__option-main {
@@ -146,7 +146,7 @@
 }
 
 .mesh-palette__option--active .mesh-palette__subtitle {
-  color: var(--color-primary-contrast);
+  color: var(--color-accent-contrast);
 }
 
 .mesh-palette__combo {
@@ -169,7 +169,7 @@
   inset-block: 0;
   inline-size: 40%;
   border-radius: var(--radius-full);
-  background-color: var(--color-primary);
+  background-color: var(--color-accent);
   animation: mesh-palette-progress 1.2s ease-in-out infinite;
 }
 
@@ -264,7 +264,7 @@
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  color: var(--color-primary);
+  color: var(--color-accent);
   font: inherit;
   font-size: var(--font-size-sm);
   padding: var(--space-2) var(--space-4);
@@ -442,7 +442,7 @@
   inset-block: 0;
   inline-size: 40%;
   border-radius: var(--radius-sm);
-  background-color: var(--color-primary);
+  background-color: var(--color-accent);
   animation: mesh-palette-progress calc(var(--duration-slow) * 4) ease-in-out infinite;
 }
 

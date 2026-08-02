@@ -110,7 +110,7 @@ describe('AppShell', () => {
     delete (navigator as { clipboard?: unknown }).clipboard;
   });
 
-  it('桌面侧栏折叠切换即时生效并持久化(design-quality §4.1 rail 240↔64)', () => {
+  it('桌面侧栏折叠切换即时生效并持久化(design-quality §4.1 rail 256↔64)', () => {
     renderShell('/');
     expect(document.querySelector('.mesh-shell')?.className).not.toContain(
       'mesh-shell--sidebar-collapsed',

@@ -34,8 +34,8 @@
     {
       "id": "shell-width",
       "blueprint": "侧栏 256px",
-      "react": "--shell-sidebar-expanded 为 240px",
-      "status": "pending"
+      "react": "--shell-sidebar-expanded 为 256px",
+      "status": "calibrated"
     },
     {
       "id": "responsive-breakpoint",
@@ -52,13 +52,37 @@
     {
       "id": "primary-action",
       "blueprint": "中性主按钮",
-      "react": "indigo accent 主按钮",
-      "status": "pending"
+      "react": "中性 primary 主按钮；品牌链接与焦点使用独立 accent",
+      "status": "calibrated"
     },
     {
       "id": "surface-and-radius",
       "blueprint": "canvas/surface/selected 与 10px/14px 圆角",
-      "react": "语义表面与 12px/16px 圆角",
+      "react": "语义表面与 10px/14px 圆角已逐值校准",
+      "status": "calibrated"
+    },
+    {
+      "id": "state-color-contrast",
+      "blueprint": "状态原始色及浅色组合",
+      "react": "*-base 精确保留原始色；组件使用满足 WCAG AA 的 *-fg 与不透明暗色 *-bg，等待差异验收",
+      "status": "pending"
+    },
+    {
+      "id": "input-border-contrast",
+      "blueprint": "输入边界 #e4e4e7 / 15% 白",
+      "react": "*-base 精确保留原值；启用字段使用满足 WCAG 1.4.11 3:1 的语义边界，等待差异验收",
+      "status": "pending"
+    },
+    {
+      "id": "faint-text-contrast",
+      "blueprint": "弱化文字 #81818b / #7f7f89",
+      "react": "*-base 精确保留原值；启用 placeholder 与可见弱文案使用满足正文 AA 的语义色，等待差异验收",
+      "status": "pending"
+    },
+    {
+      "id": "font-loading",
+      "blueprint": "自托管 Inter 可变字体",
+      "react": "字体栈已映射，但产品包尚无经许可证核验的 Inter 资产与 @font-face 加载证明",
       "status": "pending"
     }
   ],
@@ -1603,71 +1627,111 @@
     }
   ],
   "tokens": [
-    { "blueprint": "--shell", "react": ["--color-bg"], "reconciliation": "pending" },
-    { "blueprint": "--canvas", "react": ["--color-canvas"], "reconciliation": "pending" },
-    { "blueprint": "--surface", "react": ["--color-surface"], "reconciliation": "pending" },
-    { "blueprint": "--raised", "react": ["--color-surface-raised"], "reconciliation": "pending" },
-    { "blueprint": "--hover", "react": ["--color-surface-hover"], "reconciliation": "pending" },
+    { "blueprint": "--shell", "react": ["--color-bg"], "reconciliation": "calibrated" },
+    { "blueprint": "--canvas", "react": ["--color-canvas"], "reconciliation": "calibrated" },
+    { "blueprint": "--surface", "react": ["--color-surface"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--raised",
+      "react": ["--color-surface-raised"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--hover", "react": ["--color-surface-hover"], "reconciliation": "calibrated" },
     {
       "blueprint": "--selected",
       "react": ["--color-surface-selected"],
-      "reconciliation": "pending"
+      "reconciliation": "calibrated"
     },
-    { "blueprint": "--ink", "react": ["--color-text-strong"], "reconciliation": "pending" },
-    { "blueprint": "--ink-soft", "react": ["--color-text-muted"], "reconciliation": "pending" },
-    { "blueprint": "--ink-faint", "react": ["--color-text-disabled"], "reconciliation": "pending" },
-    { "blueprint": "--line", "react": ["--color-border-subtle"], "reconciliation": "pending" },
-    { "blueprint": "--line-strong", "react": ["--color-border"], "reconciliation": "pending" },
-    { "blueprint": "--input-line", "react": ["--color-border"], "reconciliation": "pending" },
-    { "blueprint": "--primary", "react": ["--color-accent"], "reconciliation": "pending" },
+    { "blueprint": "--ink", "react": ["--color-text-strong"], "reconciliation": "calibrated" },
+    { "blueprint": "--ink-soft", "react": ["--color-text-muted"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--ink-faint",
+      "react": ["--color-text-faint-base"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--line", "react": ["--color-border-subtle"], "reconciliation": "calibrated" },
+    { "blueprint": "--line-strong", "react": ["--color-border"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--input-line",
+      "react": ["--color-input-border-base"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--primary", "react": ["--color-primary"], "reconciliation": "calibrated" },
     {
       "blueprint": "--primary-ink",
-      "react": ["--color-accent-contrast"],
-      "reconciliation": "pending"
+      "react": ["--color-primary-contrast"],
+      "reconciliation": "calibrated"
     },
     {
       "blueprint": "--disabled",
       "react": ["--color-surface-pressed"],
-      "reconciliation": "pending"
+      "reconciliation": "calibrated"
     },
     {
       "blueprint": "--disabled-ink",
-      "react": ["--color-text-disabled"],
-      "reconciliation": "pending"
+      "react": ["--color-control-disabled-text"],
+      "reconciliation": "calibrated"
     },
-    { "blueprint": "--brand", "react": ["--color-accent"], "reconciliation": "pending" },
-    { "blueprint": "--brand-soft", "react": ["--color-accent-soft"], "reconciliation": "pending" },
-    { "blueprint": "--success", "react": ["--color-success-fg"], "reconciliation": "pending" },
-    { "blueprint": "--success-soft", "react": ["--color-success-bg"], "reconciliation": "pending" },
-    { "blueprint": "--warning", "react": ["--color-warning-fg"], "reconciliation": "pending" },
-    { "blueprint": "--warning-soft", "react": ["--color-warning-bg"], "reconciliation": "pending" },
-    { "blueprint": "--danger", "react": ["--color-danger-fg"], "reconciliation": "pending" },
-    { "blueprint": "--danger-soft", "react": ["--color-danger-bg"], "reconciliation": "pending" },
-    { "blueprint": "--info", "react": ["--color-info-fg"], "reconciliation": "pending" },
-    { "blueprint": "--info-soft", "react": ["--color-info-bg"], "reconciliation": "pending" },
-    { "blueprint": "--violet", "react": ["--color-avatar-h5-bg"], "reconciliation": "pending" },
-    { "blueprint": "--orange", "react": ["--color-avatar-h3-bg"], "reconciliation": "pending" },
-    { "blueprint": "--shadow-surface", "react": ["--shadow-1"], "reconciliation": "pending" },
-    { "blueprint": "--shadow-menu", "react": ["--shadow-2"], "reconciliation": "pending" },
-    { "blueprint": "--shadow-float", "react": ["--shadow-3"], "reconciliation": "pending" },
-    { "blueprint": "--radius-xs", "react": ["--radius-xs"], "reconciliation": "pending" },
-    { "blueprint": "--radius-sm", "react": ["--radius-sm"], "reconciliation": "pending" },
-    { "blueprint": "--radius-md", "react": ["--radius-md"], "reconciliation": "pending" },
-    { "blueprint": "--radius-lg", "react": ["--radius-lg"], "reconciliation": "pending" },
-    { "blueprint": "--radius-xl", "react": ["--radius-xl"], "reconciliation": "pending" },
-    { "blueprint": "--radius-round", "react": ["--radius-full"], "reconciliation": "pending" },
+    { "blueprint": "--brand", "react": ["--color-brand-base"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--brand-soft",
+      "react": ["--color-brand-soft-base"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--success", "react": ["--color-success-base"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--success-soft",
+      "react": ["--color-success-soft-base"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--warning", "react": ["--color-warning-base"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--warning-soft",
+      "react": ["--color-warning-soft-base"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--danger", "react": ["--color-danger-base"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--danger-soft",
+      "react": ["--color-danger-soft-base"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--info", "react": ["--color-info-base"], "reconciliation": "calibrated" },
+    {
+      "blueprint": "--info-soft",
+      "react": ["--color-info-soft-base"],
+      "reconciliation": "calibrated"
+    },
+    {
+      "blueprint": "--violet",
+      "react": ["--color-category-violet"],
+      "reconciliation": "calibrated"
+    },
+    {
+      "blueprint": "--orange",
+      "react": ["--color-category-orange"],
+      "reconciliation": "calibrated"
+    },
+    { "blueprint": "--shadow-surface", "react": ["--shadow-1"], "reconciliation": "calibrated" },
+    { "blueprint": "--shadow-menu", "react": ["--shadow-2"], "reconciliation": "calibrated" },
+    { "blueprint": "--shadow-float", "react": ["--shadow-3"], "reconciliation": "calibrated" },
+    { "blueprint": "--radius-xs", "react": ["--radius-xs"], "reconciliation": "calibrated" },
+    { "blueprint": "--radius-sm", "react": ["--radius-sm"], "reconciliation": "calibrated" },
+    { "blueprint": "--radius-md", "react": ["--radius-md"], "reconciliation": "calibrated" },
+    { "blueprint": "--radius-lg", "react": ["--radius-lg"], "reconciliation": "calibrated" },
+    { "blueprint": "--radius-xl", "react": ["--radius-xl"], "reconciliation": "calibrated" },
+    { "blueprint": "--radius-round", "react": ["--radius-full"], "reconciliation": "calibrated" },
     {
       "blueprint": "--sidebar-size",
       "react": ["--shell-sidebar-expanded"],
-      "reconciliation": "pending"
+      "reconciliation": "calibrated"
     },
-    { "blueprint": "--page-header", "react": ["--space-12"], "reconciliation": "pending" },
+    { "blueprint": "--page-header", "react": ["--space-12"], "reconciliation": "calibrated" },
     {
       "blueprint": "--ease",
       "react": ["--ease-enter", "--ease-exit", "--ease-move"],
-      "reconciliation": "pending"
+      "reconciliation": "calibrated"
     },
     { "blueprint": "--font-ui", "react": ["--font-family"], "reconciliation": "pending" },
-    { "blueprint": "--font-mono", "react": ["--font-family-mono"], "reconciliation": "pending" }
+    { "blueprint": "--font-mono", "react": ["--font-family-mono"], "reconciliation": "calibrated" }
   ]
 }

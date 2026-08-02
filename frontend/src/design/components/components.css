@@ -32,7 +32,8 @@
     background-color var(--motion-fast) var(--ease-enter),
     border-color var(--motion-fast) var(--ease-enter),
     color var(--motion-fast) var(--ease-enter),
-    box-shadow var(--motion-fast) var(--ease-enter);
+    box-shadow var(--motion-fast) var(--ease-enter),
+    transform var(--motion-fast) var(--ease-enter);
 }
 
 /* sm 28px:行高 20 + padding 3×2 + 边框 2 */
@@ -52,9 +53,15 @@
   padding-inline: var(--space-5);
 }
 
+.mesh-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .mesh-button:disabled {
+  background-color: var(--color-surface-pressed);
+  color: var(--color-control-disabled-text);
   cursor: not-allowed;
-  opacity: 0.55;
+  transform: none;
 }
 
 .mesh-button__label {
@@ -78,18 +85,18 @@
   }
 }
 
-/* --- primary:品牌主操作(同一可视区域原则上一个,§7.3) --- */
+/* --- primary:中性主操作(同一可视区域原则上一个,§7.3) --- */
 .mesh-button--primary {
-  background-color: var(--color-accent);
-  color: var(--color-accent-contrast);
+  background-color: var(--color-primary);
+  color: var(--color-primary-contrast);
 }
 
 .mesh-button--primary:hover:not(:disabled) {
-  background-color: var(--color-accent-hover);
+  background-color: var(--color-primary-hover);
 }
 
 .mesh-button--primary:active:not(:disabled) {
-  background-color: var(--color-accent-pressed);
+  background-color: var(--color-primary-pressed);
 }
 
 /* --- secondary:常规操作 --- */
@@ -180,7 +187,7 @@
   min-block-size: 36px;
   background-color: var(--color-surface-raised);
   color: var(--color-text);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-input-border);
   border-radius: var(--radius-md);
   padding-block: var(--space-1-5);
   padding-inline: var(--space-3);
@@ -192,11 +199,11 @@
 }
 
 .mesh-field__control::placeholder {
-  color: var(--color-text-disabled);
+  color: var(--color-placeholder);
 }
 
 .mesh-field__control:hover:not(:disabled, :focus) {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-input-border-hover);
 }
 
 .mesh-field__control:focus {
@@ -213,7 +220,7 @@
 
 .mesh-field__control:disabled {
   background-color: var(--color-surface-subtle);
-  color: var(--color-text-disabled);
+  color: var(--color-control-disabled-text);
   cursor: not-allowed;
 }
 

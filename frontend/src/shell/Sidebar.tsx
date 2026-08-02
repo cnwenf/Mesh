@@ -1,7 +1,7 @@
 /**
  * 桌面侧栏(design-quality §4.1):任务四分组(工作/团队/运行/管理)+ 可折叠 rail。
  *
- * - 展开 240px(--shell-sidebar-expanded):组标题 + 图标 + 文字;
+ * - 展开 256px(--shell-sidebar-expanded):组标题 + 图标 + 文字;
  *   折叠 64px(--shell-sidebar-collapsed):仅图标,Tooltip 补齐可读名(§7.1
  *   图标按钮必须有 tooltip);折叠偏好持久化(localStorage,外壳偏好非业务状态)。
  * - 当前项:浅强调背景 + 强文字 + 3px 边缘指示(不以整块高饱和色作唯一信号,

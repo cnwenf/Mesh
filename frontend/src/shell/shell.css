@@ -66,7 +66,7 @@
   font-size: var(--font-size-lg);
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--color-primary);
+  color: var(--color-accent);
   text-decoration: none;
 }
 
@@ -313,7 +313,7 @@
 .mesh-page__code {
   font-size: 4rem;
   font-weight: 800;
-  color: var(--color-primary);
+  color: var(--color-accent);
   margin: 0;
   line-height: 1;
 }
@@ -329,7 +329,7 @@
 }
 
 .mesh-page__link {
-  color: var(--color-primary);
+  color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -453,7 +453,7 @@
 }
 
 .mesh-home__workspace-link:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
   box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 8%));
 }
 
@@ -495,13 +495,13 @@
 }
 
 .mesh-home__issue-link:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
 }
 
 .mesh-home__issue-key {
   font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--color-primary);
+  color: var(--color-accent);
 }
 
 .mesh-home__issue-title {
@@ -777,7 +777,7 @@
 }
 
 .mesh-ws-picker__card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
 }
 
 .mesh-ws-picker__card:focus-visible {

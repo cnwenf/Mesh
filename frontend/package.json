@@ -23,6 +23,7 @@
     "test:e2e": "playwright test",
     "serve:e2e": "npm run build && vite preview --port 5173 --strictPort --host 127.0.0.1",
     "test:e2e:visual": "playwright test -c playwright.visual.config.ts",
+    "test:e2e:mes108": "playwright test -c playwright.mes108.config.ts e2e/real-mes108-foundation.spec.ts",
     "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts",
     "test:e2e:runtimes": "playwright test -c playwright.runtimes.config.ts",
     "test:e2e:autopilots": "playwright test -c playwright.autopilots.config.ts",
