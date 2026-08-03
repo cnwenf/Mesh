@@ -9,12 +9,43 @@ import { MarketplacePage } from '../MarketplacePage';
 
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
-  memberships: [{ workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null }],
+  memberships: [
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
+  ],
 };
 
 const ENTRIES = [
-  { id: '1', name: '接口文档生成', summary: 'OpenAPI', version: '2.0.0', manifest_url: 'https://m/1.json', downloads: 500, rating: 4.8, certified: true, has_scripts: false, tags: ['docs'] },
-  { id: '2', name: '依赖扫描', summary: 'CVE', version: '1.1.0', manifest_url: 'https://m/2.json', downloads: 1200, rating: 4.2, certified: false, has_scripts: true, tags: ['security'] },
+  {
+    id: '1',
+    name: '接口文档生成',
+    summary: 'OpenAPI',
+    version: '2.0.0',
+    manifest_url: 'https://m/1.json',
+    downloads: 500,
+    rating: 4.8,
+    certified: true,
+    has_scripts: false,
+    tags: ['docs'],
+  },
+  {
+    id: '2',
+    name: '依赖扫描',
+    summary: 'CVE',
+    version: '1.1.0',
+    manifest_url: 'https://m/2.json',
+    downloads: 1200,
+    rating: 4.2,
+    certified: false,
+    has_scripts: true,
+    tags: ['security'],
+  },
 ];
 
 function setup(entries: unknown = ENTRIES): { calls: { url: string; method: string }[] } {
@@ -24,23 +55,47 @@ function setup(entries: unknown = ENTRIES): { calls: { url: string; method: stri
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-    if (url.includes('/marketplace/skills')) return fakeResponse({ body: { data: entries, next_cursor: null } });
+    if (url.includes('/marketplace/skills'))
+      return fakeResponse({ body: { data: entries, next_cursor: null } });
     if (method === 'POST' && url.endsWith('/skills/import')) {
       return fakeResponse({
         status: 202,
         body: {
           data: {
-            task_id: 't-1', source_type: 'marketplace', uri: 'https://m/1.json', ref: null,
-            status: 'awaiting_review', stage: 'review', percent: 100,
+            task_id: 't-1',
+            source_type: 'marketplace',
+            uri: 'https://m/1.json',
+            ref: null,
+            status: 'awaiting_review',
+            stage: 'review',
+            percent: 100,
             preview: {
-              name: '依赖扫描', version: '1.1.0', summary: 'CVE', instructions_preview: 'x',
-              scripts: [{ path: 's.sh', runtime: 'shell', entrypoint: true, required_capabilities: ['exec:shell'] }],
-              references: [], requested_capabilities: ['exec:shell'],
+              name: '依赖扫描',
+              version: '1.1.0',
+              summary: 'CVE',
+              instructions_preview: 'x',
+              scripts: [
+                {
+                  path: 's.sh',
+                  runtime: 'shell',
+                  entrypoint: true,
+                  required_capabilities: ['exec:shell'],
+                },
+              ],
+              references: [],
+              requested_capabilities: ['exec:shell'],
             },
-            requires_approval: true, skill_id: 's-9', skill_version_id: 'v-9',
-            installation_id: null, granted_capabilities: [], error: null,
-            decision_comment: null, reviewed_by: null, reviewed_at: null,
-            created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+            requires_approval: true,
+            skill_id: 's-9',
+            skill_version_id: 'v-9',
+            installation_id: null,
+            granted_capabilities: [],
+            error: null,
+            decision_comment: null,
+            reviewed_by: null,
+            reviewed_at: null,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
           },
         },
       });
@@ -112,6 +167,9 @@ describe('MarketplacePage', () => {
     renderWithProviders(<MarketplacePage />);
     await screen.findByTestId('market-entry-1');
     expect(screen.queryByTestId('market-import-1')).toBeNull();
+    fireEvent.click(screen.getByTestId('market-preview-1'));
+    await screen.findByTestId('market-preview-dialog');
+    expect(screen.queryByTestId('market-preview-import')).toBeNull();
   });
 
   it('预览按钮打开预览对话框', async () => {
@@ -131,5 +189,78 @@ describe('MarketplacePage', () => {
     fireEvent.click(screen.getByTestId('market-preview-import'));
     // dialog closes + no wizard opens (manifest empty path)
     await waitFor(() => expect(screen.queryByTestId('import-step-source')).toBeNull());
+  });
+
+  it('无工作区与成员查询失败时显示对应状态', async () => {
+    const noWorkspaceFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) {
+        return fakeResponse({ body: { data: { ...ME, memberships: [] } } });
+      }
+      return fakeResponse({ body: { data: ENTRIES, next_cursor: null } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', noWorkspaceFetch);
+    const noWorkspace = renderWithProviders(<MarketplacePage />);
+    expect(
+      await screen.findByText(/not a member of any workspace|还不是任何工作区的成员/i),
+    ).toBeTruthy();
+    noWorkspace.unmount();
+
+    const failedMembershipFetch = (async () =>
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      })) as typeof fetch;
+    vi.stubGlobal('fetch', failedMembershipFetch);
+    renderWithProviders(<MarketplacePage />);
+    expect(
+      await screen.findByText(/Could not load the marketplace|市场列表加载失败/i),
+    ).toBeTruthy();
+  });
+
+  it('市场请求失败时显示错误态', async () => {
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderWithProviders(<MarketplacePage />);
+    expect(
+      await screen.findByText(/Could not load the marketplace|市场列表加载失败/i),
+    ).toBeTruthy();
+  });
+
+  it('预览覆盖未认证脚本项并可由关闭按钮退出', async () => {
+    setup();
+    renderWithProviders(<MarketplacePage />);
+    fireEvent.click(await screen.findByTestId('market-preview-2'));
+    const preview = await screen.findByTestId('market-preview-dialog');
+    expect(preview.textContent).toMatch(/Contains scripts|含脚本/);
+    expect(preview.textContent).toMatch(/No|否/);
+    fireEvent.click(screen.getByRole('button', { name: /Close dialog|关闭对话框/i }));
+    await waitFor(() => expect(screen.queryByTestId('market-preview-dialog')).toBeNull());
+  });
+
+  it('预览导入成功路径打开向导,向导关闭回调清理弹层', async () => {
+    setup();
+    renderWithProviders(<MarketplacePage />);
+    fireEvent.click(await screen.findByTestId('market-preview-1'));
+    fireEvent.click(await screen.findByTestId('market-preview-import'));
+    await screen.findByTestId('import-scripts');
+    fireEvent.click(screen.getByRole('button', { name: /Close dialog|关闭对话框/i }));
+    await waitFor(() => expect(screen.queryByTestId('import-scripts')).toBeNull());
+  });
+
+  it('导入向导完成回调关闭向导', async () => {
+    setup();
+    renderWithProviders(<MarketplacePage />);
+    fireEvent.click(await screen.findByTestId('market-import-1'));
+    await screen.findByTestId('import-scripts');
+    fireEvent.click(screen.getByTestId('import-reject'));
+    await waitFor(() => expect(screen.queryByTestId('import-scripts')).toBeNull());
   });
 });

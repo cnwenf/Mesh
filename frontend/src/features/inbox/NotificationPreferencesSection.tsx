@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, Skeleton, useToast } from '../../design';
+import { Button, ErrorState, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { NOTIFICATION_TYPES, getPreferences, updatePreferences } from './api';
@@ -26,7 +26,7 @@ const AGENT_EVENT = 'execution_finished';
 export function NotificationPreferencesSection(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
-  const { workspaceId } = useInboxContext();
+  const { status, workspaceId } = useInboxContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const [rows, setRows] = useState<Readonly<Record<string, RowState>>>({});
   const [quietStart, setQuietStart] = useState('');
@@ -96,7 +96,11 @@ export function NotificationPreferencesSection(): React.JSX.Element {
     }
   }, [client, workspaceId, rows, quietStart, quietEnd, toast, t]);
 
-  if (isLoading) {
+  if (status === 'error') {
+    return <ErrorState title={t('state.errorTitle')} description={t('state.errorDescription')} />;
+  }
+
+  if (status === 'loading' || isLoading) {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 

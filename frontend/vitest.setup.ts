@@ -37,6 +37,27 @@ if (!window.ResizeObserver) {
   });
 }
 
+// jsdom does not expose PointerEvent. Appica's Base UI controls dispatch a
+// pointer click to their hidden native input so the browser form contract stays
+// authoritative; a MouseEvent-compatible constructor is sufficient in tests.
+if (!window.PointerEvent) {
+  class PointerEventStub extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+
+    constructor(type: string, params: PointerEventInit = {}) {
+      super(type, params);
+      this.pointerId = params.pointerId ?? 0;
+      this.pointerType = params.pointerType ?? 'mouse';
+    }
+  }
+  Object.defineProperty(window, 'PointerEvent', {
+    configurable: true,
+    writable: true,
+    value: PointerEventStub,
+  });
+}
+
 afterEach(() => {
   cleanup();
   // 防御性:任何文件经 vi.stubGlobal 注入的全局(如 fetch 夹具)在此统一复位,

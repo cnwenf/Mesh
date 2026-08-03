@@ -679,6 +679,12 @@ features/
 
 **MES-158 组件底座契约**：前端以精确锁定的 `@appica/ui-react@1.0.0` 作为 UI 原语与应用外壳基础，仅从公开子路径按需导入，禁止根 barrel import。Mesh 的 `design/components` 继续是业务层唯一稳定接口：适配层负责保留既有 props、className、路由、权限和状态语义，feature 不直接绑定第三方组件 API。桌面侧栏、顶栏搜索和基础 Button/Input/Badge/Avatar/Kbd/Skeleton 由该底座渲染；后端接口、数据模型、路由表、Zustand 状态、Realtime 契约与 RBAC 均不得因视觉迁移改变。
 
+**MES-160 通讯与管理页族契约**：收件箱、聊天、统一成员/Agent 名册与 Agent 详情，以及工作区设置、Runtime、Skill、Squad、Autopilot 页面统一组合 Mesh `DataView`、`ConversationLayout`、`SettingsLayout`、`Tabs` 与反馈组件；Table、Tabs、Textarea、Switch 的组件库实现只能位于 `design/components` 适配层，feature 继续只依赖 Mesh 接口。规范 `/w/:workspaceSlug/*` 页面必须以 `WorkspaceProvider` 解析出的工作区为唯一事实源，再从 `/users/me` 中精确匹配该 `workspace_id` 的成员身份；即使该身份不是返回列表首项，也不得退回首个 membership。仅旧扁平路由可在迁移层使用首 membership 兼容，并须把内部跳转收敛到当前 slug 的规范深链。
+
+`workspaceSlug` 同时是前端租户状态边界：规范路由在 slug 变化时必须同步重挂载完整工作区子树，清除页面本地状态，并使上一工作区的迟到请求失去写入目标；不得只等待 Provider 的异步 loading effect。共享 membership 解析器必须提供真实重试动作：`/users/me` 失败时重发成员身份请求，Provider 自身处于 error/not-found 时委派其 `refresh()`，且重试前一轮的迟到响应不得覆盖新结果。
+
+该页族的视觉迁移不得改变业务通道：成员名册继续消费 `workspace:{workspace_id}` 的 `member.*`，Agent 详情继续消费 `workspace:{workspace_id}:agents` 的平铺 `agent_id|id` 载荷，收件箱继续消费 `member:{member_id}:inbox`，聊天列表即使尚无会话也须通过当前人类名册身份订阅 `chat_list:{member_id}`，会话正文仍走既有 SSE。错误、无成员身份和 Provider 未就绪必须呈现显式门控态，禁止以无限 skeleton 掩盖失败。真实验收必须至少构造两个工作区并访问非首 membership，对 REST 目标工作区、WebSocket 帧、聊天 SSE、PostgreSQL 落库逐项断言；SSE 须校验实际 stream URL、`text/event-stream` 响应和至少一个非空 `message.delta` 帧，不得只以最终 DOM 推断流式链路。桌面/手机 × 亮/暗四组合均须检查无横向溢出。
+
 依赖接入还须满足以下约束：
 
 - `@appica/ui-react`、Tailwind CSS 与 Vite 插件均精确锁版本，lockfile 必须提交；
@@ -686,6 +692,15 @@ features/
 - Mesh 主题协商链是唯一偏好事实源，组件库主题只能消费 Mesh 已解析的 `light|dark`；其 storage、首帧脚本与 system 解析均须禁用或惰性化，不得成为第二条主题权威链；
 - `APPICA_TOKEN_ALIASES` 由 `tokenValues.ts` 生成 `appica-tokens.css`，把组件库原始 token 映射到 Mesh 语义 token；亮暗模式不得另建色值真源；
 - `check:appica` 在 CI 校验精确版本、已安装包许可、THIRD_PARTY_NOTICES、样式入口、子路径导入和 token 桥接；`npm audit --audit-level=high` 必须同时通过。
+
+MES-160 通讯与管理页族的 production-auth 真栈可从仓库根目录复现：
+
+```bash
+./frontend/e2e/mes160-real/gen-stack-env.sh --force
+./frontend/e2e/mes160-real/run-e2e.sh
+```
+
+runner 仅将 nginx 前端绑定到 `127.0.0.1:18530`；PostgreSQL、Redis、MinIO、API 与 gateway 不发布宿主端口。一次性强随机凭据写入 gitignored 且 mode 600 的 `stack.env`，测试同步完成后删除容器和卷。
 
 ### 11.2 CSS 策略
 

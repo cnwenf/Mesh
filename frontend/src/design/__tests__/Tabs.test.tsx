@@ -5,7 +5,7 @@ import { Tabs } from '../components/Tabs';
 import type { TabItem } from '../components/Tabs';
 
 const ITEMS: TabItem[] = [
-  { value: 'overview', label: '概览', content: <div>概览内容</div> },
+  { value: 'overview', label: '概览', content: <div>概览内容</div>, testId: 'overview-tab' },
   { value: 'issues', label: '工作项', content: <div>工作项内容</div> },
   { value: 'settings', label: '设置', content: <div>设置内容</div>, disabled: true },
 ];
@@ -15,6 +15,7 @@ describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
     render(<Tabs items={ITEMS} label="对象页签" />);
     expect(screen.getByRole('tablist', { name: '对象页签' })).toBeInTheDocument();
     const overview = screen.getByRole('tab', { name: '概览' });
+    expect(overview).toHaveAttribute('data-testid', 'overview-tab');
     expect(overview).toHaveAttribute('aria-selected', 'true');
     expect(overview).toHaveAttribute('tabindex', '0');
     expect(screen.getByRole('tab', { name: '工作项' })).toHaveAttribute('tabindex', '-1');
@@ -49,25 +50,34 @@ describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
   });
 
   it('ArrowRight/ArrowLeft 切换选中与焦点(跳过禁用项)', () => {
-    render(<Tabs items={ITEMS} label="t" />);
-    screen.getByRole('tab', { name: '概览' }).focus();
-    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+    const onChange = vi.fn();
+    render(<Tabs items={ITEMS} label="t" onChange={onChange} />);
+    const overview = screen.getByRole('tab', { name: '概览' });
+    overview.focus();
+    fireEvent.keyDown(overview, { key: 'ArrowRight' });
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: '工作项' }));
     expect(screen.getByRole('tab', { name: '工作项' })).toHaveAttribute('aria-selected', 'true');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith('issues');
     // 「设置」禁用 → 循环回「概览」
-    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+    fireEvent.keyDown(screen.getByRole('tab', { name: '工作项' }), { key: 'ArrowRight' });
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: '概览' }));
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith('overview');
     // ← 反向同样跳过禁用
-    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowLeft' });
+    fireEvent.keyDown(screen.getByRole('tab', { name: '概览' }), { key: 'ArrowLeft' });
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: '工作项' }));
+    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenLastCalledWith('issues');
   });
 
   it('Home/End 跳首末可用页签', () => {
     render(<Tabs items={ITEMS} label="t" />);
-    const tablist = screen.getByRole('tablist');
-    fireEvent.keyDown(tablist, { key: 'End' });
+    const overview = screen.getByRole('tab', { name: '概览' });
+    overview.focus();
+    fireEvent.keyDown(overview, { key: 'End' });
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: '工作项' }));
-    fireEvent.keyDown(tablist, { key: 'Home' });
+    fireEvent.keyDown(screen.getByRole('tab', { name: '工作项' }), { key: 'Home' });
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: '概览' }));
   });
 
@@ -91,6 +101,7 @@ describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
   it('className 透传', () => {
     const { container } = render(<Tabs items={ITEMS} label="t" className="custom" />);
     expect(container.querySelector('.mesh-tabs')).toHaveClass('custom');
+    expect(container.querySelector('[data-slot="tabs"]')).not.toBeNull();
   });
 });
 

@@ -18,7 +18,14 @@ afterEach(() => {
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -69,7 +76,7 @@ interface Recorded {
   body?: unknown;
 }
 
-function setup(existing: boolean): Recorded[] {
+function setup(existing: boolean, me = ME): Recorded[] {
   const calls: Recorded[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -83,11 +90,14 @@ function setup(existing: boolean): Recorded[] {
       }
     }
     calls.push({ url, method, body });
-    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
     if (url.includes('/agents')) return fakeResponse({ body: { data: AGENTS, next_cursor: null } });
-    if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+    if (url.includes('/webhook-secrets'))
+      return fakeResponse({ body: { data: [], next_cursor: null } });
     if (url.includes('/preview-schedule'))
-      return fakeResponse({ body: { data: { cron: '0 8 * * *', timezone: 'UTC', next_runs: ['2026-07-28T08:00:00Z'] } } });
+      return fakeResponse({
+        body: { data: { cron: '0 8 * * *', timezone: 'UTC', next_runs: ['2026-07-28T08:00:00Z'] } },
+      });
     if (method === 'GET' && existing) return fakeResponse({ body: { data: RULE } });
     return fakeResponse({ body: { data: { ...RULE, id: 'ap-new', name: 'new' } } });
   }) as typeof fetch;
@@ -101,6 +111,10 @@ function renderEditor(route: string) {
       <Route path="/autopilots/new" element={<AutopilotEditorPage />} />
       <Route path="/autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
       <Route path="/autopilots/:autopilotId" element={<div>detail-page</div>} />
+      <Route
+        path="/w/:workspaceSlug/automations/autopilots/:autopilotId"
+        element={<div>detail-page</div>}
+      />
     </Routes>,
     { route },
   );
@@ -119,10 +133,16 @@ describe('AutopilotEditorPage', () => {
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-executor'), 'ag-1');
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() =>
-      expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(true),
+      expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(
+        true,
+      ),
     );
     const create = calls.find((call) => call.method === 'POST' && call.url.endsWith('/autopilots'));
-    expect(create?.body).toMatchObject({ name: '每日汇总', trigger_type: 'schedule', status: 'active' });
+    expect(create?.body).toMatchObject({
+      name: '每日汇总',
+      trigger_type: 'schedule',
+      status: 'active',
+    });
     await waitFor(() => expect(screen.getByText('detail-page')).toBeInTheDocument());
   });
 
@@ -145,16 +165,22 @@ describe('AutopilotEditorPage', () => {
       ).toBeInTheDocument(),
     );
     // nothing was submitted
-    expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(false);
+    expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(
+      false,
+    );
   });
 
   it('prefills from an existing rule in edit mode', async () => {
     setup(true);
     renderEditor('/autopilots/ap-1/edit');
     await waitFor(() =>
-      expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe('既有规则'),
+      expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe(
+        '既有规则',
+      ),
     );
-    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe('0 8 * * *');
+    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe(
+      '0 8 * * *',
+    );
     expect((screen.getByTestId('autopilot-editor-timezone') as HTMLInputElement).value).toBe('UTC');
   });
 
@@ -171,22 +197,63 @@ describe('AutopilotEditorPage', () => {
   it('toggles sections open and closed', async () => {
     setup(false);
     renderEditor('/autopilots/new');
-    await waitFor(() => expect(screen.getByTestId('autopilot-section-trigger-body')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-section-trigger-body')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-section-trigger-toggle'));
     expect(screen.queryByTestId('autopilot-section-trigger-body')).toBeNull();
     await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
     expect(screen.getByTestId('autopilot-section-guardrails-body')).toBeInTheDocument();
-    expect((screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked).toBe(false);
+    expect(
+      (screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked,
+    ).toBe(false);
   });
 
   it('shows webhook secret selector for webhook triggers', async () => {
     setup(false);
     renderEditor('/autopilots/new');
-    await waitFor(() => expect(screen.getByTestId('autopilot-editor-trigger-type')).toBeInTheDocument());
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'webhook_received');
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-editor-trigger-type')).toBeInTheDocument(),
+    );
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'webhook_received',
+    );
     expect(screen.getByTestId('autopilot-editor-secret')).toBeInTheDocument();
     // without a secret selected, save stays disabled even with a name
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'wh rule');
     expect((screen.getByTestId('autopilot-editor-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('blocks a member from opening the management editor directly', async () => {
+    const calls: string[] = [];
+    const memberMe = {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: memberMe } });
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }) as typeof fetch);
+
+    renderEditor('/autopilots/new');
+
+    await waitFor(() => expect(screen.getByText(/No permission/i)).toBeInTheDocument());
+    expect(screen.queryByTestId('autopilot-editor')).toBeNull();
+    expect(calls.some((url) => url.includes('/agents'))).toBe(false);
+    expect(calls.some((url) => url.includes('/webhook-secrets'))).toBe(false);
+  });
+
+  it('shows the no-workspace state without loading editor dependencies', async () => {
+    const calls = setup(false, { ...ME, memberships: [] });
+
+    renderEditor('/autopilots/new');
+
+    expect(await screen.findByText('No workspace')).toBeInTheDocument();
+    expect(screen.queryByTestId('autopilot-editor')).toBeNull();
+    expect(calls.some((call) => call.url.includes('/agents'))).toBe(false);
+    expect(calls.some((call) => call.url.includes('/webhook-secrets'))).toBe(false);
   });
 });

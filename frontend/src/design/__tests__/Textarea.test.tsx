@@ -21,6 +21,7 @@ describe('Textarea(多行字段)', () => {
   it('无 error/hint 时不挂无障碍关联属性', () => {
     render(<Textarea label="描述" />);
     const control = screen.getByLabelText('描述');
+    expect(control).toHaveAttribute('data-slot', 'textarea');
     expect(control).not.toHaveAttribute('aria-describedby');
     expect(control).not.toHaveAttribute('aria-invalid');
   });

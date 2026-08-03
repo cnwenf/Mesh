@@ -14,9 +14,10 @@ import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { inboxChannel, listInbox, markRead, unreadCount } from './api';
 import { notificationTargetPath } from './links';
-import { extractUnreadCount } from './realtime';
+import { applyInboxFrame, extractUnreadCount } from './realtime';
 import type { Notification } from './types';
 import { useInboxContext } from './useInboxContext';
 
@@ -26,7 +27,7 @@ export function InboxBell(): React.JSX.Element {
   const t = useT();
   const navigate = useNavigate();
   const realtime = useRealtimeContext();
-  const { workspaceId, memberId } = useInboxContext();
+  const { workspaceId, workspaceSlug, memberId } = useInboxContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const [count, setCount] = useState(0);
   const [open, setOpen] = useState(false);
@@ -63,9 +64,7 @@ export function InboxBell(): React.JSX.Element {
       const nextCount = extractUnreadCount(frame);
       if (nextCount !== null) setCount(nextCount);
       if (frame.event === 'notification.created') {
-        setLatest((prev) =>
-          [frame.payload as unknown as Notification, ...prev].slice(0, DROPDOWN_LIMIT),
-        );
+        setLatest((prev) => applyInboxFrame(prev, frame).slice(0, DROPDOWN_LIMIT));
       }
     });
     return () => {
@@ -107,14 +106,14 @@ export function InboxBell(): React.JSX.Element {
   const handleClick = useCallback(
     (notification: Notification) => {
       setOpen(false);
-      const path = notificationTargetPath(notification);
+      const path = notificationTargetPath(notification, workspaceSlug);
       if (workspaceId !== null && notification.read_at === null) {
         void markRead(client, workspaceId, notification.id).catch(() => undefined);
         setCount((prev) => Math.max(0, prev - 1));
       }
       if (path !== null) navigate(path);
     },
-    [client, navigate, workspaceId],
+    [client, navigate, workspaceId, workspaceSlug],
   );
 
   return (
@@ -187,7 +186,9 @@ export function InboxBell(): React.JSX.Element {
             data-testid="inbox-bell-all"
             onClick={() => {
               setOpen(false);
-              navigate('/inbox');
+              navigate(
+                workspaceSlug === null ? '/inbox' : workspaceRoute(workspaceSlug, 'inbox'),
+              );
             }}
           >
             {t('inbox.viewAll')}

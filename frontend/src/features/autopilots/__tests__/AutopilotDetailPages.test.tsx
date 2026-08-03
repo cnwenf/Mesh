@@ -112,19 +112,19 @@ interface Recorded {
   method: string;
 }
 
-function setupDetail(): Recorded[] {
+function setupDetail(me = ME, runsResponse?: Promise<Response>): Recorded[] {
   const calls: Recorded[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
-    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
     if (url.includes('/preview-schedule'))
       return fakeResponse({
         body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] } },
       });
     if (url.includes('/runs'))
-      return fakeResponse({ body: { data: [RUN_WAITING], next_cursor: null } });
+      return runsResponse ?? fakeResponse({ body: { data: [RUN_WAITING], next_cursor: null } });
     if (method !== 'GET') return fakeResponse({ body: { data: { ...RULE, status: 'paused' } } });
     return fakeResponse({ body: { data: RULE } });
   }) as typeof fetch;
@@ -140,6 +140,14 @@ describe('AutopilotDetailPage', () => {
         <Route path="/autopilots/:autopilotId" element={<AutopilotDetailPage />} />
         <Route path="/autopilots/runs/:runId" element={<div>run-detail</div>} />
         <Route path="/autopilots/:autopilotId/edit" element={<div>editor</div>} />
+        <Route
+          path="/w/:workspaceSlug/automations/autopilots/runs/:runId"
+          element={<div>run-detail</div>}
+        />
+        <Route
+          path="/w/:workspaceSlug/automations/autopilots/:autopilotId/edit"
+          element={<div>editor</div>}
+        />
       </Routes>,
       { route: '/autopilots/ap-1' },
     );
@@ -165,6 +173,10 @@ describe('AutopilotDetailPage', () => {
       <Routes>
         <Route path="/autopilots/:autopilotId" element={<AutopilotDetailPage />} />
         <Route path="/autopilots/runs/:runId" element={<div>run-detail</div>} />
+        <Route
+          path="/w/:workspaceSlug/automations/autopilots/runs/:runId"
+          element={<div>run-detail</div>}
+        />
       </Routes>,
       { route: '/autopilots/ap-1' },
     );
@@ -195,16 +207,79 @@ describe('AutopilotDetailPage', () => {
       expect(calls.some((call) => call.url.endsWith('/autopilots/ap-1/pause'))).toBe(true),
     );
   });
+
+  it('keeps the detail read-only for members', async () => {
+    setupDetail({
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/:autopilotId" element={<AutopilotDetailPage />} />
+      </Routes>,
+      { route: '/autopilots/ap-1' },
+    );
+
+    expect(await screen.findByTestId('autopilot-detail-name')).toHaveTextContent('每日汇总');
+    expect(screen.queryByTestId('autopilot-detail-pause')).toBeNull();
+    expect(screen.queryByTestId('autopilot-detail-test-run')).toBeNull();
+  });
+
+  it('shows the no-workspace state before loading a rule', async () => {
+    const calls = setupDetail({ ...ME, memberships: [] });
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/:autopilotId" element={<AutopilotDetailPage />} />
+      </Routes>,
+      { route: '/autopilots/ap-1' },
+    );
+
+    expect(await screen.findByText('No workspace')).toBeInTheDocument();
+    expect(calls.some((call) => call.url.includes('/autopilots/ap-1'))).toBe(false);
+  });
+
+  it('keeps a rule-less route in its loading shell', async () => {
+    setupDetail();
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots" element={<AutopilotDetailPage />} />
+      </Routes>,
+      { route: '/autopilots' },
+    );
+
+    expect(await screen.findByText('Loading automation rules…')).toBeInTheDocument();
+  });
+
+  it('shows the run-history skeleton while the run request is pending', async () => {
+    let resolveRuns!: (response: Response) => void;
+    const runsResponse = new Promise<Response>((resolve) => {
+      resolveRuns = resolve;
+    });
+    setupDetail(ME, runsResponse);
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/:autopilotId" element={<AutopilotDetailPage />} />
+      </Routes>,
+      { route: '/autopilots/ap-1' },
+    );
+
+    await screen.findByTestId('autopilot-detail-name');
+    expect(screen.queryByTestId('autopilot-runs-table')).toBeNull();
+    expect(screen.getByText('Loading automation rules…')).toBeInTheDocument();
+
+    resolveRuns(fakeResponse({ body: { data: [RUN_WAITING], next_cursor: null } }));
+    expect(await screen.findByTestId('autopilot-runs-table')).toBeInTheDocument();
+  });
 });
 
-function setupRunDetail(runOverrides: Record<string, unknown> = {}): Recorded[] {
+function setupRunDetail(runOverrides: Record<string, unknown> = {}, me = ME): Recorded[] {
   const calls: Recorded[] = [];
   const run = { ...RUN_WAITING, ...runOverrides };
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
-    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
     if (method !== 'GET') return fakeResponse({ body: { data: { status: 'approved' } } });
     return fakeResponse({ body: { data: run } });
   }) as typeof fetch;
@@ -219,6 +294,10 @@ describe('AutopilotRunDetailPage', () => {
       <Routes>
         <Route path="/autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
         <Route path="/autopilots/:autopilotId" element={<div>rule</div>} />
+        <Route
+          path="/w/:workspaceSlug/automations/autopilots/:autopilotId"
+          element={<div>rule</div>}
+        />
       </Routes>,
       { route: '/autopilots/runs/run-1' },
     );
@@ -257,6 +336,86 @@ describe('AutopilotRunDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('autopilot-run-status')).toBeInTheDocument());
     expect(screen.queryByTestId('autopilot-run-cancel')).toBeNull();
     expect(screen.queryByTestId('autopilot-run-approve')).toBeNull();
+  });
+
+  it('keeps approval visible to members while hiding management and maps artifact routes', async () => {
+    setupRunDetail(
+      {
+        artifacts: [
+          {
+            id: 'a-task',
+            artifact_type: 'agent_output',
+            ref_table: 'task_executions',
+            ref_id: 'exec-1',
+            summary: null,
+            created_at: '2026-07-27T00:00:00Z',
+          },
+          {
+            id: 'a-notification',
+            artifact_type: 'notification',
+            ref_table: 'notifications',
+            ref_id: 'notification-1',
+            summary: 'sent',
+            created_at: '2026-07-27T00:00:00Z',
+          },
+          {
+            id: 'a-unknown',
+            artifact_type: 'http_response',
+            ref_table: 'external_results',
+            ref_id: 'external-1',
+            summary: null,
+            created_at: '2026-07-27T00:00:00Z',
+          },
+        ],
+      },
+      {
+        ...ME,
+        memberships: [{ ...ME.memberships[0], role: 'member' }],
+      },
+    );
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
+      </Routes>,
+      { route: '/autopilots/runs/run-1' },
+    );
+
+    expect(await screen.findByTestId('autopilot-run-approve')).toBeInTheDocument();
+    expect(screen.queryByTestId('autopilot-run-cancel')).toBeNull();
+    expect(screen.getByTestId('autopilot-artifact-link-a-task')).toBeInTheDocument();
+    expect(screen.getByTestId('autopilot-artifact-link-a-notification')).toBeInTheDocument();
+    expect(screen.queryByTestId('autopilot-artifact-link-a-unknown')).toBeNull();
+  });
+
+  it('shows the no-workspace state without requesting a run', async () => {
+    const calls = setupRunDetail({}, { ...ME, memberships: [] });
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
+      </Routes>,
+      { route: '/autopilots/runs/run-1' },
+    );
+
+    expect(await screen.findByText('No workspace')).toBeInTheDocument();
+    expect(calls.some((call) => call.url.includes('/autopilot-runs/run-1'))).toBe(false);
+  });
+
+  it('shows an error when workspace membership cannot be resolved', async () => {
+    vi.stubGlobal('fetch', (async () =>
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      })) as typeof fetch);
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
+      </Routes>,
+      { route: '/autopilots/runs/run-1' },
+    );
+
+    expect(
+      await screen.findByText('An unexpected error occurred. Please try again.'),
+    ).toBeInTheDocument();
   });
 });
 

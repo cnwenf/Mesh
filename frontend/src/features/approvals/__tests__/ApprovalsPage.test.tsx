@@ -515,7 +515,7 @@ describe('ApprovalsPage states', () => {
       expect(screen.getByRole('tablist')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('approvals-list')).toBeNull();
-    expect(screen.getByText('No approvals waiting for you')).toBeInTheDocument();
+    expect(await screen.findByText('No approvals waiting for you')).toBeInTheDocument();
   });
 
   it('shows the error state with retry when the list fails', async () => {

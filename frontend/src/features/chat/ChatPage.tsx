@@ -1,6 +1,6 @@
 /**
  * 聊天页(chat-session.md §4.1):左会话列表 + 右会话面板的响应式布局。
- * 顶层编排:工作区解析(fetchMe/activeWorkspace)、会话列表拉取(过滤)、
+ * 顶层编排:工作区解析(WorkspaceProvider 权威 membership)、会话列表拉取(过滤)、
  * workspace:{ws}:chat_sessions 频道列表级预览合并(applySessionListFrame)、
  * 置顶经 favorites 乐观切换(§6.19)、新建会话、选中会话渲染 ConversationPanel。
  * 流式主路径在 ConversationPanel/useChatStream(SSE);本页只编排列表与选择。
@@ -19,9 +19,12 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
+import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import { listAgents } from '../agents/api';
 import type { AgentSummary } from '../agents/types';
-import { activeWorkspace, fetchMe } from '../members/api';
+import { listMembers } from '../members/api';
+import type { HumanProfile, MemberSummary } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   createChatSession,
   deleteSessionFavorite,
@@ -42,6 +45,18 @@ import './chat.css';
 
 const SESSION_PAGE_LIMIT = 50;
 
+function matchCurrentMemberId(
+  members: readonly MemberSummary[],
+  user: { readonly id: string; readonly email: string },
+): string | null {
+  for (const member of members) {
+    if (member.member_type !== 'human' || member.profile === null) continue;
+    const profile = member.profile as HumanProfile;
+    if (profile.id === user.id || profile.email === user.email) return member.id;
+  }
+  return null;
+}
+
 export function ChatPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
@@ -50,9 +65,15 @@ export function ChatPage(): React.JSX.Element {
   const { sessionId } = useParams();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
-
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [bootError, setBootError] = useState<string | null>(null);
+  const provider = useOptionalWorkspace();
+  const membershipState = useWorkspaceMembership(client);
+  const workspaceId =
+    membershipState.kind === 'ready' ? membershipState.membership.workspace_id : null;
+  const workspaceSlug =
+    provider !== null && provider.status === 'ready' && provider.workspace !== null
+      ? provider.workspace.slug
+      : null;
+  const chatPath = workspaceSlug === null ? '/chat' : workspaceRoute(workspaceSlug, 'chat');
 
   const [agents, setAgents] = useState<readonly AgentSummary[]>([]);
   const [sessions, setSessions] = useState<readonly ChatSession[]>([]);
@@ -69,6 +90,19 @@ export function ChatPage(): React.JSX.Element {
   /** H6:深链会话确证不存在/失效(引导 404 且列表无命中)。 */
   const [sessionNotFound, setSessionNotFound] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [resolvedMember, setResolvedMember] = useState<{
+    readonly targetKey: string;
+    readonly memberId: string | null;
+  }>({ targetKey: '', memberId: null });
+
+  // 工作区切换先清除旧租户快照;新列表/名册返回前绝不短暂展示或订阅旧数据。
+  useEffect(() => {
+    setAgents([]);
+    setSessions([]);
+    setBootstrappedSession(null);
+    setResolvedMember({ targetKey: '', memberId: null });
+    bootstrapAttemptRef.current = null;
+  }, [workspaceId]);
 
   // 聊天上下文独占激活(§2.1:chat 与 board/issue 不叠加)。Enter 发送 / Shift+Enter
   // 换行 / Esc 失焦的实际语义在 ChatComposer(输入控件原生键,分发层第 1 层放行);
@@ -101,26 +135,30 @@ export function ChatPage(): React.JSX.Element {
     ]);
   }, [t]);
 
-  // 工作区解析(单一归属口径,同其他页面)。
+  // 当前成员 id 独立于会话列表解析:即使列表为空/被筛空,仍订阅本人私有列表频道。
   useEffect(() => {
+    if (membershipState.kind !== 'ready') return;
+    // 兼容不完整的隔离测试桩;生产 `/users/me` 始终携带 user。
+    if (membershipState.user === undefined) return;
+    const targetKey = `${membershipState.membership.workspace_id}:${membershipState.user.id}`;
     let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        const active = activeWorkspace(me.memberships);
-        if (cancelled) return;
-        if (active === null) {
-          setBootError('state.errorDescription');
-          return;
+    setResolvedMember({ targetKey, memberId: null });
+    listMembers(client, membershipState.membership.workspace_id, { limit: 100 })
+      .then((page) => {
+        if (!cancelled) {
+          setResolvedMember({
+            targetKey,
+            memberId: matchCurrentMemberId(page.data, membershipState.user),
+          });
         }
-        setWorkspaceId(active.workspace_id);
       })
-      .catch((err) => {
-        if (!cancelled) setBootError(toErrorKey(err, 'state.errorDescription'));
+      .catch(() => {
+        if (!cancelled) setResolvedMember({ targetKey, memberId: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, membershipState]);
 
   // agent 名册(过滤下拉用;active)。
   useEffect(() => {
@@ -177,9 +215,18 @@ export function ChatPage(): React.JSX.Element {
     };
   }, [client, workspaceId, agentFilter, statusFilter, reloadKey]);
 
-  // H1:列表级帧走 owner 私有频道 chat_list:{myMemberId}(全部会话均由本人持有,
-  // owner_id 即本人 member id)。无会话时不订阅(也无需更新)。
-  const myMemberId = sessions.length > 0 ? sessions[0].owner_id : null;
+  // H1:列表级帧走 owner 私有频道 chat_list:{myMemberId};名册是真源,已有会话的
+  // owner_id 仅在名册暂不可用时作兼容兜底,不会再令空列表失去订阅。
+  const memberTargetKey =
+    membershipState.kind === 'ready'
+      ? `${membershipState.membership.workspace_id}:${membershipState.user?.id ?? 'unknown'}`
+      : null;
+  const myMemberId =
+    memberTargetKey === null
+      ? null
+      : resolvedMember.targetKey === memberTargetKey
+        ? (resolvedMember.memberId ?? sessions[0]?.owner_id ?? null)
+        : (sessions[0]?.owner_id ?? null);
   useEffect(() => {
     if (realtime === null || myMemberId === null) return;
     const channel = chatListChannel(myMemberId);
@@ -242,15 +289,15 @@ export function ChatPage(): React.JSX.Element {
   // H6:确证坏/失效深链 → 回列表路由,消除手机死胡同(§8.3)与桌面悬空 URL。
   useEffect(() => {
     if (sessionId !== undefined && sessionNotFound) {
-      navigate('/chat', { replace: true });
+      navigate(chatPath, { replace: true });
     }
-  }, [sessionId, sessionNotFound, navigate]);
+  }, [sessionId, sessionNotFound, navigate, chatPath]);
 
   const handleSelect = useCallback(
     (session: ChatSession) => {
-      navigate(`/chat/${session.id}`);
+      navigate(`${chatPath}/${session.id}`);
     },
-    [navigate],
+    [chatPath, navigate],
   );
 
   const handleSessionUpdated = useCallback((updated: ChatSession) => {
@@ -289,22 +336,22 @@ export function ChatPage(): React.JSX.Element {
       setNewOpen(false);
       // 先落引导快照再导航:列表重拉 settle 前即可渲染会话面板。
       setBootstrappedSession(created);
-      navigate(`/chat/${created.id}`);
+      navigate(`${chatPath}/${created.id}`);
       setReloadKey((key) => key + 1);
     },
-    [client, workspaceId, navigate],
+    [chatPath, client, workspaceId, navigate],
   );
 
-  if (bootError !== null) {
+  if (membershipState.kind === 'error' || membershipState.kind === 'no_workspace') {
     return (
       <div className="mesh-chat-page" data-testid="chat-page">
         <h1 className="sr-only">{pageTitle}</h1>
-        <ErrorState title={t('state.errorTitle')} description={t(bootError)} />
+        <ErrorState title={t('state.errorTitle')} description={t('state.errorDescription')} />
       </div>
     );
   }
 
-  if (workspaceId === null) {
+  if (membershipState.kind === 'loading' || workspaceId === null) {
     return (
       <div className="mesh-chat-page" data-testid="chat-page">
         <h1 className="sr-only">{pageTitle}</h1>
@@ -345,6 +392,7 @@ export function ChatPage(): React.JSX.Element {
             key={selected.id}
             client={client}
             workspaceId={workspaceId}
+            workspaceSlug={workspaceSlug}
             session={selected}
             locale={intl.locale}
             onSessionUpdated={handleSessionUpdated}

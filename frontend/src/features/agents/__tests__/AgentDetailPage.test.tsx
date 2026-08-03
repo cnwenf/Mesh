@@ -4,13 +4,14 @@
  * 暂停弹窗 in_flight_policy(M-F1)、presence 脚手架(M-F2)、生命周期动作。
  * 页面自建 client → 桩 global fetch,按调用顺序返回包络。
  */
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { RealtimeContext } from '../../../shell/AppShell';
+import { WorkspaceProvider } from '../../../workspace/WorkspaceProvider';
 import { AgentDetailPage } from '../AgentDetailPage';
 
 afterEach(() => {
@@ -89,8 +90,22 @@ const AGENT = {
 };
 
 const VERSIONS = [
-  { id: 'v-2', agent_id: 'a-1', snapshot: { model_config: { temperature: 0.7 } }, change_summary: '改', changed_by: 'm-1', created_at: '2026-01-02T00:00:00Z' },
-  { id: 'v-1', agent_id: 'a-1', snapshot: { model_config: { temperature: 0.2 } }, change_summary: '初', changed_by: 'm-1', created_at: '2026-01-01T00:00:00Z' },
+  {
+    id: 'v-2',
+    agent_id: 'a-1',
+    snapshot: { model_config: { temperature: 0.7 } },
+    change_summary: '改',
+    changed_by: 'm-1',
+    created_at: '2026-01-02T00:00:00Z',
+  },
+  {
+    id: 'v-1',
+    agent_id: 'a-1',
+    snapshot: { model_config: { temperature: 0.2 } },
+    change_summary: '初',
+    changed_by: 'm-1',
+    created_at: '2026-01-01T00:00:00Z',
+  },
 ];
 
 function renderPage() {
@@ -98,6 +113,10 @@ function renderPage() {
   return renderWithProviders(
     <Routes>
       <Route path="/agents/:agentId" element={<AgentDetailPage />} />
+      <Route
+        path="/w/:workspaceSlug/members"
+        element={<div data-testid="canonical-members-route" />}
+      />
     </Routes>,
     { route: '/agents/a-1' },
   );
@@ -175,7 +194,9 @@ describe('AgentDetailPage', () => {
     expect(screen.getByTestId('agent-transfer-dialog')).toBeInTheDocument();
     await user.type(screen.getByTestId('agent-transfer-user-id'), 'u-9');
     await user.click(screen.getByTestId('agent-transfer-confirm'));
-    await waitFor(() => expect(screen.queryByTestId('agent-transfer-dialog')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId('agent-transfer-dialog')).not.toBeInTheDocument(),
+    );
   });
 
   it('暂停弹窗选 cancel_current 发 body(M-F1)', async () => {
@@ -325,6 +346,7 @@ function setupWith(opts: StubOptions = {}): Recorded[] {
 }
 
 interface FakeFrame {
+  channel: string;
   event: string;
   payload?: unknown;
 }
@@ -353,6 +375,10 @@ function renderPageWithRealtime(realtime: unknown) {
     <RealtimeContext.Provider value={realtime as any}>
       <Routes>
         <Route path="/agents/:agentId" element={<AgentDetailPage />} />
+        <Route
+          path="/w/:workspaceSlug/members"
+          element={<div data-testid="canonical-members-route" />}
+        />
       </Routes>
     </RealtimeContext.Provider>,
     { route: '/agents/a-1' },
@@ -375,7 +401,65 @@ describe('AgentDetailPage 扩展覆盖', () => {
     renderPage();
     await screen.findByTestId('agent-detail-name');
     await user.click(screen.getByTestId('agent-detail-back'));
-    await waitFor(() => expect(screen.queryByTestId('agent-detail-page')).not.toBeInTheDocument());
+    expect(await screen.findByTestId('canonical-members-route')).toBeInTheDocument();
+  });
+
+  it('canonical workspace provider 选中第二个 membership,详情与返回均保持 workspace slug', async () => {
+    const user = userEvent.setup();
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+      role: 'admin',
+    };
+    const me = { ...ME, memberships: [ME.memberships[0], betaMembership] };
+    const calls: Recorded[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method, init });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/workspaces/ws-2/agents/a-1')) {
+        return fakeResponse({ body: { data: AGENT } });
+      }
+      if (url.includes('/workspaces/ws-2/analytics/agents/stats')) {
+        return fakeResponse({ body: { data: { agents: [] } } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch);
+    const providerClient = {
+      request: vi.fn(async () => ({
+        id: 'ws-2',
+        name: 'Beta',
+        slug: 'beta',
+        logo_url: null,
+        timezone: 'UTC',
+        settings: {},
+        my_role: 'admin',
+        created_at: '2026-08-04T00:00:00Z',
+        updated_at: '2026-08-04T00:00:00Z',
+      })),
+    };
+
+    renderWithProviders(
+      <WorkspaceProvider slug="beta" client={providerClient as never}>
+        <Routes>
+          <Route path="/w/:workspaceSlug/agents/:agentId" element={<AgentDetailPage />} />
+          <Route
+            path="/w/:workspaceSlug/members"
+            element={<div data-testid="canonical-members-route" />}
+          />
+        </Routes>
+      </WorkspaceProvider>,
+      { route: '/w/beta/agents/a-1' },
+    );
+
+    expect(await screen.findByTestId('agent-detail-name')).toHaveTextContent('小测');
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-2/agents/a-1'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-1/agents/a-1'))).toBe(false);
+    await user.click(screen.getByTestId('agent-detail-back'));
+    expect(await screen.findByTestId('canonical-members-route')).toBeInTheDocument();
   });
 
   it('配置 Tab 全控件交互后保存,PATCH /config 携带完整 model_config', async () => {
@@ -523,12 +607,12 @@ describe('AgentDetailPage 扩展覆盖', () => {
     expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
     // onClose:点击对话框关闭按钮。
     await user.click(screen.getByRole('button', { name: 'Close dialog' }));
-    await waitFor(() =>
-      expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument());
     // onSaved:重开并走完四步 → PATCH + PATCH /config → 重拉详情。
     await user.click(screen.getByTestId('agent-edit-button'));
-    const detailsBefore = calls.filter((c) => c.method === 'GET' && c.url.includes('/agents/')).length;
+    const detailsBefore = calls.filter(
+      (c) => c.method === 'GET' && c.url.includes('/agents/'),
+    ).length;
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-next'));
@@ -543,24 +627,50 @@ describe('AgentDetailPage 扩展覆盖', () => {
 
   it('实时帧:agent.updated 重拉、异 id 忽略、presence 三元组渲染', async () => {
     const rt = makeFakeRealtime();
-    setupWith();
+    const calls = setupWith();
     renderPageWithRealtime(rt);
     await screen.findByTestId('agent-detail-name');
     expect(rt.client.subscribe).toHaveBeenCalledWith('workspace:ws-1:agents');
     expect(rt.client.subscribe).toHaveBeenCalledWith('agent:a-1:presence');
 
-    const detailsBefore = 1;
-    // 其它 agent 的帧 → 忽略。
-    rt.emit({ event: 'agent.updated', payload: { data: { id: 'other' } } });
-    // 本 agent 的 agent.updated → 重拉。
-    rt.emit({ event: 'agent.updated', payload: { data: { id: 'a-1' } } });
-    await waitFor(() =>
-      expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument(),
-    );
+    const detailCalls = (): number =>
+      calls.filter((call) => call.method === 'GET' && call.url.includes('/agents/a-1')).length;
+    const detailsBefore = detailCalls();
+    // 其它频道即使 id 相同也必须忽略;同频道的其它 agent 也忽略。
+    act(() => {
+      rt.emit({
+        channel: 'workspace:other:agents',
+        event: 'agent.updated',
+        payload: { id: 'a-1' },
+      });
+      rt.emit({
+        channel: 'workspace:ws-1:agents',
+        event: 'agent.updated',
+        payload: { id: 'other' },
+      });
+    });
+    expect(detailCalls()).toBe(detailsBefore);
+    // 投影器线缆 payload 为 flat data,本 agent 帧触发重拉。
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1:agents',
+        event: 'agent.updated',
+        payload: { id: 'a-1' },
+      });
+    });
+    await waitFor(() => expect(detailCalls()).toBeGreaterThan(detailsBefore));
     // presence 帧 → 运行态 running(data-state)+ 容量三元组说明。
-    rt.emit({
-      event: 'agent.presence',
-      payload: { running: 1, queued: 2, awaiting_approval: 3 },
+    act(() => {
+      rt.emit({
+        channel: 'workspace:other:presence',
+        event: 'agent.presence',
+        payload: { running: 99 },
+      });
+      rt.emit({
+        channel: 'agent:a-1:presence',
+        event: 'agent.presence',
+        payload: { running: 1, queued: 2, awaiting_approval: 3 },
+      });
     });
     await waitFor(() =>
       expect(
@@ -571,7 +681,6 @@ describe('AgentDetailPage 扩展覆盖', () => {
     expect(caption).toHaveTextContent('1');
     expect(caption).toHaveTextContent('2');
     expect(caption).toHaveTextContent('3');
-    void detailsBefore;
   });
 
   it('实时帧:agent.deleted 跳回名册', async () => {
@@ -579,8 +688,14 @@ describe('AgentDetailPage 扩展覆盖', () => {
     setupWith();
     renderPageWithRealtime(rt);
     await screen.findByTestId('agent-detail-name');
-    rt.emit({ event: 'agent.deleted', payload: { data: { id: 'a-1' } } });
-    await waitFor(() => expect(screen.queryByTestId('agent-detail-page')).not.toBeInTheDocument());
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1:agents',
+        event: 'agent.deleted',
+        payload: { id: 'a-1' },
+      });
+    });
+    expect(await screen.findByTestId('canonical-members-route')).toBeInTheDocument();
   });
 
   it('概览/技能 Tab 切换 + trigger_on_assign 否分支', async () => {
@@ -602,9 +717,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
     const subtitle = document.querySelector('.mesh-agents-detail__subtitle');
     expect(subtitle?.textContent).toContain('bio');
     await user.click(screen.getByTestId('agent-tab-config'));
-    expect((screen.getByTestId('agent-detail-instructions') as HTMLTextAreaElement).value).toBe(
-      '',
-    );
+    expect((screen.getByTestId('agent-detail-instructions') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('未知生命周期状态无动作按钮(VERBS 回退空)', async () => {
@@ -620,7 +733,9 @@ describe('AgentDetailPage 扩展覆盖', () => {
     setupWith();
     renderPageWithRealtime(rt);
     await screen.findByTestId('agent-detail-name');
-    rt.emit({ event: 'agent.presence', payload: {} });
+    act(() => {
+      rt.emit({ channel: 'agent:a-1:presence', event: 'agent.presence', payload: {} });
+    });
     // 缺字段回退 0 → 三元组全 0 → idle 态;容量说明含 0。
     await waitFor(() =>
       expect(
@@ -628,11 +743,15 @@ describe('AgentDetailPage 扩展覆盖', () => {
       ).not.toBeNull(),
     );
     expect(screen.getByTestId('agent-detail-presence-caption')).toHaveTextContent('0');
-    rt.emit({ event: 'agent.lifecycle_changed', payload: { data: { id: 'a-1' } } });
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1:agents',
+        event: 'agent.lifecycle_changed',
+        payload: { id: 'a-1' },
+      });
+    });
     await waitFor(() => expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument());
   });
-
-
 
   it('保存配置:空 instructions 落 null;预设选「无」为 no-op', async () => {
     const user = userEvent.setup();
@@ -653,10 +772,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
 
   it('历史:change_summary 缺省渲染空;非管理角色看只读历史', async () => {
     const user = userEvent.setup();
-    const versionsWithNull = [
-      { ...VERSIONS[0], change_summary: null },
-      VERSIONS[1],
-    ];
+    const versionsWithNull = [{ ...VERSIONS[0], change_summary: null }, VERSIONS[1]];
     const calls: Recorded[] = [];
     const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

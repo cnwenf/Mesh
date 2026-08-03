@@ -24,8 +24,7 @@ import {
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
 import {
   cancelExecution,
   executionChannel,
@@ -79,11 +78,13 @@ export function ExecutionDetailPage(): React.JSX.Element {
   const realtime = useRealtimeContext();
   const realtimeState = realtime?.state ?? 'absent';
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canCancelExecution = workspace !== null && workspace.role !== 'guest';
 
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = tabFromParam(searchParams.get('tab'));
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,20 +100,6 @@ export function ExecutionDetailPage(): React.JSX.Element {
   const seenOffsetsRef = useRef<Set<number>>(new Set());
   const maxOffsetRef = useRef(0);
   const logPanelRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        if (!cancelled) setError(t('state.errorDescription'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, t]);
 
   const loadExecution = useCallback(() => {
     if (workspace === null || executionId === undefined) return;
@@ -279,26 +266,42 @@ export function ExecutionDetailPage(): React.JSX.Element {
     startIso !== null ? Math.max(0, Math.floor((nowMs - Date.parse(startIso)) / 1000)) : 0;
   const isTerminal = execution !== null && TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const isSuccess = execution !== null && SUCCESS_EXECUTION_STATUSES.has(execution.status);
-  const canCancel = execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
+  const canCancel =
+    canCancelExecution && execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const timeoutPct =
     execution !== null && execution.timeout_seconds > 0
       ? Math.min(100, Math.round((elapsedSeconds / execution.timeout_seconds) * 100))
       : 0;
 
-  if (error !== null) {
+  const membershipError = membershipState.kind === 'error' ? t('state.errorDescription') : null;
+  const visibleError = membershipError ?? error;
+
+  if (visibleError !== null) {
     return (
       <div className="mesh-executions">
         <ErrorState
           title={t('state.errorTitle')}
-          description={error}
+          description={visibleError}
           retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
+          onRetry={
+            membershipState.kind === 'error'
+              ? membershipState.retry
+              : () => setReloadKey((key) => key + 1)
+          }
         />
       </div>
     );
   }
 
-  if (isLoading || execution === null) {
+  if (membershipState.kind === 'no_workspace') {
+    return (
+      <div className="mesh-executions">
+        <EmptyState title={t('state.emptyTitle')} description={t('runtimes.noWorkspace')} />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'loading' || isLoading || execution === null) {
     return (
       <div className="mesh-executions">
         <Skeleton loadingLabel={t('common.loading')} />

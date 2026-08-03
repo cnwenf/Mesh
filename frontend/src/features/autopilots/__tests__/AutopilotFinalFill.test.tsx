@@ -25,7 +25,14 @@ afterEach(() => {
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -73,11 +80,14 @@ function okStub() {
     const url = String(input);
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
     if (url.includes('/agents')) return fakeResponse({ body: { data: [], next_cursor: null } });
-    if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
-    if (url.includes('/kill-switch')) return fakeResponse({ body: { data: { kill_switch: false } } });
+    if (url.includes('/webhook-secrets'))
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    if (url.includes('/kill-switch'))
+      return fakeResponse({ body: { data: { kill_switch: false } } });
     if (url.includes('/runs')) return fakeResponse({ body: { data: [], next_cursor: null } });
     if (url.match(/autopilots\/[^/]+$/)) return fakeResponse({ body: { data: RULE } });
-    if (url.includes('/autopilots')) return fakeResponse({ body: { data: [RULE], next_cursor: null } });
+    if (url.includes('/autopilots'))
+      return fakeResponse({ body: { data: [RULE], next_cursor: null } });
     return fakeResponse({ body: { data: RULE } });
   }) as typeof fetch;
   vi.stubGlobal('fetch', impl);
@@ -100,11 +110,32 @@ const ROUTES = (
     <Route path="/autopilots/:autopilotId" element={<AutopilotDetailPage />} />
     <Route path="/autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
     <Route path="/webhooks" element={<WebhookConfigPage />} />
+    <Route path="/w/:workspaceSlug/automations/autopilots" element={<AutopilotsPage />} />
+    <Route path="/w/:workspaceSlug/automations/autopilots/new" element={<AutopilotEditorPage />} />
+    <Route
+      path="/w/:workspaceSlug/automations/autopilots/runs/:runId"
+      element={<AutopilotRunDetailPage />}
+    />
+    <Route
+      path="/w/:workspaceSlug/automations/autopilots/:autopilotId"
+      element={<div data-testid="autopilot-detail-name" />}
+    />
+    <Route
+      path="/w/:workspaceSlug/automations/autopilots/:autopilotId/edit"
+      element={<AutopilotEditorPage />}
+    />
+    <Route path="/w/:workspaceSlug/automations/webhooks" element={<WebhookConfigPage />} />
   </Routes>
 );
 
 describe('unmount race: cancelled branches', () => {
-  const paths = ['/autopilots', '/autopilots/new', '/autopilots/ap-1', '/autopilots/ap-1/edit', '/webhooks'];
+  const paths = [
+    '/autopilots',
+    '/autopilots/new',
+    '/autopilots/ap-1',
+    '/autopilots/ap-1/edit',
+    '/webhooks',
+  ];
   for (const path of paths) {
     it(`unmounts mid-load at ${path}`, () => {
       okStub();
@@ -157,7 +188,8 @@ describe('non-MeshApiError error paths (error.unknown)', () => {
       const url = String(input);
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-      if (url.includes('/kill-switch')) return fakeResponse({ body: { data: { kill_switch: false } } });
+      if (url.includes('/kill-switch'))
+        return fakeResponse({ body: { data: { kill_switch: false } } });
       if (method === 'POST' && failOnce) {
         failOnce = false;
         throw new TypeError('network down');
@@ -203,7 +235,12 @@ describe('channel guard + misc branches', () => {
       { route: '/autopilots' },
     );
     await waitFor(() => expect(screen.getByTestId('autopilot-row-ap-1')).toBeInTheDocument());
-    realtime.emit({ channel: 'workspace:OTHER:autopilots', event: 'autopilot.updated', seq: 1, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'workspace:OTHER:autopilots',
+      event: 'autopilot.updated',
+      seq: 1,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     // no reload crash; page still intact
     expect(screen.getByTestId('autopilot-row-ap-1')).toBeInTheDocument();
   });
@@ -216,7 +253,12 @@ describe('channel guard + misc branches', () => {
       { route: '/autopilots/ap-1' },
     );
     await waitFor(() => expect(screen.getByTestId('autopilot-detail-name')).toBeInTheDocument());
-    realtime.emit({ channel: 'autopilot:other', event: 'autopilot.updated', seq: 1, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'autopilot:other',
+      event: 'autopilot.updated',
+      seq: 1,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     expect(screen.getByTestId('autopilot-detail-name')).toBeInTheDocument();
   });
 
@@ -227,17 +269,20 @@ describe('channel guard + misc branches', () => {
     const search = screen.getByTestId('autopilot-search') as HTMLInputElement;
     expect(search.value).toBe('abc');
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect((screen.getByTestId('autopilot-search') as HTMLInputElement).value).toBe(''));
+    await waitFor(() =>
+      expect((screen.getByTestId('autopilot-search') as HTMLInputElement).value).toBe(''),
+    );
   });
 
-  it('webhook with no workspace shows the empty list', async () => {
+  it('webhook with no workspace blocks management controls', async () => {
     const impl = (async () =>
       fakeResponse({ body: { data: { user: ME.user, memberships: [] } } })) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(ROUTES, { route: '/webhooks' });
     await waitFor(() =>
-      expect(screen.getByText(/No webhook credentials|autopilots\.webhook\.empty/)).toBeInTheDocument(),
+      expect(screen.getByText(/No workspace|autopilots\.noWorkspace\.title/)).toBeInTheDocument(),
     );
+    expect(screen.queryByTestId('webhook-create-secret')).toBeNull();
   });
 });
 
@@ -248,7 +293,9 @@ describe('detail test-run variants', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } } });
+        return fakeResponse({
+          body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } },
+        });
       if (url.includes('/runs')) return fakeResponse({ body: { data: [], next_cursor: null } });
       if (method === 'POST' && url.includes('/test-run'))
         return fakeResponse({ body: { data: testRunResponse } });
@@ -261,7 +308,9 @@ describe('detail test-run variants', () => {
   it('dry run with non-matching filters toasts wouldNotRun', async () => {
     detailStub({ would_run: false, matched_filters: {} });
     renderWithProviders(ROUTES, { route: '/autopilots/ap-1' });
-    await waitFor(() => expect(screen.getByTestId('autopilot-detail-test-run')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-detail-test-run')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-detail-test-run'));
     await userEvent.click(screen.getByTestId('autopilot-test-dry-run'));
     await userEvent.click(screen.getByTestId('autopilot-test-submit'));
@@ -271,7 +320,9 @@ describe('detail test-run variants', () => {
   it('real test run navigates to the run detail', async () => {
     detailStub({ run_id: 'run-9', status: 'pending', autopilot_id: 'ap-1', is_test: true });
     renderWithProviders(ROUTES, { route: '/autopilots/ap-1' });
-    await waitFor(() => expect(screen.getByTestId('autopilot-detail-test-run')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-detail-test-run')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-detail-test-run'));
     await userEvent.click(screen.getByTestId('autopilot-test-submit'));
     await waitFor(() => expect(screen.getByTestId('autopilot-run-status')).toBeInTheDocument());
@@ -285,7 +336,12 @@ describe('editor save variants + remaining branches', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (url.includes('/agents'))
-        return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }],
+            next_cursor: null,
+          },
+        });
       if (url.includes('/webhook-secrets'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
       if (method === 'GET') return fakeResponse({ body: { data: RULE } });
@@ -303,7 +359,10 @@ describe('editor save variants + remaining branches', () => {
     renderNew();
     await waitFor(() => expect(screen.getByTestId('autopilot-editor-name')).toBeInTheDocument());
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'n');
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_field_changed');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'issue_field_changed',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-watch-fields'), 'priority');
     await userEvent.click(screen.getByTestId('autopilot-section-filter-toggle'));
     await userEvent.type(screen.getByTestId('autopilot-editor-filter-labels'), 'bug');
@@ -314,7 +373,10 @@ describe('editor save variants + remaining branches', () => {
       target: { value: '[{"path": "x", "op": "eq", "value": 1}]' },
     });
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByTestId('autopilot-detail-name')).toBeInTheDocument());
   });
@@ -324,19 +386,27 @@ describe('editor save variants + remaining branches', () => {
     renderNew();
     await waitFor(() => expect(screen.getByTestId('autopilot-editor-name')).toBeInTheDocument());
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'n');
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'agent_mentioned');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'agent_mentioned',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-target-agents'), 'ag-1');
     // four actions covering every kind
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'run_agent_prompt');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'run_agent_prompt',
+    );
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-1'), 'add_comment');
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-2'), 'http_request');
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-3'), 'create_issue');
     // prompt typed (undefined → value), executor via global select
-    fireEvent.change(screen.getByTestId('autopilot-action-prompt-0'), { target: { value: 'do it' } });
+    fireEvent.change(screen.getByTestId('autopilot-action-prompt-0'), {
+      target: { value: 'do it' },
+    });
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-executor'), 'ag-1');
     await userEvent.type(screen.getByTestId('autopilot-editor-action-content'), 'c');
     await userEvent.type(screen.getByTestId('autopilot-editor-action-url'), 'https://h.example/x');
@@ -377,7 +447,10 @@ describe('editor save variants + remaining branches', () => {
     expect((screen.getByTestId('autopilot-editor-save') as HTMLButtonElement).disabled).toBe(true);
     // switching to a notification action enables saving
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByTestId('autopilot-detail-name')).toBeInTheDocument());
   });
@@ -405,7 +478,8 @@ describe('editor save variants + remaining branches', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (url.includes('/agents')) return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/webhook-secrets'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       if (method === 'GET') return fakeResponse({ body: { data: SPARSE } });
       return fakeResponse({ body: { data: SPARSE } });
     }) as typeof fetch;
@@ -415,7 +489,10 @@ describe('editor save variants + remaining branches', () => {
       expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe('规则'),
     );
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByTestId('autopilot-detail-name')).toBeInTheDocument());
   });
@@ -446,10 +523,26 @@ describe('run detail: rich run + realtime reload', () => {
     created_at: '2026-07-27T00:00:00Z',
     updated_at: '2026-07-27T00:01:00Z',
     attempts: [
-      { attempt_number: 1, status: 'succeeded', execution_id: 'ex-1', started_at: '2026-07-27T00:00:00Z', finished_at: '2026-07-27T00:01:00Z', error: null, prompt_tokens: 1, completion_tokens: 2 },
+      {
+        attempt_number: 1,
+        status: 'succeeded',
+        execution_id: 'ex-1',
+        started_at: '2026-07-27T00:00:00Z',
+        finished_at: '2026-07-27T00:01:00Z',
+        error: null,
+        prompt_tokens: 1,
+        completion_tokens: 2,
+      },
     ],
     artifacts: [
-      { id: 'a-1', artifact_type: 'comment', ref_table: 'comments', ref_id: 'c-1', summary: null, created_at: '2026-07-27T00:01:00Z' },
+      {
+        id: 'a-1',
+        artifact_type: 'comment',
+        ref_table: 'comments',
+        ref_id: 'c-1',
+        summary: null,
+        created_at: '2026-07-27T00:01:00Z',
+      },
     ],
   };
 
@@ -519,7 +612,12 @@ describe('webhook final branches', () => {
       }
       if (method === 'GET')
         return fakeResponse({
-          body: { data: [{ id: 'sec-1', label: 'p', status: 'active', created_at: 'x', revoked_at: null }], next_cursor: null },
+          body: {
+            data: [
+              { id: 'sec-1', label: 'p', status: 'active', created_at: 'x', revoked_at: null },
+            ],
+            next_cursor: null,
+          },
         });
       return fakeResponse({ body: { data: {} } });
     }) as typeof fetch;
@@ -544,4 +642,3 @@ describe('webhook final branches', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
 });
-

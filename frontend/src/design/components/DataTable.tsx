@@ -11,6 +11,15 @@
  *   本组件只保证表格自身不破版。无硬编码文案。
  */
 import type { ReactNode } from 'react';
+import {
+  Table as AppicaTable,
+  TableBody as AppicaTableBody,
+  TableCaption as AppicaTableCaption,
+  TableCell as AppicaTableCell,
+  TableHead as AppicaTableHead,
+  TableHeader as AppicaTableHeader,
+  TableRow as AppicaTableRow,
+} from '@appica/ui-react/table';
 import { Icon } from './Icon';
 import './components.css';
 
@@ -76,19 +85,23 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
     .join(' ');
 
   return (
-    <table className={tableClasses}>
-      <caption className={hideCaption ? 'mesh-data-table__caption mesh-visually-hidden' : 'mesh-data-table__caption'}>
+    <AppicaTable
+      size={density === 'comfortable' ? 'md' : 'sm'}
+      hoverableRows={onRowClick !== undefined}
+      className={tableClasses}
+    >
+      <AppicaTableCaption className={hideCaption ? 'mesh-data-table__caption mesh-visually-hidden' : 'mesh-data-table__caption'}>
         {caption}
-      </caption>
-      <thead>
-        <tr>
+      </AppicaTableCaption>
+      <AppicaTableHeader>
+        <AppicaTableRow>
           {columns.map((column) => {
             const isSorted = sortBy?.id === column.id;
             const ariaSort = isSorted ? (sortBy.direction === 'asc' ? 'ascending' : 'descending') : undefined;
             const alignClass = column.align === 'end' ? ' mesh-data-table__cell--end' : '';
             if (column.sortable === true) {
               return (
-                <th key={column.id} scope="col" aria-sort={ariaSort} className={`mesh-data-table__header${alignClass}`}>
+                <AppicaTableHead key={column.id} scope="col" aria-sort={ariaSort} className={`mesh-data-table__header${alignClass}`}>
                   <button
                     type="button"
                     className="mesh-data-table__sort"
@@ -103,30 +116,30 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
                       />
                     ) : null}
                   </button>
-                </th>
+                </AppicaTableHead>
               );
             }
             return (
-              <th key={column.id} scope="col" className={`mesh-data-table__header${alignClass}`}>
+              <AppicaTableHead key={column.id} scope="col" className={`mesh-data-table__header${alignClass}`}>
                 {column.header}
-              </th>
+              </AppicaTableHead>
             );
           })}
-        </tr>
-      </thead>
-      <tbody>
+        </AppicaTableRow>
+      </AppicaTableHeader>
+      <AppicaTableBody>
         {rows.length === 0 && emptyState !== undefined ? (
-          <tr>
-            <td colSpan={columns.length} className="mesh-data-table__empty">
+          <AppicaTableRow>
+            <AppicaTableCell colSpan={columns.length} className="mesh-data-table__empty">
               {emptyState}
-            </td>
-          </tr>
+            </AppicaTableCell>
+          </AppicaTableRow>
         ) : (
           rows.map((row) => {
             const extra = rowClassName?.(row);
             const rowClasses = ['mesh-data-table__row', extra].filter((p): p is string => Boolean(p)).join(' ');
             return (
-              <tr
+              <AppicaTableRow
                 key={rowKey(row)}
                 className={rowClasses}
                 onClick={
@@ -158,18 +171,18 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
                 }
               >
                 {columns.map((column) => (
-                  <td
+                  <AppicaTableCell
                     key={column.id}
                     className={column.align === 'end' ? 'mesh-data-table__cell mesh-data-table__cell--end' : 'mesh-data-table__cell'}
                   >
                     {column.cell(row)}
-                  </td>
+                  </AppicaTableCell>
                 ))}
-              </tr>
+              </AppicaTableRow>
             );
           })
         )}
-      </tbody>
-    </table>
+      </AppicaTableBody>
+    </AppicaTable>
   );
 }

@@ -5,6 +5,7 @@
  */
 import type { TextareaHTMLAttributes } from 'react';
 import { forwardRef, useCallback, useEffect, useId, useRef } from 'react';
+import { Textarea as AppicaTextarea } from '@appica/ui-react/textarea';
 import './components.css';
 
 /** 自适应上限(§7.4:textarea 自适应但有最大高度) */
@@ -70,7 +71,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
       <label className="mesh-field__label" htmlFor={textareaId}>
         {label}
       </label>
-      <textarea
+      <AppicaTextarea
         ref={setRefs}
         id={textareaId}
         rows={rows}

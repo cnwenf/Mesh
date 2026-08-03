@@ -22,8 +22,7 @@ import type { StatusDotTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   cancelExecution,
   getRuntime,
@@ -71,8 +70,11 @@ export function RuntimeDetailPage(): React.JSX.Element {
   const { runtimeId } = useParams<{ runtimeId: string }>();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = workspace?.role === 'owner' || workspace?.role === 'admin';
+  const canTrigger = workspace !== null && workspace.role !== 'guest';
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [runtime, setRuntime] = useState<RuntimeDetail | null>(null);
   const [executions, setExecutions] = useState<ExecutionDetail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -80,20 +82,6 @@ export function RuntimeDetailPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [rotatedToken, setRotatedToken] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        if (!cancelled) setError(t('state.errorDescription'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, t]);
 
   const load = useCallback(() => {
     if (workspace === null || runtimeId === undefined) return;
@@ -196,20 +184,35 @@ export function RuntimeDetailPage(): React.JSX.Element {
     [executions],
   );
 
-  if (error !== null) {
+  const membershipError = membershipState.kind === 'error' ? t('state.errorDescription') : null;
+  const visibleError = membershipError ?? error;
+
+  if (visibleError !== null) {
     return (
       <div className="mesh-runtimes-detail">
         <ErrorState
           title={t('state.errorTitle')}
-          description={error}
+          description={visibleError}
           retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
+          onRetry={
+            membershipState.kind === 'error'
+              ? membershipState.retry
+              : () => setReloadKey((key) => key + 1)
+          }
         />
       </div>
     );
   }
 
-  if (isLoading || runtime === null) {
+  if (membershipState.kind === 'no_workspace') {
+    return (
+      <div className="mesh-runtimes-detail">
+        <EmptyState title={t('state.emptyTitle')} description={t('runtimes.noWorkspace')} />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'loading' || isLoading || runtime === null) {
     return (
       <div className="mesh-runtimes-detail">
         <Skeleton loadingLabel={t('common.loading')} />
@@ -228,7 +231,13 @@ export function RuntimeDetailPage(): React.JSX.Element {
         <Button
           variant="ghost"
           data-testid="runtime-detail-back"
-          onClick={() => navigate('/runtimes')}
+          onClick={() =>
+            navigate(
+              workspace === null
+                ? '/runtimes'
+                : workspaceRoute(workspace.workspace_slug, '/automations/runtimes'),
+            )
+          }
         >
           {t('runtimes.detail.back')}
         </Button>
@@ -242,7 +251,7 @@ export function RuntimeDetailPage(): React.JSX.Element {
           />
         </span>
         <div className="mesh-runtimes-detail__actions">
-          {canPause ? (
+          {canManage && canPause ? (
             <Button
               variant="secondary"
               size="sm"
@@ -257,7 +266,7 @@ export function RuntimeDetailPage(): React.JSX.Element {
               {t('runtimes.action.pause')}
             </Button>
           ) : null}
-          {canResume ? (
+          {canManage && canResume ? (
             <Button
               variant="secondary"
               size="sm"
@@ -272,14 +281,16 @@ export function RuntimeDetailPage(): React.JSX.Element {
               {t('runtimes.action.resume')}
             </Button>
           ) : null}
-          <Button
-            variant="secondary"
-            size="sm"
-            data-testid="runtime-detail-rotate"
-            onClick={() => void handleRotate()}
-          >
-            {t('runtimes.action.rotateToken')}
-          </Button>
+          {canManage ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              data-testid="runtime-detail-rotate"
+              onClick={() => void handleRotate()}
+            >
+              {t('runtimes.action.rotateToken')}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -351,23 +362,32 @@ export function RuntimeDetailPage(): React.JSX.Element {
                     variant="ghost"
                     size="sm"
                     data-testid={`runtime-view-${execution.id}`}
-                    onClick={() => navigate(`/executions/${execution.id}`)}
-                  >
-                    {t('runtimes.action.view')}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    data-testid={`runtime-cancel-${execution.id}`}
                     onClick={() =>
-                      void act(
-                        () => cancelExecution(client, workspace?.workspace_id ?? '', execution.id),
-                        t('runtimes.toast.cancelled'),
+                      navigate(
+                        workspace === null
+                          ? `/executions/${execution.id}`
+                          : workspaceRoute(workspace.workspace_slug, `/executions/${execution.id}`),
                       )
                     }
                   >
-                    {t('runtimes.action.cancel')}
+                    {t('runtimes.action.view')}
                   </Button>
+                  {canTrigger ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      data-testid={`runtime-cancel-${execution.id}`}
+                      onClick={() =>
+                        void act(
+                          () =>
+                            cancelExecution(client, workspace?.workspace_id ?? '', execution.id),
+                          t('runtimes.toast.cancelled'),
+                        )
+                      }
+                    >
+                      {t('runtimes.action.cancel')}
+                    </Button>
+                  ) : null}
                 </li>
               );
             })}
@@ -392,7 +412,13 @@ export function RuntimeDetailPage(): React.JSX.Element {
                   variant="ghost"
                   size="sm"
                   data-testid={`runtime-history-view-${execution.id}`}
-                  onClick={() => navigate(`/executions/${execution.id}`)}
+                  onClick={() =>
+                    navigate(
+                      workspace === null
+                        ? `/executions/${execution.id}`
+                        : workspaceRoute(workspace.workspace_slug, `/executions/${execution.id}`),
+                    )
+                  }
                 >
                   {t('runtimes.action.view')}
                 </Button>
