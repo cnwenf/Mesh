@@ -160,6 +160,17 @@ Tests (real PostgreSQL 16 + Redis required; `MESH_TEST_DATABASE_URL` /
 pytest --cov=mesh --cov-report=term-missing   # unit + real e2e, coverage ≥90%
 ```
 
+CI 并行化边界(MES-149):当前全量门禁仍串行执行,禁止直接引入
+`pytest-xdist`——测试共享 PostgreSQL schema/cluster role、Redis DB 与 MinIO
+bucket;全局/e2e autouse 清理会全库 `TRUNCATE`,e2e/Redis fixtures 还会
+`FLUSHDB`,同服务栈并发会互删数据。
+后续缩短 CI 关键路径的安全方案是 GitHub job 级分片:先将
+`tests/e2e` 与 `tests/unit` 放到**完全独立的真实服务栈**,各分片只上传
+原始 coverage data,最终唯一 gate 执行 `coverage combine` 后再判定整体
+覆盖率 ≥90%;不得把每个 shard 单独 90% 或合并 XML 百分比当作整体门禁。
+首轮分片还必须以 node id 并集验证「全集且无重」,并在连续多轮与当前
+串行基线一致后才替换门禁拓扑。
+
 ## Dependency management (lockfile)
 
 `pyproject.toml` carries semantic version ranges; the committed lockfiles are

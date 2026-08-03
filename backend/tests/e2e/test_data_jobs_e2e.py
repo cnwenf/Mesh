@@ -70,9 +70,14 @@ def _storage_env() -> dict[str, str]:
     }
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture
 async def data_job_worker(provision_database):
-    """REAL worker subprocess — relay with the data-job handlers + reaper."""
+    """Per-test REAL worker subprocess with data-job handlers + reaper.
+
+    Function scope is intentional: tests that drive an in-process reaper with
+    a controlled clock must never overlap a module-lifetime background reaper.
+    It also stops worker transactions before the per-test database cleanup.
+    """
     env = os.environ.copy()
     env["MESH_DATABASE_URL"] = get_test_database_url()
     env["MESH_REDIS_URL"] = get_test_redis_url()
@@ -192,6 +197,42 @@ async def _wait_job_status(
     raise AssertionError(f"job status never reached {expected}: last={last}")
 
 
+async def _wait_terminal_notification(
+    session_factory,
+    job_id: str | uuid.UUID,
+    *,
+    expected_priority: str,
+    expected_failure_reason: str | None = None,
+    timeout: float = 30.0,
+) -> Notification:
+    """Wait for the canonical notification belonging to one terminal job.
+
+    Poll the durable group key rather than taking an unscoped snapshot of
+    whichever data-job notification happens to be visible first.  This keeps
+    the assertion tied to the target job even if scheduling or row order
+    changes under a saturated runner.
+    """
+    group_key = f"data_job:{job_id}:finished"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        async with session_factory() as session:
+            notification = await session.scalar(
+                select(Notification).where(
+                    Notification.type == "data_job_finished",
+                    Notification.group_key == group_key,
+                )
+            )
+        if notification is None:
+            await asyncio.sleep(0.2)
+            continue
+        payload = notification.payload or {}
+        assert notification.priority == expected_priority
+        if expected_failure_reason is not None:
+            assert expected_failure_reason in str(payload.get("preview") or "")
+        return notification
+    raise AssertionError(f"terminal notification never appeared for data job {job_id}")
+
+
 async def test_import_two_phase_partial_success_real_worker(api_client, data_job_worker, session_factory):
     token = await _register_and_login(api_client, f"e2e-import-{uuid.uuid4().hex[:8]}@x.io")
     workspace_id = await _create_workspace(api_client, token)
@@ -277,13 +318,6 @@ async def test_run_before_validate_rejected(api_client, data_job_worker):
     assert ran.json()["error"]["code"] == "validation_required"
 
 
-# CI-saturation flake containment (NOT a skip — bounded retry ≤2, explicit):
-# the failure-notification poll races the worker's terminal-notification
-# write under a saturated single-runner CI (4000+-test serial suite); the
-# data_jobs code path is unaffected by MES-87 (zero diff) and this case is
-# deterministically green locally. Deterministic convergence (event-driven
-# wait instead of the timing snapshot) tracked in MES-149.
-@pytest.mark.flaky(reruns=2)
 async def test_source_replaced_after_validate_api_rejects_and_worker_fails_critical(
     api_client, data_job_worker, session_factory
 ):
@@ -344,14 +378,12 @@ async def test_source_replaced_after_validate_api_rejects_and_worker_fails_criti
         )
     failed = await _wait_job_status(api_client, token, job_id, frozenset({"failed"}))
     assert failed["failure_reason"] == "source_changed"
-    async with session_factory() as session:
-        notification = (
-            (await session.execute(select(Notification).where(Notification.type == "data_job_finished")))
-            .scalars()
-            .first()
-        )
-        assert notification is not None
-        assert notification.priority == "critical"
+    await _wait_terminal_notification(
+        session_factory,
+        job_id,
+        expected_priority="critical",
+        expected_failure_reason="source_changed",
+    )
 
 
 async def test_t31_kill_resume_fencing_and_replay(api_client, data_job_worker, session_factory):
@@ -641,13 +673,83 @@ async def _load_job(session_factory, job_id: uuid.UUID) -> DataJob:
         return job
 
 
+async def _wait_recovery_terminal(
+    session_factory,
+    *,
+    workspace_id: uuid.UUID,
+    job_id: uuid.UUID,
+    resume_key: str,
+    timeout: float = 45.0,
+) -> dict:
+    """Wait for the resume event and job to reach one durable final snapshot."""
+    from mesh.db.models.outbox import OutboxEvent
 
-# CI-saturation flake containment (NOT a skip — bounded retry ≤2, explicit):
-# the re-arm outbox-key visibility assert races the worker's rearm write
-# under a saturated single-runner CI; zero MES-87 diff in this path,
-# deterministically green locally. Deterministic convergence tracked in
-# MES-149.
-@pytest.mark.flaky(reruns=2)
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        async with session_factory() as session:
+            job = await session.get(DataJob, job_id)
+            event = await session.scalar(
+                select(OutboxEvent).where(OutboxEvent.idempotency_key == resume_key)
+            )
+            issue_count = await session.scalar(
+                select(func.count())
+                .select_from(Issue)
+                .where(Issue.workspace_id == workspace_id)
+            )
+            ledger_total = await session.scalar(
+                select(func.count()).select_from(DataJobRow).where(DataJobRow.job_id == job_id)
+            )
+            ledger_created = await session.scalar(
+                select(func.count())
+                .select_from(DataJobRow)
+                .where(DataJobRow.job_id == job_id, DataJobRow.status == "created")
+            )
+        checkpoint = dict(job.checkpoint or {}) if job is not None else {}
+        last = {
+            "event_status": event.status if event is not None else None,
+            "event_published": event.published_at is not None if event is not None else False,
+            "event_attempts": event.delivery_attempts if event is not None else None,
+            "job_status": job.status if job is not None else None,
+            "finished": job.finished_at is not None if job is not None else False,
+            "failure_reason": job.failure_reason if job is not None else None,
+            "lease_owner": job.lease_owner if job is not None else None,
+            "lease_expires_at": job.lease_expires_at if job is not None else None,
+            "total_rows": job.total_rows if job is not None else None,
+            "succeeded_rows": job.succeeded_rows if job is not None else None,
+            "failed_rows": job.failed_rows if job is not None else None,
+            "last_committed_batch": checkpoint.get("last_committed_batch"),
+            "resumed_count": checkpoint.get("resumed_count"),
+            "issue_count": issue_count,
+            "ledger_total": ledger_total,
+            "ledger_created": ledger_created,
+        }
+        if last["event_status"] == "failed" or last["job_status"] == "failed":
+            raise AssertionError(f"recovery reached a failed terminal state: {last}")
+        if last == {
+            "event_status": "published",
+            "event_published": True,
+            "event_attempts": 0,
+            "job_status": "completed",
+            "finished": True,
+            "failure_reason": None,
+            "lease_owner": None,
+            "lease_expires_at": None,
+            "total_rows": 2,
+            "succeeded_rows": 2,
+            "failed_rows": 0,
+            "last_committed_batch": 1,
+            "resumed_count": 1,
+            "issue_count": 2,
+            "ledger_total": 2,
+            "ledger_created": 2,
+        }:
+            return last
+        await asyncio.sleep(0.2)
+    raise AssertionError(f"recovery never reached the durable terminal snapshot: last={last}")
+
+
+
 async def test_h2_double_crash_at_same_checkpoint_does_not_wedge(
     api_client, session_factory
 ):
@@ -658,8 +760,9 @@ async def test_h2_double_crash_at_same_checkpoint_does_not_wedge(
     stalling for the outbox retention window. Without bucketing the 2nd reaper
     emit would dedup against the non-bucketed wedge row and wedge the job.
 
-    Driven with an in-process worker (real object storage + real DB) so no
-    competing subprocess reaper perturbs the bucket assertions."""
+    Driven with an in-process relay + worker (real object storage + real DB).
+    The subprocess worker fixture is function-scoped and is deliberately not
+    requested here, so no uncontrolled reaper can perturb the clock buckets."""
     from datetime import UTC, datetime, timedelta
 
     from mesh.api.app import build_object_storage
@@ -669,6 +772,7 @@ async def test_h2_double_crash_at_same_checkpoint_does_not_wedge(
     from mesh.data_jobs.runner import DataJobWorker, resume_idempotency_key
     from mesh.db.models.outbox import OutboxEvent
     from mesh.issue.statuses import ensure_scope_seeded
+    from mesh.outbox.relay import OutboxRelay
     from mesh.outbox.service import scope_idempotency_key
 
     token = await _register_and_login(api_client, f"e2e-h2-{uuid.uuid4().hex[:8]}@x.io")
@@ -718,11 +822,11 @@ async def test_h2_double_crash_at_same_checkpoint_does_not_wedge(
     await worker.process(job_id, "import-validate")
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
-        job = await session_factory_get(session_factory, job_id)
+        job = await _load_job(session_factory, job_id)
         if job.status == "pending":
             break
         await asyncio.sleep(0.2)
-    assert (await session_factory_get(session_factory, job_id)).source_content_hash
+    assert (await _load_job(session_factory, job_id)).source_content_hash
 
     inner = resume_idempotency_key(job_id, 0)  # non-bucketed (pre-fix reaper emit)
     t1 = datetime(2026, 7, 28, 12, 0, 0, tzinfo=UTC)
@@ -738,9 +842,11 @@ async def test_h2_double_crash_at_same_checkpoint_does_not_wedge(
                 {"o": owner, "e": expires, "id": job_id},
             )
 
-    async def outbox_keys() -> set:
+    async def outbox_event(key: str) -> OutboxEvent | None:
         async with session_factory() as session:
-            return set((await session.execute(select(OutboxEvent.idempotency_key))).scalars().all())
+            return await session.scalar(
+                select(OutboxEvent).where(OutboxEvent.idempotency_key == key)
+            )
 
     # CRASH #1 at checkpoint 0: wasted published resume row at the non-bucketed
     # key (what the pre-fix reaper would have emitted).
@@ -753,42 +859,60 @@ async def test_h2_double_crash_at_same_checkpoint_does_not_wedge(
                 payload={"data_job_id": str(job_id), "action": "resume"},
                 idempotency_key=scope_idempotency_key(ws_uuid, inner),
                 status="published",
+                published_at=t1,
             )
         )
-    await run_reaper_pass(session_factory, settings=settings, clock=lambda: t1)
+    assert await run_reaper_pass(session_factory, settings=settings, clock=lambda: t1) == 1
     bucketed_t1 = scope_idempotency_key(
         ws_uuid, resume_idempotency_key(job_id, 0, bucket=_rearm_bucket(t1, settings))
     )
-    assert bucketed_t1 in await outbox_keys()  # not wedged by the non-bucketed wedge
+    first_rearm = await outbox_event(bucketed_t1)
+    assert first_rearm is not None  # not wedged by the non-bucketed wedge
+    assert first_rearm.status == "pending"
+    assert first_rearm.delivery_attempts == 0
+    assert first_rearm.published_at is None
 
     # CRASH #2 at the SAME checkpoint 0: the t1 re-arm row is now 'wasted'.
     await set_crashed("dead-2", t2 - timedelta(minutes=1))
     async with session_factory() as session, session.begin():
         await session.execute(
-            text("UPDATE outbox_events SET status='published' WHERE idempotency_key=:k"),
-            {"k": bucketed_t1},
+            text(
+                "UPDATE outbox_events SET status='published', published_at=:published_at "
+                "WHERE idempotency_key=:k"
+            ),
+            {"k": bucketed_t1, "published_at": t1},
         )
-    await run_reaper_pass(session_factory, settings=settings, clock=lambda: t2)
+    assert await run_reaper_pass(session_factory, settings=settings, clock=lambda: t2) == 1
     bucketed_t2 = scope_idempotency_key(
         ws_uuid, resume_idempotency_key(job_id, 0, bucket=_rearm_bucket(t2, settings))
     )
     assert bucketed_t2 != bucketed_t1
-    assert bucketed_t2 in await outbox_keys()  # fresh re-arm despite two wedge rows
+    second_rearm = await outbox_event(bucketed_t2)
+    assert second_rearm is not None  # fresh re-arm despite two wedge rows
+    assert second_rearm.status == "pending"
+    assert second_rearm.delivery_attempts == 0
+    assert second_rearm.published_at is None
 
-    # The worker consumes the fresh resume (checkpoint 0) and COMPLETES.
-    await worker.process(job_id, "resume")
-    job = await session_factory_get(session_factory, job_id)
-    assert job.status in ("completed", "completed_with_errors")
-    assert job.succeeded_rows == 2 and job.failed_rows == 0
-    async with session_factory() as session:
-        assert (await session.scalar(select(func.count()).select_from(Issue))) == 2  # no dupes
-
-
-async def session_factory_get(session_factory, job_id):
-    async with session_factory() as session:
-        from mesh.db.models.data_job import DataJob
-
-        return await session.get(DataJob, job_id)
+    # Consume the fresh resume through the real outbox relay handler, then
+    # wait until BOTH the event and all job/ledger/entity invariants are in a
+    # durable terminal state.  Neither a transient pending event nor a lone
+    # completed status is sufficient proof that recovery converged.
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"data_job.resume": worker.handle_resume},
+        batch_size=1,
+        lock_timeout=0,
+    )
+    relayed = await relay.run_once()
+    assert relayed.claimed == 1
+    assert relayed.published == 1
+    assert relayed.failed == 0
+    await _wait_recovery_terminal(
+        session_factory,
+        workspace_id=ws_uuid,
+        job_id=job_id,
+        resume_key=bucketed_t2,
+    )
 
 
 async def test_auto_infer_default_flow_works_under_app_role_rls(

@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Fixed
+
+- **数据作业 e2e 确定性收敛(MES-149)**:清零两处 `@pytest.mark.flaky`——`source_changed` 失败通知改为按目标 job group key 轮询 critical 终态;H2 同 checkpoint 双崩溃用例将真实 worker 改为每例生命周期,杜绝模块级后台 reaper 与受控时钟抢锁,并经真实 in-process outbox relay 消费第二次 resume,联合等待 outbox published、job 精确 completed、租约/checkpoint/计数与实体台账全部收敛。同步记录 CI 分片取舍:不在共享数据库/Redis 上启用 xdist,后续仅采用独立服务栈的 job 级分片 + 原始 coverage data 聚合门禁。
+
 ## [0.27.0] - 2026-08-01
 
 前端设计优化 Stage 1 批次③/④(MES-111 / MES-126 / MES-127)——成员与 Agent 名册、收件箱、聊天、账号/工作区设置、统一搜索/命令面板、Analytics 与统一审批页完成逐页设计对齐；沉淀 `ConversationLayout`、`RunStateBadge`、`SettingsLayout` 等稳定 patterns，核销 G3/G4/G10/G11/G19，并落地六类全局搜索与迁移 0035。审批入口补齐真实 `/me` agent principal 双路由门禁，快捷键补齐 IME 全局豁免、`G —` 等待态及 `/` 默认行为抑制；聊天附件事务可见性与会话属主读门同步加固。前端 3856 例单测全绿，整体行覆盖 98.3%、分支覆盖 92.82%、变更覆盖 99.0%，逐文件 189 文件 ≥90%；批次④ production 鉴权桌面/手机真实 E2E 10/10、后端 CI 4148 例与覆盖率 91.07%、GitHub 14 项门禁全绿。合入同时包含浏览器 mock e2e 稳定化、来源审计外置/容器 Node 版本对齐，以及 `brace-expansion` 拒绝服务漏洞补丁。
