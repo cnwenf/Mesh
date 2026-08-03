@@ -143,7 +143,7 @@
 - [x] `Ctrl/Cmd+K` 任意页面（含输入框内）打开命令面板；居中浮层 ~640px，限高内滚动，选中行始终可视（依据: search-command-palette.md §4.1）— 现状 ✅（`shortcuts/CommandPalette.tsx`；`e2e/real-mes111-b4.spec.ts` 桌面真实键盘路径）
 - [x] **六类对象跨模块搜索**：issue（identifier/标题）、成员、agent、项目、视图、聊天会话，按类型分组组头（依据: search-command-palette.md §1.2 S2）— 现状 ✅（MES-111 批次④：`backend/src/mesh/search/` + `shortcuts/usePaletteData.ts`/`PaletteResults.tsx`；后端真实 e2e 见 `backend/tests/e2e/test_search_e2e.py`，浏览器存证见 `e2e/evidence/mes111-b4/`）
 - [x] 顶栏搜索框为真实控件：输入即展开同一结果视图，`/` 聚焦（依据: search-command-palette.md §1.2）— 现状 ✅（MES-111 批次④：`shell/TopBar.tsx` 与面板共用 `PaletteResults` + `usePaletteData`；`TopBar.test.tsx` 与 `e2e/real-mes111-b4.spec.ts` 覆盖输入、键盘、鼠标路径）
-- [x] 命令全集九组：顶层导航、设置子页、待审批、新建 issue、主题×4、复制当前深链、收藏/取消收藏、标记全部已读（随当前 filter）、帮助层；无权命令不注册不渲染（依据: search-command-palette.md §1.2 S3）— 现状 ✅（`shell/shortcutsRegistration.ts` 的 `issue.new` 与其余角色门控命令同源注册；MES-161 复验零查询面板与真实键盘/触控入口）
+- [x] 命令全集九组：顶层导航、设置子页、待审批、新建 issue、主题×4、复制当前深链、收藏/取消收藏、标记全部已读（随当前 filter）、帮助层；无权命令不注册不渲染（依据: search-command-palette.md §1.2 S3）— 现状 ✅（新建 issue 命令与其余角色门控命令同源注册于 `shell/shortcutsRegistration.ts`；MES-161 复验零查询面板与真实键盘/触控入口）
 - [x] 空 query 数据流：favorites → recents（本地三元组隔离键）→ 常用命令；失权对象惰性清理（依据: search-command-palette.md §4.2.1）— 现状 ✅（`usePaletteData.ts` 在打开面板时校验实体并调用 `removeRecent` 清理失权项；MES-161 补齐回归与不安全 URL 负向测试）
 - [x] identifier 精确命中（`web-124` → `WEB-124`）顶置直达，跳过防抖（依据: search-command-palette.md §2.2）— 现状 ✅（`useEntitySearch.ts` 跳过 120ms 防抖；`backend/tests/e2e/test_search_e2e.py` 与 `e2e/real-mes111-b4.spec.ts` 覆盖大小写直达）
 - [x] 模糊搜索分层打分 + 命中字符高亮（字重/下划线叠加，不以颜色为唯一信号）（依据: search-command-palette.md §3.1/§4.1）— 现状 ✅（`backend/src/mesh/search/scoring.py` 分层打分，`PaletteResults.tsx` 以 `<mark>` 字重+下划线渲染；对应后端 e2e 与 `PaletteResults.test.tsx`）
