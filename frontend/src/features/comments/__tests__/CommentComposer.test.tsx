@@ -30,6 +30,15 @@ beforeEach(() => {
 });
 
 describe('CommentComposer', () => {
+  it('renders composer controls through the shared design-system adapters', () => {
+    renderComposer();
+
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('data-slot', 'textarea');
+    expect(screen.getByTestId('composer-preview-toggle')).toHaveAttribute('data-slot', 'button');
+    expect(screen.getByTestId('composer-submit')).toHaveAttribute('data-slot', 'button');
+    expect(screen.getByTestId('composer-suppress').closest('.mesh-checkbox')).not.toBeNull();
+  });
+
   it('shows the agent will-run badge (sparkle icon + wording) in the autocomplete', () => {
     renderComposer();
     typeInto('@code');
@@ -115,9 +124,11 @@ describe('CommentComposer', () => {
     // 正文 + 提及均保留在输入框与草稿中
     const after = screen.getByTestId('composer-input') as HTMLTextAreaElement;
     expect(after.value).toContain('mention://member/mem-2');
-    expect(window.localStorage.getItem('mesh.comments.draft.iss-test')).toContain('mention://member/mem-2');
+    expect(window.localStorage.getItem('mesh.comments.draft.iss-test')).toContain(
+      'mention://member/mem-2',
+    );
     // retry 按钮可达
-    expect(screen.getByTestId('composer-retry')).toBeTruthy();
+    expect(screen.getByTestId('composer-retry')).toHaveAttribute('data-slot', 'button');
   });
 
   it('toggles the markdown preview', () => {

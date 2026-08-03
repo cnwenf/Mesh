@@ -10,7 +10,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, DataView, EmptyState, ErrorState, FilterChips, Icon, Select, useListKeyboardSelection, useToast } from '../../design';
+import {
+  Button,
+  Checkbox,
+  DataView,
+  EmptyState,
+  ErrorState,
+  FilterChips,
+  Icon,
+  Input,
+  Select,
+  useListKeyboardSelection,
+  useToast,
+} from '../../design';
 import type { FilterChip } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
@@ -32,6 +44,7 @@ import {
 import type { SavedView } from './issuesSavedViews';
 import { nextIssueSort, parseIssueSort, sortIssues } from './issuesSort';
 import type { IssueSortField, IssueSortState } from './issuesSort';
+import { workspaceIssueByIdentifierPath } from './issueRoutes';
 import { applyIssueListFrame } from './realtime';
 import type { IssuePriority, IssueSummary, IssueStatusRef, StateCategory } from './types';
 import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
@@ -170,8 +183,7 @@ export function IssuesPage(): React.JSX.Element {
       const [page, defs] = await Promise.all([
         listIssues(client, workspace.workspace_id, {
           q: qFilter === '' ? undefined : qFilter,
-          state_category:
-            categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
+          state_category: categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
           priority: priorityFilter === ALL ? undefined : (priorityFilter as IssuePriority),
           assignee_id:
             mineOnly && currentMemberIdRef.current !== null
@@ -199,7 +211,15 @@ export function IssuesPage(): React.JSX.Element {
     }
     // currentMemberId 仅在 mine 过滤时影响结果,避免无关的重拉(首载竞态 B4)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, workspace, qFilter, categoryFilter, priorityFilter, mineOnly, mineOnly ? currentMemberId : null]);
+  }, [
+    client,
+    workspace,
+    qFilter,
+    categoryFilter,
+    priorityFilter,
+    mineOnly,
+    mineOnly ? currentMemberId : null,
+  ]);
 
   useEffect(() => {
     void load();
@@ -232,9 +252,7 @@ export function IssuesPage(): React.JSX.Element {
         state_category: categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
         priority: priorityFilter === ALL ? undefined : (priorityFilter as IssuePriority),
         assignee_id:
-          mineOnly && currentMemberIdRef.current !== null
-            ? currentMemberIdRef.current
-            : undefined,
+          mineOnly && currentMemberIdRef.current !== null ? currentMemberIdRef.current : undefined,
         sort: 'created_at',
         order: 'desc',
         limit: PAGE_LIMIT,
@@ -248,7 +266,10 @@ export function IssuesPage(): React.JSX.Element {
       setNextCursor(page.nextCursor);
     } catch (err: unknown) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
-      toast.addToast(tRef.current(key), { tone: 'danger', closeLabel: tRef.current('common.close') });
+      toast.addToast(tRef.current(key), {
+        tone: 'danger',
+        closeLabel: tRef.current('common.close'),
+      });
     }
   }, [client, workspace, nextCursor, qFilter, categoryFilter, priorityFilter, mineOnly, toast]);
 
@@ -283,7 +304,10 @@ export function IssuesPage(): React.JSX.Element {
   const handleSort = useCallback(
     (field: IssueSortField) => {
       const next: IssueSortState | null = nextIssueSort(sort, field);
-      setParams({ sort: next !== null ? next.field : null, order: next !== null ? next.order : null });
+      setParams({
+        sort: next !== null ? next.field : null,
+        order: next !== null ? next.order : null,
+      });
     },
     [sort, setParams],
   );
@@ -303,7 +327,9 @@ export function IssuesPage(): React.JSX.Element {
     itemCount: sortedIssues.length,
     onOpen: (index) => {
       const issue = sortedIssues[index];
-      if (issue !== undefined) navigate(`/issues/${issue.id}`);
+      if (issue !== undefined) {
+        navigate(workspaceIssueByIdentifierPath(workspace?.workspace_slug, issue.identifier));
+      }
     },
     onToggle: (index) => {
       const issue = sortedIssues[index];
@@ -423,12 +449,13 @@ export function IssuesPage(): React.JSX.Element {
         onDelete={deleteView}
       />
       <div className="mesh-issues__filters" role="search">
-        <input
+        <Input
           type="search"
+          label={t('issues.filters.search')}
           value={qInput}
           onChange={(event) => setQInput(event.target.value)}
           placeholder={t('issues.filters.search')}
-          aria-label={t('issues.filters.search')}
+          className="mesh-issues__search-control"
           data-testid="issue-filter-q"
         />
         <Select
@@ -459,15 +486,13 @@ export function IssuesPage(): React.JSX.Element {
             </option>
           ))}
         </Select>
-        <label className="mesh-issues__mine">
-          <input
-            type="checkbox"
-            checked={mineOnly}
-            onChange={(event) => setParam('mine', event.target.checked ? 'true' : null)}
-            data-testid="issue-filter-mine"
-          />
-          {t('issues.filters.mine')}
-        </label>
+        <Checkbox
+          className="mesh-issues__mine"
+          label={t('issues.filters.mine')}
+          checked={mineOnly}
+          onChange={(event) => setParam('mine', event.target.checked ? 'true' : null)}
+          data-testid="issue-filter-mine"
+        />
       </div>
       <FilterChips
         chips={chips}
@@ -486,7 +511,14 @@ export function IssuesPage(): React.JSX.Element {
         requestOptimisticStepComplete('create_first_issue'); // §1.2.2 乐观推进步骤 3
         // F3:新建结果遵循当前过滤水位;不匹配则重拉(而非错误前置)
         if (
-          matchesFilters(created, categoryFilter, priorityFilter, mineOnly, currentMemberId, qFilter)
+          matchesFilters(
+            created,
+            categoryFilter,
+            priorityFilter,
+            mineOnly,
+            currentMemberId,
+            qFilter,
+          )
         ) {
           setIssues((prev) => [created, ...prev.filter((i) => i.id !== created.id)]);
         } else {
@@ -523,6 +555,7 @@ export function IssuesPage(): React.JSX.Element {
       <>
         {quickCreate}
         <IssueListTable
+          workspaceSlug={workspace!.workspace_slug}
           issues={sortedIssues}
           sort={sort}
           onSort={handleSort}
@@ -532,7 +565,9 @@ export function IssuesPage(): React.JSX.Element {
           allSelected={allSelected}
           someSelected={someSelected}
           keyboard={keyboard}
-          onOpen={(issue) => navigate(`/issues/${issue.id}`)}
+          onOpen={(issue) =>
+            navigate(workspaceIssueByIdentifierPath(workspace!.workspace_slug, issue.identifier))
+          }
         />
       </>
     );

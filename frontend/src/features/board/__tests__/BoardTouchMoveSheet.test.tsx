@@ -16,30 +16,51 @@ import { ensurePointerEvent } from './dragTestUtils';
 
 function card(id: string, position: number): BoardCard {
   return {
-    id, identifier: `WEB-${id}`, title: `Card ${id}`, state_category: 'todo',
-    status: { id: 'st', name: 'Todo', category: 'todo' }, status_id: 'st', priority: 'high',
-    assignee: null, assignee_id: null, project_id: null, position, version: 1, updated_at: '',
+    id,
+    identifier: `WEB-${id}`,
+    title: `Card ${id}`,
+    state_category: 'todo',
+    status: { id: 'st', name: 'Todo', category: 'todo' },
+    status_id: 'st',
+    priority: 'high',
+    assignee: null,
+    assignee_id: null,
+    project_id: null,
+    position,
+    version: 1,
+    updated_at: '',
   };
 }
 
 function column(key: string, overrides: Partial<BoardColumn> = {}): BoardColumn {
   return {
-    key, label: `board.category.${key}`, collapsed: false, wip: null, count: 0,
-    placeholder: false, ...overrides,
+    key,
+    label: `board.category.${key}`,
+    collapsed: false,
+    wip: null,
+    count: 0,
+    placeholder: false,
+    ...overrides,
   };
 }
 
-function renderTouch(overrides: { columns?: BoardColumn[]; cardsByKey?: Record<string, BoardCard[]> } = {}) {
+function renderTouch(
+  overrides: { columns?: BoardColumn[]; cardsByKey?: Record<string, BoardCard[]> } = {},
+) {
   const onDropCard = vi.fn();
   renderWithProviders(
     <BoardColumns
-      columns={overrides.columns ?? [
-        column('todo'),
-        column('in_progress', { wip: { limit: 1, enforcement: 'block' }, count: 1 }),
-        column('done'),
-      ]}
+      columns={
+        overrides.columns ?? [
+          column('todo'),
+          column('in_progress', { wip: { limit: 1, enforcement: 'block' }, count: 1 }),
+          column('done'),
+        ]
+      }
       groupBy="state_category"
-      cardsByKey={overrides.cardsByKey ?? { todo: [card('a', 1), card('b', 2)], in_progress: [card('x', 5)] }}
+      cardsByKey={
+        overrides.cardsByKey ?? { todo: [card('a', 1), card('b', 2)], in_progress: [card('x', 5)] }
+      }
       canWrite
       dragEnabled
       onToggleCollapse={vi.fn()}
@@ -76,7 +97,12 @@ describe('BoardTouchMoveSheet 触摸移动(§8.3)', () => {
 
   it('长按第二分组的卡片亦可打开 sheet(跨组查找)', () => {
     renderTouch();
-    fireEvent.pointerDown(screen.getByTestId('board-card-x'), { clientX: 10, clientY: 10, button: 0, pointerType: 'touch' });
+    fireEvent.pointerDown(screen.getByTestId('board-card-x'), {
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+      pointerType: 'touch',
+    });
     act(() => {
       vi.advanceTimersByTime(350);
     });
@@ -96,11 +122,17 @@ describe('BoardTouchMoveSheet 触摸移动(§8.3)', () => {
 
   it('block 满载列禁用并附原因', () => {
     renderTouch();
-    fireEvent.pointerDown(screen.getByTestId('board-card-a'), { clientX: 10, clientY: 10, button: 0, pointerType: 'touch' });
+    fireEvent.pointerDown(screen.getByTestId('board-card-a'), {
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+      pointerType: 'touch',
+    });
     act(() => {
       vi.advanceTimersByTime(350);
     });
     const blocked = screen.getByTestId('touch-column-in_progress');
+    expect(blocked).toHaveAttribute('data-slot', 'button');
     expect(blocked).toBeDisabled();
     expect(screen.getByTestId('touch-blocked-reason-in_progress').textContent).toContain(
       'This column has reached its WIP limit; drop is blocked',
@@ -109,7 +141,12 @@ describe('BoardTouchMoveSheet 触摸移动(§8.3)', () => {
 
   it('选择列 → onDropCard(末尾位置) + 关闭 sheet', () => {
     const { onDropCard } = renderTouch();
-    fireEvent.pointerDown(screen.getByTestId('board-card-a'), { clientX: 10, clientY: 10, button: 0, pointerType: 'touch' });
+    fireEvent.pointerDown(screen.getByTestId('board-card-a'), {
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+      pointerType: 'touch',
+    });
     act(() => {
       vi.advanceTimersByTime(350);
     });
@@ -121,12 +158,19 @@ describe('BoardTouchMoveSheet 触摸移动(§8.3)', () => {
 
   it('列内排序:顶/上移/下移/底 计算正确位置', () => {
     const { onDropCard } = renderTouch();
-    fireEvent.pointerDown(screen.getByTestId('board-card-a'), { clientX: 10, clientY: 10, button: 0, pointerType: 'touch' });
+    fireEvent.pointerDown(screen.getByTestId('board-card-a'), {
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+      pointerType: 'touch',
+    });
     act(() => {
       vi.advanceTimersByTime(350);
     });
     // a 在 todo(index 0, pos 1;b pos 2)。置顶 → index 0 → pos = 1-1 = 0。
-    fireEvent.click(screen.getByTestId('touch-move-top'));
+    const moveTop = screen.getByTestId('touch-move-top');
+    expect(moveTop).toHaveAttribute('data-slot', 'button');
+    fireEvent.click(moveTop);
     expect(onDropCard).toHaveBeenLastCalledWith('a', 'todo', 0);
     // 置底 → index null → pos = 2+1 = 3。
     fireEvent.click(screen.getByTestId('touch-move-bottom'));

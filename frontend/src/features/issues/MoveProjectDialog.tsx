@@ -139,7 +139,7 @@ export function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
           <Button variant="ghost" onClick={props.onCancel} data-testid="move-cancel">
             {t('issues.move.cancel')}
           </Button>
-          <Button onClick={() => void confirm()} disabled={isBusy} data-testid="move-confirm">
+          <Button onClick={() => void confirm()} isLoading={isBusy} data-testid="move-confirm">
             {t('issues.move.confirm')}
           </Button>
         </div>

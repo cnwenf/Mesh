@@ -679,6 +679,8 @@ features/
 
 **MES-158 组件底座契约**：前端以精确锁定的 `@appica/ui-react@1.0.0` 作为 UI 原语与应用外壳基础，仅从公开子路径按需导入，禁止根 barrel import。Mesh 的 `design/components` 继续是业务层唯一稳定接口：适配层负责保留既有 props、className、路由、权限和状态语义，feature 不直接绑定第三方组件 API。桌面侧栏、顶栏搜索和基础 Button/Input/Badge/Avatar/Kbd/Skeleton 由该底座渲染；后端接口、数据模型、路由表、Zustand 状态、Realtime 契约与 RBAC 均不得因视觉迁移改变。
 
+**MES-159 核心工作区页面契约**：工作区首页、项目列表/详情、issue 列表/详情与看板必须只通过 Mesh `design/components` 适配层消费组件库。页面级搜索、标题、描述、批量选择、表格、页签与动作按钮分别复用 Input、Textarea、Checkbox、DataTable、Tabs 与 Button；feature 不直接导入组件库。迁移须保留 `/w/:workspaceSlug/...` 规范深链、URL 筛选参数、API/Realtime 数据流、RBAC、测试选择器和键盘/触控语义，且桌面与手机、亮色与暗色均使用同一业务实现。
+
 **MES-160 通讯与管理页族契约**：收件箱、聊天、统一成员/Agent 名册与 Agent 详情，以及工作区设置、Runtime、Skill、Squad、Autopilot 页面统一组合 Mesh `DataView`、`ConversationLayout`、`SettingsLayout`、`Tabs` 与反馈组件；Table、Tabs、Textarea、Switch 的组件库实现只能位于 `design/components` 适配层，feature 继续只依赖 Mesh 接口。规范 `/w/:workspaceSlug/*` 页面必须以 `WorkspaceProvider` 解析出的工作区为唯一事实源，再从 `/users/me` 中精确匹配该 `workspace_id` 的成员身份；即使该身份不是返回列表首项，也不得退回首个 membership。仅旧扁平路由可在迁移层使用首 membership 兼容，并须把内部跳转收敛到当前 slug 的规范深链。
 
 `workspaceSlug` 同时是前端租户状态边界：规范路由在 slug 变化时必须同步重挂载完整工作区子树，清除页面本地状态，并使上一工作区的迟到请求失去写入目标；不得只等待 Provider 的异步 loading effect。共享 membership 解析器必须提供真实重试动作：`/users/me` 失败时重发成员身份请求，Provider 自身处于 error/not-found 时委派其 `refresh()`，且重试前一轮的迟到响应不得覆盖新结果。

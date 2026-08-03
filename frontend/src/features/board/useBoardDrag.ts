@@ -55,6 +55,7 @@ const SNAPBACK_MS = 180;
 interface PendingDrag {
   readonly cardId: string;
   readonly identifier: string;
+  readonly pointerType: string;
   readonly startX: number;
   readonly startY: number;
   readonly rect: DOMRect;
@@ -64,6 +65,7 @@ interface PendingDrag {
 interface BoardDragHandlers {
   move: (event: PointerEvent) => void;
   up: () => void;
+  cancel: () => void;
   key: (event: KeyboardEvent) => void;
 }
 
@@ -130,7 +132,23 @@ export function useBoardDrag(
       const pending = pendingRef.current;
       if (pending === null) return;
       if (!activeRef.current) {
-        if (exceedsDragThreshold(pending.startX, pending.startY, event.clientX, event.clientY, DRAG_THRESHOLD)) {
+        if (
+          exceedsDragThreshold(
+            pending.startX,
+            pending.startY,
+            event.clientX,
+            event.clientY,
+            DRAG_THRESHOLD,
+          )
+        ) {
+          // 触屏拖动越过 slop 表示用户要滚动/横向切列。移动端只通过长按
+          // 打开目标列 sheet，不进入需要精确命中的浮动拖拽模式。
+          if (pending.pointerType === 'touch') {
+            clearPending();
+            activeRef.current = false;
+            setTracking(false);
+            return;
+          }
           if (pending.timer != null) clearTimeout(pending.timer);
           activeRef.current = true;
           lastHitColumnRef.current = null;
@@ -152,7 +170,8 @@ export function useBoardDrag(
       }
       const columns = getColumnRectsRef.current();
       const cardsByColumn: Record<string, readonly CardRect[]> = {};
-      for (const col of columns) cardsByColumn[col.columnKey] = getCardRectsRef.current(col.columnKey);
+      for (const col of columns)
+        cardsByColumn[col.columnKey] = getCardRectsRef.current(col.columnKey);
       const hit = hitTest(event.clientX, event.clientY, columns, cardsByColumn);
       const prev = dragStateRef.current;
       if (prev === null) return;
@@ -196,8 +215,7 @@ export function useBoardDrag(
       }
       setTracking(false);
     },
-    key: (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
+    cancel: (): void => {
       clearPending();
       if (activeRef.current) {
         activeRef.current = false;
@@ -213,6 +231,10 @@ export function useBoardDrag(
         }
       }
       setTracking(false);
+    },
+    key: (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      handlersRef.current.cancel();
     },
   };
 
@@ -230,13 +252,16 @@ export function useBoardDrag(
     if (!tracking) return;
     const move = (event: PointerEvent): void => handlersRef.current.move(event);
     const up = (): void => handlersRef.current.up();
+    const cancel = (): void => handlersRef.current.cancel();
     const key = (event: KeyboardEvent): void => handlersRef.current.key(event);
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', cancel);
     document.addEventListener('keydown', key);
     return () => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', cancel);
       document.removeEventListener('keydown', key);
     };
   }, [tracking]);
@@ -254,10 +279,20 @@ export function useBoardDrag(
         // 计时器仅在 pending 存活时触发(越阈值/抬起/卸载均先 clearTimeout),故无需空判。
         timer = setTimeout(() => {
           pendingRef.current = null;
+          activeRef.current = false;
+          setTracking(false);
           callbacksRef.current.onLongPress(cardId);
         }, LONG_PRESS_MS);
       }
-      pendingRef.current = { cardId, identifier: cardIdentifier, startX, startY, rect, timer };
+      pendingRef.current = {
+        cardId,
+        identifier: cardIdentifier,
+        pointerType: event.pointerType,
+        startX,
+        startY,
+        rect,
+        timer,
+      };
       setTracking(true);
     },
     [],

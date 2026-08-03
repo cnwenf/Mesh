@@ -14,6 +14,7 @@ import { useT } from '../../i18n';
 import { MemberAvatarWall } from '../squads/MemberAvatarWall';
 import { assignTask, getIssueAssignment, listSquads } from '../squads/api';
 import type { IssueAssignment, Squad } from '../squads/types';
+import { workspaceSquadPath } from './issueRoutes';
 import './issues.css';
 
 const SQUAD_LIST_LIMIT = 50;
@@ -66,7 +67,10 @@ function AssignToSquadDialog(props: AssignToSquadDialogProps): React.JSX.Element
       setError(null);
       try {
         await assignTask(client, props.workspaceId, squadId, { issue_id: props.issueId });
-        toast.addToast(t('issues.squad.assigned'), { tone: 'success', closeLabel: t('common.close') });
+        toast.addToast(t('issues.squad.assigned'), {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        });
         props.onAssigned();
         props.onClose();
       } catch (err: unknown) {
@@ -80,7 +84,12 @@ function AssignToSquadDialog(props: AssignToSquadDialogProps): React.JSX.Element
   );
 
   return (
-    <Dialog open onClose={props.onClose} title={t('issues.squad.assignTitle')} closeLabel={t('common.close')}>
+    <Dialog
+      open
+      onClose={props.onClose}
+      title={t('issues.squad.assignTitle')}
+      closeLabel={t('common.close')}
+    >
       <div className="mesh-issues__squad-picker" data-testid="issue-squad-picker">
         {squads === null ? (
           <Skeleton loadingLabel={t('common.loading')} />
@@ -89,7 +98,11 @@ function AssignToSquadDialog(props: AssignToSquadDialogProps): React.JSX.Element
         ) : (
           <ul className="mesh-issues__squad-list">
             {squads.map((squad) => (
-              <li key={squad.id} className="mesh-issues__squad-item" data-testid={`issue-squad-option-${squad.id}`}>
+              <li
+                key={squad.id}
+                className="mesh-issues__squad-item"
+                data-testid={`issue-squad-option-${squad.id}`}
+              >
                 <div className="mesh-issues__squad-item-info">
                   <span className="mesh-issues__squad-item-name">{squad.name}</span>
                   {squad.description !== null && squad.description !== '' ? (
@@ -121,6 +134,7 @@ function AssignToSquadDialog(props: AssignToSquadDialogProps): React.JSX.Element
 
 export interface IssueSquadAssignmentProps {
   readonly workspaceId: string;
+  readonly workspaceSlug: string;
   readonly issueId: string;
   /** 分派成功后通知父级重取 issue(负责人已被服务端改写为组长)。 */
   readonly onChanged: () => void;
@@ -158,7 +172,7 @@ export function IssueSquadAssignment(props: IssueSquadAssignmentProps): React.JS
     <div className="mesh-issues__squad" data-testid="issue-squad-assignment">
       {assignment !== null ? (
         <Link
-          to={`/squads/${assignment.squad_id}`}
+          to={workspaceSquadPath(props.workspaceSlug, assignment.squad_id)}
           className="mesh-issues__squad-badge"
           data-testid="issue-squad-badge"
         >
@@ -167,7 +181,10 @@ export function IssueSquadAssignment(props: IssueSquadAssignmentProps): React.JS
           </span>
           <span className="mesh-issues__squad-badge-text">
             {assignment.leader !== null
-              ? t('issues.squad.ledBy', { squad: assignment.squad_name, leader: assignment.leader.name })
+              ? t('issues.squad.ledBy', {
+                  squad: assignment.squad_name,
+                  leader: assignment.leader.name,
+                })
               : t('issues.squad.squadOnly', { squad: assignment.squad_name })}
           </span>
         </Link>

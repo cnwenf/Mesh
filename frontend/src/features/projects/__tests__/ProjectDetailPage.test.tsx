@@ -99,6 +99,7 @@ interface StubOptions {
   readonly updates?: readonly unknown[];
   readonly archiveStatus?: number;
   readonly deleteStatus?: number;
+  readonly me?: unknown;
 }
 
 function stubFetch(opts: StubOptions = {}) {
@@ -108,7 +109,7 @@ function stubFetch(opts: StubOptions = {}) {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, init });
-    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: opts.me ?? ME } });
     if (method === 'GET' && url.includes('/updates')) {
       return fakeResponse({
         body: { data: opts.updates ?? [UPDATE_1], next_cursor: null },
@@ -174,8 +175,10 @@ function renderDetail(): void {
     <Routes>
       <Route path="/projects" element={<div data-testid="projects-list-page" />} />
       <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      <Route path="/w/:workspaceSlug/projects" element={<div data-testid="projects-list-page" />} />
+      <Route path="/w/:workspaceSlug/projects/:projectId" element={<ProjectDetailPage />} />
     </Routes>,
-    { route: '/projects/prj-1' },
+    { route: '/w/team/projects/prj-1' },
   );
 }
 
@@ -192,11 +195,76 @@ describe('ProjectDetailPage', () => {
 
   it('renders header with name, status badge, health and progress', async () => {
     stubFetch();
-    renderDetail();
+    const { container } = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
     expect(await screen.findByText('Apollo')).toBeDefined();
+    expect(container.querySelector('.mesh-page-header')).not.toBeNull();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByText('APL')).toBeInTheDocument();
+    expect(screen.getByText('Public')).toBeInTheDocument();
+    expect(screen.getByTestId('settings-link')).toHaveAttribute(
+      'href',
+      '/w/team/projects/prj-1/settings',
+    );
     expect(screen.getByText('Active')).toBeDefined();
     expect(screen.getByText('On track')).toBeDefined();
     expect(screen.getByText('Moon landing')).toBeDefined();
+  });
+
+  it('多工作区时详情页按 route slug 保留设置与列表回跳上下文', async () => {
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    stubFetch({
+      me: { ...ME, memberships: [ME.memberships[0], betaMembership] },
+      project: makeProject({ workspace_id: 'ws-2' }),
+    });
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/w/:workspaceSlug/projects"
+          element={<div data-testid="projects-list-page" />}
+        />
+        <Route path="/w/:workspaceSlug/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/w/beta/projects/prj-1' },
+    );
+
+    await screen.findByTestId('project-detail-header');
+    expect(screen.getByTestId('settings-link')).toHaveAttribute(
+      'href',
+      '/w/beta/projects/prj-1/settings',
+    );
+  });
+
+  it('项目实际工作区与 route slug 不一致时拒绝渲染详情', async () => {
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    stubFetch({
+      me: { ...ME, memberships: [ME.memberships[0], betaMembership] },
+      project: makeProject({ workspace_id: 'ws-1' }),
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceSlug/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/w/beta/projects/prj-1' },
+    );
+
+    expect(await screen.findByText('You do not have access to that project.')).toBeInTheDocument();
+    expect(screen.queryByTestId('project-detail-header')).toBeNull();
   });
 
   it('opens and closes project export and import dialogs', async () => {
@@ -220,7 +288,10 @@ describe('ProjectDetailPage', () => {
     stubFetch();
     renderDetail();
     const user = userEvent.setup();
-    await user.click(await screen.findByTestId('tab-milestones'));
+    const milestoneTab = await screen.findByTestId('tab-milestones');
+    expect(milestoneTab).toHaveAttribute('data-slot', 'tabs-trigger');
+    expect(screen.getByRole('tablist')).toHaveAttribute('data-slot', 'tabs-list');
+    await user.click(milestoneTab);
     expect(await screen.findByTestId('milestone-list')).toBeDefined();
     expect(screen.getByText('GA launch')).toBeDefined();
     expect(screen.getByText('Beta')).toBeDefined();
@@ -316,7 +387,7 @@ describe('ProjectDetailPage', () => {
     await waitFor(() => {
       expect(callsTo(calls, 'DELETE', '/projects/prj-1').length).toBe(1);
     });
-    // 删除后路由回 /projects(占位列表页)
+    // 删除后路由回到同一工作区的项目列表。
     expect(await screen.findByTestId('projects-list-page')).toBeDefined();
   });
 
@@ -520,6 +591,8 @@ describe('ProjectDetailPage', () => {
     renderDetail();
     const toggle = await screen.findByTestId('archive-toggle-button');
     expect(toggle.textContent).toBe('Unarchive');
+    expect(screen.getByTestId('update-status-button')).toBeDisabled();
+    expect(screen.queryByTestId('health-light-button')).toBeNull();
 
     await user.click(toggle);
 
@@ -577,7 +650,7 @@ function makeFakeRealtime(): FakeRealtime {
 
 function renderDetailWithRealtime(realtime: FakeRealtime): void {
   render(
-    <MemoryRouter initialEntries={['/projects/prj-1']}>
+    <MemoryRouter initialEntries={['/w/team/projects/prj-1']}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
@@ -585,6 +658,14 @@ function renderDetailWithRealtime(realtime: FakeRealtime): void {
               <Routes>
                 <Route path="/projects" element={<div data-testid="projects-list-page" />} />
                 <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+                <Route
+                  path="/w/:workspaceSlug/projects"
+                  element={<div data-testid="projects-list-page" />}
+                />
+                <Route
+                  path="/w/:workspaceSlug/projects/:projectId"
+                  element={<ProjectDetailPage />}
+                />
               </Routes>
             </RealtimeContext.Provider>
           </ToastLayer>

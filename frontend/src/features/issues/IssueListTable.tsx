@@ -9,11 +9,13 @@
 /* eslint-disable react-refresh/only-export-components -- formatDueDate 为行内纯助手,与表格组件同模块契约 */
 import { Link } from 'react-router';
 import { useIntl } from 'react-intl';
-import { Avatar, Icon, Menu } from '../../design';
+import { Avatar, Badge, Button, Checkbox, DataTableSurface, Icon, Menu } from '../../design';
 import type { ListKeyboardSelection } from '../../design';
 import { formatDate, useT } from '../../i18n';
 import type { IssueSummary } from './types';
 import type { IssueSortField, IssueSortState } from './issuesSort';
+import { categoryTone } from './issuePresentation';
+import { workspaceIssueByIdentifierPath } from './issueRoutes';
 import './issues.css';
 
 /**
@@ -43,17 +45,21 @@ function SortableHeader(props: SortableHeaderProps): React.JSX.Element {
   const ariaSort = active ? (sort.order === 'asc' ? 'ascending' : 'descending') : 'none';
   return (
     <th scope="col" aria-sort={ariaSort} className="mesh-issues__th--sortable">
-      <button type="button" className="mesh-issues__sort-button" onClick={() => onSort(field)}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="mesh-issues__sort-button"
+        onClick={() => onSort(field)}
+      >
         {label}
-        {active ? (
-          <Icon name={sort.order === 'asc' ? 'arrow-up' : 'arrow-down'} size={16} />
-        ) : null}
-      </button>
+        {active ? <Icon name={sort.order === 'asc' ? 'arrow-up' : 'arrow-down'} size={16} /> : null}
+      </Button>
     </th>
   );
 }
 
 interface IssueRowProps {
+  readonly workspaceSlug: string;
   readonly issue: IssueSummary;
   readonly index: number;
   readonly isSelected: boolean;
@@ -64,7 +70,7 @@ interface IssueRowProps {
 }
 
 function IssueRow(props: IssueRowProps): React.JSX.Element {
-  const { issue, index, isSelected, onToggleOne, onOpen, keyboard, locale } = props;
+  const { workspaceSlug, issue, index, isSelected, onToggleOne, onOpen, keyboard, locale } = props;
   const t = useT();
   const assigneeName =
     issue.assignee !== null
@@ -80,8 +86,9 @@ function IssueRow(props: IssueRowProps): React.JSX.Element {
       onFocus={() => keyboard.activate(index)}
     >
       <td className="mesh-issues__cell--select">
-        <input
-          type="checkbox"
+        <Checkbox
+          className="mesh-issues__selection-control"
+          label={`${t('issues.columns.select')} ${issue.identifier}`}
           checked={isSelected}
           onChange={() => onToggleOne(issue.id)}
           aria-label={`${t('issues.columns.select')} ${issue.identifier}`}
@@ -90,13 +97,16 @@ function IssueRow(props: IssueRowProps): React.JSX.Element {
       </td>
       <td className="mesh-issues__identifier">{issue.identifier}</td>
       <td className="mesh-issues__cell--title">
-        <Link to={`/issues/${issue.id}`} className="mesh-issues__title-link">
+        <Link
+          to={workspaceIssueByIdentifierPath(workspaceSlug, issue.identifier)}
+          className="mesh-issues__title-link"
+        >
           {issue.title}
         </Link>
       </td>
       <td className="mesh-issues__cell--status">
         <span
-          className="mesh-issues__status-chip"
+          className="mesh-issues__status-accent"
           data-testid={`issue-status-${issue.id}`}
           style={
             issue.status !== null && issue.status.color !== null
@@ -104,17 +114,17 @@ function IssueRow(props: IssueRowProps): React.JSX.Element {
               : undefined
           }
         >
-          {issue.status !== null ? issue.status.name : t(`issues.category.${issue.state_category}`)}
+          <Badge tone={categoryTone(issue.state_category)} className="mesh-issues__status-chip">
+            {issue.status !== null
+              ? issue.status.name
+              : t(`issues.category.${issue.state_category}`)}
+          </Badge>
         </span>
       </td>
       <td className="mesh-issues__cell--priority">{t(`issues.priority.${issue.priority}`)}</td>
       <td className="mesh-issues__cell--assignee">
         {issue.assignee !== null ? (
-          <Avatar
-            name={issue.assignee.name}
-            kind={issue.assignee.member_type}
-            size={20}
-          />
+          <Avatar name={issue.assignee.name} kind={issue.assignee.member_type} size={20} />
         ) : null}
         <span>{assigneeName}</span>
       </td>
@@ -125,7 +135,12 @@ function IssueRow(props: IssueRowProps): React.JSX.Element {
           triggerLabel={t('issues.rowActions')}
           trigger={<Icon name="more-horizontal" size={16} />}
           entries={[
-            { key: 'open', label: t('issues.rowOpen'), icon: 'external', onSelect: () => onOpen(issue) },
+            {
+              key: 'open',
+              label: t('issues.rowOpen'),
+              icon: 'external',
+              onSelect: () => onOpen(issue),
+            },
             {
               key: 'toggle',
               label: isSelected ? t('issues.rowDeselect') : t('issues.rowSelect'),
@@ -140,6 +155,7 @@ function IssueRow(props: IssueRowProps): React.JSX.Element {
 }
 
 export interface IssueListTableProps {
+  readonly workspaceSlug: string;
   readonly issues: readonly IssueSummary[];
   readonly sort: IssueSortState | null;
   readonly onSort: (field: IssueSortField) => void;
@@ -154,6 +170,7 @@ export interface IssueListTableProps {
 
 export function IssueListTable(props: IssueListTableProps): React.JSX.Element {
   const {
+    workspaceSlug,
     issues,
     sort,
     onSort,
@@ -169,28 +186,47 @@ export function IssueListTable(props: IssueListTableProps): React.JSX.Element {
   const intl = useIntl();
   return (
     <div className="mesh-issues__list-container" ref={keyboard.containerRef}>
-      <table className="mesh-issues__table" data-testid="issue-table">
+      <DataTableSurface className="mesh-issues__table" data-testid="issue-table">
         <caption className="sr-only">{t('issues.tableCaption')}</caption>
         <thead>
           <tr>
             <th scope="col" className="mesh-issues__th--select">
-              <input
-                type="checkbox"
+              <Checkbox
+                className="mesh-issues__selection-control"
+                label={t('issues.columns.selectAll')}
                 checked={allSelected}
-                ref={(el) => {
-                  if (el !== null) el.indeterminate = someSelected && !allSelected;
-                }}
+                indeterminate={someSelected && !allSelected}
                 onChange={onToggleAll}
                 aria-label={t('issues.columns.selectAll')}
                 data-testid="issue-select-all"
               />
             </th>
-            <SortableHeader field="identifier" label={t('issues.columns.key')} sort={sort} onSort={onSort} />
-            <SortableHeader field="title" label={t('issues.columns.title')} sort={sort} onSort={onSort} />
+            <SortableHeader
+              field="identifier"
+              label={t('issues.columns.key')}
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortableHeader
+              field="title"
+              label={t('issues.columns.title')}
+              sort={sort}
+              onSort={onSort}
+            />
             <th scope="col">{t('issues.columns.status')}</th>
-            <SortableHeader field="priority" label={t('issues.columns.priority')} sort={sort} onSort={onSort} />
+            <SortableHeader
+              field="priority"
+              label={t('issues.columns.priority')}
+              sort={sort}
+              onSort={onSort}
+            />
             <th scope="col">{t('issues.columns.assignee')}</th>
-            <SortableHeader field="due" label={t('issues.columns.due')} sort={sort} onSort={onSort} />
+            <SortableHeader
+              field="due"
+              label={t('issues.columns.due')}
+              sort={sort}
+              onSort={onSort}
+            />
             <th scope="col" className="mesh-issues__th--actions">
               <span className="sr-only">{t('issues.rowActions')}</span>
             </th>
@@ -200,6 +236,7 @@ export function IssueListTable(props: IssueListTableProps): React.JSX.Element {
           {issues.map((issue, index) => (
             <IssueRow
               key={issue.id}
+              workspaceSlug={workspaceSlug}
               issue={issue}
               index={index}
               isSelected={selected.has(issue.id)}
@@ -210,7 +247,7 @@ export function IssueListTable(props: IssueListTableProps): React.JSX.Element {
             />
           ))}
         </tbody>
-      </table>
+      </DataTableSurface>
     </div>
   );
 }

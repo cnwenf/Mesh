@@ -1,9 +1,9 @@
 /**
- * 项目模块特性级小组件(设计系统无 Badge/Avatar/ProgressBar,按 §6.12 就地实现)。
- * 仅用语义 token 着色(见 projects.css);状态语义一律有文本兜底,颜色非唯一信号。
+ * 项目模块特性级小组件。徽章、头像和状态点统一经共享设计
+ * 适配器渲染;项目状态始终保留文本信号，不只依赖颜色。
  */
-import { useId } from 'react';
-import { StatusDot } from '../../design';
+import { Avatar, Badge, Button, StatusDot, Textarea } from '../../design';
+import type { BadgeTone } from '../../design';
 import { useT } from '../../i18n';
 import type { ProjectHealth, ProjectStatus } from './types';
 
@@ -15,10 +15,20 @@ export interface StatusBadgeProps {
 
 /** 项目状态徽章:planning=info / active=success / paused=warn / completed=neutral / cancelled=danger。 */
 export function StatusBadge(props: StatusBadgeProps): React.JSX.Element {
+  const tones: Readonly<Record<ProjectStatus, BadgeTone>> = {
+    planning: 'info',
+    active: 'success',
+    paused: 'warning',
+    completed: 'neutral',
+    cancelled: 'danger',
+  };
   return (
-    <span className={`mesh-projects__badge mesh-projects__badge--${props.status}`}>
+    <Badge
+      tone={tones[props.status]}
+      className={`mesh-projects__badge mesh-projects__badge--${props.status}`}
+    >
       {props.label}
-    </span>
+    </Badge>
   );
 }
 
@@ -27,6 +37,7 @@ export interface HealthIndicatorProps {
   /** 提供时整灯可点击(§4.2 点击健康度灯更新状态);渲染为 button */
   readonly onClick?: () => void;
   readonly updateLabel?: string;
+  readonly testId?: string;
 }
 
 const HEALTH_TONES: Record<ProjectHealth, 'success' | 'warn' | 'danger'> = {
@@ -48,35 +59,37 @@ export function HealthIndicator(props: HealthIndicatorProps): React.JSX.Element 
     );
   if (onClick === undefined) return dot;
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="sm"
       className="mesh-projects__health-button"
-      data-testid="health-light-button"
+      data-testid={props.testId ?? 'health-light-button'}
       onClick={onClick}
       aria-label={updateLabel ?? t('projects.detail.updateStatus')}
     >
       {dot}
-    </button>
+    </Button>
   );
 }
 
 export interface AvatarInitialProps {
-  /** 显示名(取首字符大写);空名回退占位符 */
+  /** 显示名;空名回退占位符 */
   readonly name: string;
-  /** 可访问名(如负责人姓名);提供时渲染 sr-only 文本 */
+  /** 可访问名(如负责人完整姓名) */
   readonly accessibleName?: string;
+  readonly kind?: 'human' | 'agent';
 }
 
-/** 头像首字圆(人/agent 通用;§4.1 卡片负责人位)。 */
+/** 项目负责人头像的兼容包装，内部使用共享头像语义。 */
 export function AvatarInitial(props: AvatarInitialProps): React.JSX.Element {
-  const initial = props.name.length > 0 ? props.name.slice(0, 1).toUpperCase() : '?';
+  const displayName = props.accessibleName ?? (props.name.trim().length > 0 ? props.name : '?');
   return (
-    <span className="mesh-projects__avatar" aria-hidden={props.accessibleName === undefined}>
-      {initial}
-      {props.accessibleName !== undefined ? (
-        <span className="sr-only">{props.accessibleName}</span>
-      ) : null}
-    </span>
+    <Avatar
+      name={displayName}
+      kind={props.kind ?? 'human'}
+      size={32}
+      className="mesh-projects__avatar"
+    />
   );
 }
 
@@ -90,22 +103,15 @@ export interface LabeledTextareaProps {
 
 /** 带可见标签的文本域(设计系统无 Textarea,复用 .mesh-field 词汇)。 */
 export function LabeledTextarea(props: LabeledTextareaProps): React.JSX.Element {
-  const autoId = useId();
-  const textareaId = `mesh-projects-textarea-${autoId}`;
   return (
-    <div className="mesh-field">
-      <label className="mesh-field__label" htmlFor={textareaId}>
-        {props.label}
-      </label>
-      <textarea
-        id={textareaId}
-        className="mesh-field__control mesh-projects__textarea"
-        value={props.value}
-        rows={props.rows ?? 3}
-        placeholder={props.placeholder}
-        onChange={(event) => props.onChange(event.target.value)}
-      />
-    </div>
+    <Textarea
+      label={props.label}
+      className="mesh-projects__textarea"
+      value={props.value}
+      rows={props.rows ?? 3}
+      placeholder={props.placeholder}
+      onChange={(event) => props.onChange(event.target.value)}
+    />
   );
 }
 

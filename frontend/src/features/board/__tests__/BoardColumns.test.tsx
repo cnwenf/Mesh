@@ -136,8 +136,12 @@ describe('BoardColumns 渲染', () => {
 
   it('渲染列内卡片;无卡片呈现空态文案', () => {
     render({ cardsByKey: { todo: [card('a', 1), card('b', 2)] } });
+    const todo = screen.getByTestId('board-column-todo');
     expect(screen.getByTestId('board-card-a')).toBeInTheDocument();
     expect(screen.getByTestId('board-card-b')).toBeInTheDocument();
+    const heading = screen.getByRole('heading', { name: 'Todo', level: 2 });
+    expect(todo).toHaveAttribute('aria-labelledby', heading.id);
+    expect(todo).not.toHaveAttribute('aria-label');
   });
 
   it('卡片可聚焦(键盘移动入口,§10.2)且标注 aria-keyshortcuts', () => {
@@ -145,6 +149,8 @@ describe('BoardColumns 渲染', () => {
     const cardA = screen.getByTestId('board-card-a');
     expect(cardA).toHaveAttribute('tabindex', '0');
     expect(cardA).toHaveAttribute('aria-keyshortcuts');
+    // 可访问名由真实卡片内容构成；不把未经本地化的英文 role 描述泄漏给读屏。
+    expect(cardA).not.toHaveAttribute('aria-roledescription');
   });
 
   it('仅注册 palette 命令，保留 BoardPage 所有的上下文与快捷键', () => {
@@ -291,7 +297,9 @@ describe('BoardColumns 渲染', () => {
   it('折叠列不渲染列体;展开/折叠回调', () => {
     const { onToggleCollapse } = render({ columns: [column({ collapsed: true })] });
     expect(screen.queryByTestId('column-body-todo')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const toggle = screen.getByRole('button', { expanded: false });
+    expect(toggle).toHaveAttribute('data-slot', 'button');
+    fireEvent.click(toggle);
     expect(onToggleCollapse).toHaveBeenCalledWith('todo');
   });
 
@@ -421,14 +429,54 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
   });
 
-  it('触摸端越过阈值进入指针拖拽(早于长按,清掉长按计时器)', () => {
+  it('触摸端移动越过阈值会交还滚动手势，不启动精细指针拖拽或长按 sheet', () => {
     const { onDropCard, cardA } = setupDragScene();
     fireEvent.pointerDown(cardA, { clientX: 10, clientY: 10, button: 0, pointerType: 'touch' });
-    fireEvent.pointerMove(document, { clientX: 20, clientY: 10 }); // 越阈值 → 进入拖拽
-    expect(screen.getByTestId('board-drag-clone')).toBeInTheDocument();
-    fireEvent.pointerMove(document, { clientX: 250, clientY: 150 }); // 命中 done
+    fireEvent.pointerMove(document, { clientX: 10, clientY: 40 });
+    expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.queryByTestId('board-touch-sheet')).not.toBeInTheDocument();
     fireEvent.pointerUp(document, { clientX: 250, clientY: 150 });
-    expect(onDropCard).toHaveBeenCalledWith('a', 'done', 15);
+    expect(onDropCard).not.toHaveBeenCalled();
+  });
+
+  it('pointercancel 取消活动拖拽并回位，不提交落点', () => {
+    const { onDropCard, cardA } = setupDragScene();
+    fireEvent.pointerDown(cardA, { clientX: 10, clientY: 10, button: 0, pointerType: 'mouse' });
+    // 非 Escape 键不应干预追踪状态。
+    fireEvent.keyDown(document, { key: 'Shift' });
+    fireEvent.pointerMove(document, { clientX: 20, clientY: 10 });
+    fireEvent.pointerMove(document, { clientX: 250, clientY: 150 });
+    expect(screen.getByTestId('board-drag-clone')).toBeInTheDocument();
+
+    fireEvent.pointerCancel(document, { clientX: 250, clientY: 150 });
+
+    expect(onDropCard).not.toHaveBeenCalled();
+    expect(screen.getByTestId('board-live')).toHaveTextContent('Cancelled dragging WEB-a');
+    expect(screen.getByTestId('board-drag-clone')).toHaveClass('mesh-board-drag__clone--returning');
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
+  });
+
+  it('pointercancel 可在触摸长按尚未触发时清理计时器', () => {
+    const { onDropCard, cardA } = setupDragScene();
+    fireEvent.pointerDown(cardA, {
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+      pointerType: 'touch',
+    });
+    fireEvent.pointerCancel(document, { clientX: 10, clientY: 10 });
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.queryByTestId('board-touch-sheet')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
+    expect(onDropCard).not.toHaveBeenCalled();
   });
 
   it('触摸长按打开等价移动 sheet，选列后落库路径并关闭', () => {
@@ -700,6 +748,7 @@ describe('BoardColumns 快速创建打磨(§4.5)', () => {
   it('回车提交并清空;空标题不提交', async () => {
     const { onQuickCreate } = render();
     const input = screen.getByTestId('quick-add-todo');
+    expect(input).toHaveAttribute('data-slot', 'input');
     fireEvent.change(input, { target: { value: '新卡' } });
     // act 包裹以冲刷 submit 内 pending 微任务(setPending)。
     await act(async () => {

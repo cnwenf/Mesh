@@ -6,7 +6,7 @@
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
@@ -109,6 +109,8 @@ interface FetchOptions {
   readonly failListOnce?: boolean;
   /** POST 创建以网络错误 reject(非 MeshApiError 分支) */
   readonly createRejects?: boolean;
+  /** 多工作区路由匹配场景的 /users/me 响应。 */
+  readonly me?: unknown;
 }
 
 function makeFetch(projects: readonly ListProjectsProject[], opts: FetchOptions = {}) {
@@ -119,7 +121,7 @@ function makeFetch(projects: readonly ListProjectsProject[], opts: FetchOptions 
     const method = init?.method ?? 'GET';
     calls.push({ url, init });
     if (url.includes('/users/me')) {
-      return fakeResponse({ body: { data: ME } });
+      return fakeResponse({ body: { data: opts.me ?? ME } });
     }
     if (method === 'POST' && url.includes('/projects')) {
       if (opts.createRejects === true) {
@@ -226,12 +228,17 @@ describe('ProjectsPage', () => {
     renderWithProviders(<ProjectsPage />, { route: '/projects' });
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Projects');
+    expect(screen.getByTestId('data-view')).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
 
     const cardA = await screen.findByTestId('project-card-prj-1');
-    expect(within(cardA).getByText('Apollo')).toBeInTheDocument();
+    expect(within(cardA).getByRole('link', { name: 'Apollo' })).toHaveAttribute(
+      'href',
+      '/w/team/projects/prj-1',
+    );
     expect(within(cardA).getByText('Active')).toBeInTheDocument();
     expect(within(cardA).getByText('On track')).toBeInTheDocument();
-    expect(within(cardA).getByText('Jane Doe')).toBeInTheDocument();
+    expect(within(cardA).getByRole('img', { name: 'Jane Doe' })).toBeInTheDocument();
     expect(within(cardA).getByRole('progressbar', { name: '5/10 done' })).toBeInTheDocument();
     expect(screen.getByTestId('project-date-prj-1')).toHaveTextContent('Due');
 
@@ -241,6 +248,69 @@ describe('ProjectsPage', () => {
     expect(within(cardB).getByText('No health set')).toBeInTheDocument();
     expect(within(cardB).queryByText('Jane Doe')).not.toBeInTheDocument();
     expect(screen.queryByTestId('project-date-prj-2')).not.toBeInTheDocument();
+  });
+
+  it('规范深链按 route slug 请求对应工作区,且卡片保留同一 slug', async () => {
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    const calls = stub([PROJECT_A], {
+      me: { ...ME, memberships: [ME.memberships[0], betaMembership] },
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceSlug/projects" element={<ProjectsPage />} />
+      </Routes>,
+      { route: '/w/beta/projects' },
+    );
+
+    const card = await screen.findByTestId('project-card-prj-1');
+    expect(listCalls(calls).some((call) => call.url.includes('/workspaces/ws-2/projects'))).toBe(
+      true,
+    );
+    expect(within(card).getByRole('link', { name: 'Apollo' })).toHaveAttribute(
+      'href',
+      '/w/beta/projects/prj-1',
+    );
+  });
+
+  it('route slug 无对应 membership 时不误读其他工作区项目', async () => {
+    const calls = stub([PROJECT_A]);
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceSlug/projects" element={<ProjectsPage />} />
+      </Routes>,
+      { route: '/w/missing/projects' },
+    );
+
+    expect(
+      await screen.findByText('You are not a member of any workspace yet.'),
+    ).toBeInTheDocument();
+    expect(listCalls(calls)).toHaveLength(0);
+  });
+
+  it('创建成功后进入同一工作区的规范项目详情深链', async () => {
+    stub([PROJECT_A]);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceSlug/projects" element={<ProjectsPage />} />
+        <Route
+          path="/w/:workspaceSlug/projects/:projectId"
+          element={<div data-testid="created-project-route" />}
+        />
+      </Routes>,
+      { route: '/w/team/projects' },
+    );
+
+    await user.click(await screen.findByTestId('new-project-button'));
+    await user.type(screen.getByTestId('create-project-name'), 'Tiny');
+    await user.click(screen.getByTestId('create-project-submit'));
+
+    expect(await screen.findByTestId('created-project-route')).toBeInTheDocument();
   });
 
   it('无项目时显示空态(onboarding 四要素)', async () => {
@@ -384,9 +454,7 @@ describe('ProjectsPage', () => {
 
     await user.click(screen.getByTestId('projects-load-more'));
 
-    expect(
-      await screen.findByText('Something went wrong. Please try again.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Something went wrong. Please try again.')).toBeInTheDocument();
   });
 
   it('实时帧 project.created 按当前筛选合并进列表', async () => {
@@ -487,10 +555,7 @@ describe('CreateProjectDialog(经 ProjectsPage 打开)', () => {
 
     await waitFor(() =>
       expect(
-        calls.some(
-          (c) =>
-            c.init?.method === 'POST' && c.url.includes('/workspaces/ws-1/projects'),
-        ),
+        calls.some((c) => c.init?.method === 'POST' && c.url.includes('/workspaces/ws-1/projects')),
       ).toBe(true),
     );
     const post = calls.find((c) => c.init?.method === 'POST');
@@ -570,7 +635,9 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     const nameInput = await screen.findByLabelText('Name');
     await user.type(nameInput, 'Broken');
     await user.click(screen.getByTestId('create-project-submit'));
-    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeDefined();
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeDefined();
   });
 
   it('名称为空时提交被禁用,不发请求', async () => {
@@ -618,9 +685,10 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     const listCountBefore = listCalls(calls).length;
 
     const card = screen.getByTestId('project-card-prj-1');
-    const healthZone = card.querySelector('span[role="presentation"]');
-    expect(healthZone).not.toBeNull();
-    await user.click(healthZone as HTMLElement);
+    expect(card.querySelector('[role="presentation"]')).toBeNull();
+    const healthButton = within(card).getByRole('button', { name: 'Update status' });
+    expect(healthButton).toHaveAttribute('data-testid', 'project-health-prj-1');
+    await user.click(healthButton);
     expect(await screen.findByTestId('health-update-form')).toBeDefined();
 
     await user.click(screen.getByTestId('health-update-submit'));
@@ -629,5 +697,4 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     await waitFor(() => expect(listCalls(calls).length).toBeGreaterThan(listCountBefore));
     await waitFor(() => expect(screen.queryByText('Update status')).toBeNull());
   });
-
 });

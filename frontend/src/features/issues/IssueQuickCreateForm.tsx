@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, Select } from '../../design';
+import { Button, Input, Select } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import type { Membership, MemberSummary } from '../members/types';
@@ -87,16 +87,14 @@ export function IssueQuickCreateForm(props: IssueQuickCreateFormProps): React.JS
         void submit(false);
       }}
     >
-      <label className="mesh-issues__field">
-        <span>{t('issues.create.title')}</span>
-        <input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder={t('issues.create.titlePlaceholder')}
-          data-testid="issue-create-title"
-          autoFocus
-        />
-      </label>
+      <Input
+        label={t('issues.create.title')}
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        placeholder={t('issues.create.titlePlaceholder')}
+        data-testid="issue-create-title"
+        autoFocus
+      />
       <Select
         label={t('issues.priority.label')}
         value={priority}
@@ -155,13 +153,14 @@ export function IssueQuickCreateForm(props: IssueQuickCreateFormProps): React.JS
         </p>
       ) : null}
       <div className="mesh-issues__create-actions">
-        <Button type="submit" disabled={isSaving || title.trim() === ''}>
+        <Button type="submit" isLoading={isSaving} disabled={title.trim() === ''}>
           {t('issues.create.submit')}
         </Button>
         <Button
           type="button"
           variant="secondary"
-          disabled={isSaving || title.trim() === ''}
+          isLoading={isSaving}
+          disabled={title.trim() === ''}
           onClick={() => void submit(true)}
         >
           {t('issues.create.submitMore')}

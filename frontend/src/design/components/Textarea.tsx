@@ -23,7 +23,17 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
 }
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function Textarea(
-  { label, error, hint, maxHeight = TEXTAREA_MAX_HEIGHT_PX, id, className, rows = 3, onChange, ...rest },
+  {
+    label,
+    error,
+    hint,
+    maxHeight = TEXTAREA_MAX_HEIGHT_PX,
+    id,
+    className,
+    rows = 3,
+    onChange,
+    ...rest
+  },
   ref,
 ) {
   const autoId = useId();
@@ -31,8 +41,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   const errorId = `${textareaId}-error`;
   const hintId = `${textareaId}-hint`;
   const describedBy =
-    [error ? errorId : null, hint ? hintId : null].filter((part): part is string => Boolean(part)).join(' ') ||
-    undefined;
+    [error ? errorId : null, hint ? hintId : null]
+      .filter((part): part is string => Boolean(part))
+      .join(' ') || undefined;
   const innerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const setRefs = useCallback(
@@ -75,6 +86,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
         ref={setRefs}
         id={textareaId}
         rows={rows}
+        inputSize="md"
         className={controlClasses}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}

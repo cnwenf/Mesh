@@ -118,7 +118,7 @@ export function IssuesBulkBar(props: IssuesBulkBarProps): React.JSX.Element | nu
             <Button
               variant="danger"
               size="sm"
-              disabled={isBusy}
+              isLoading={isBusy}
               onClick={() => setConfirmDelete(true)}
             >
               {t('issues.bulk.delete')}
@@ -138,7 +138,7 @@ export function IssuesBulkBar(props: IssuesBulkBarProps): React.JSX.Element | nu
         <div className="mesh-issues__confirm-actions">
           <Button
             variant="danger"
-            disabled={isBusy}
+            isLoading={isBusy}
             data-testid="bulk-delete-confirm"
             onClick={() => {
               setConfirmDelete(false);

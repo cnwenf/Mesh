@@ -575,6 +575,8 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 - 列头计数实时 = 当前可见卡片数 / WIP `limit`;超限 warn 黄、block 红。
 - (可选)超限时通知列负责人——属通知模块,本模块只发事件。
 
+看板遵循 design-quality.md §11 的 Mesh 适配层边界：视图切换、筛选/分组、列头、卡片动作、紧凑模式和触控移动面板统一复用共享 Button/Input/Select/Badge 等组件；feature 不直接依赖底层组件库。桌面拖拽、键盘移动与触控移动必须继续汇入同一原子 move 命令，迁移不得改变 WIP、乐观回滚、实时收敛或 `/w/:workspaceSlug/views/:viewId` 深链契约。
+
 ### 4.5 关键交互流程
 
 - **保存视图**:调好筛选/分组/排序 → 工具条"另存为" → 命名 + 选 `visibility` → 保存 → 出现在侧栏。

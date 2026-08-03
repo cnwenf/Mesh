@@ -52,8 +52,13 @@ function squadFixture(id: string, name: string) {
 
 function renderAssignment(onChanged: () => void = () => undefined): void {
   renderWithProviders(
-    <IssueSquadAssignment workspaceId="ws-1" issueId="iss-1" onChanged={onChanged} />,
-    { route: '/issues/iss-1' },
+    <IssueSquadAssignment
+      workspaceId="ws-1"
+      workspaceSlug="team"
+      issueId="iss-1"
+      onChanged={onChanged}
+    />,
+    { route: '/w/team/issues/iss-1' },
   );
 }
 
@@ -73,7 +78,7 @@ describe('IssueSquadAssignment', () => {
     const badge = await screen.findByTestId('issue-squad-badge');
     expect(badge.textContent).toContain('Platform');
     expect(badge.textContent).toContain('Owner');
-    expect(badge.getAttribute('href')).toBe('/squads/sq-1');
+    expect(badge.getAttribute('href')).toBe('/w/team/squads/sq-1');
     // 查询走 by-issue 端点
     expect(String(stub.calls[0].url)).toContain('/squads/assignments/by-issue/iss-1');
   });
@@ -85,6 +90,42 @@ describe('IssueSquadAssignment', () => {
     await screen.findByTestId('issue-squad-assignment');
     await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(1));
     expect(screen.queryByTestId('issue-squad-badge')).toBeNull();
+  });
+
+  it('renders a leaderless assignment and a squad without a description', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: { ...ASSIGNMENT, squad_name: '   ', leader: null } } }),
+      fakeResponse({
+        body: {
+          data: [{ ...squadFixture('sq-1', 'Platform'), description: null }],
+          next_cursor: null,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderAssignment();
+
+    const badge = await screen.findByTestId('issue-squad-badge');
+    expect(badge.querySelector('.mesh-issues__squad-badge-avatar')?.textContent).toBe('?');
+    fireEvent.click(screen.getByTestId('issue-assign-squad'));
+    await screen.findByTestId('issue-squad-option-sq-1');
+    expect(screen.queryByText('Owns the platform')).toBeNull();
+  });
+
+  it('keeps assignment controls usable when assignment lookup and squad listing fail', async () => {
+    const failure = () =>
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      });
+    const stub = stubFetch(failure(), failure());
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderAssignment();
+
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(1));
+    expect(screen.queryByTestId('issue-squad-badge')).toBeNull();
+    fireEvent.click(screen.getByTestId('issue-assign-squad'));
+    expect(await screen.findByTestId('issue-squad-error')).toBeTruthy();
   });
 
   it('assigns the issue to a squad from the dialog and refreshes', async () => {

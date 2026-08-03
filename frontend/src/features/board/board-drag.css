@@ -66,6 +66,10 @@
   cursor: pointer;
 }
 
+.mesh-board-touch__reorder-btn > .mesh-button__label {
+  justify-content: center;
+}
+
 .mesh-board-touch__reorder-btn:hover {
   background: var(--color-surface-hover);
 }
@@ -92,6 +96,14 @@
   font: inherit;
   text-align: start;
   cursor: pointer;
+}
+
+.mesh-board-touch__column-btn > .mesh-button__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-inline-size: 0;
 }
 
 .mesh-board-touch__column-btn:hover:not(:disabled) {
@@ -149,6 +161,10 @@
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.mesh-board-compact__chip > .mesh-button__label {
+  gap: var(--space-2);
 }
 
 .mesh-board-compact__chip--active {

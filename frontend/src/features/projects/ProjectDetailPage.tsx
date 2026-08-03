@@ -7,11 +7,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, Dialog, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Icon,
+  PageHeader,
+  Skeleton,
+  Tabs,
+  buttonClasses,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
+import { fetchMe } from '../members/api';
 import {
   archiveProject,
   deleteProject,
@@ -25,6 +36,7 @@ import { ImportWizard } from '../data-jobs/ImportWizard';
 import { HealthUpdateDialog } from './HealthUpdateDialog';
 import { MilestonesPanel } from './MilestonesPanel';
 import { applyMilestoneFrame, applyUpdateFrame, mergeProjectHeader } from './realtime';
+import { projectSettingsRoute, projectsRoute, resolveProjectWorkspace } from './routing';
 import { UpdatesPanel } from './UpdatesPanel';
 import type { Membership } from '../members/types';
 import { ProjectDashboardPanel } from '../analytics/ProjectDashboardPanel';
@@ -50,7 +62,10 @@ export function ProjectDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
   const navigate = useNavigate();
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId, workspaceSlug } = useParams<{
+    projectId: string;
+    workspaceSlug?: string;
+  }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
 
@@ -70,14 +85,25 @@ export function ProjectDetailPage(): React.JSX.Element {
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const projectListPath =
+    workspace?.workspace_slug !== undefined
+      ? projectsRoute(workspace.workspace_slug)
+      : workspaceSlug !== undefined
+        ? projectsRoute(workspaceSlug)
+        : '/projects';
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
     let cancelled = false;
+    setWorkspace(null);
+    setMeResolved(false);
+    setProject(null);
+    setError(null);
+    setIsLoading(true);
     fetchMe(client)
       .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
+        if (!cancelled) setWorkspace(resolveProjectWorkspace(me.memberships, workspaceSlug));
       })
       .catch(() => {
         if (!cancelled) setError(t('state.errorDescription'));
@@ -88,7 +114,7 @@ export function ProjectDetailPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [client, t]);
+  }, [client, t, workspaceSlug]);
 
   useEffect(() => {
     if (workspace === null || projectId === undefined) return;
@@ -101,6 +127,10 @@ export function ProjectDetailPage(): React.JSX.Element {
     ])
       .then(([detail, page]) => {
         if (cancelled) return;
+        if (detail.workspace_id !== workspace.workspace_id) {
+          setError(t('error.project_not_visible'));
+          return;
+        }
         setProject(detail);
         setMilestones([...detail.milestones]);
         setUpdates([...page.data]);
@@ -125,7 +155,7 @@ export function ProjectDetailPage(): React.JSX.Element {
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (frame.event === 'project.deleted') {
-        navigate('/projects');
+        navigate(projectListPath);
         return;
       }
       if (frame.event === 'project.archived' || frame.event === 'project.unarchived') {
@@ -149,7 +179,7 @@ export function ProjectDetailPage(): React.JSX.Element {
       unsubscribe();
       realtime.client.unsubscribe(channel);
     };
-  }, [realtime, projectId, navigate]);
+  }, [realtime, projectId, navigate, projectListPath]);
 
   const selectTab = (tab: TabKey): void => {
     const params = new URLSearchParams(searchParams);
@@ -187,7 +217,7 @@ export function ProjectDetailPage(): React.JSX.Element {
         tone: 'success',
         closeLabel: t('common.close'),
       });
-      navigate('/projects');
+      navigate(projectListPath);
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -230,86 +260,104 @@ export function ProjectDetailPage(): React.JSX.Element {
   return (
     <div className="mesh-projects">
       <div className="mesh-projects__detail-header" data-testid="project-detail-header">
-        <div className="mesh-projects__detail-title-row">
-          {project.color !== null ? (
-            <span
-              className="mesh-projects__color-swatch"
-              data-testid="project-color"
-              style={{ background: project.color }}
-              aria-hidden="true"
-            />
-          ) : null}
-          {project.icon !== null ? (
-            <span className="mesh-projects__icon" data-testid="project-icon" aria-hidden="true">
-              {project.icon}
-            </span>
-          ) : null}
-          <h1 className="mesh-projects__title">{project.name}</h1>
-          <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
-          {/* §4.2 健康度灯可点击更新;归档只读时不可点 */}
-          <HealthIndicator
-            health={project.health}
-            onClick={project.archived ? undefined : () => setHealthOpen(true)}
-          />
-        </div>
+        <PageHeader
+          title={project.name}
+          eyebrow={
+            <div className="mesh-projects__detail-context">
+              {project.color !== null ? (
+                <span
+                  className="mesh-projects__color-swatch"
+                  data-testid="project-color"
+                  style={{ background: project.color }}
+                  aria-hidden="true"
+                />
+              ) : null}
+              {project.icon !== null ? (
+                <span className="mesh-projects__icon" data-testid="project-icon" aria-hidden="true">
+                  {project.icon}
+                </span>
+              ) : null}
+              <span className="mesh-projects__project-key">{project.key}</span>
+              <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
+              <HealthIndicator
+                health={project.health}
+                onClick={project.archived ? undefined : () => setHealthOpen(true)}
+              />
+            </div>
+          }
+          actions={
+            <div className="mesh-projects__detail-actions">
+              <Button
+                variant="secondary"
+                data-testid="update-status-button"
+                disabled={project.archived}
+                onClick={() => setHealthOpen(true)}
+              >
+                {t('projects.detail.updateStatus')}
+              </Button>
+              <Link
+                to={projectSettingsRoute(
+                  workspace?.workspace_slug ?? workspaceSlug ?? '',
+                  project.id,
+                )}
+                className={buttonClasses('secondary', 'md', 'mesh-projects__settings-link')}
+                data-testid="settings-link"
+              >
+                {t('projects.detail.settings')}
+              </Link>
+              <Button
+                variant="secondary"
+                data-testid="archive-toggle-button"
+                onClick={() => void handleArchiveToggle()}
+              >
+                {project.archived ? t('projects.detail.unarchive') : t('projects.detail.archive')}
+              </Button>
+              <Button
+                variant="danger"
+                data-testid="delete-project-button"
+                onClick={() => setDeleteOpen(true)}
+              >
+                {t('projects.detail.delete')}
+              </Button>
+              <Button
+                variant="secondary"
+                data-testid="export-project-button"
+                onClick={() => setExportOpen(true)}
+              >
+                {t('dataJobs.page.exportProject')}
+              </Button>
+              {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
+                <Button
+                  variant="secondary"
+                  data-testid="import-project-button"
+                  disabled={project.archived}
+                  onClick={() => setImportOpen(true)}
+                >
+                  {t('dataJobs.page.importProject')}
+                </Button>
+              )}
+            </div>
+          }
+        />
         <div className="mesh-projects__detail-meta">
           <ProgressBar progress={project.progress} title={progressTitle} />
+          <span className="mesh-projects__detail-visibility">
+            <Icon name="eye" size={16} />
+            {t(`projects.visibility.${project.visibility}`)}
+          </span>
           {project.lead !== null ? (
             <span className="mesh-projects__detail-lead">
-              <AvatarInitial name={project.lead.name} accessibleName={project.lead.name} />
+              <AvatarInitial
+                name={project.lead.name}
+                accessibleName={project.lead.name}
+                kind={project.lead.member_type}
+              />
               {project.lead.name}
             </span>
           ) : null}
           {project.target_date !== null ? (
             <span>{t('projects.card.due', { date: project.target_date })}</span>
           ) : null}
-        </div>
-        <div className="mesh-projects__detail-actions">
-          <Button
-            variant="secondary"
-            data-testid="update-status-button"
-            onClick={() => setHealthOpen(true)}
-          >
-            {t('projects.detail.updateStatus')}
-          </Button>
-          <Link
-            to={`/projects/${project.id}/settings`}
-            className="mesh-projects__settings-link"
-            data-testid="settings-link"
-          >
-            {t('projects.detail.settings')}
-          </Link>
-          <Button
-            variant="secondary"
-            data-testid="archive-toggle-button"
-            onClick={() => void handleArchiveToggle()}
-          >
-            {project.archived ? t('projects.detail.unarchive') : t('projects.detail.archive')}
-          </Button>
-          <Button
-            variant="danger"
-            data-testid="delete-project-button"
-            onClick={() => setDeleteOpen(true)}
-          >
-            {t('projects.detail.delete')}
-          </Button>
-          {/* import-export.md §4.1 情境入口:导出本项目(读权限)/ 导入到本项目(写权限) */}
-          <Button
-            variant="secondary"
-            data-testid="export-project-button"
-            onClick={() => setExportOpen(true)}
-          >
-            {t('dataJobs.page.exportProject')}
-          </Button>
-          {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
-            <Button
-              variant="secondary"
-              data-testid="import-project-button"
-              onClick={() => setImportOpen(true)}
-            >
-              {t('dataJobs.page.importProject')}
-            </Button>
-          )}
         </div>
       </div>
 
@@ -332,86 +380,92 @@ export function ProjectDetailPage(): React.JSX.Element {
         </>
       )}
 
-      <div className="mesh-members__tabs" role="tablist" aria-label={t('projects.tab.label')}>
-        {TAB_KEYS.map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab}
-            className="mesh-members__tab"
-            data-testid={`tab-${tab}`}
-            onClick={() => selectTab(tab)}
-          >
-            {t(`projects.tab.${tab}`)}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        className="mesh-projects__tabs"
+        label={t('projects.tab.label')}
+        value={activeTab}
+        onChange={(value) => selectTab(value as TabKey)}
+        items={TAB_KEYS.map((tab) => ({
+          value: tab,
+          label: t(`projects.tab.${tab}`),
+          testId: `tab-${tab}`,
+          content:
+            tab === activeTab ? (
+              <div className="mesh-projects__tab-panel">
+                {activeTab === 'overview' ? (
+                  <section className="mesh-projects__panel" aria-label={t('projects.tab.overview')}>
+                    <p className="mesh-projects__description" data-testid="project-description">
+                      {project.description !== null && project.description !== ''
+                        ? project.description
+                        : t('projects.detail.noDescription')}
+                    </p>
+                    {milestones.length === 0 ? (
+                      <p className="mesh-projects__sub">{t('projects.milestones.empty')}</p>
+                    ) : (
+                      <ul
+                        className="mesh-projects__milestone-list"
+                        data-testid="overview-milestone-list"
+                      >
+                        {milestones.map((milestone) => (
+                          <li
+                            key={milestone.id}
+                            className={
+                              milestone.overdue
+                                ? 'mesh-projects__milestone mesh-projects__milestone--overdue'
+                                : 'mesh-projects__milestone'
+                            }
+                          >
+                            <span className="mesh-projects__milestone-title">
+                              {milestone.title}
+                            </span>
+                            <span className="mesh-projects__milestone-sub">
+                              {t(`projects.milestones.state.${milestone.state}`)}
+                              {milestone.target_date !== null ? ` · ${milestone.target_date}` : ''}
+                              {milestone.overdue ? ` · ${t('projects.milestones.overdue')}` : ''}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                ) : null}
 
-      {activeTab === 'overview' ? (
-        <section className="mesh-projects__panel" aria-label={t('projects.tab.overview')}>
-          <p className="mesh-projects__description" data-testid="project-description">
-            {project.description !== null && project.description !== ''
-              ? project.description
-              : t('projects.detail.noDescription')}
-          </p>
-          {milestones.length === 0 ? (
-            <p className="mesh-projects__sub">{t('projects.milestones.empty')}</p>
-          ) : (
-            <ul className="mesh-projects__milestone-list" data-testid="overview-milestone-list">
-              {milestones.map((milestone) => (
-                <li
-                  key={milestone.id}
-                  className={
-                    milestone.overdue
-                      ? 'mesh-projects__milestone mesh-projects__milestone--overdue'
-                      : 'mesh-projects__milestone'
-                  }
-                >
-                  <span className="mesh-projects__milestone-title">{milestone.title}</span>
-                  <span className="mesh-projects__milestone-sub">
-                    {t(`projects.milestones.state.${milestone.state}`)}
-                    {milestone.target_date !== null ? ` · ${milestone.target_date}` : ''}
-                    {milestone.overdue ? ` · ${t('projects.milestones.overdue')}` : ''}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : null}
+                {activeTab === 'milestones' ? (
+                  <MilestonesPanel
+                    client={client}
+                    projectId={project.id}
+                    milestones={milestones}
+                    upsertMilestone={(milestone) =>
+                      setMilestones((prev) => upsertById(prev, milestone))
+                    }
+                    removeMilestone={(milestoneId) =>
+                      setMilestones((prev) => prev.filter((m) => m.id !== milestoneId))
+                    }
+                  />
+                ) : null}
 
-      {activeTab === 'milestones' ? (
-        <MilestonesPanel
-          client={client}
-          projectId={project.id}
-          milestones={milestones}
-          upsertMilestone={(milestone) => setMilestones((prev) => upsertById(prev, milestone))}
-          removeMilestone={(milestoneId) =>
-            setMilestones((prev) => prev.filter((m) => m.id !== milestoneId))
-          }
-        />
-      ) : null}
+                {activeTab === 'updates' ? (
+                  <UpdatesPanel
+                    client={client}
+                    projectId={project.id}
+                    updates={updates}
+                    prependUpdate={(update) => setUpdates((prev) => [update, ...prev])}
+                    onSubmitted={reload}
+                  />
+                ) : null}
 
-      {activeTab === 'updates' ? (
-        <UpdatesPanel
-          client={client}
-          projectId={project.id}
-          updates={updates}
-          prependUpdate={(update) => setUpdates((prev) => [update, ...prev])}
-          onSubmitted={reload}
-        />
-      ) : null}
-
-      {/* 统计报表(analytics.md §4.2):velocity + burndown + cycle time */}
-      {activeTab === 'dashboard' && workspace !== null ? (
-        <ProjectDashboardPanel
-          client={client}
-          workspaceId={workspace.workspace_id}
-          workspaceSlug={workspace.workspace_slug}
-          projectId={project.id}
-        />
-      ) : null}
+                {activeTab === 'dashboard' && workspace !== null ? (
+                  <ProjectDashboardPanel
+                    client={client}
+                    workspaceId={workspace.workspace_id}
+                    workspaceSlug={workspace.workspace_slug}
+                    projectId={project.id}
+                  />
+                ) : null}
+              </div>
+            ) : null,
+        }))}
+      />
 
       <HealthUpdateDialog
         open={healthOpen}

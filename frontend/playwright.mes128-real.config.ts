@@ -12,7 +12,7 @@ const frontendPort = process.env.MES128_FRONTEND_PORT ?? '18430';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['real-mes128-keyboard.spec.ts'],
+  testMatch: ['real-mes128-keyboard.spec.ts', 'real-mes159-projects.spec.ts'],
   timeout: 240_000,
   retries: 0,
   workers: 1,

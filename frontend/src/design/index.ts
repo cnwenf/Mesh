@@ -28,8 +28,13 @@ export { Button, buttonClasses } from './components/Button';
 export type { ButtonProps, ButtonSize, ButtonVariant } from './components/Button';
 export { Checkbox } from './components/Checkbox';
 export type { CheckboxProps } from './components/Checkbox';
-export { DataTable } from './components/DataTable';
-export type { DataTableColumn, DataTableProps, DataTableSortState } from './components/DataTable';
+export { DataTable, DataTableSurface } from './components/DataTable';
+export type {
+  DataTableColumn,
+  DataTableProps,
+  DataTableSortState,
+  DataTableSurfaceProps,
+} from './components/DataTable';
 export { Dialog } from './components/Dialog';
 export type { DialogProps } from './components/Dialog';
 export { EmptyState } from './components/EmptyState';

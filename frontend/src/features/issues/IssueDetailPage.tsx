@@ -26,13 +26,14 @@ import {
   Dialog,
   ErrorState,
   Icon,
+  Input,
   Menu,
   Select,
   Skeleton,
   Tabs,
+  Textarea,
   useToast,
 } from '../../design';
-import type { BadgeTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -61,6 +62,12 @@ import {
 } from './api';
 import { IssueProperties } from './IssueProperties';
 import { focusIssueProperty, registerIssueContextShortcuts } from './issueShortcuts';
+import { categoryTone } from './issuePresentation';
+import {
+  workspaceIssueByIdentifierPath,
+  workspaceIssuePath,
+  workspaceIssuesPath,
+} from './issueRoutes';
 import { MoveProjectDialog } from './MoveProjectDialog';
 import { applyIssueDetailFrame } from './realtime';
 import type {
@@ -71,30 +78,13 @@ import type {
   IssueSummary,
   IssueStatusRef,
   MovePreview,
-  StateCategory,
 } from './types';
 import { useSaveIndicator } from './useSaveIndicator';
 import type { SavePhase } from './useSaveIndicator';
 import './issues.css';
 
-/** 状态类别 → 徽标 tone(图标 + 文案承载语义,颜色非唯一信号,§7.2)。 */
-export function categoryTone(category: StateCategory): BadgeTone {
-  switch (category) {
-    case 'todo':
-      return 'info';
-    case 'in_progress':
-      return 'accent';
-    case 'in_review':
-      return 'warning';
-    case 'blocked':
-      return 'danger';
-    case 'done':
-      return 'success';
-    case 'backlog':
-    case 'cancelled':
-      return 'neutral';
-  }
-}
+// 保留既有公开测试/调用入口；实际映射由列表与详情共用 issuePresentation。
+export { categoryTone } from './issuePresentation';
 
 interface AddDependencyFormProps {
   readonly issueId: string;
@@ -140,11 +130,11 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
 
   return (
     <div className="mesh-issues__dep-add">
-      <input
+      <Input
+        label={t('issues.deps.targetPlaceholder')}
         value={target}
         onChange={(event) => setTarget(event.target.value)}
         placeholder={t('issues.deps.targetPlaceholder')}
-        aria-label={t('issues.deps.targetPlaceholder')}
         data-testid="dep-target-input"
       />
       <Select
@@ -166,7 +156,12 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
           </option>
         ))}
       </Select>
-      <Button size="sm" disabled={isBusy || target.trim() === ''} onClick={() => void submit()}>
+      <Button
+        size="sm"
+        isLoading={isBusy}
+        disabled={target.trim() === ''}
+        onClick={() => void submit()}
+      >
         {t('issues.deps.add')}
       </Button>
       {error !== null ? (
@@ -241,7 +236,10 @@ export function IssueDetailPage(): React.JSX.Element {
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const { issueId } = useParams<{ issueId: string }>();
+  const { issueId, workspaceSlug: routeWorkspaceSlug } = useParams<{
+    issueId: string;
+    workspaceSlug: string;
+  }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
@@ -261,6 +259,7 @@ export function IssueDetailPage(): React.JSX.Element {
   const [dependencies, setDependencies] = useState<DependencyEntry[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [currentMember, setCurrentMember] = useState<CommentMemberRef | null>(null);
+  const [membershipWorkspaceSlug, setMembershipWorkspaceSlug] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [movePreviewData, setMovePreviewData] = useState<MovePreview | null>(null);
@@ -327,6 +326,17 @@ export function IssueDetailPage(): React.JSX.Element {
           detail.project_id !== null
             ? await listMilestones(client, detail.project_id, { limit: 100 })
             : { data: [] };
+        const issueMembership = me.memberships.find(
+          (membership) => membership.workspace_id === detail.workspace_id,
+        );
+        if (
+          issueMembership === undefined ||
+          (routeWorkspaceSlug !== undefined &&
+            issueMembership.workspace_slug !== routeWorkspaceSlug)
+        ) {
+          throw new Error('The issue workspace is not available to the current user');
+        }
+        const resolvedWorkspaceSlug = routeWorkspaceSlug ?? issueMembership.workspace_slug;
         if (cancelled) return;
         setIssue(detail);
         setTitleDraft(detail.title);
@@ -340,6 +350,7 @@ export function IssueDetailPage(): React.JSX.Element {
         setMilestones([...milestonePage.data]);
         setCycles([...cyclePage.data]);
         setCurrentMember(resolveCurrentMember(roster.data, me.user.id, me.user.email));
+        setMembershipWorkspaceSlug(resolvedWorkspaceSlug);
       } catch (err: unknown) {
         if (cancelled) return;
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -351,7 +362,9 @@ export function IssueDetailPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [client, issueId, reloadKey]);
+  }, [client, issueId, reloadKey, routeWorkspaceSlug]);
+
+  const workspaceSlug = routeWorkspaceSlug ?? membershipWorkspaceSlug;
 
   // 看板 S/A 的等价 UI 路径:详情渲染完成后聚焦对应属性控件，并清理一次性 query。
   useEffect(() => {
@@ -421,15 +434,15 @@ export function IssueDetailPage(): React.JSX.Element {
   }, [issue, descriptionDraft, patchAndToast]);
 
   const remove = useCallback(async () => {
-    if (issue === null) return;
+    if (issue === null || workspaceSlug === null) return;
     try {
       await deleteIssue(client, issue.id);
-      navigate('/issues');
+      navigate(workspaceIssuesPath(workspaceSlug));
     } catch (err: unknown) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
     }
-  }, [client, issue, navigate, toast, t]);
+  }, [client, issue, navigate, toast, t, workspaceSlug]);
 
   const removeDependency = useCallback(
     async (entry: DependencyEntry) => {
@@ -474,7 +487,7 @@ export function IssueDetailPage(): React.JSX.Element {
       />
     );
   }
-  if (isLoading || issue === null) {
+  if (isLoading || issue === null || workspaceSlug === null) {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 
@@ -490,18 +503,20 @@ export function IssueDetailPage(): React.JSX.Element {
       <span className="mesh-issues-detail__identifier" data-testid="issue-detail-identifier">
         {issue.identifier}
       </span>
-      <input
-        className="mesh-issues-detail__title"
-        value={titleDraft}
-        onChange={(event) => setTitleDraft(event.target.value)}
-        onBlur={() => void saveTitle()}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') void saveTitle();
-          if (event.key === 'Escape') setTitleDraft(issue.title);
-        }}
-        aria-label={t('issues.detail.title')}
-        data-testid="issue-detail-title"
-      />
+      <div className="mesh-issues-detail__title-field">
+        <Input
+          label={t('issues.detail.title')}
+          className="mesh-issues-detail__title"
+          value={titleDraft}
+          onChange={(event) => setTitleDraft(event.target.value)}
+          onBlur={() => void saveTitle()}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void saveTitle();
+            if (event.key === 'Escape') setTitleDraft(issue.title);
+          }}
+          data-testid="issue-detail-title"
+        />
+      </div>
       <span className="mesh-issues-detail__version" data-testid="issue-detail-version">
         v{issue.version}
       </span>
@@ -561,16 +576,18 @@ export function IssueDetailPage(): React.JSX.Element {
   const main = (
     <section className="mesh-issues-detail__main">
       <h2>{t('issues.detail.description')}</h2>
-      <textarea
-        className="mesh-issues-detail__description"
-        value={descriptionDraft}
-        onChange={(event) => setDescriptionDraft(event.target.value)}
-        onBlur={() => void saveDescription()}
-        placeholder={t('issues.detail.noDescription')}
-        aria-label={t('issues.detail.description')}
-        data-testid="issue-detail-description"
-        rows={4}
-      />
+      <div className="mesh-issues-detail__description-field">
+        <Textarea
+          label={t('issues.detail.description')}
+          className="mesh-issues-detail__description"
+          value={descriptionDraft}
+          onChange={(event) => setDescriptionDraft(event.target.value)}
+          onBlur={() => void saveDescription()}
+          placeholder={t('issues.detail.noDescription')}
+          data-testid="issue-detail-description"
+          rows={4}
+        />
+      </div>
 
       <h2>
         {t('issues.detail.children')}（{doneChildren}/{totalChildren}）
@@ -581,7 +598,7 @@ export function IssueDetailPage(): React.JSX.Element {
         <ul className="mesh-issues-detail__children" data-testid="issue-detail-children">
           {children.map((child) => (
             <li key={child.id}>
-              <Link to={`/issues/${child.id}`}>
+              <Link to={workspaceIssueByIdentifierPath(workspaceSlug, child.identifier)}>
                 {child.identifier} · {child.title}
               </Link>
               <span>{t(`issues.category.${child.state_category}`)}</span>
@@ -598,7 +615,14 @@ export function IssueDetailPage(): React.JSX.Element {
           {dependencies.map((dep) => (
             <li key={dep.id}>
               <span data-testid={`dep-type-${dep.id}`}>{t(`issues.deps.type.${dep.type}`)}</span>
-              <Link to={`/issues/${dep.depends_on_id}`} data-testid={`dep-link-${dep.id}`}>
+              <Link
+                to={
+                  dep.depends_on_identifier !== null
+                    ? workspaceIssueByIdentifierPath(workspaceSlug, dep.depends_on_identifier)
+                    : workspaceIssuePath(workspaceSlug, dep.depends_on_id)
+                }
+                data-testid={`dep-link-${dep.id}`}
+              >
                 {dep.depends_on_identifier ?? dep.depends_on_id.slice(0, 8)}
               </Link>
               <Button size="sm" variant="ghost" onClick={() => void removeDependency(dep)}>
@@ -654,6 +678,7 @@ export function IssueDetailPage(): React.JSX.Element {
         main={main}
         aside={
           <IssueProperties
+            workspaceSlug={workspaceSlug}
             issue={issue}
             statuses={statuses}
             members={members}

@@ -387,6 +387,18 @@
   resize: vertical;
 }
 
+.mesh-comments__composer > .mesh-field > .mesh-field__label {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .mesh-comments__composer-preview {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -455,6 +467,11 @@
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+}
+
+.mesh-comments__suppress .mesh-checkbox__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
 }
 
 .mesh-comments__trigger-preview {

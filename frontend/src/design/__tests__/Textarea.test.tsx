@@ -12,6 +12,7 @@ describe('Textarea(多行字段)', () => {
     render(<Textarea label="描述" id="demo" error="太短了" hint="至少两句" />);
     const control = screen.getByLabelText('描述');
     expect(control.tagName).toBe('TEXTAREA');
+    expect(control).toHaveAttribute('data-slot', 'textarea');
     expect(control).toHaveAttribute('aria-invalid', 'true');
     const ids = (control.getAttribute('aria-describedby') ?? '').split(' ');
     expect(ids).toHaveLength(2);

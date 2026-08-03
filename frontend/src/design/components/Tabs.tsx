@@ -58,6 +58,9 @@ export function Tabs(props: TabsProps): React.JSX.Element {
 
   const enabledItems = items.filter((item) => item.disabled !== true);
 
+  // Keep the Mesh keyboard contract on the tablist itself. Appica also provides
+  // roving focus when the trigger owns the event; this handler additionally
+  // supports callers that dispatch navigation from the labelled tablist.
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     const enabledValues = enabledItems.map((item) => item.value);
     if (enabledValues.length === 0) return;
@@ -74,6 +77,7 @@ export function Tabs(props: TabsProps): React.JSX.Element {
     }
     if (next !== null) {
       event.preventDefault();
+      event.stopPropagation();
       select(next);
       document.getElementById(`${baseId}-tab-${next}`)?.focus();
     }

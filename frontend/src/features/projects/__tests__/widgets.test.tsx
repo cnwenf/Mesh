@@ -20,6 +20,7 @@ describe('StatusBadge', () => {
   it('渲染本地化状态文案并带状态修饰类', () => {
     renderWithProviders(<StatusBadge status="active" label="Active" />);
     const badge = screen.getByText('Active');
+    expect(badge.className).toContain('mesh-badge');
     expect(badge.className).toContain('mesh-projects__badge');
     expect(badge.className).toContain('mesh-projects__badge--active');
   });
@@ -44,28 +45,29 @@ describe('HealthIndicator', () => {
     renderWithProviders(<HealthIndicator health={health} />);
     expect(screen.getByText(label)).toBeInTheDocument();
   });
+
+  it('可交互健康度通过共享 Button 适配器渲染', () => {
+    renderWithProviders(<HealthIndicator health="on_track" onClick={() => undefined} />);
+    expect(screen.getByRole('button')).toHaveAttribute('data-slot', 'button');
+  });
 });
 
 describe('AvatarInitial', () => {
-  it('取首字符大写', () => {
+  it('经共享头像适配器渲染缩写和可访问名', () => {
     renderWithProviders(<AvatarInitial name="jane" />);
-    expect(screen.getByText('J')).toBeInTheDocument();
+    const avatar = screen.getByRole('img', { name: 'jane' });
+    expect(avatar).toHaveClass('mesh-avatar');
+    expect(avatar).toHaveTextContent('J');
   });
 
   it('空名回退占位符 ?', () => {
     renderWithProviders(<AvatarInitial name="" />);
-    expect(screen.getByText('?')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '?' })).toHaveTextContent('?');
   });
 
-  it('无 accessibleName 时对辅助技术隐藏(aria-hidden)', () => {
-    renderWithProviders(<AvatarInitial name="bob" />);
-    expect(screen.getByText('B').getAttribute('aria-hidden')).toBe('true');
-  });
-
-  it('提供 accessibleName 时渲染 sr-only 文本且不再隐藏', () => {
+  it('提供 accessibleName 时用它作为头像可访问名', () => {
     renderWithProviders(<AvatarInitial name="bob" accessibleName="Bob Jones" />);
-    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
-    expect(screen.getByText('B').getAttribute('aria-hidden')).toBe('false');
+    expect(screen.getByRole('img', { name: 'Bob Jones' })).toHaveTextContent('BJ');
   });
 });
 
@@ -90,6 +92,7 @@ describe('LabeledTextarea', () => {
     const onChange = vi.fn();
     renderWithProviders(<Controlled onChange={onChange} />);
     const textarea = screen.getByLabelText('Note');
+    expect(textarea).toHaveAttribute('data-slot', 'textarea');
     expect(textarea).toBeInTheDocument();
     await user.type(textarea, 'hi');
     expect(onChange).toHaveBeenLastCalledWith('hi');

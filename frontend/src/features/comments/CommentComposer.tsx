@@ -7,16 +7,11 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { Button } from '../../design';
+import { Button, Checkbox, Textarea } from '../../design';
 import { useT } from '../../i18n';
 import { MentionAutocomplete } from './MentionAutocomplete';
 import { renderMarkdownPreview } from './markdown';
-import {
-  filterCandidates,
-  insertMention,
-  parseMentionQuery,
-  triggeredAgents,
-} from './mentions';
+import { filterCandidates, insertMention, parseMentionQuery, triggeredAgents } from './mentions';
 import type { MentionCandidate } from './mentions';
 import { useCommentDraft } from './useCommentDraft';
 import { useDraftSaveIndicator } from './useDraftSaveIndicator';
@@ -138,7 +133,9 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
       return t('comments.draftSaving');
     }
     if (draftIndicator.status === 'saved' && draftIndicator.savedAt !== null) {
-      return t('comments.draftSaved', { time: new Date(draftIndicator.savedAt).toLocaleTimeString() });
+      return t('comments.draftSaved', {
+        time: new Date(draftIndicator.savedAt).toLocaleTimeString(),
+      });
     }
     return null;
   }, [draftIndicator.status, draftIndicator.savedAt, t]);
@@ -159,14 +156,15 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
       ) : null}
 
       <div className="mesh-comments__composer-toolbar">
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           data-testid="composer-preview-toggle"
           aria-pressed={previewMode}
           onClick={() => setPreviewMode((mode) => !mode)}
         >
           {previewMode ? t('comments.composer.edit') : t('comments.composer.preview')}
-        </button>
+        </Button>
       </div>
 
       {previewMode ? (
@@ -177,12 +175,12 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
           dangerouslySetInnerHTML={{ __html: previewHtml }}
         />
       ) : (
-        <textarea
+        <Textarea
           className="mesh-comments__composer-input"
           data-testid="composer-input"
           value={draft.value}
+          label={t('comments.composer.placeholder')}
           placeholder={t('comments.composer.placeholder')}
-          aria-label={t('comments.composer.placeholder')}
           autoFocus={props.autoFocus}
           rows={3}
           onChange={handleChange}
@@ -208,15 +206,13 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
       ) : null}
 
       <div className="mesh-comments__composer-foot">
-        <label className="mesh-comments__suppress">
-          <input
-            type="checkbox"
-            data-testid="composer-suppress"
-            checked={suppress}
-            onChange={(event) => setSuppress(event.target.checked)}
-          />
-          {t('comments.composer.suppress')}
-        </label>
+        <Checkbox
+          className="mesh-comments__suppress"
+          data-testid="composer-suppress"
+          label={t('comments.composer.suppress')}
+          checked={suppress}
+          onChange={(event) => setSuppress(event.target.checked)}
+        />
 
         {!suppress && agents.length > 0 ? (
           <span className="mesh-comments__trigger-preview" data-testid="trigger-preview">
@@ -228,7 +224,11 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
 
         {/* 草稿自动保存弱提示(§9.5.1):aria-live=polite 供读屏,视觉上弱化为 muted caption。 */}
         {draftStatusText !== null ? (
-          <span className="mesh-comments__draft-status" aria-live="polite" data-testid="draft-status">
+          <span
+            className="mesh-comments__draft-status"
+            aria-live="polite"
+            data-testid="draft-status"
+          >
             {draftStatusText}
           </span>
         ) : null}
@@ -249,9 +249,15 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
            可执行恢复动作(重试)。role=alert 原位提示,不清空任何输入(§9.5.4)。 */
         <div className="mesh-comments__composer-error" role="alert" data-testid="composer-error">
           <p className="mesh-comments__composer-error-text">{t('comments.composer.failedKeep')}</p>
-          <button type="button" className="mesh-comments__composer-retry" data-testid="composer-retry" onClick={() => void submit()}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mesh-comments__composer-retry"
+            data-testid="composer-retry"
+            onClick={() => void submit()}
+          >
             {t('comments.retry')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

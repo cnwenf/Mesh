@@ -16,7 +16,9 @@ import type { APIRequestContext, Locator, Page, TestInfo } from '@playwright/tes
 
 const PG_CONTAINER = process.env.MES128_PG_CONTAINER ?? 'mes128-real-postgres-1';
 const RESPONSE_TIMEOUT = 30_000;
-const EVIDENCE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'evidence', 'mes111-b5-real');
+const EVIDENCE_DIR =
+  process.env.MES128_EVIDENCE_DIR ??
+  join(dirname(fileURLToPath(import.meta.url)), 'evidence', 'mes111-b5-real');
 const EVIDENCE_MANIFEST = join(EVIDENCE_DIR, 'manifest.json');
 
 interface ApiResponseEvidence {
@@ -458,6 +460,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   await issuePageLoadedPromise;
   await expect(page.getByTestId('issues-skeleton')).toBeHidden();
   const createTitle = page.getByTestId('issue-create-title');
+  await expect(createTitle).toHaveAttribute('data-slot', 'input');
   await typeWithKeyboard(page, createTitle, firstIssueTitle);
   const createResponsePromise = page.waitForResponse(
     (response) =>
@@ -477,6 +480,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   await expect(page.getByTestId(`issue-row-${firstIssue.identifier}`)).toContainText(
     firstIssueTitle,
   );
+  await expect(page.getByTestId('issue-table')).toHaveAttribute('data-slot', 'table');
   screenshots.push(await screenshot(page, testInfo, '02-issue-created'));
 
   // `g b` 打开默认看板；方向键进入移动模式并切列，Enter 提交，未触发拖拽。
@@ -541,7 +545,21 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
 
   // 评论输入与提交均走键盘，Ctrl+Enter 命中真实 comments 写端点。
   await page.goto(`/issues/${firstIssue.id}`);
+  await expect(page.getByTestId('issue-detail')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-detail-title')).toHaveAttribute('data-slot', 'input');
+  await expect(page.getByTestId('issue-detail-description')).toHaveAttribute(
+    'data-slot',
+    'textarea',
+  );
+  await expect(page.getByTestId('attachment-composer')).toBeVisible();
+  await expect(page.getByTestId('attachments-empty')).toBeVisible();
+  const issueTabs = page.locator('[data-slot="tabs-trigger"]');
+  await expect(issueTabs).toHaveCount(2);
+  await issueTabs.nth(1).click();
+  await expect(page.getByTestId('issue-detail-activity')).toBeVisible();
+  await issueTabs.nth(0).click();
   const composer = page.getByTestId('composer-input');
+  await expect(composer).toHaveAttribute('data-slot', 'textarea');
   await typeWithKeyboard(page, composer, commentBody);
   const commentResponsePromise = page.waitForResponse(
     (response) =>

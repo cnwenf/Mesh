@@ -4,7 +4,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { DataTable } from '../components/DataTable';
+import { DataTable, DataTableSurface } from '../components/DataTable';
 import type { DataTableColumn } from '../components/DataTable';
 
 interface Row {
@@ -24,6 +24,19 @@ const COLUMNS: ReadonlyArray<DataTableColumn<Row>> = [
 ];
 
 describe('DataTable(语义表格)', () => {
+  it('DataTableSurface 为自定义表格组合提供 Appica-backed 根节点', () => {
+    render(
+      <DataTableSurface data-testid="custom-table">
+        <tbody>
+          <tr>
+            <td>自定义单元格</td>
+          </tr>
+        </tbody>
+      </DataTableSurface>,
+    );
+    expect(screen.getByTestId('custom-table')).toHaveAttribute('data-slot', 'table');
+  });
+
   it('caption + scope=col 表头 + 行单元格渲染', () => {
     render(<DataTable caption="成员名册" columns={COLUMNS} rows={ROWS} rowKey={(row) => row.id} />);
     expect(screen.getByRole('table', { name: '成员名册' })).toHaveAttribute('data-slot', 'table');
@@ -36,7 +49,13 @@ describe('DataTable(语义表格)', () => {
 
   it('hideCaption 视觉隐藏但读屏可达', () => {
     const { container } = render(
-      <DataTable caption="隐藏标题" hideCaption columns={COLUMNS} rows={ROWS} rowKey={(row) => row.id} />,
+      <DataTable
+        caption="隐藏标题"
+        hideCaption
+        columns={COLUMNS}
+        rows={ROWS}
+        rowKey={(row) => row.id}
+      />,
     );
     expect(screen.getByRole('table', { name: '隐藏标题' })).toBeInTheDocument();
     expect(container.querySelector('.mesh-visually-hidden')).not.toBeNull();
@@ -71,7 +90,10 @@ describe('DataTable(语义表格)', () => {
         sortBy={{ id: 'name', direction: 'desc' }}
       />,
     );
-    expect(screen.getByRole('columnheader', { name: /名称/ })).toHaveAttribute('aria-sort', 'descending');
+    expect(screen.getByRole('columnheader', { name: /名称/ })).toHaveAttribute(
+      'aria-sort',
+      'descending',
+    );
     const countHeader = screen.getByRole('columnheader', { name: '数量' });
     expect(countHeader).not.toHaveAttribute('aria-sort');
     expect(countHeader.querySelector('button')).toBeNull();
@@ -132,7 +154,11 @@ describe('DataTable(语义表格)', () => {
 
 describe('DataTable 行点击守卫(验收 R1-M4)', () => {
   const COLUMNS: ReadonlyArray<DataTableColumn<{ id: string; name: string }>> = [
-    { id: 'name', header: '名称', cell: (row) => <button type="button">行内按钮 {row.name}</button> },
+    {
+      id: 'name',
+      header: '名称',
+      cell: (row) => <button type="button">行内按钮 {row.name}</button>,
+    },
   ];
 
   it('点击行内按钮不冒泡为整行导航;点击行体触发 onRowClick', async () => {

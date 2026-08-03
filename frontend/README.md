@@ -127,6 +127,20 @@ npx playwright test --config playwright.mes90.config.ts
 
 ## 质量命令
 
+MES-159 将工作区首页、项目列表/详情、issue 列表/详情与看板收敛到
+Mesh `design/components` 适配层。页面不得直接导入底层组件库；Input、
+Textarea、Button、DataTable 与 Tabs 的 Appica 渲染契约由组件测试中的
+`data-slot` 断言守护。项目与 issue 导航统一使用
+`/w/:workspaceSlug/...`，多工作区数据作用域按路由 slug 解析；看板桌面拖拽、
+键盘移动、触控移动和取消回滚仍走同一原子 move 数据流。
+当前 Spec 仅声明 `sub_group_by` 配置字段，未定义二维泳道投影返回体、
+跨泳道 move 参数/实时事件、位置作用域与 WIP 口径。因此本基线只覆盖
+已定义的单维看板，不把未定义的泳道行为计为已完成。
+
+真实 production 栈验证继续使用 `e2e/mes128-real/run-e2e.sh`。如需避免本地
+复验覆盖仓库内历史截图，可设置 `MES128_EVIDENCE_DIR` 指向运行期目录；CI 默认
+仍生成并上传标准 evidence 目录。
+
 ```bash
 npm run lint            # ESLint 9(flat config)
 npm run typecheck       # tsc --noEmit

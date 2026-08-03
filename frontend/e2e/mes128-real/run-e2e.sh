@@ -6,6 +6,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../../.." && pwd)"
 ENV_FILE="${DIR}/stack.env"
 PROJECT="${MES128_COMPOSE_PROJECT:-mes128-real}"
+FRONTEND_PORT="${MES128_FRONTEND_PORT:-18430}"
 COMPOSE=(docker compose -p "${PROJECT}" -f "${ROOT}/docker-compose.yml" -f "${DIR}/compose.override.yml" --env-file "${ENV_FILE}")
 
 if [[ ! -e "${ENV_FILE}" ]]; then
