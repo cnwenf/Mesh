@@ -400,15 +400,50 @@ test('forced-colors 下选中结果的图标继承 HighlightText', async ({ page
   await gotoHomeReady(page);
   await page.keyboard.press('Control+K');
 
-  const active = page.locator('.mesh-palette__option--active');
-  await expect(active).toBeVisible();
-  const colors = await active.evaluate((row) => {
-    const icon = row.querySelector('.mesh-palette__option-icon');
-    return {
-      row: getComputedStyle(row).color,
-      icon: icon === null ? null : getComputedStyle(icon).color,
-    };
-  });
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const selectedOption = palette.getByRole('option', { name: 'Issues', exact: true });
+  await expect(selectedOption).toBeVisible();
+  await selectedOption.hover();
+  await expect(selectedOption).toHaveAttribute('aria-selected', 'true');
 
-  expect(colors.icon).toBe(colors.row);
+  // 空查询打开时 favorites/recents 会异步完成核验并重建分区；必须在同一个浏览器
+  // 任务中重新确认当前行仍为 active 后再读取样式，避免 locator 解析与 evaluate 之间
+  // 选中项已切换而误测到普通行。probe 让断言不依赖宿主系统的具体高对比色板。
+  await expect
+    .poll(() =>
+      selectedOption.evaluate((row) => {
+        const icon = row.querySelector(':scope > .mesh-palette__option-icon');
+        const glyph = icon?.querySelector('.mesh-icon');
+        if (!(icon instanceof HTMLElement) || !(glyph instanceof SVGElement)) {
+          return null;
+        }
+
+        const probe = document.createElement('span');
+        probe.style.color = 'HighlightText';
+        probe.style.forcedColorAdjust = 'none';
+        document.body.append(probe);
+        const highlightText = getComputedStyle(probe).color;
+        probe.remove();
+
+        const rowStyle = getComputedStyle(row);
+        const iconStyle = getComputedStyle(icon);
+        const glyphStyle = getComputedStyle(glyph);
+        return {
+          activeSelectorMatches: row.matches('.mesh-palette__option.mesh-palette__option--active'),
+          rowAdjust: rowStyle.forcedColorAdjust,
+          iconAdjust: iconStyle.forcedColorAdjust,
+          rowUsesHighlightText: rowStyle.color === highlightText,
+          iconUsesHighlightText: iconStyle.color === highlightText,
+          glyphUsesHighlightText: glyphStyle.color === highlightText,
+        };
+      }),
+    )
+    .toEqual({
+      activeSelectorMatches: true,
+      rowAdjust: 'none',
+      iconAdjust: 'none',
+      rowUsesHighlightText: true,
+      iconUsesHighlightText: true,
+      glyphUsesHighlightText: true,
+    });
 });
