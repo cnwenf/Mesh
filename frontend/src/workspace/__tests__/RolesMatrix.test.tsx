@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, ToastProvider } from '../../design';
 import { I18nProvider } from '../../i18n';
+import { RealtimeContext } from '../../shell/AppShell';
+import type { RealtimeContextValue } from '../../shell/AppShell';
 import { RolesMatrix } from '../RolesMatrix';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -45,7 +47,9 @@ function stubClient(fetchImpl: ReturnType<typeof vi.fn>) {
   };
 }
 
-function stubFetch(...responses: Array<{ status: number; body: unknown }>): ReturnType<typeof vi.fn> {
+function stubFetch(
+  ...responses: Array<{ status: number; body: unknown }>
+): ReturnType<typeof vi.fn> {
   const fetchImpl = vi.fn();
   for (const response of responses) {
     fetchImpl.mockImplementationOnce(() =>
@@ -55,13 +59,24 @@ function stubFetch(...responses: Array<{ status: number; body: unknown }>): Retu
   return fetchImpl;
 }
 
-function renderMatrix(fetchImpl: ReturnType<typeof vi.fn>): ReturnType<typeof render> {
+function renderMatrix(
+  fetchImpl: ReturnType<typeof vi.fn>,
+  realtime?: RealtimeContextValue,
+): ReturnType<typeof render> {
+  const matrix = <RolesMatrix workspaceId="ws-1" client={stubClient(fetchImpl) as never} />;
   return render(
     <MemoryRouter>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+        <I18nProvider
+          workspaceDefaultLocale={null}
+          reporter={{ report: () => undefined, reported: [] }}
+        >
           <ToastProvider regionLabel="notifications">
-            <RolesMatrix workspaceId="ws-1" client={stubClient(fetchImpl) as never} />
+            {realtime === undefined ? (
+              matrix
+            ) : (
+              <RealtimeContext.Provider value={realtime}>{matrix}</RealtimeContext.Provider>
+            )}
           </ToastProvider>
         </I18nProvider>
       </ThemeProvider>
@@ -71,7 +86,10 @@ function renderMatrix(fetchImpl: ReturnType<typeof vi.fn>): ReturnType<typeof re
 
 describe('RolesMatrix(角色矩阵 + 名册消费,§4 角色呈现)', () => {
   it('角色 × 能力矩阵按 RBAC 呈现(删除仅 owner,设置/邀请/成员 admin+)', async () => {
-    const fetchImpl = stubFetch({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
+    const fetchImpl = stubFetch({
+      status: 404,
+      body: { error: { code: 'not_found', message: 'x' } },
+    });
     renderMatrix(fetchImpl);
 
     await waitFor(() => expect(screen.getByTestId('roles-matrix')).toBeTruthy());
@@ -82,10 +100,20 @@ describe('RolesMatrix(角色矩阵 + 名册消费,§4 角色呈现)', () => {
   });
 
   it('名册端点 404(MES-14 未合入)→ 优雅降级提示,非错误态', async () => {
-    const fetchImpl = stubFetch({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
+    const fetchImpl = stubFetch({
+      status: 404,
+      body: { error: { code: 'not_found', message: 'x' } },
+    });
     renderMatrix(fetchImpl);
 
     await waitFor(() => expect(screen.getByTestId('roles-roster-unavailable')).toBeTruthy());
+  });
+
+  it('名册端点 405 同样优雅降级', async () => {
+    renderMatrix(
+      stubFetch({ status: 405, body: { error: { code: 'method_not_allowed', message: 'x' } } }),
+    );
+    expect(await screen.findByTestId('roles-roster-unavailable')).toBeTruthy();
   });
 
   it('名册可用 → 行内角色变更 PATCH 并就地更新', async () => {
@@ -96,14 +124,17 @@ describe('RolesMatrix(角色矩阵 + 名册消费,§4 角色呈现)', () => {
       status: 'active',
       display_name: 'Jane',
     };
+    const other = { ...member, id: 'mem-2', display_name: 'John', role: 'guest' };
     const fetchImpl = stubFetch(
-      { status: 200, body: { data: [member], next_cursor: null } },
+      { status: 200, body: { data: [member, other], next_cursor: null } },
       { status: 200, body: { data: { ...member, role: 'admin' } } },
     );
     renderMatrix(fetchImpl);
-    await waitFor(() => expect(screen.getByTestId('roles-roster-row')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByTestId('roles-roster-row')).toHaveLength(2));
 
-    fireEvent.change(screen.getByTestId('roles-roster-select'), { target: { value: 'admin' } });
+    fireEvent.change(screen.getAllByTestId('roles-roster-select')[0], {
+      target: { value: 'admin' },
+    });
     await waitFor(() => {
       const [, init] = fetchImpl.mock.calls[1] as [string, { method: string; body: string }];
       expect(init.method).toBe('PATCH');
@@ -150,5 +181,50 @@ describe('RolesMatrix(角色矩阵 + 名册消费,§4 角色呈现)', () => {
       (screen.getByTestId('roles-roster-select') as HTMLSelectElement).options,
     ).map((option) => option.value);
     expect(options).not.toContain('owner');
+  });
+
+  it('空名册呈现空态,无显示名时回退成员 id', async () => {
+    const emptyFetch = stubFetch({ status: 200, body: { data: [], next_cursor: null } });
+    const first = renderMatrix(emptyFetch);
+    expect(await screen.findByTestId('roles-roster-empty')).toBeTruthy();
+    first.unmount();
+
+    const member = {
+      id: 'mem-fallback',
+      member_type: 'human',
+      role: 'member',
+      status: 'active',
+      display_name: null,
+    };
+    renderMatrix(stubFetch({ status: 200, body: { data: [member], next_cursor: null } }));
+    expect(await screen.findByText('mem-fallback')).toBeTruthy();
+    expect(screen.getByLabelText('Role of mem-fallback')).toBeTruthy();
+  });
+
+  it('realtime 仅在同频道成员事件时重拉名册', async () => {
+    const callbacks: Array<(frame: unknown) => void> = [];
+    const realtimeClient = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(),
+      onFrame: vi.fn((callback: (frame: unknown) => void) => {
+        callbacks.push(callback);
+        return vi.fn();
+      }),
+    };
+    const fetchImpl = stubFetch(
+      { status: 200, body: { data: [], next_cursor: null } },
+      { status: 200, body: { data: [], next_cursor: null } },
+    );
+    const rendered = renderMatrix(fetchImpl, {
+      state: 'connected',
+      client: realtimeClient as never,
+    });
+    await screen.findByTestId('roles-roster-empty');
+    callbacks[0]({ channel: 'workspace:other', event: 'member.added' });
+    callbacks[0]({ channel: 'workspace:ws-1', event: 'other' });
+    callbacks[0]({ channel: 'workspace:ws-1', event: 'member.role_changed' });
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    rendered.unmount();
+    expect(realtimeClient.unsubscribe).toHaveBeenCalledWith('workspace:ws-1');
   });
 });

@@ -2,8 +2,8 @@
  * 视觉回归专用 mock 服务端(theme.md §5.4 / Task 21)。
  *
  * 这是 e2e/mock-server.mjs 的独立 fork(端口 8911,勿与默认套件 8901 冲突),
- * 为「暗色视觉回归门禁」提供六核心页(看板 / issue 详情 / 成员 / 聊天 / 运行详情 /
- * 收件箱)恒定 fixture 数据 + 应用外壳引导数据 + 内置字体分发。默认套件对
+ * 为「暗色视觉回归门禁」提供 design-quality §13.5 核心页恒定 fixture 数据 +
+ * 应用外壳引导数据 + 内置字体分发。默认套件对
  * mock-server.mjs 的既有消费不受影响(本文件不改动 mock-server.mjs)。
  *
  * 确定性约定:
@@ -128,7 +128,10 @@ function corsHeaders(extra = {}) {
 }
 
 function sendJson(res, status, body, headers = {}) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...corsHeaders(headers) });
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    ...corsHeaders(headers),
+  });
   res.end(JSON.stringify(body));
 }
 
@@ -173,16 +176,14 @@ function readBody(req) {
 // 字体分发(内置 OFL woff2,@font-face 跨域加载需 ACAO:*)
 // ---------------------------------------------------------------------------
 
-const FONT_ALLOWLIST = new Set(
-  [
-    'noto-sans-sc-chinese-simplified-400-normal.woff2',
-    'noto-sans-sc-chinese-simplified-500-normal.woff2',
-    'noto-sans-sc-chinese-simplified-700-normal.woff2',
-    'noto-sans-sc-latin-400-normal.woff2',
-    'noto-sans-sc-latin-500-normal.woff2',
-    'noto-sans-sc-latin-700-normal.woff2',
-  ],
-);
+const FONT_ALLOWLIST = new Set([
+  'noto-sans-sc-chinese-simplified-400-normal.woff2',
+  'noto-sans-sc-chinese-simplified-500-normal.woff2',
+  'noto-sans-sc-chinese-simplified-700-normal.woff2',
+  'noto-sans-sc-latin-400-normal.woff2',
+  'noto-sans-sc-latin-500-normal.woff2',
+  'noto-sans-sc-latin-700-normal.woff2',
+]);
 
 function serveFont(res, name) {
   if (!FONT_ALLOWLIST.has(name)) {
@@ -203,7 +204,10 @@ function serveFont(res, name) {
 // 路由
 // ---------------------------------------------------------------------------
 
-// 页面数据路由表由 page-routes.mjs 注入(六页恒定 fixture),保持本文件聚焦引导层。
+// 页面数据路由表由 page-routes.mjs 注入(核心页恒定 fixture),保持本文件聚焦引导层。
+import { handleExtendedCollaborationRoute } from './extended-routes-collaboration.mjs';
+import { handleExtendedSettingsRoute } from './extended-routes-settings.mjs';
+import { handleExtendedAutomationRoute } from './extended-routes-automation.mjs';
 import { handlePageRoute } from './page-routes.mjs';
 
 async function handleRequest(req, res, url) {
@@ -227,6 +231,12 @@ async function handleRequest(req, res, url) {
   }
 
   // ---- 外壳引导:当前用户 / 工作区(每个鉴权页 đều 触发)-----------------
+  if (path === '/api/v1/me' && req.method === 'GET') {
+    // credential-polymorphic principal endpoint；视觉会话固定为 human。
+    sendJson(res, 200, envelope(ME.user));
+    return;
+  }
+
   if (path === '/api/v1/users/me' && req.method === 'GET') {
     sendJson(res, 200, envelope(ME));
     return;
@@ -259,8 +269,31 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  if (
+    path === `/api/v1/workspaces/${WORKSPACE_ID}/members/${MEMBER_HUMAN_ID}` &&
+    req.method === 'GET'
+  ) {
+    sendJson(
+      res,
+      200,
+      envelope({
+        ...MEMBERS[0],
+        display_override: null,
+        disabled_at: null,
+        counts: { open_issues_assigned: 0 },
+      }),
+    );
+    return;
+  }
+
   if (path === '/api/v1/inbox/unread-count' && req.method === 'GET') {
     sendJson(res, 200, envelope({ count: 3 }));
+    return;
+  }
+
+  if (path === '/api/v1/notification-preferences' && req.method === 'GET') {
+    // 收件箱 quiet-hours 为 best-effort；显式空表使正常态不依赖 404 降级。
+    sendJson(res, 200, listEnvelope([]));
     return;
   }
 
@@ -284,7 +317,15 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- 六核心页专有数据路由(看板 / issue 详情 / 成员 / 聊天 / 运行详情 / 收件箱)
+  // ---- 非核心正常态 + §13.5 核心页专有数据路由 -----------------------
+  if (
+    handleExtendedSettingsRoute(req, res, url) ||
+    handleExtendedCollaborationRoute(req, res, url) ||
+    handleExtendedAutomationRoute(req, res, url)
+  ) {
+    return;
+  }
+
   if (handlePageRoute(req, res, url, { kind: 'general' })) {
     return;
   }
@@ -334,12 +375,22 @@ wss.on('connection', (socket) => {
       return;
     }
     if (!socket.mesh.authenticated) {
-      if (msg.op === 'auth' && typeof msg.token === 'string' && msg.token.startsWith(DEV_TOKEN_PREFIX)) {
+      if (
+        msg.op === 'auth' &&
+        typeof msg.token === 'string' &&
+        msg.token.startsWith(DEV_TOKEN_PREFIX)
+      ) {
         socket.mesh.authenticated = true;
         clearTimeout(socket.mesh.authTimer);
         socket.send(JSON.stringify({ op: 'auth_ok' }));
       } else {
-        socket.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'first frame must be auth' }));
+        socket.send(
+          JSON.stringify({
+            op: 'error',
+            code: 'unauthorized',
+            message: 'first frame must be auth',
+          }),
+        );
         socket.close();
       }
       return;
@@ -360,5 +411,7 @@ wss.on('connection', (socket) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[visual-mock] listening on http://127.0.0.1:${PORT} (ws: /ws, fonts: /visual/fonts/*)`);
+  console.log(
+    `[visual-mock] listening on http://127.0.0.1:${PORT} (ws: /ws, fonts: /visual/fonts/*)`,
+  );
 });

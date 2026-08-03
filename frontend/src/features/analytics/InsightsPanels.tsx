@@ -21,13 +21,14 @@ export function InsightsWorkloadPanel(props: {
         <EmptyState title={t('analytics.state.noData')} />
       ) : (
         <table className="mesh-analytics__table">
+          <caption className="sr-only">{t('analytics.workload.title')}</caption>
           <thead>
             <tr>
-              <th>{t('analytics.workload.member')}</th>
-              <th>{t('analytics.workload.openIssues')}</th>
-              <th>{t('analytics.workload.running')}</th>
-              <th>{t('analytics.workload.queued')}</th>
-              <th>{t('analytics.workload.awaitingApproval')}</th>
+              <th scope="col">{t('analytics.workload.member')}</th>
+              <th scope="col">{t('analytics.workload.openIssues')}</th>
+              <th scope="col">{t('analytics.workload.running')}</th>
+              <th scope="col">{t('analytics.workload.queued')}</th>
+              <th scope="col">{t('analytics.workload.awaitingApproval')}</th>
             </tr>
           </thead>
           <tbody>

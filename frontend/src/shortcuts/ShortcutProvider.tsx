@@ -5,6 +5,7 @@
  *
  * 1. **输入控件**:焦点在 input/textarea/select/contentEditable 时,只放行
  *    显式 mod 组合;表单语义键(Esc/Tab/Enter)走浏览器原生语义,不由本分发器路由;
+ *    button/link/summary/ARIA 交互控件的裸 Enter/Space 同样保留给原生激活;
  * 2. **最上层弹层**:overlayStack 非空时背景页面快捷键全屏蔽,仅弹层自身
  *    键绑定(onKeyDown)与 Esc 分层关闭语义生效(§4.5);
  * 3. **页面上下文组**:combo 命中且 group 属 activeContexts 的 handler 中取
@@ -87,6 +88,28 @@ export function formatCombo(combo: string, isMac: boolean = detectMac()): string
     .split('+')
     .map((token) => formatKeyToken(token, isMac))
     .join('+');
+}
+
+const ACTIVATION_TARGET_SELECTOR = [
+  'button',
+  'a[href]',
+  'summary',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="tab"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="option"]',
+  '[role="treeitem"]',
+].join(',');
+
+function isInteractiveActivationTarget(target: EventTarget | null, key: string): boolean {
+  if (key !== 'enter' && key !== ' ') return false;
+  return target instanceof Element && target.closest(ACTIVATION_TARGET_SELECTOR) !== null;
 }
 
 /** 由键盘事件归一化 combo:'c'、'/'、'mod+k'、'alt+x' 等(与注册表约定一致)。 */
@@ -178,6 +201,10 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
     };
 
     const handleKeyDown = (event: KeyboardEvent): void => {
+      // 页面内控件已经消费的语义键不得在 window 层二次执行。
+      if (event.defaultPrevented) {
+        return;
+      }
       const current = propsRef.current;
       const isMac = current.isMac ?? detectMac();
       const sequenceWindowMs = current.sequenceWindowMs ?? SEQUENCE_WINDOW_MS;
@@ -221,6 +248,12 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
         event.preventDefault();
         clearPending();
         current.onOpenPalette?.();
+        return;
+      }
+
+      // 原生/语义交互控件的 Enter/Space 必须先激活它自身；否则如
+      // compact 看板 tab 的 Enter 会被 board.open 抢走并错误跳转详情。
+      if (!modMatches && !event.altKey && isInteractiveActivationTarget(event.target, lower)) {
         return;
       }
 

@@ -26,6 +26,11 @@ describe('ErrorBoundary / ErrorPage', () => {
   it('ErrorPage 独立渲染(无 onRetry 时无重试按钮)', () => {
     renderWithProviders(<ErrorPage />);
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#mesh-main-content',
+    );
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'mesh-main-content');
     expect(screen.queryByTestId('errorpage-retry')).not.toBeInTheDocument();
   });
 

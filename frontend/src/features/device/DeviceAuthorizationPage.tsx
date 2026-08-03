@@ -118,7 +118,11 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
   // 未登录:品牌区不作链接(本态仅一个「去登录」链接,getByRole('link') 唯一)。
   if (token === null) {
     return (
-      <PublicFlowShell brandLabel={t('brand.name')} title={t('device.title')}>
+      <PublicFlowShell
+        brandLabel={t('brand.name')}
+        skipLabel={t('a11y.skipLink')}
+        title={t('device.title')}
+      >
         <p className="mesh-public-flow__field-note">
           {t('device.loginRequired')}{' '}
           <Link to="/login?next=/device" className="mesh-public-flow__inline-link">
@@ -135,7 +139,11 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
   const approveDisabled = noWorkspace || (mustChoose && workspaceId === '');
 
   return (
-    <PublicFlowShell brandLabel={t('brand.name')} title={t('device.title')}>
+    <PublicFlowShell
+      brandLabel={t('brand.name')}
+      skipLabel={t('a11y.skipLink')}
+      title={t('device.title')}
+    >
       <form className="mesh-public-flow__form" onSubmit={onSubmitCode}>
         <Input
           id="device-code"

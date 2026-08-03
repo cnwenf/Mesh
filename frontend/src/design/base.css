@@ -16,6 +16,28 @@
   color-scheme: dark;
 }
 
+/* 全站首焦 skip link:鉴权外壳、公共流程与独立错误页共用。 */
+.mesh-skip-link {
+  position: absolute;
+  inset-inline-start: var(--space-2);
+  inset-block-start: var(--space-2);
+  z-index: var(--z-overlay);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  text-decoration: none;
+  font-weight: 600;
+  transform: translateY(-300%);
+  transition: transform var(--duration-fast) ease;
+}
+
+.mesh-skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 /* 最小 reset */
 *,
 *::before,
@@ -45,6 +67,59 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/* 粗指针命中区(design-quality §8.2):所有原生/ARIA 操作控件的实际命中矩形
+   均不得小于 44×44；不以相邻留白替代尺寸。桌面密度不受影响。 */
+@media (pointer: coarse) {
+  :root
+    :is(
+      button,
+      input:not([type='hidden']),
+      select,
+      textarea,
+      summary,
+      [role='button'],
+      [role='checkbox'],
+      [role='combobox'],
+      [role='gridcell'],
+      [role='link'],
+      [role='menuitem'],
+      [role='menuitemcheckbox'],
+      [role='menuitemradio'],
+      [role='option'],
+      [role='radio'],
+      [role='scrollbar'],
+      [role='searchbox'],
+      [role='slider'],
+      [role='spinbutton'],
+      [role='switch'],
+      [role='tab'],
+      [role='textbox'],
+      [role='treeitem'],
+      [contenteditable]:not([contenteditable='false']),
+      [tabindex]:not([tabindex='-1'])
+    ) {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+
+  :root a[href] {
+    display: inline-flex;
+    align-items: center;
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+}
+
+/* compact 外壳固定元素偏移：供 Toast/BulkBar/输入栏等跨 feature sticky 统一消费，
+   避免各自重写 56px 与 safe-area 近似值。 */
+@media (max-width: 599px) {
+  :root,
+  :root[data-theme='dark'] {
+    --shell-topbar-offset: calc(97px + env(safe-area-inset-top));
+    --shell-mobile-nav-offset: calc(56px + env(safe-area-inset-bottom));
+  }
 }
 
 img,

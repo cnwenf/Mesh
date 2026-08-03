@@ -1,10 +1,13 @@
 /**
  * 导入向导组件测试:来源步 → 预览(脚本强制确认 + 权限最小化) → 审批 → 安装步。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
+import { RealtimeContext } from '../../../shell/AppShell';
+import type { RealtimeContextValue } from '../../../shell/AppShell';
+import { workspaceSkillsChannel } from '../api';
 import { ImportWizard } from '../ImportWizard';
 
 const AWAITING = {
@@ -21,8 +24,12 @@ const AWAITING = {
     summary: 's',
     instructions_preview: '## 预览',
     scripts: [
-      { path: 'scripts/check.sh', runtime: 'shell', entrypoint: true,
-        required_capabilities: ['exec:shell', 'net:outbound'] },
+      {
+        path: 'scripts/check.sh',
+        runtime: 'shell',
+        entrypoint: true,
+        required_capabilities: ['exec:shell', 'net:outbound'],
+      },
     ],
     references: [{ path: 'docs/r.md', media_type: 'text/markdown' }],
     requested_capabilities: ['exec:shell', 'net:outbound'],
@@ -71,7 +78,12 @@ describe('ImportWizard', () => {
   it('预览含脚本时:未确认前审批禁用,确认后启用', async () => {
     setup();
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
     );
     await screen.findByTestId('import-scripts');
     const approve = screen.getByTestId('import-approve');
@@ -85,7 +97,12 @@ describe('ImportWizard', () => {
     const { calls } = setup();
     const onDone = vi.fn();
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={onDone} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={onDone}
+        initialUri="http://x/m.json"
+      />,
     );
     await screen.findByTestId('import-scripts');
     fireEvent.click(screen.getByTestId('import-confirm-scripts/check.sh'));
@@ -104,7 +121,12 @@ describe('ImportWizard', () => {
     setup();
     const onDone = vi.fn();
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={onDone} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={onDone}
+        initialUri="http://x/m.json"
+      />,
     );
     await screen.findByTestId('import-scripts');
     fireEvent.click(screen.getByTestId('import-confirm-scripts/check.sh'));
@@ -116,6 +138,7 @@ describe('ImportWizard', () => {
     const { calls } = setup();
     renderWithProviders(<ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} />);
     await screen.findByTestId('import-step-source');
+    fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'marketplace' } });
     fireEvent.change(screen.getByTestId('import-uri'), { target: { value: 'http://x/m.json' } });
     fireEvent.click(screen.getByTestId('import-start'));
     await waitFor(() => {
@@ -126,17 +149,28 @@ describe('ImportWizard', () => {
   it('无需审批(ready)→ 直接进入安装步', async () => {
     setup(READY);
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
     );
-    await screen.findByTestId('import-to-install');
+    fireEvent.click(await screen.findByTestId('import-to-install'));
+    expect(await screen.findByTestId('import-step-install')).toBeTruthy();
   });
 
   it('导入失败态', async () => {
-    setup({ ...AWAITING, status: 'failed', preview: null, error: 'source_unreachable' });
+    setup({ ...AWAITING, status: 'failed', preview: null, error: null });
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
     );
-    await screen.findByTestId('import-failed');
+    expect((await screen.findByTestId('import-failed')).textContent).toBe('Import failed: ');
   });
 
   it('审批失败捕获 + 安装失败捕获', async () => {
@@ -146,11 +180,19 @@ describe('ImportWizard', () => {
       if (method === 'POST' && url.endsWith('/skills/import')) {
         return fakeResponse({ status: 202, body: { data: AWAITING } });
       }
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', failing);
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
     );
     await screen.findByTestId('import-scripts');
     fireEvent.click(screen.getByTestId('import-confirm-scripts/check.sh'));
@@ -180,7 +222,12 @@ describe('ImportWizard', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
     );
     const bar = await screen.findByTestId('import-progress');
     expect(bar.querySelector('[role="progressbar"]')).toBeTruthy();
@@ -195,15 +242,26 @@ describe('ImportWizard', () => {
         return fakeResponse({ status: 202, body: { data: AWAITING } });
       }
       if (method === 'POST') {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       return fakeResponse({ body: { data: AWAITING } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', failingApproveInstall);
     renderWithProviders(
-      <ImportWizard workspaceId="ws-1" onClose={vi.fn()} onDone={vi.fn()} initialUri="http://x/m.json" />,
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
     );
     await screen.findByTestId('import-scripts');
+    fireEvent.change(screen.getByLabelText('Review comment'), {
+      target: { value: 'reviewed carefully' },
+    });
     fireEvent.click(screen.getByTestId('import-confirm-scripts/check.sh'));
     fireEvent.click(screen.getByTestId('import-grant-exec:shell'));
     // approve fails → stays on preview (catch)
@@ -211,11 +269,103 @@ describe('ImportWizard', () => {
     await waitFor(() => expect(screen.getByTestId('import-scripts')).toBeTruthy());
   });
 
+  it('脚本/权限复选支持撤回,并呈现安全与对象能力分支', async () => {
+    const rich = {
+      ...AWAITING,
+      preview: {
+        ...AWAITING.preview,
+        scripts: [
+          {
+            path: 'scripts/check.sh',
+            runtime: 'shell',
+            entrypoint: false,
+            required_capabilities: [{ capability: 'read:issues' }],
+          },
+          {
+            path: 'scripts/no-capabilities.sh',
+            runtime: 'shell',
+            entrypoint: false,
+          },
+        ],
+        requested_capabilities: ['read:issues'],
+      },
+    };
+    setup(rich);
+    renderWithProviders(
+      <ImportWizard
+        workspaceId="ws-1"
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        initialUri="http://x/m.json"
+      />,
+    );
+    const script = await screen.findByTestId('import-confirm-scripts/check.sh');
+    const grant = screen.getByTestId('import-grant-read:issues');
+    fireEvent.click(script);
+    fireEvent.click(script);
+    fireEvent.click(grant);
+    fireEvent.click(grant);
+    expect(script).not.toBeChecked();
+    expect(grant).not.toBeChecked();
+    expect(
+      screen.getAllByText('read:issues').every((node) => !node.classList.contains('is-risky')),
+    ).toBe(true);
+  });
+
+  it('realtime 仅合并同任务进度帧并在卸载时退订', async () => {
+    const handlers: Array<(frame: unknown) => void> = [];
+    const realtimeClient = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(),
+      onFrame: vi.fn((handler: (frame: unknown) => void) => {
+        handlers.push(handler);
+        return vi.fn();
+      }),
+    };
+    setup();
+    const realtime: RealtimeContextValue = {
+      state: 'connected',
+      client: realtimeClient as never,
+    };
+    const rendered = renderWithProviders(
+      <RealtimeContext.Provider value={realtime}>
+        <ImportWizard
+          workspaceId="ws-1"
+          onClose={vi.fn()}
+          onDone={vi.fn()}
+          initialUri="http://x/m.json"
+        />
+      </RealtimeContext.Provider>,
+    );
+    await screen.findByTestId('import-scripts');
+    const channel = workspaceSkillsChannel('ws-1');
+    act(() => {
+      handlers[0]({
+        channel: 'workspace:other:skills',
+        event: 'skill_import.progress',
+        payload: {},
+      });
+      handlers[0]({ channel, event: 'other', payload: {} });
+      handlers[0]({ channel, event: 'skill_import.progress', payload: { task_id: 'other' } });
+      handlers[0]({
+        channel,
+        event: 'skill_import.progress',
+        payload: { task_id: 't-1', percent: 42, stage: 'installing', status: 'installing' },
+      });
+    });
+    expect(await screen.findByText(/installing · 42%/)).toBeTruthy();
+    rendered.unmount();
+    expect(realtimeClient.unsubscribe).toHaveBeenCalledWith(channel);
+  });
+
   it('启动导入失败 → 错误态', async () => {
     const failStart = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? 'GET';
       if (method === 'POST') {
-        return fakeResponse({ status: 502, body: { error: { code: 'source_unreachable', message: 'x' } } });
+        return fakeResponse({
+          status: 502,
+          body: { error: { code: 'source_unreachable', message: 'x' } },
+        });
       }
       return fakeResponse({ body: { data: [] } });
     }) as typeof fetch;

@@ -230,6 +230,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
       <PublicFlowShell
         brandLabel={brandLabel}
         brandHref="/"
+        skipLabel={t('a11y.skipLink')}
         title={t('auth.mfaTitle')}
         description={t('auth.mfaPrompt')}
         footer={footer}
@@ -263,6 +264,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
       <PublicFlowShell
         brandLabel={brandLabel}
         brandHref="/"
+        skipLabel={t('a11y.skipLink')}
         title={t('auth.verifyEmailTitle')}
         footer={footer}
       >
@@ -281,6 +283,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
     <PublicFlowShell
       brandLabel={brandLabel}
       brandHref="/"
+      skipLabel={t('a11y.skipLink')}
       title={t('login.title')}
       description={t('login.description')}
       footer={footer}

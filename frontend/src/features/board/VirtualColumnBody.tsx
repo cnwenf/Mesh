@@ -76,7 +76,8 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
 
   // 激活卡片越窗仍渲染。
   const activeIndex = activeCardId === null ? -1 : cards.findIndex((c) => c.id === activeCardId);
-  const activeOutOfWindow = activeIndex >= 0 && (activeIndex < window.start || activeIndex >= window.end);
+  const activeOutOfWindow =
+    activeIndex >= 0 && (activeIndex < window.start || activeIndex >= window.end);
 
   // 聚焦时 scroll-into-view。
   useEffect(() => {
@@ -90,7 +91,11 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
     const card = cards[i];
     if (card === undefined) continue;
     visible.push(
-      <div key={card.id} style={{ height: `${CARD_HEIGHT}px`, boxSizing: 'border-box' }}>
+      <div
+        key={card.id}
+        role="presentation"
+        style={{ height: `${CARD_HEIGHT}px`, boxSizing: 'border-box' }}
+      >
         {renderCard(card, i, { setsize: cards.length, posinset: i + 1 })}
       </div>,
     );
@@ -104,6 +109,7 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
       activeNode = (
         <div
           key={`active-${card.id}`}
+          role="presentation"
           style={{ height: `${CARD_HEIGHT}px`, boxSizing: 'border-box' }}
         >
           {renderCard(card, activeIndex, { setsize: cards.length, posinset: activeIndex + 1 })}
@@ -113,9 +119,10 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
   }
 
   // 落点指示线:绝对定位于 index × 行高(null → 列尾),随 hit.index 移位(§9.4.2)。
-  const resolvedIndicatorIndex = indicatorIndex === null || indicatorIndex === undefined
-    ? cards.length
-    : Math.min(Math.max(indicatorIndex, 0), cards.length);
+  const resolvedIndicatorIndex =
+    indicatorIndex === null || indicatorIndex === undefined
+      ? cards.length
+      : Math.min(Math.max(indicatorIndex, 0), cards.length);
   const showIndicator = indicatorNode !== undefined && indicatorIndex !== undefined;
 
   return (
@@ -123,11 +130,13 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
       ref={containerRef}
       className="mesh-board__virtual"
       data-testid="virtual-column-body"
+      role="list"
       onScroll={handleScroll}
     >
       {/* 总高度 spacer,撑开滚动区域。 */}
-      <div style={{ height: `${window.totalHeight}px`, position: 'relative' }}>
+      <div role="presentation" style={{ height: `${window.totalHeight}px`, position: 'relative' }}>
         <div
+          role="presentation"
           style={{
             position: 'absolute',
             top: 0,
@@ -142,7 +151,12 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
         {showIndicator ? (
           <div
             aria-hidden="true"
-            style={{ position: 'absolute', left: 0, right: 0, top: `${resolvedIndicatorIndex * CARD_HEIGHT}px` }}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: `${resolvedIndicatorIndex * CARD_HEIGHT}px`,
+            }}
           >
             {indicatorNode}
           </div>

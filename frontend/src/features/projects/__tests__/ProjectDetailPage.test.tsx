@@ -199,6 +199,23 @@ describe('ProjectDetailPage', () => {
     expect(screen.getByText('Moon landing')).toBeDefined();
   });
 
+  it('opens and closes project export and import dialogs', async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderDetail();
+    await screen.findByText('Apollo');
+
+    await user.click(screen.getByTestId('export-project-button'));
+    const exportDialog = await screen.findByRole('dialog', { name: 'Export data' });
+    await user.click(within(exportDialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Export data' })).toBeNull());
+
+    await user.click(screen.getByTestId('import-project-button'));
+    const importDialog = await screen.findByRole('dialog', { name: 'Import data' });
+    await user.click(within(importDialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Import data' })).toBeNull());
+  });
+
   it('shows milestones with overdue marking on the milestones tab', async () => {
     stubFetch();
     renderDetail();
@@ -319,9 +336,7 @@ describe('ProjectDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderDetail();
-    expect(
-      await screen.findByText('You are not a member of any workspace yet.'),
-    ).toBeDefined();
+    expect(await screen.findByText('You are not a member of any workspace yet.')).toBeDefined();
   });
 
   it('shows the dialog error when posting a health update fails', async () => {
@@ -362,7 +377,10 @@ describe('ProjectDetailPage', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       }
       if (method !== 'GET' && url.includes('/milestones')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
         return fakeResponse({ body: { data: makeProject() } });
@@ -386,7 +404,9 @@ describe('ProjectDetailPage', () => {
     await user.click(screen.getByTestId('milestone-delete-ms-1'));
     await user.click(await screen.findByTestId('milestone-delete-confirm'));
     await waitFor(() => {
-      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText('An internal error occurred. Please try again.').length,
+      ).toBeGreaterThan(0);
     });
   });
 
@@ -396,7 +416,10 @@ describe('ProjectDetailPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'POST' && url.includes('/updates')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/updates')) {
         return fakeResponse({ body: { data: [], next_cursor: null } });
@@ -516,7 +539,6 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('delete-confirm')).toBeNull();
     expect(callsTo(calls, 'DELETE', '/projects/').length).toBe(0);
   });
-
 });
 
 // ---- 实时帧合并(project:{id} 频道,§3.5/§6.7)----
@@ -752,5 +774,69 @@ describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
       await Promise.resolve();
     });
     expect(second.container.innerHTML).toBe('');
+  });
+
+  it('实时帧在项目加载前到达被丢弃(prev===null 守卫,MES-128 覆盖加固)', async () => {
+    // 项目详情 GET 保持 pending,使 project===null 时收到实时帧。
+    let resolveProject: (response: Response) => void = () => undefined;
+    const pendingProject = new Promise<Response>((resolve) => {
+      resolveProject = resolve;
+    });
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return pendingProject;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    const realtime = makeFakeRealtime();
+    renderDetailWithRealtime(realtime);
+    await screen.findByText('Loading…');
+    await waitFor(() => expect(realtime.client.subscribe).toHaveBeenCalledWith('project:prj-1'));
+
+    // project.updated / project.archived 帧在 project===null 时到达:
+    // prev===null 分支应原样返回 null,不抛错、不污染状态。
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 1,
+        event: 'project.updated',
+        payload: { id: 'prj-1', name: 'Should Not Appear', updated_at: '2026-07-02T00:00:00Z' },
+      });
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 2,
+        event: 'project.archived',
+        payload: {},
+      });
+    });
+
+    // 解析加载后,确认未被空帧污染:头部仍为原始项目。
+    await act(async () => {
+      resolveProject(fakeResponse({ body: { data: makeProject() } }));
+    });
+    expect(await screen.findByTestId('project-detail-header')).toBeDefined();
+    expect(screen.queryByText('Should Not Appear')).toBeNull();
+  });
+
+  it('项目加载遇到非 MeshApiError 时回退通用错误描述(MES-128 覆盖加固)', async () => {
+    // 项目 GET 以非 MeshApiError 的通用错误拒绝 → catch 走 'state.errorDescription' 分支。
+    const rejection = Promise.reject(new Error('network down'));
+    rejection.catch(() => undefined);
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return rejection;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderDetail();
+    expect(await screen.findByText('Something went wrong')).toBeDefined();
   });
 });

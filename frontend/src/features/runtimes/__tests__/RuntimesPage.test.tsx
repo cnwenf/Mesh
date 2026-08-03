@@ -89,7 +89,8 @@ function setup(runtimes: unknown[] = [RUNTIME_ONLINE, RUNTIME_PAUSED]): Recorded
               release: {
                 artifact_url: 'https://releases.mesh.example/runtime/1.4.2/mesh-runtime.tar.gz',
                 sha256: 'ab'.repeat(32),
-                signature_url: 'https://releases.mesh.example/runtime/1.4.2/mesh-runtime.tar.gz.sig',
+                signature_url:
+                  'https://releases.mesh.example/runtime/1.4.2/mesh-runtime.tar.gz.sig',
                 signing_key_url: 'https://releases.mesh.example/mesh-release.pub',
               },
               activate_hint: 'mesh-runtime activate --activation-file ./activation.txt',
@@ -141,7 +142,9 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
       <Route
         path="/"
         element={
-          realtime === null ? page : (
+          realtime === null ? (
+            page
+          ) : (
             <RealtimeContext.Provider value={realtime.value}>{page}</RealtimeContext.Provider>
           )
         }
@@ -161,6 +164,12 @@ describe('RuntimesPage', () => {
     expect(screen.getByTestId('runtime-row-r-1')).toHaveTextContent('Self-hosted');
     expect(screen.getByTestId('runtime-load-r-1')).toBeInTheDocument();
     expect(screen.getByTestId('runtime-heartbeat-r-1').textContent).toMatch(/s ago/);
+    // compact 布局以 data-label 保留每个单元格的列语义，CSS 才能安全卡片化，
+    // 避免 390px 下六列被压成逐字换行。
+    const row = screen.getByTestId('runtime-row-r-1');
+    for (const label of ['Status', 'Name', 'Kind', 'Load', 'Heartbeat', 'Actions']) {
+      expect(row.querySelector(`td[data-label="${label}"]`)).not.toBeNull();
+    }
     // 暂停态行呈现 Resume 动作而非 Pause。
     expect(screen.getByTestId('runtime-resume-r-2')).toBeInTheDocument();
     expect(screen.queryByTestId('runtime-pause-r-2')).toBeNull();
@@ -196,7 +205,9 @@ describe('RuntimesPage', () => {
     renderPage(realtime);
     await screen.findByTestId('runtime-row-r-1');
     expect(realtime.subscribed).toContain('workspace:ws-1:runtimes');
-    const listCallsBefore = calls.filter((c) => c.url.includes('/runtimes') && c.method === 'GET').length;
+    const listCallsBefore = calls.filter(
+      (c) => c.url.includes('/runtimes') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -286,7 +297,9 @@ describe('RuntimesPage', () => {
     await user.selectOptions(screen.getByTestId('runtimes-status-filter'), 'online');
     await user.selectOptions(screen.getByTestId('runtimes-kind-filter'), 'self_hosted');
     await waitFor(() =>
-      expect(calls.some((c) => c.url.includes('status=online') && c.url.includes('kind=self_hosted'))).toBe(true),
+      expect(
+        calls.some((c) => c.url.includes('status=online') && c.url.includes('kind=self_hosted')),
+      ).toBe(true),
     );
   });
 

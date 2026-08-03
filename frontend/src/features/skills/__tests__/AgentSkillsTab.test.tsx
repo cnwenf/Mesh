@@ -80,9 +80,7 @@ describe('AgentSkillsTab', () => {
     fireEvent.click(await screen.findByTestId('agent-unbind-b-1'));
     await waitFor(() => {
       expect(
-        calls.some(
-          (c) => c.method === 'DELETE' && c.url.endsWith('/agents/a-1/skills/b-1'),
-        ),
+        calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/agents/a-1/skills/b-1')),
       ).toBe(true);
     });
   });
@@ -104,9 +102,9 @@ describe('AgentSkillsTab', () => {
     });
     fireEvent.click(screen.getByTestId('agent-skill-bind'));
     await waitFor(() => {
-      expect(
-        calls.some((c) => c.method === 'POST' && c.url.endsWith('/agents/a-1/skills')),
-      ).toBe(true);
+      expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/agents/a-1/skills'))).toBe(
+        true,
+      );
     });
   });
 
@@ -119,7 +117,8 @@ describe('AgentSkillsTab', () => {
     fireEvent.click(checkboxes[1]); // auto_trigger toggle
     await waitFor(() => {
       expect(
-        calls.filter((c) => c.method === 'PATCH' && c.url.endsWith('/agents/a-1/skills/b-1')).length,
+        calls.filter((c) => c.method === 'PATCH' && c.url.endsWith('/agents/a-1/skills/b-1'))
+          .length,
       ).toBeGreaterThanOrEqual(2);
     });
   });
@@ -127,8 +126,10 @@ describe('AgentSkillsTab', () => {
   it('空绑定列表 → 空态', async () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/agents/a-1/skills')) return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/skill-installations')) return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      if (url.includes('/agents/a-1/skills'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/skill-installations'))
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
       return fakeResponse({ body: { data: [] } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -142,11 +143,16 @@ describe('AgentSkillsTab', () => {
       const url = String(input);
       const method = init?.method ?? 'GET';
       if (method === 'GET') {
-        if (url.includes('/agents/a-1/skills')) return fakeResponse({ body: { data: [ROW], next_cursor: null } });
-        if (url.includes('/skill-installations')) return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+        if (url.includes('/agents/a-1/skills'))
+          return fakeResponse({ body: { data: [ROW], next_cursor: null } });
+        if (url.includes('/skill-installations'))
+          return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
         return fakeResponse({ body: { data: [] } });
       }
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(<AgentSkillsTab workspaceId="ws-1" agentId="a-1" canManage />);
@@ -165,8 +171,10 @@ describe('AgentSkillsTab', () => {
       const method = init?.method ?? 'GET';
       calls.push({ url, method, body: init?.body as string | undefined });
       if (method === 'GET') {
-        if (url.includes('/agents/a-1/skills')) return fakeResponse({ body: { data: [ROW], next_cursor: null } });
-        if (url.includes('/skill-installations')) return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+        if (url.includes('/agents/a-1/skills'))
+          return fakeResponse({ body: { data: [ROW], next_cursor: null } });
+        if (url.includes('/skill-installations'))
+          return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
         return fakeResponse({ body: { data: [] } });
       }
       return fakeResponse({ body: { data: ROW } });
@@ -177,9 +185,7 @@ describe('AgentSkillsTab', () => {
     fireEvent.change(input, { target: { value: '300' } });
     fireEvent.blur(input);
     await waitFor(() =>
-      expect(
-        calls.some((c) => c.method === 'PATCH' && (c.body ?? '').includes('300')),
-      ).toBe(true),
+      expect(calls.some((c) => c.method === 'PATCH' && (c.body ?? '').includes('300'))).toBe(true),
     );
   });
 
@@ -188,17 +194,50 @@ describe('AgentSkillsTab', () => {
       const url = String(input);
       const method = init?.method ?? 'GET';
       if (method === 'GET') {
-        if (url.includes('/agents/a-1/skills')) return fakeResponse({ body: { data: [ROW], next_cursor: null } });
-        if (url.includes('/skill-installations')) return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+        if (url.includes('/agents/a-1/skills'))
+          return fakeResponse({ body: { data: [ROW], next_cursor: null } });
+        if (url.includes('/skill-installations'))
+          return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
         return fakeResponse({ body: { data: [] } });
       }
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', failImpl);
     renderWithProviders(<AgentSkillsTab workspaceId="ws-1" agentId="a-1" canManage />);
     const row = await screen.findByTestId('agent-skill-b-1');
     fireEvent.click(row.querySelectorAll('input[type="checkbox"]')[0]); // enabled toggle catch
+    fireEvent.click(row.querySelectorAll('input[type="checkbox"]')[1]); // auto-trigger catch
     fireEvent.click(screen.getByTestId('agent-unbind-b-1')); // unbind catch
     await waitFor(() => expect(screen.getByTestId('agent-panel-skills')).toBeTruthy());
+  });
+
+  it('内置且无更新技能不显示来源/更新标记,相同优先级不发请求', async () => {
+    const calls: { method: string }[] = [];
+    const plainRow = {
+      ...ROW,
+      skill: { ...ROW.skill, source_type: 'builtin' },
+      install_status: 'installed',
+    };
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ method });
+      if (url.includes('/agents/a-1/skills')) {
+        return fakeResponse({ body: { data: [plainRow], next_cursor: null } });
+      }
+      return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderWithProviders(<AgentSkillsTab workspaceId="ws-1" agentId="a-1" canManage />);
+    const row = await screen.findByTestId('agent-skill-b-1');
+    expect(row.querySelector('.mesh-skills__source-flag')).toBeNull();
+    expect(row.querySelector('.mesh-skills__update-flag')).toBeNull();
+
+    const priority = screen.getByTestId('agent-priority-b-1') as HTMLInputElement;
+    fireEvent.blur(priority);
+    expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
   });
 });

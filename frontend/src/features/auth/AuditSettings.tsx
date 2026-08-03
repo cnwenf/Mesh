@@ -87,11 +87,12 @@ export function AuditSettings(props: AuditSettingsProps): React.JSX.Element {
         <p data-testid="audit-empty">{t('audit.empty')}</p>
       ) : (
         <table className="mesh-audit__table" data-testid="audit-table">
+          <caption className="sr-only">{t('audit.title')}</caption>
           <thead>
             <tr>
-              <th>{t('audit.time')}</th>
-              <th>{t('audit.action')}</th>
-              <th>{t('audit.actor')}</th>
+              <th scope="col">{t('audit.time')}</th>
+              <th scope="col">{t('audit.action')}</th>
+              <th scope="col">{t('audit.actor')}</th>
             </tr>
           </thead>
           <tbody>

@@ -15,6 +15,8 @@ export interface WorkspaceSettings {
   default_theme?: string;
   invitation_max_uses_cap?: number;
   invitation_max_lifetime_hours_cap?: number;
+  /** 工作区产品功能开关；已知键值均为 boolean，未知键由服务端前向透传。 */
+  feature_flags?: Record<string, boolean>;
   [key: string]: unknown;
 }
 
@@ -75,10 +77,7 @@ export async function listWorkspaces(
   query?: WorkspaceListQuery,
 ): Promise<ListEnvelope<WorkspaceSummary>> {
   return client.list<WorkspaceSummary>(WORKSPACES_PATH, {
-    query:
-      query !== undefined
-        ? { limit: query.limit, cursor: query.cursor }
-        : undefined,
+    query: query !== undefined ? { limit: query.limit, cursor: query.cursor } : undefined,
   });
 }
 
@@ -164,9 +163,7 @@ export async function restoreWorkspace(
  * 列表响应不含 settings,故取首个所属工作区后读其 detail;
  * 无工作区 / settings 未设 / detail 读取失败时返回 null(协商链跳过本级)。
  */
-export async function fetchWorkspaceDefaultLocale(
-  client: MeshApiClient,
-): Promise<string | null> {
+export async function fetchWorkspaceDefaultLocale(client: MeshApiClient): Promise<string | null> {
   const workspaces = await fetchWorkspaces(client);
   if (workspaces.length === 0) return null;
   try {

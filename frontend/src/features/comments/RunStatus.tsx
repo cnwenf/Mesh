@@ -52,7 +52,13 @@ export function RunStatus(props: RunStatusProps): React.JSX.Element {
     .filter((part): part is string => part !== null)
     .join(' ');
   return (
-    <span className={classes} data-testid={`run-status-${props.status}`}>
+    <span
+      className={classes}
+      data-testid={`run-status-${props.status}`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       <Icon name={config.icon} size={16} className="mesh-run-status__icon" />
       {/* agent 名为数据(非整句),与已本地化状态文案以分隔符并排,避免组件内拼接句子(§10.3)。 */}
       {hasAgent ? <span className="mesh-run-status__name">{props.agentName}</span> : null}

@@ -18,11 +18,11 @@ test('Ctrl+K 打开面板:空态收藏区 + 分组搜索 + Enter 规范深链', 
 
   // Ctrl+K 打开,搜索框即聚焦
   await page.keyboard.press('Control+K');
-  const combobox = page.getByRole('combobox');
-  await expect(combobox).toBeFocused();
   // 分区标题断言一律限定面板作用域:页面其余区域(侧栏/移动导航/首页)
   // 存在同名文案(MES-111 移动端导航),裸 getByText 触发 strict mode 歧义。
   const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const combobox = palette.getByRole('combobox');
+  await expect(combobox).toBeFocused();
 
   // 空态:收藏区(mock favorites 1 条)+ 命令区
   await expect(palette.getByText('Favorites')).toBeVisible();
@@ -49,10 +49,10 @@ test('顶栏搜索输入即展开同一面板(§4.9)', async ({ page }) => {
   await topbarSearch.pressSequentially('Login', { delay: 30 });
 
   // 首个字符即展开面板,后续输入落在面板搜索框
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('dialog', { name: 'Command palette' });
   await expect(dialog).toBeVisible();
-  await expect(page.getByRole('combobox')).toHaveValue('Login');
-  await expect(page.getByRole('option', { name: /Login page crashes/ })).toBeVisible();
+  await expect(dialog.getByRole('combobox')).toHaveValue('Login');
+  await expect(dialog.getByRole('option', { name: /Login page crashes/ })).toBeVisible();
 });
 
 test('无匹配时呈现 no-results(文案 + 建议)', async ({ page }) => {
@@ -60,8 +60,9 @@ test('无匹配时呈现 no-results(文案 + 建议)', async ({ page }) => {
   await gotoHomeReady(page);
 
   await page.keyboard.press('Control+K');
-  const combobox = page.getByRole('combobox');
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const combobox = palette.getByRole('combobox');
   await combobox.fill('zzz-nomatch');
-  await expect(page.getByText(/No results for/)).toBeVisible();
-  await expect(page.getByRole('option')).toHaveCount(0);
+  await expect(palette.getByText(/No results for/)).toBeVisible();
+  await expect(palette.getByRole('option')).toHaveCount(0);
 });

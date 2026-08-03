@@ -3,7 +3,7 @@
  * 权限最小化勾选) → ③ 审批安装。进度经 GET import/{task_id} 轮询(3~5s 退化方案,
  * §3.5);含脚本的 marketplace/url 来源强制人工审阅,未审批不得安装(§5.3)。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, Dialog, Input, useToast } from '../../design';
 import { env } from '../../env';
@@ -76,7 +76,12 @@ export function ImportWizard({
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (String(frame.channel) !== channel || frame.event !== 'skill_import.progress') return;
-      const data = frame.payload as { task_id?: string; percent?: number; stage?: string; status?: string };
+      const data = frame.payload as {
+        task_id?: string;
+        percent?: number;
+        stage?: string;
+        status?: string;
+      };
       if (data.task_id !== task.task_id) return;
       setTask((prev) =>
         prev === null
@@ -95,8 +100,9 @@ export function ImportWizard({
     };
   }, [realtime, task, workspaceId]);
 
-  // 预览就绪时,默认最小化授权:建议拒绝项(高危)预置不勾选(§4.2)。
-  useEffect(() => {
+  // 预览就绪时,默认最小化授权:建议拒绝项(高危)预置不勾选(§4.2)。在浏览器
+  // 绘制可交互控件前完成重置,避免被动 effect 覆盖刚发生的确认操作。
+  useLayoutEffect(() => {
     if (task?.preview === undefined || task.preview === null) return;
     setGranted(new Set());
     setConfirmedScripts(new Set());
@@ -133,7 +139,8 @@ export function ImportWizard({
 
   const preview = task?.preview ?? null;
   const scripts = preview?.scripts ?? [];
-  const allScriptsConfirmed = scripts.length === 0 || scripts.every((s) => confirmedScripts.has(s.path));
+  const allScriptsConfirmed =
+    scripts.length === 0 || scripts.every((s) => confirmedScripts.has(s.path));
   const requested = preview?.requested_capabilities ?? [];
 
   const approve = useCallback(
@@ -151,7 +158,10 @@ export function ImportWizard({
         });
         setTask(updated);
         if (decision === 'reject') {
-          toast.addToast(t('skills.importRejected'), { tone: 'info', closeLabel: t('a11y.closeDialog') });
+          toast.addToast(t('skills.importRejected'), {
+            tone: 'info',
+            closeLabel: t('a11y.closeDialog'),
+          });
           onDone();
           return;
         }
@@ -178,7 +188,10 @@ export function ImportWizard({
         auto_update: autoUpdate,
       });
       setStep('done');
-      toast.addToast(t('skills.installSucceeded'), { tone: 'success', closeLabel: t('a11y.closeDialog') });
+      toast.addToast(t('skills.installSucceeded'), {
+        tone: 'success',
+        closeLabel: t('a11y.closeDialog'),
+      });
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('skills.installFailed'));
@@ -188,7 +201,12 @@ export function ImportWizard({
   }, [task, workspaceId, autoUpdate, t, toast, onDone]);
 
   return (
-    <Dialog open title={t('skills.importTitle')} onClose={onClose} closeLabel={t('a11y.closeDialog')}>
+    <Dialog
+      open
+      title={t('skills.importTitle')}
+      onClose={onClose}
+      closeLabel={t('a11y.closeDialog')}
+    >
       <div className="mesh-skills-wizard">
         <ol className="mesh-skills-wizard__steps">
           <li className={step === 'source' ? 'is-active' : ''}>{t('skills.importStepSource')}</li>
@@ -200,15 +218,30 @@ export function ImportWizard({
           <div className="mesh-skills-wizard__body" data-testid="import-step-source">
             <label className="mesh-skills__field">
               {t('skills.importSourceType')}
-              <select aria-label={t('skills.importSourceType')} value={sourceType} onChange={(e) => setSourceType(e.target.value as 'url' | 'marketplace')}>
+              <select
+                aria-label={t('skills.importSourceType')}
+                value={sourceType}
+                onChange={(e) => setSourceType(e.target.value as 'url' | 'marketplace')}
+              >
                 <option value="url">{t('skills.source.url')}</option>
                 <option value="marketplace">{t('skills.source.marketplace')}</option>
               </select>
             </label>
-            <Input label={t('skills.importUri')} value={uri} onChange={(e) => setUri(e.target.value)} data-testid="import-uri" />
-            {error !== null ? <p className="mesh-skills__form-error" data-testid="import-start-error">{error}</p> : null}
+            <Input
+              label={t('skills.importUri')}
+              value={uri}
+              onChange={(e) => setUri(e.target.value)}
+              data-testid="import-uri"
+            />
+            {error !== null ? (
+              <p className="mesh-skills__form-error" data-testid="import-start-error">
+                {error}
+              </p>
+            ) : null}
             <div className="mesh-skills__form-actions">
-              <Button variant="secondary" onClick={onClose}>{t('skills.cancel')}</Button>
+              <Button variant="secondary" onClick={onClose}>
+                {t('skills.cancel')}
+              </Button>
               <Button
                 onClick={() => void start()}
                 disabled={busy || uri.trim() === ''}
@@ -222,7 +255,8 @@ export function ImportWizard({
 
         {step === 'preview' ? (
           <div className="mesh-skills-wizard__body" data-testid="import-step-preview">
-            {task !== null && ['parsing', 'validating', 'sandbox_preview', 'installing'].includes(task.status) ? (
+            {task !== null &&
+            ['parsing', 'validating', 'sandbox_preview', 'installing'].includes(task.status) ? (
               <div className="mesh-skills-wizard__progress" data-testid="import-progress">
                 <span className="mesh-skills-wizard__progress-label">
                   {t('skills.importProgress', { name: `${task.stage} · ${task.percent}%` })}
@@ -248,9 +282,14 @@ export function ImportWizard({
             ) : null}
             {preview !== null && task !== null ? (
               <>
-                <h3>{preview.name} <span className="mesh-skills__version-tag">v{preview.version}</span></h3>
+                <h3>
+                  {preview.name}{' '}
+                  <span className="mesh-skills__version-tag">v{preview.version}</span>
+                </h3>
                 <p className="mesh-skills-wizard__summary">{preview.summary}</p>
-                <pre className="mesh-skills-wizard__instructions">{preview.instructions_preview}</pre>
+                <pre className="mesh-skills-wizard__instructions">
+                  {preview.instructions_preview}
+                </pre>
 
                 {scripts.length > 0 ? (
                   <section className="mesh-skills-wizard__scripts" data-testid="import-scripts">
@@ -273,7 +312,9 @@ export function ImportWizard({
                         />
                         <code>{script.path}</code>
                         <span className="mesh-skills-wizard__script-runtime">{script.runtime}</span>
-                        {script.entrypoint ? <span className="mesh-skills-wizard__entry">entry</span> : null}
+                        {script.entrypoint ? (
+                          <span className="mesh-skills-wizard__entry">entry</span>
+                        ) : null}
                         <span className="mesh-skills-wizard__caps">
                           {(script.required_capabilities ?? []).map((cap, ci) => {
                             const key = typeof cap === 'string' ? cap : cap.capability;
@@ -293,7 +334,10 @@ export function ImportWizard({
                 ) : null}
 
                 {requested.length > 0 ? (
-                  <section className="mesh-skills-wizard__caps-section" data-testid="import-capabilities">
+                  <section
+                    className="mesh-skills-wizard__caps-section"
+                    data-testid="import-capabilities"
+                  >
                     <h4>{t('skills.importCapsTitle')}</h4>
                     <p className="mesh-skills-wizard__caps-hint">{t('skills.importCapsHint')}</p>
                     {requested.map((cap) => (
@@ -321,12 +365,18 @@ export function ImportWizard({
                 ) : null}
 
                 {task.requires_approval ? (
-                  <Input label={t('skills.importComment')} value={comment} onChange={(e) => setComment(e.target.value)} />
+                  <Input
+                    label={t('skills.importComment')}
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                  />
                 ) : null}
 
                 {error !== null ? <p className="mesh-skills__form-error">{error}</p> : null}
                 <div className="mesh-skills__form-actions">
-                  <Button variant="secondary" onClick={onClose}>{t('skills.cancel')}</Button>
+                  <Button variant="secondary" onClick={onClose}>
+                    {t('skills.cancel')}
+                  </Button>
                   {task.requires_approval ? (
                     <>
                       <Button
@@ -374,7 +424,9 @@ export function ImportWizard({
             </label>
             {error !== null ? <p className="mesh-skills__form-error">{error}</p> : null}
             <div className="mesh-skills__form-actions">
-              <Button variant="secondary" onClick={onClose}>{t('skills.cancel')}</Button>
+              <Button variant="secondary" onClick={onClose}>
+                {t('skills.cancel')}
+              </Button>
               <Button onClick={() => void install()} disabled={busy} data-testid="import-install">
                 {t('skills.importInstall')}
               </Button>

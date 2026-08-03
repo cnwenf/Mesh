@@ -6,7 +6,11 @@
  * 无硬编码可见文案(closeLabel 来自调用方)。
  */
 import { useRef } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from 'react';
 import { Icon } from './Icon';
 import { IconButton } from './IconButton';
 import { trapTabKey, useFocusTrap } from './useFocusTrap';
@@ -70,7 +74,8 @@ export function Drawer(props: DrawerProps): React.JSX.Element | null {
             <IconButton label={closeLabel} className="mesh-drawer__close" onClick={onClose}>
               <Icon name="close" size={20} />
             </IconButton>
-          ) : null}        </div>
+          ) : null}{' '}
+        </div>
         <div className="mesh-drawer__body">{children}</div>
         {footer !== undefined ? <div className="mesh-drawer__footer">{footer}</div> : null}
       </div>

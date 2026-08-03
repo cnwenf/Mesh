@@ -72,12 +72,24 @@ describe('AuditSettings(auth.md §4.4 / §3.3 / §5.3)', () => {
   });
 
   it('有 next_cursor 时呈现加载更多', async () => {
-    const client = routingClient({
-      '/api/v1/workspaces/ws-1/audit-logs': {
-        body: { data: [ENTRY], next_cursor: 'cur-1' },
-      },
-    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [ENTRY], next_cursor: 'cur-1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ ...ENTRY, id: 'aud-2' }], next_cursor: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ) as unknown as typeof fetch;
+    const client = new MeshApiClient({ baseUrl: 'http://t', getToken: () => 'tok', fetchImpl });
     renderWithProviders(<AuditSettings client={client} workspaceId="ws-1" />);
     await waitFor(() => expect(screen.getByTestId('audit-load-more')).toBeTruthy());
+    await userEvent.click(screen.getByTestId('audit-load-more'));
+    await waitFor(() => expect(screen.getByTestId('audit-aud-2')).toBeTruthy());
   });
 });

@@ -130,7 +130,13 @@ export function InboxBell(): React.JSX.Element {
         <Icon name="bell" size={20} />
       </IconButton>
       {count > 0 ? (
-        <span className="mesh-inbox-bell__badge mesh-text-micro mesh-tnum" data-testid="inbox-badge">
+        <span
+          className="mesh-inbox-bell__badge mesh-text-micro mesh-tnum"
+          data-testid="inbox-badge"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {count > 99 ? '99+' : count}
         </span>
       ) : null}
@@ -164,7 +170,10 @@ export function InboxBell(): React.JSX.Element {
                     <span className="mesh-inbox-bell__item-preview mesh-text-caption mesh-truncate">
                       {notification.preview}
                     </span>
-                    <time className="mesh-text-caption mesh-tnum" dateTime={notification.created_at}>
+                    <time
+                      className="mesh-text-caption mesh-tnum"
+                      dateTime={notification.created_at}
+                    >
                       {formatRelativeTime(notification.created_at, { locale })}
                     </time>
                   </button>

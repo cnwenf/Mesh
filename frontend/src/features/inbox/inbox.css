@@ -1,7 +1,7 @@
 /**
  * 收件箱 / 通知偏好样式(comment-inbox.md §4.2,design-quality.md §3.2/§4.4)。
  * 颜色一律经语义 token;排版经 type scale 工具类(时间/元数据 caption + tnum)。
- * ConversationLayout(底座 patterns 层)承载桌面双栏 / 手机(≤720px)单栏路由化,
+ * ConversationLayout(底座 patterns 层)承载 medium+ 双栏 / compact(≤599px)单栏路由化,
  * 本文件仅做收件箱专属的列表行状态矩阵与预览窗格。
  */
 
@@ -71,7 +71,9 @@
   padding: var(--space-1) var(--space-3);
   min-block-size: 2rem;
   cursor: pointer;
-  transition: background-color var(--motion-fast), color var(--motion-fast);
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast);
 }
 
 .mesh-inbox__tab:hover {
@@ -132,7 +134,9 @@
   padding: var(--space-1) var(--space-2);
   min-block-size: 2.75rem;
   border-radius: var(--radius-sm);
-  transition: color var(--motion-fast), background-color var(--motion-fast);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
 }
 
 .mesh-inbox__mute:hover {
@@ -261,7 +265,7 @@
   flex: none;
 }
 
-/* 行操作:hover / focus-within 出现;≤720px 触控常驻(§8.2)。 */
+/* 行操作:hover / focus-within 出现;compact 触控常驻(§8.2)。 */
 .mesh-inbox__row-actions {
   display: flex;
   gap: var(--space-1);
@@ -285,7 +289,9 @@
   min-inline-size: 2.75rem;
   min-block-size: 2.75rem;
   border-radius: var(--radius-sm);
-  transition: color var(--motion-fast), background-color var(--motion-fast);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
 }
 
 .mesh-inbox__row-actions button:hover {
@@ -299,7 +305,7 @@
   opacity: 1;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 599px) {
   .mesh-inbox__row-actions {
     opacity: 1;
   }
@@ -340,7 +346,7 @@
 }
 
 /* 手机单栏(ConversationLayout 同断点)才需要返回;桌面双栏隐藏。 */
-@media (min-width: 721px) {
+@media (min-width: 600px) {
   .mesh-inbox-preview__back {
     display: none;
   }

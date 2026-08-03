@@ -84,6 +84,12 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText('Page not found')).toHaveCount(0);
     await page.getByTestId('mobile-nav-more').click();
+    await page.getByTestId('mobile-drawer-nav-members').click();
+    await page.waitForURL('**/w/acme/members');
+    await expect(page.getByRole('heading', { level: 1, name: 'Members' })).toBeVisible();
+    await expect(page.getByTestId('member-card-member-human-1')).toBeVisible();
+    await page.screenshot({ path: `${EVIDENCE_DIR}/phone-members-drawer-flow-light.png` });
+    await page.getByTestId('mobile-nav-more').click();
     await page.getByTestId('mobile-drawer-nav-settings').click();
     await page.waitForURL('**/settings');
   });
@@ -259,7 +265,11 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
   test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/login');
-    await expect(page.locator('input[type="email"], input[name="email"]').first()).toBeVisible();
+    const email = page.locator('input[type="email"], input[name="email"]').first();
+    await expect(email).toBeVisible();
+    await email.fill('member@example.test');
+    await page.getByRole('heading', { level: 1 }).click();
+    await expect(email).not.toBeFocused();
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-light.png` });
 
     // 暗色:经 mesh.settings.v1 持久化偏好预置(theme.md 协商链,防闪烁分区承载)
@@ -271,6 +281,9 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     });
     await page.goto('/login');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await email.fill('member@example.test');
+    await page.getByRole('heading', { level: 1 }).click();
+    await expect(email).not.toBeFocused();
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-dark.png` });
   });
 

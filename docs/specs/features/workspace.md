@@ -114,9 +114,12 @@ users(人类登录身份,auth.md)──┐
 | `default_locale` | string | `"en"` | **工作区默认 locale(唯一真源,R3)**:BCP-47,README §6.18 / i18n.md locale 协商链的第三级(用户偏好 `users.settings.locale` 缺失时回退到本键,再回退系统 `en`)。R3:默认值由 `"zh-CN"` 统一为 **`"en"`**(与 i18n.md §2.1/§2.3 及 README §6.18 系统回退一致;首发语言 `zh-CN`/`en` 指支持清单,不等于默认值);既有 `default_language` 列仅迁移后弃用,协商一律只走本键,**不长期双写** |
 | `default_theme` | string | `"system"` | 工作区默认主题模式 `light`/`dark`/`system`(README §6.12 主题契约:用户账号偏好 absent/`null` 时生效;三值语义与协商链见 theme.md §2.1/§2.2);非法值 → `422 invalid_theme_mode`(与 theme.md §3.3 / auth.md §3.5 统一,§3.3 已登记) |
 | `seat_limit` | int \| null | `null` | 席位上限(null=不限,供计费展示) |
-| `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}`(产品级 Feature Flags 系统为未来规划,README §12) |
+| `feature_flags` | object | `{}` | 工作区级产品功能开关。已知键 `autopilot` 为 boolean，缺失时按 `true` 兼容旧工作区；显式 `false` 时前端隐藏桌面/手机导航、命令与快捷键入口，直达路由显示可读的“功能未开启”态。此开关只管呈现，后端 RBAC 仍是授权边界；未知键依 PATCH 前向兼容规则透传 |
 
 > 写入 `settings` 采用**按键浅合并**(PATCH 语义):仅覆盖请求中出现的键,未出现的键保持原值;未知键允许透传以支持前向兼容,但服务端对已知键做类型校验——**已登记具名错误码的已知键从其具名码**(`default_theme` → `422 invalid_theme_mode`、`default_locale` → `422 unsupported_locale`,与 auth.md §3.1 canonical 一致),其余已知键类型非法返回 `400 validation_error`(§3.3)。
+> `feature_flags` 的已知键也在服务端校验：`autopilot` 非 boolean 返回
+> `400 validation_error`。管理员在“工作区设置 → 常规”修改开关，保存时必须保留
+> `settings` 和 `feature_flags` 中其他已有键，不得用整体替换丢失前向兼容配置。
 
 ### 2.3 表:`workspace_invitations`(邀请)
 

@@ -186,15 +186,15 @@ export function ApprovalsPage(): React.JSX.Element {
 
   if (ws.kind === 'loading') {
     return (
-      <main className="mesh-page mesh-approvals">
+      <div className="mesh-page mesh-approvals">
         <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
         <ApprovalsSkeleton label={t('common.loading')} />
-      </main>
+      </div>
     );
   }
   if (ws.kind === 'error') {
     return (
-      <main className="mesh-page mesh-approvals">
+      <div className="mesh-page mesh-approvals">
         <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
         <ErrorState
           title={t('state.errorTitle')}
@@ -202,26 +202,26 @@ export function ApprovalsPage(): React.JSX.Element {
           retryLabel={t('common.retry')}
           onRetry={() => setReloadKey((k) => k + 1)}
         />
-      </main>
+      </div>
     );
   }
   if (ws.kind === 'no_workspace') {
     return (
-      <main className="mesh-page mesh-approvals">
+      <div className="mesh-page mesh-approvals">
         <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
         <EmptyState title={t('approvals.noWorkspace.title')} />
-      </main>
+      </div>
     );
   }
   if (ws.isAgentPrincipal) {
     return (
-      <main className="mesh-page mesh-approvals" data-testid="approvals-agent-gated">
+      <div className="mesh-page mesh-approvals" data-testid="approvals-agent-gated">
         <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
         <EmptyState
           title={t('approvals.agentGated.title')}
           description={t('approvals.agentGated.hint')}
         />
-      </main>
+      </div>
     );
   }
 

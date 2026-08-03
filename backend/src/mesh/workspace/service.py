@@ -115,6 +115,10 @@ def _validate_settings_keys(patch: dict) -> None:
         elif key == "feature_flags":
             if not isinstance(value, dict):
                 raise _type_error(key, "an object")
+            # workspace.md §2.2:产品化的已知开关是 boolean；未知键仍透传以便
+            # 前向兼容，但不能让字符串 "false" 在前端被误判为开启。
+            if "autopilot" in value and not isinstance(value["autopilot"], bool):
+                raise _type_error("feature_flags.autopilot", "a boolean")
         # Unknown keys: pass through (§2.2 forward compatibility).
 
 

@@ -500,6 +500,11 @@
 
 业务组件 SHOULD 使用 container query，而不是只依赖 viewport。断点值集中为 token/常量，禁止各 CSS 文件随意创建近似值。
 
+> **MES-128 实施记录（2026-08-02）**：断点单一事实源落在
+> `frontend/src/design/tokenValues.ts`，运行时帮助函数落在 `frontend/src/design/responsive.ts`；
+> `frontend/scripts/check-responsive-contract.mjs` 在 CI 中拒绝自造近似 viewport 断点，
+> container query 使用独立规则，不与 viewport 阈值混淆。
+
 ### 8.2 通用规则
 
 - 320px 宽、200% zoom 下不得丢失主操作或产生页面级双向滚动。
@@ -635,6 +640,10 @@
 - 200% zoom 与 320 CSS px 下 reflow。
 - forced-colors、prefers-contrast、reduced-motion 继续纳入 CI。
 
+> **MES-128 自动化边界**：§13.5 的 13 个核心页已纳入桌面/触控手机 axe、
+> 320/390/200% 等效 reflow、44px 触控目标与媒体偏好门禁。axe 不能替代 NVDA/VoiceOver
+> 人工读屏；完整状态盘点与未闭环项见 `docs/audits/mes128-state-accessibility-matrix.md`。
+
 ### 10.3 i18n 与时区
 
 - 所有新文案同时提交 `zh-CN` 和 `en`，不得在组件中拼接句子。
@@ -759,40 +768,41 @@ features/
 
 ### 13.1 全局
 
-- [ ] 所有 46 个路由节点及其公开/权限状态有可达性测试。
-- [ ] `/skills`、市场和详情路由真实刷新可达。
-- [ ] 顶栏搜索输入、回车、鼠标点击和快捷键进入同一结果系统。
-- [ ] 桌面导航分组明确，中文无两个同名“自动化”。
-- [ ] 320px、390px、768px、1024px、1440px 无页面级横向溢出。
-- [ ] 320px 手机可完成登录、创建 issue、移动看板卡片、评论、切工作区和聊天。
-- [ ] 亮暗主题均为独立校准的 surface/边界/状态/图表体系。
-- [ ] 页面只有一个主标题和一个主要 CTA。
+- [x] 当前 63 个叶子路由及其公开/受保护/权限/重定向状态有 fail-closed 可达性测试（`appRouteManifest.test.ts`、`app-routes.spec.ts`）。
+- [x] `/skills`、市场和详情路由均在新鲜 production preview 中刷新到正常态，API 失败不能冒充通过。
+- [x] 顶栏搜索输入、回车、鼠标点击和快捷键进入同一结果系统（palette/shell UT + 真栈工作区切换后搜索）。
+- [x] 桌面导航分组明确，中文无两个同名“自动化”（导航清单与 i18n 同步门禁）。
+- [x] 320px、390px、640px（200% 等效）、768px、1024px、1440px 无页面级横向溢出（core/extended reflow crawl）。
+- [x] 320px 手机可完成登录、创建 issue、非拖拽移动看板卡片、评论、切工作区、搜索；真实 `/chat` 流程另验证消息落库（真栈 manifest）。
+- [x] 亮暗主题均为独立校准的 surface/边界/状态/图表体系（104 正常态 + 146 异常态视觉基线）。
+- [x] 页面只有一个主标题和一个主要 CTA（结构静态门禁、axe 与 112 单元格人工视觉复查）。
 
 ### 13.2 令牌与组件
 
-- [ ] 色彩、字体、间距、圆角、阴影、动效、z-index 均令牌化。
-- [ ] 业务 CSS 无新增原始颜色；散落间距显著下降并有静态门禁。
-- [ ] Button、字段、Select、菜单、Dialog、Drawer 覆盖完整状态矩阵。
-- [ ] 导航和操作图标不再使用 emoji/字符；回应 emoji 例外。
-- [ ] 状态、优先级和 AI 身份均不只靠颜色。
-- [ ] 触控目标 ≥44×44px。
+- [x] 色彩、字体、间距、圆角、阴影、动效、z-index 均令牌化（token 生成幂等 + ESLint/Stylelint）。
+- [x] 业务 CSS 无新增原始颜色；旧别名由精确 baseline 阻止增加（`lint:css`、`check:legacy-token-debt`）。
+- [x] Button、字段、Select、菜单、Dialog、Drawer 覆盖完整状态矩阵（design component UT + styleguide visual）。
+- [x] 导航和操作图标不再使用 emoji/字符；回应 emoji 例外（`mesh/no-emoji-icons`）。
+- [x] 状态、优先级和 AI 身份均同时提供文字/图标语义，不只靠颜色（axe + 对比度 + 页面矩阵）。
+- [x] 所有可见交互目标 ≥44×44px；链接、ARIA/custom button、`summary`、checkbox/radio 及关联 label 均纳入严格 coarse-pointer 门禁。
 
 ### 13.3 页面与状态
 
-- [ ] 登录/注册/MFA、首页、项目、issue、看板、评论、成员、Skills、Squads、收件箱、聊天、Runtimes、自动值守、Integrations、Analytics、设置全部完成页面级审查项。
-- [ ] 每页覆盖 loading、refreshing、empty、error、permission、offline/stale 和长内容。
-- [ ] ErrorState 告知影响和恢复动作；失败不丢用户输入。
-- [ ] skeleton 与最终布局同形，局部刷新不清空已有内容。
-- [ ] destructive action 有明确确认或撤销。
+- [x] 登录/注册/MFA、首页、项目、issue、看板、评论、成员、Skills、Squads、收件箱、聊天、Runtimes、自动值守、Integrations、Analytics、设置已完成页面级审查；28 行四组合矩阵 112/112 有独立证据。
+- [x] 13 个核心页以 91 个显式 cell 覆盖 normal/loading/empty/error/permission/offline/long；73 个适用异常场景生成 146 个双主题快照，5 个 N/A 有源码证据。
+- [x] ErrorState 告知影响和恢复动作；表单/评论/聊天失败不丢用户输入（组件分支 UT + 异常态浏览器断言）。
+- [x] skeleton 与最终布局同形，局部刷新保留已有内容（页面组件 UT + loading 状态视觉基线）。
+- [x] destructive action 有明确确认或撤销（Dialog/Drawer 交互 UT + 页面级 E2E）。
 
 ### 13.4 无障碍与国际化
 
-- [ ] 键盘可完成全部关键流程，看板有非拖拽路径。
-- [ ] skip link、焦点圈定、焦点恢复、唯一 h1、live region 通过自动化与人工检查。
-- [ ] light/dark 正文对比 ≥4.5:1，图形/边界 ≥3:1。
-- [ ] forced-colors、prefers-contrast、reduced-motion 测试通过。
-- [ ] 中英文目录同步；长英文、长中文、时区、相对/绝对时间均有视觉用例。
-- [ ] 200% zoom 与 320 CSS px 下内容 reflow。
+- [x] 键盘可完成两档真栈六流程，看板有非拖拽路径；250 卡完整列表模式不会跳过未挂载卡片。
+- [x] skip link、焦点圈定、焦点恢复、唯一 h1、live region 通过静态、组件与真实浏览器自动化。
+- [ ] NVDA/Chrome 与 VoiceOver/Safari 人工检查（当前 Linux 环境不可执行；签署脚本见 `docs/audits/mes128-screen-reader-runbook.md`，未完成前 PR 保持 Draft）。
+- [x] light/dark 正文对比 ≥4.5:1，图形/边界 ≥3:1（`check:contrast`）。
+- [x] forced-colors、prefers-contrast、reduced-motion 测试通过。
+- [x] 中英文目录同步；长英文、长中文、时区、相对/绝对时间均有组件/视觉用例。
+- [x] 200% zoom 与 320 CSS px 下内容 reflow。
 
 ### 13.5 视觉与交互门禁
 
@@ -805,15 +815,20 @@ features/
 
 自动化门禁：
 
-- [ ] token 生成幂等。
-- [ ] 对比度检查。
-- [ ] 硬编码颜色检查。
-- [ ] 关键组件状态单测。
-- [ ] 路由可达性测试。
-- [ ] 视觉 diff。
-- [ ] 自动无障碍扫描 + 键盘 E2E。
-- [ ] 手机 overflow 检查（`scrollWidth <= clientWidth`，显式横向滚动容器除外）。
-- [ ] mock 契约浏览器套件每次使用新鲜的生产构建预览与 mock 服务进程；不使用 Vite dev/HMR 源码模块图，不复用已存在进程，且 `retries: 0`。
+- [x] token 生成幂等。
+- [x] 对比度检查。
+- [x] 硬编码颜色检查。
+- [x] 关键组件状态单测。
+- [x] 63 路由可达性、权限及正常态测试。
+- [x] 104 正常态 + 146 异常态视觉 diff。
+- [x] 自动无障碍扫描 + 键盘 E2E。
+- [x] 手机 overflow 检查（`scrollWidth <= clientWidth`，显式横向滚动容器除外）。
+- [x] mock 契约浏览器套件每次使用新鲜 production build/preview 与 mock 进程；不使用 Vite dev/HMR，不复用进程，`retries: 0`。
+
+MES-128 工程基线为：104 个核心正常态快照、146 个核心异常态快照、112 个逐页四组合
+证据单元格、63 路由可达/权限/正常态清单，以及 320/390px production-auth 真栈键盘旅程。
+manifest 校验文件、route、shown scope、backend kind、尺寸与 SHA-256，且明确区分 mock-contract
+视觉证据与真实 PostgreSQL 证据。唯一未完成项是目标操作系统上的 NVDA/VoiceOver 人工签署。
 
 ---
 

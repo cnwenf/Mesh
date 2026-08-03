@@ -105,7 +105,9 @@ function makeFetch(members: unknown[]) {
       const q = new URL(url, 'http://x').searchParams.get('q');
       if (q) {
         requested = requested.filter((m) =>
-          String((m as { display_name: string }).display_name).toLowerCase().includes(q.toLowerCase()),
+          String((m as { display_name: string }).display_name)
+            .toLowerCase()
+            .includes(q.toLowerCase()),
         );
       }
       return fakeResponse({ body: { data: requested, next_cursor: null } });
@@ -127,10 +129,7 @@ async function waitForTable(): Promise<HTMLElement> {
 }
 
 /** 打开某行(桌面表格)的行操作菜单,返回后按 menuitem 可访问名点击。 */
-async function openRowMenu(
-  user: ReturnType<typeof userEvent.setup>,
-  id: string,
-): Promise<void> {
+async function openRowMenu(user: ReturnType<typeof userEvent.setup>, id: string): Promise<void> {
   const row = screen.getByTestId(`member-open-${id}`).closest('tr') as HTMLElement;
   await user.click(within(row).getByRole('button', { name: 'Row actions' }));
 }
@@ -152,7 +151,9 @@ describe('MembersPage', () => {
     expect(within(table).getByText('Code Bot')).toBeInTheDocument();
     expect(within(table).getByText('AI')).toBeInTheDocument();
     // 徽章出自 design Badge(accent tone,默认 sparkle 图标)
-    expect(screen.getByTestId('ai-badge-mem-a').querySelector('.mesh-badge--accent')).not.toBeNull();
+    expect(
+      screen.getByTestId('ai-badge-mem-a').querySelector('.mesh-badge--accent'),
+    ).not.toBeNull();
     // 标题为「成员」(en: Members),h1 用 title-1 工具类
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Members');
   });
@@ -242,7 +243,7 @@ describe('MembersPage', () => {
 
     await user.click(screen.getByTestId('member-open-mem-h'));
     const drawer = await screen.findByTestId('member-drawer');
-    expect(drawer).toHaveTextContent('Jane Doe');
+    expect(screen.getByRole('dialog', { name: 'Jane Doe' })).toBeInTheDocument();
     expect(drawer).toHaveTextContent('3'); // open_issues_assigned
   });
 
@@ -393,9 +394,7 @@ describe('MembersPage', () => {
     await user.click(screen.getByTestId('invite-submit'));
     await screen.findByTestId('invite-done');
     expect(
-      calls.some(
-        (c) => (c.init?.method ?? 'GET') === 'POST' && c.url.includes('/invitations'),
-      ),
+      calls.some((c) => (c.init?.method ?? 'GET') === 'POST' && c.url.includes('/invitations')),
     ).toBe(true);
   });
 
@@ -419,9 +418,7 @@ describe('MembersPage', () => {
     await user.click(screen.getByTestId('new-agent-button'));
     expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Close dialog' }));
-    await waitFor(() =>
-      expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument());
     // 重开并走完四步创建 → POST /agents → onSaved 重拉。
     await user.click(screen.getByTestId('new-agent-button'));
     await user.type(screen.getByTestId('agent-wizard-name'), '名册小测');
@@ -442,10 +439,9 @@ describe('MembersPage', () => {
     renderWithProviders(<MembersPage />, { route: '/members' });
     await waitForTable();
     await user.type(screen.getByTestId('member-search'), 'Code');
-    await waitFor(
-      () => expect(screen.queryAllByText('Jane Doe')).toHaveLength(0),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(screen.queryAllByText('Jane Doe')).toHaveLength(0), {
+      timeout: 3000,
+    });
     const table = await waitForTable();
     expect(within(table).getByText('Code Bot')).toBeInTheDocument();
   });
@@ -559,7 +555,7 @@ describe('MembersPage', () => {
     );
     await waitForTable();
     // 订阅该 agent 的 presence 频道(profile.id = agt-9)。
-    expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence');
+    await waitFor(() => expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence'));
     // 无帧 → unknown 态(表格与卡片一致)。
     expect(
       screen.getByTestId('member-presence-mem-a').querySelector('[data-state="unknown"]'),
@@ -572,7 +568,10 @@ describe('MembersPage', () => {
 
     // presence 帧到达 → running 态。
     act(() => {
-      rt.emit({ channel: 'agent:agt-9:presence', payload: { running: 1, queued: 0, awaiting_approval: 0 } });
+      rt.emit({
+        channel: 'agent:agt-9:presence',
+        payload: { running: 1, queued: 0, awaiting_approval: 0 },
+      });
     });
     await waitFor(() =>
       expect(

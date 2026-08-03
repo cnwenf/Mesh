@@ -403,7 +403,7 @@
 /* ===== Toast(只承载跨区域结果,§3.1;z-index 经层级 token) ===== */
 .mesh-toast-region {
   position: fixed;
-  inset-block-end: var(--space-5);
+  inset-block-end: calc(var(--space-5) + var(--shell-mobile-nav-offset));
   inset-inline-end: var(--space-5);
   display: flex;
   flex-direction: column;

@@ -24,27 +24,6 @@
   grid-template-columns: var(--shell-sidebar-collapsed) 1fr;
 }
 
-.mesh-skip-link {
-  position: absolute;
-  inset-inline-start: var(--space-2);
-  inset-block-start: var(--space-2);
-  z-index: var(--z-overlay);
-  padding: var(--space-2) var(--space-3);
-  background-color: var(--color-surface-raised);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-raised);
-  text-decoration: none;
-  font-weight: 600;
-  transform: translateY(-300%);
-  transition: transform var(--duration-fast) ease;
-}
-
-.mesh-skip-link:focus-visible {
-  transform: translateY(0);
-}
-
 /* ── 顶栏 ─────────────────────────────────────────────── */
 
 .mesh-topbar {
@@ -52,13 +31,49 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-6);
+  padding: calc(var(--space-3) + env(safe-area-inset-top)) var(--space-6) var(--space-3);
   background: var(--color-surface-raised);
   border-bottom: 1px solid var(--color-border);
   box-shadow: var(--shadow-raised);
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
+}
+
+/* medium(600–1023px):外壳强制 64px rail。文字保留在可访问树中并由 title 提供
+   指针提示；纯布局由 CSS 控制，不在组件中读取 window.innerWidth。 */
+@media (min-width: 600px) and (max-width: 1023px) {
+  .mesh-shell,
+  .mesh-shell--sidebar-collapsed {
+    grid-template-columns: var(--shell-sidebar-collapsed) minmax(0, 1fr);
+  }
+
+  .mesh-sidebar {
+    padding-inline: var(--space-2);
+  }
+
+  .mesh-sidebar__group-title,
+  .mesh-sidebar__footer {
+    display: none;
+  }
+
+  .mesh-sidebar__link {
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .mesh-sidebar__link-label {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
 
 .mesh-topbar__brand {
@@ -520,46 +535,29 @@
   font-weight: var(--font-weight-medium);
 }
 
-/* ── 邀请接受页(/invite/:token,PublicFlow 卡片形态;位于 AppShell 内) ── */
+/* ── 邀请接受页(/invite/:token,PublicFlowShell 卡内内容) ── */
 
-.mesh-invite {
-  max-width: 480px;
-  margin: var(--space-8) auto;
-  padding: var(--space-6) var(--space-5);
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-raised);
+.mesh-invite-content {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.mesh-invite h1 {
-  font-family: var(--font-family-display);
-  font-weight: var(--font-weight-display);
-  font-size: var(--font-size-title-1);
-  line-height: var(--line-height-title-1);
-  color: var(--color-text-strong);
-  text-wrap: balance;
-  margin: 0;
-}
-
-.mesh-invite p {
+.mesh-invite-content p {
   margin: 0;
   color: var(--color-text);
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
 }
 
-.mesh-invite a {
+.mesh-invite-content a {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
   align-self: flex-start;
 }
 
-.mesh-invite a:focus-visible {
+.mesh-invite-content a:focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
@@ -679,7 +677,7 @@
   .mesh-topbar {
     flex-wrap: wrap;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
+    padding: calc(var(--space-2) + env(safe-area-inset-top)) var(--space-3) var(--space-2);
   }
 
   .mesh-topbar__search {
@@ -777,7 +775,7 @@
 }
 
 .mesh-ws-picker__card:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
 }
 
 .mesh-ws-picker__card:focus-visible {
@@ -838,6 +836,14 @@
   display: flex;
   gap: var(--space-2);
   flex-shrink: 0;
+}
+
+/* 设置资源入口在精细指针下同样保持完整 44px 命中区（WCAG 2.2 §2.5.8）。 */
+.mesh-ws-settings__resource-link {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 44px;
+  min-block-size: 44px;
 }
 
 /* ===== 成员详情资料卡(§3.4 规范深链)===== */

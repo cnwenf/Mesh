@@ -95,7 +95,10 @@ export function ProjectDetailPage(): React.JSX.Element {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    Promise.all([getProject(client, projectId), listProjectUpdates(client, projectId, { limit: 50 })])
+    Promise.all([
+      getProject(client, projectId),
+      listProjectUpdates(client, projectId, { limit: 50 }),
+    ])
       .then(([detail, page]) => {
         if (cancelled) return;
         setProject(detail);
@@ -162,10 +165,13 @@ export function ProjectDetailPage(): React.JSX.Element {
         ? await unarchiveProject(client, projectId)
         : await archiveProject(client, projectId);
       setProject((prev) => (prev === null ? prev : { ...prev, ...updated }));
-      toast.addToast(t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'), {
-        tone: 'success',
-        closeLabel: t('common.close'),
-      });
+      toast.addToast(
+        t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'),
+        {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        },
+      );
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -177,7 +183,10 @@ export function ProjectDetailPage(): React.JSX.Element {
     setIsDeleting(true);
     try {
       await deleteProject(client, projectId);
-      toast.addToast(t('projects.detail.deleted'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('projects.detail.deleted'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
       navigate('/projects');
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
@@ -190,28 +199,28 @@ export function ProjectDetailPage(): React.JSX.Element {
 
   if (meResolved && workspace === null && error === null) {
     return (
-      <main className="mesh-projects">
+      <div className="mesh-projects">
         <EmptyState title={t('state.emptyTitle')} description={t('projects.noWorkspace')} />
-      </main>
+      </div>
     );
   }
   if (error !== null) {
     return (
-      <main className="mesh-projects">
+      <div className="mesh-projects">
         <ErrorState
           title={t('state.errorTitle')}
           description={error}
           retryLabel={t('common.retry')}
           onRetry={reload}
         />
-      </main>
+      </div>
     );
   }
   if (isLoading || project === null) {
     return (
-      <main className="mesh-projects">
+      <div className="mesh-projects">
         <Skeleton loadingLabel={t('common.loading')} />
-      </main>
+      </div>
     );
   }
 
@@ -219,7 +228,7 @@ export function ProjectDetailPage(): React.JSX.Element {
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
 
   return (
-    <main className="mesh-projects">
+    <div className="mesh-projects">
       <div className="mesh-projects__detail-header" data-testid="project-detail-header">
         <div className="mesh-projects__detail-title-row">
           {project.color !== null ? (
@@ -418,7 +427,9 @@ export function ProjectDetailPage(): React.JSX.Element {
           title={t('projects.detail.deleteTitle')}
           closeLabel={t('common.close')}
         >
-          <p data-testid="delete-confirm-text">{t('projects.detail.deleteConfirm', { name: project.name })}</p>
+          <p data-testid="delete-confirm-text">
+            {t('projects.detail.deleteConfirm', { name: project.name })}
+          </p>
           <div className="mesh-projects__form-actions">
             <Button variant="secondary" onClick={() => setDeleteOpen(false)}>
               {t('common.cancel')}
@@ -434,6 +445,6 @@ export function ProjectDetailPage(): React.JSX.Element {
           </div>
         </Dialog>
       ) : null}
-    </main>
+    </div>
   );
 }

@@ -17,6 +17,7 @@ import { SUPPORTED_LOCALES, useT } from '../../../i18n';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { isHttpsUrl } from '../../permissions';
 import { useWorkspace } from '../../WorkspaceProvider';
+import { deriveWorkspaceFeatureFlags } from '../../featureFlags';
 import { DirtyNavigationGuardDialog, useDirtyNavigationGuard } from '../../useDirtyNavigationGuard';
 
 const BASE_TIMEZONES = ['UTC', 'Asia/Shanghai', 'America/New_York', 'Europe/London'];
@@ -27,12 +28,21 @@ interface SaveError {
 }
 
 /** 读取工作区当前 settings 中的 default_locale / default_theme(归一默认值)。 */
-function currentSettings(workspace: WorkspaceDetail): { locale: string; theme: string } {
+function currentSettings(workspace: WorkspaceDetail): {
+  locale: string;
+  theme: string;
+  autopilot: boolean;
+} {
   return {
     locale:
-      typeof workspace.settings.default_locale === 'string' ? workspace.settings.default_locale : 'en',
+      typeof workspace.settings.default_locale === 'string'
+        ? workspace.settings.default_locale
+        : 'en',
     theme:
-      typeof workspace.settings.default_theme === 'string' ? workspace.settings.default_theme : 'system',
+      typeof workspace.settings.default_theme === 'string'
+        ? workspace.settings.default_theme
+        : 'system',
+    autopilot: deriveWorkspaceFeatureFlags(workspace.settings).autopilot,
   };
 }
 
@@ -69,6 +79,7 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
   const [timezone, setTimezone] = useState('');
   const [defaultLocale, setDefaultLocale] = useState('en');
   const [defaultTheme, setDefaultTheme] = useState('system');
+  const [autopilotEnabled, setAutopilotEnabled] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [errorValues, setErrorValues] = useState<Record<string, unknown>>({});
@@ -84,7 +95,8 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
       logoUrl.trim() !== (workspace.logo_url ?? '') ||
       timezone !== workspace.timezone ||
       defaultLocale !== baseline.locale ||
-      defaultTheme !== baseline.theme);
+      defaultTheme !== baseline.theme ||
+      autopilotEnabled !== baseline.autopilot);
   const guard = useDirtyNavigationGuard(dirty);
 
   if (workspace === null) return <></>;
@@ -98,6 +110,7 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
     setTimezone(workspace.timezone);
     setDefaultLocale(base.locale);
     setDefaultTheme(base.theme);
+    setAutopilotEnabled(base.autopilot);
     setInitializedFor(workspace.id);
     setErrorKey(null);
   }
@@ -109,7 +122,15 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
     }
     setIsSaving(true);
     setErrorKey(null);
-    const changes = buildChanges(workspace, { name, slug, logoUrl, timezone, defaultLocale, defaultTheme });
+    const changes = buildChanges(workspace, {
+      name,
+      slug,
+      logoUrl,
+      timezone,
+      defaultLocale,
+      defaultTheme,
+      autopilotEnabled,
+    });
     try {
       const updated = await patch(changes);
       addToast(t('workspace.savedToast'), { tone: 'success', closeLabel: t('a11y.dismiss') });
@@ -135,7 +156,9 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
       title={t('workspace.basicSection')}
       footer={
         <>
-          {dirty ? <span className="mesh-settings__hint">{t('workspaceSettings.unsavedHint')}</span> : null}
+          {dirty ? (
+            <span className="mesh-settings__hint">{t('workspaceSettings.unsavedHint')}</span>
+          ) : null}
           <Button
             data-testid="ws-save"
             disabled={!dirty}
@@ -209,6 +232,19 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
         <p className="mesh-field-hint" data-testid="ws-default-theme-hint">
           {t('workspace.defaultThemeHint')}
         </p>
+        <fieldset className="mesh-settings__fieldset">
+          <legend>{t('workspace.featureFlagsTitle')}</legend>
+          <label className="mesh-settings__checkbox-row">
+            <input
+              type="checkbox"
+              checked={autopilotEnabled}
+              data-testid="ws-feature-autopilot"
+              onChange={(event) => setAutopilotEnabled(event.target.checked)}
+            />
+            <span>{t('workspace.featureFlagAutopilot')}</span>
+          </label>
+          <p className="mesh-field-hint">{t('workspace.featureFlagsHint')}</p>
+        </fieldset>
         {errorKey !== null ? (
           <p role="alert" data-testid="ws-basic-error">
             {t(errorKey, errorValues)}
@@ -237,6 +273,7 @@ interface FormValues {
   timezone: string;
   defaultLocale: string;
   defaultTheme: string;
+  autopilotEnabled: boolean;
 }
 
 /** 由表单值与服务端现状差异构造 PATCH 浅合并载荷(不可变,仅含变更键,W4)。 */
@@ -254,6 +291,13 @@ function buildChanges(workspace: WorkspaceDetail, form: FormValues): WorkspacePa
   }
   if (form.defaultTheme !== current.theme) {
     changes.settings = { ...changes.settings, default_theme: form.defaultTheme };
+  }
+  if (form.autopilotEnabled !== current.autopilot) {
+    const existing = workspace.settings.feature_flags ?? {};
+    changes.settings = {
+      ...changes.settings,
+      feature_flags: { ...existing, autopilot: form.autopilotEnabled },
+    };
   }
   return changes;
 }

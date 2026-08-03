@@ -14,3 +14,4 @@ e2e/mes107/stack.env
 e2e/evidence/attachments/*-[0-9]*.png
 e2e/evidence/attachments/*-[0-9]*.txt
 e2e/mes111-b4/stack.env
+e2e/mes128-real/stack.env

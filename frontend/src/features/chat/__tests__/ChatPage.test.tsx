@@ -25,18 +25,32 @@ function renderChatPage(route = '/chat') {
 const me = { memberships: [{ workspace_id: 'ws-1' }] };
 const agent = { id: 'a-1', display_name: 'Builder', name: 'builder' };
 const session = {
-  id: 'sess-1', workspace_id: 'ws-1', owner_id: 'u-1', agent_id: 'a-1',
-  agent: { id: 'a-1', name: 'Bot', avatar_url: null }, title: 'First chat', title_is_auto: true,
-  context_issue_id: null, context_project_id: null, status: 'active', pinned: false,
-  last_message_at: '2026-07-01T00:00:00Z', last_message_preview: 'hi', message_count: 1,
-  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+  id: 'sess-1',
+  workspace_id: 'ws-1',
+  owner_id: 'u-1',
+  agent_id: 'a-1',
+  agent: { id: 'a-1', name: 'Bot', avatar_url: null },
+  title: 'First chat',
+  title_is_auto: true,
+  context_issue_id: null,
+  context_project_id: null,
+  status: 'active',
+  pinned: false,
+  last_message_at: '2026-07-01T00:00:00Z',
+  last_message_preview: 'hi',
+  message_count: 1,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
 };
 
 interface Recorder {
   calls: { url: string; method: string }[];
 }
 
-function stubApi(router: (url: string, method: string) => Response | null, recorder?: Recorder): void {
+function stubApi(
+  router: (url: string, method: string) => Response | null,
+  recorder?: Recorder,
+): void {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -52,7 +66,8 @@ function stubApi(router: (url: string, method: string) => Response | null, recor
 function defaultRouter(overrides: { sessions?: unknown[]; favorites?: unknown[] } = {}) {
   return (url: string, method: string): Response | null => {
     if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
-    if (url.includes('/workspaces/ws-1/agents')) return fakeResponse({ body: { data: [agent], next_cursor: null } });
+    if (url.includes('/workspaces/ws-1/agents'))
+      return fakeResponse({ body: { data: [agent], next_cursor: null } });
     if (url.includes('/chat-sessions') && url.includes('/messages'))
       return fakeResponse({ body: { data: [], next_cursor: null } });
     if (url.includes('/chat-sessions') && method === 'GET')
@@ -70,6 +85,7 @@ describe('ChatPage(§4.1)', () => {
     stubApi(defaultRouter());
     renderChatPage();
     expect(await screen.findByTestId('chat-session-sess-1')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Chat sessions' })).toHaveClass('sr-only');
     // agent 过滤下拉含 Builder
     expect(screen.getByText('Builder')).toBeInTheDocument();
   });
@@ -111,7 +127,10 @@ describe('ChatPage(§4.1)', () => {
 
   it('工作区加载中呈现骨架', () => {
     // /users/me 永不 settle → 持续 loading
-    vi.stubGlobal('fetch', (() => new Promise<Response>(() => undefined)) as unknown as typeof fetch);
+    vi.stubGlobal(
+      'fetch',
+      (() => new Promise<Response>(() => undefined)) as unknown as typeof fetch,
+    );
     renderChatPage();
     expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
@@ -120,8 +139,10 @@ describe('ChatPage(§4.1)', () => {
     let sessionCalls = 0;
     stubApi((url, method) => {
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
-      if (url.includes('/workspaces/ws-1/agents')) return fakeResponse({ body: { data: [agent], next_cursor: null } });
-      if (url.includes('/favorites')) return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/workspaces/ws-1/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       if (url.includes('/chat-sessions') && method === 'GET') {
         sessionCalls += 1;
         return sessionCalls === 1

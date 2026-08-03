@@ -17,10 +17,11 @@
  * 拖拽各阶段经 aria-live assertive 区域(board-live)播报。
  */
 /* eslint-disable react-refresh/only-export-components -- 纯工具与列组件同模块契约 */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../design';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
+import { useShortcutRegistry } from '../../shortcuts';
 import { BoardCompact, useIsCompactViewport } from './BoardCompact';
 import { BoardDragLayer } from './BoardDragLayer';
 import { BoardTouchMoveSheet } from './BoardTouchMoveSheet';
@@ -45,10 +46,7 @@ export function categoryColorClass(key: string): string {
  * 浮点中点法定位(kanban §4.3):插入 index 处取相邻中点;列顶 = 首张 -1;
  * 列底/空列 = 末张 +1(空列 = 1)。
  */
-export function computeDropPosition(
-  cards: readonly BoardCard[],
-  index: number | null,
-): number {
+export function computeDropPosition(cards: readonly BoardCard[], index: number | null): number {
   if (cards.length === 0) return 1;
   if (index === null || index >= cards.length) {
     return (cards[cards.length - 1]?.position ?? 0) + 1;
@@ -99,7 +97,13 @@ function WipBadge({ column }: { column: BoardColumn }): React.JSX.Element | null
 }
 
 /** 拖拽预检 WIP 提示条(warn 放行 / block 禁落,图标+文字非仅颜色,§9.4.3)。 */
-function WipStrip({ columnKey, tone }: { columnKey: string; tone: 'warn' | 'block' }): React.JSX.Element {
+function WipStrip({
+  columnKey,
+  tone,
+}: {
+  columnKey: string;
+  tone: 'warn' | 'block';
+}): React.JSX.Element {
   const t = useT();
   return (
     <div
@@ -176,14 +180,32 @@ interface BoardCardItemProps {
   /** 虚拟化窗口的 AT 坐标(仅虚拟化路径提供;§10.2 不破坏读屏集合语义)。 */
   readonly virtualSetSize?: number;
   readonly virtualPosInSet?: number;
-  readonly onCardPointerDown: (event: React.PointerEvent, cardId: string, identifier: string) => void;
-  readonly onCardKeyDown: (event: React.KeyboardEvent, cardId: string, identifier: string, columnKey: string) => void;
+  readonly onCardPointerDown: (
+    event: React.PointerEvent,
+    cardId: string,
+    identifier: string,
+  ) => void;
+  readonly onCardKeyDown: (
+    event: React.KeyboardEvent,
+    cardId: string,
+    identifier: string,
+    columnKey: string,
+  ) => void;
+  readonly onSelect: (cardId: string, columnKey: string) => void;
 }
 
 function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
   const {
-    card, columnKey, isPlaceholder, isSelected, isHighlighted, virtualSetSize, virtualPosInSet,
-    onCardPointerDown, onCardKeyDown,
+    card,
+    columnKey,
+    isPlaceholder,
+    isSelected,
+    isHighlighted,
+    virtualSetSize,
+    virtualPosInSet,
+    onCardPointerDown,
+    onCardKeyDown,
+    onSelect,
   } = props;
   const className = [
     'mesh-board__card',
@@ -200,11 +222,22 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
       role="listitem"
       tabIndex={0}
       aria-roledescription="draggable card"
-      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter Escape"
+      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight J K H L C S A F Enter Escape"
+      aria-current={isSelected ? 'true' : undefined}
       aria-setsize={virtualSetSize}
       aria-posinset={virtualPosInSet}
-      onPointerDown={(event) => onCardPointerDown(event, card.id, card.identifier)}
-      onKeyDown={(event) => onCardKeyDown(event, card.id, card.identifier, columnKey)}
+      onPointerDown={(event) => {
+        onSelect(card.id, columnKey);
+        onCardPointerDown(event, card.id, card.identifier);
+      }}
+      onFocus={() => onSelect(card.id, columnKey)}
+      onKeyDown={(event) => {
+        onCardKeyDown(event, card.id, card.identifier, columnKey);
+        // 方向键移动模式会 preventDefault；此时连同阻断冒泡，避免同一
+        // Enter 又被 window 层 board.open 解读为跳转详情。未进入移动模式的
+        // Enter 不会被 preventDefault，仍保留“打开卡片”快捷键。
+        if (event.defaultPrevented) event.stopPropagation();
+      }}
     >
       <span className="mesh-board__card-grip" aria-hidden="true">
         <Icon name="grip" size={16} />
@@ -236,7 +269,12 @@ function renderCardsWithIndicator(
   const nodes: React.ReactNode[] = cards.map((card) => renderCard(card));
   if (!showIndicator) return nodes;
   const indicator = (
-    <div key="__drop-indicator" className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+    <div
+      key="__drop-indicator"
+      className="mesh-board__drop-indicator"
+      data-testid="board-drop-indicator"
+      aria-hidden="true"
+    />
   );
   if (indicatorIndex === null || indicatorIndex >= nodes.length) {
     nodes.push(indicator);
@@ -258,6 +296,9 @@ interface BoardColumnCardProps {
   readonly highlightCardId: string | null;
   readonly onCardPointerDown: BoardCardItemProps['onCardPointerDown'];
   readonly onCardKeyDown: BoardCardItemProps['onCardKeyDown'];
+  readonly onSelectCard: BoardCardItemProps['onSelect'];
+  readonly selectedCardId: string | null;
+  readonly fullListMode: boolean;
 }
 
 function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
@@ -273,6 +314,9 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     highlightCardId,
     onCardPointerDown,
     onCardKeyDown,
+    onSelectCard,
+    selectedCardId,
+    fullListMode,
   } = props;
   const t = useT();
 
@@ -308,17 +352,22 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
       card={card}
       columnKey={column.key}
       isPlaceholder={dragState?.cardId === card.id}
-      isSelected={moveState?.cardId === card.id}
+      isSelected={moveState?.cardId === card.id || selectedCardId === card.id}
       isHighlighted={highlightCardId === card.id}
       virtualSetSize={virtualA11y?.setsize}
       virtualPosInSet={virtualA11y?.posinset}
       onCardPointerDown={onCardPointerDown}
       onCardKeyDown={onCardKeyDown}
+      onSelect={onSelectCard}
     />
   );
 
   return (
-    <section className={columnClassName} data-testid={`board-column-${column.key}`} aria-label={label}>
+    <section
+      className={columnClassName}
+      data-testid={`board-column-${column.key}`}
+      aria-label={label}
+    >
       <header className="mesh-board__column-head">
         <span className={`mesh-board__dot ${categoryColorClass(column.key)}`} aria-hidden="true" />
         <span className="mesh-board__column-name">{label}</span>
@@ -330,7 +379,9 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
           type="button"
           className="mesh-board__collapse"
           aria-expanded={!column.collapsed}
-          aria-label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', { name: label })}
+          aria-label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', {
+            name: label,
+          })}
           onClick={() => onToggleCollapse(column.key)}
         >
           <Icon name={column.collapsed ? 'chevron-right' : 'chevron-down'} size={16} />
@@ -340,30 +391,44 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
         <div
           className={`mesh-board__column-body ${wipFull ? 'mesh-board__column-body--blocked' : ''}`.trim()}
           data-testid={`column-body-${column.key}`}
-          role="list"
         >
           {stripTone !== null ? <WipStrip columnKey={column.key} tone={stripTone} /> : null}
           {cards.length === 0 ? (
             <>
               {showIndicator ? (
-                <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+                <div
+                  className="mesh-board__drop-indicator"
+                  data-testid="board-drop-indicator"
+                  aria-hidden="true"
+                />
               ) : null}
               <p className="mesh-board__column-empty">{t('board.columnEmptyTitle')}</p>
             </>
-          ) : shouldVirtualize(cards.length) ? (
+          ) : !fullListMode && shouldVirtualize(cards.length) ? (
             <VirtualColumnBody
               cards={cards}
-              activeCardId={moveState?.cardId ?? null}
+              activeCardId={moveState?.cardId ?? selectedCardId}
               renderCard={(card, _index, virtualA11y) => renderCard(card as BoardCard, virtualA11y)}
               indicatorNode={
                 showIndicator ? (
-                  <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+                  <div
+                    className="mesh-board__drop-indicator"
+                    data-testid="board-drop-indicator"
+                    aria-hidden="true"
+                  />
                 ) : undefined
               }
               indicatorIndex={showIndicator ? (dragState?.hit?.index ?? null) : undefined}
             />
           ) : (
-            renderCardsWithIndicator(cards, showIndicator, dragState?.hit?.index ?? null, renderCard)
+            <div role="list" className="mesh-board__card-list">
+              {renderCardsWithIndicator(
+                cards,
+                showIndicator,
+                dragState?.hit?.index ?? null,
+                renderCard,
+              )}
+            </div>
           )}
           <QuickCreate groupKey={column.key} canWrite={canWrite} onQuickCreate={onQuickCreate} />
         </div>
@@ -385,6 +450,12 @@ interface BoardColumnsProps {
   readonly highlightCardId?: string | null;
 }
 
+interface BoardSelection {
+  readonly cardId: string;
+  readonly columnKey: string;
+  readonly index: number;
+}
+
 export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
   const {
     columns,
@@ -404,6 +475,8 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
   const isCompact = useIsCompactViewport();
   const [compactIndex, setCompactIndex] = useState(0);
   const [touchCardId, setTouchCardId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<BoardSelection | null>(null);
+  const [fullListMode, setFullListMode] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const announce = useCallback((message: string) => setAnnouncement(message), []);
 
@@ -417,6 +490,65 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     [columnLabelByKey],
   );
   const columnKeys = useMemo(() => columns.map((column) => column.key), [columns]);
+  const firstSelection = useCallback((): BoardSelection | null => {
+    for (const column of columns) {
+      const first = cardsByKey[column.key]?.[0];
+      if (first !== undefined) return { cardId: first.id, columnKey: column.key, index: 0 };
+    }
+    return null;
+  }, [columns, cardsByKey]);
+
+  const selectCard = useCallback(
+    (cardId: string, columnKey: string) => {
+      const index = (cardsByKey[columnKey] ?? []).findIndex((card) => card.id === cardId);
+      if (index >= 0) setSelection({ cardId, columnKey, index });
+    },
+    [cardsByKey],
+  );
+
+  // 选中态变化后把真实 DOM 焦点送到卡片；虚拟窗口通过 activeCardId 保证该卡挂载。
+  useEffect(() => {
+    if (selection === null) return;
+    boardRef.current
+      ?.querySelector<HTMLElement>(`[data-testid="board-card-${CSS.escape(selection.cardId)}"]`)
+      ?.focus();
+  }, [selection]);
+
+  // 数据刷新移除当前卡时回到首张，避免快捷键引用陈旧 id。
+  useEffect(() => {
+    if (selection === null) return;
+    const exists = (cardsByKey[selection.columnKey] ?? []).some(
+      (card) => card.id === selection.cardId,
+    );
+    if (!exists) setSelection(firstSelection());
+  }, [cardsByKey, selection, firstSelection]);
+
+  // search-command-palette.md §4.3:BoardPage owns the keyboard handlers and page context.
+  // Palette commands delegate to those exact registered actions, avoiding a second business path.
+  useEffect(() => {
+    const registry = useShortcutRegistry.getState();
+    const command = (id: string, label: string) =>
+      registry.registerCommand({
+        id,
+        label,
+        group: 'board',
+        run: () => registry.shortcuts.find((shortcut) => shortcut.id === id)?.run(),
+      });
+    const unregisterCommands = [
+      command('board.move.up.vim', t('shortcuts.boardPrevious')),
+      command('board.move.down.vim', t('shortcuts.boardNext')),
+      command('board.move.left.vim', t('shortcuts.boardLeft')),
+      command('board.move.right.vim', t('shortcuts.boardRight')),
+      command('board.new.card', t('shortcuts.boardCreate')),
+      command('board.change.status', t('shortcuts.boardStatus')),
+      command('board.change.assignee', t('shortcuts.boardAssignee')),
+      command('board.open.card', t('shortcuts.boardOpen')),
+      command('board.filter', t('shortcuts.boardFilter')),
+    ];
+    return () => {
+      for (const unregister of unregisterCommands) unregister();
+    };
+  }, [t]);
 
   const computePosition = useCallback(
     (columnKey: string, index: number | null) =>
@@ -538,17 +670,35 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
       highlightCardId={highlightCardId ?? null}
       onCardPointerDown={drag.onPointerDown}
       onCardKeyDown={keyboard.handleCardKeyDown}
+      onSelectCard={selectCard}
+      selectedCardId={selection?.cardId ?? null}
+      fullListMode={fullListMode}
     />
   );
 
   const activeCompactIndex = columns.length === 0 ? 0 : compactIndex % columns.length;
 
   return (
-    <div className="mesh-board__columns-wrap" ref={boardRef} data-testid="board-columns-wrap">
+    <div
+      className="mesh-board__columns-wrap"
+      ref={boardRef}
+      data-testid="board-columns-wrap"
+      data-a11y-list-mode={fullListMode ? 'full' : 'virtual'}
+    >
       {/* aria-live 播报区(视觉隐藏,复用 design/base.css .sr-only):拖拽/键盘移动各阶段,§10.2。 */}
       <div className="sr-only" aria-live="assertive" data-testid="board-live">
         {announcement}
       </div>
+      {columns.some((column) => shouldVirtualize((cardsByKey[column.key] ?? []).length)) ? (
+        <button
+          type="button"
+          className="mesh-board__a11y-list-toggle"
+          aria-pressed={fullListMode}
+          onClick={() => setFullListMode((current) => !current)}
+        >
+          {t(fullListMode ? 'board.useVirtualList' : 'board.useCompleteA11yList')}
+        </button>
+      ) : null}
       {drag.dragState !== null ? <BoardDragLayer dragState={drag.dragState} /> : null}
       {isCompact ? (
         <BoardCompact

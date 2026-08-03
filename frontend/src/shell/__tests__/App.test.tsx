@@ -7,7 +7,7 @@
  * 实时 WebSocket 以空操作替身桩平(不建真实连接);首页实时演示的 GET
  * 以 mock fetch 提供(不触真实网络)。
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App';
 import { useAuthStore } from '../../state/authStore';
@@ -129,6 +129,53 @@ describe('App 路由', () => {
     ).toBeInTheDocument();
   });
 
+  it('工作区编号深链解析到同工作区 issue UUID 路由', async () => {
+    signIn();
+    const workspace = {
+      id: 'ws-1',
+      name: 'WS',
+      slug: 'ws',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: { default_locale: 'en', default_theme: 'light' },
+      my_role: 'owner',
+      created_at: '2026-07-25T00:00:00Z',
+      updated_at: '2026-07-25T00:00:00Z',
+    };
+    const me = {
+      user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
+      memberships: [
+        {
+          workspace_id: 'ws-1',
+          workspace_name: 'WS',
+          workspace_slug: 'ws',
+          role: 'owner',
+          status: 'active',
+          joined_at: null,
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.includes('/workspaces/by-slug/ws')
+          ? { data: workspace }
+          : url.includes('/issues/by-identifier/WEB-124')
+            ? { data: { id: 'issue-1' } }
+            : url.includes('/users/me')
+              ? { data: me }
+              : { data: [], next_cursor: null };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+    navigateTo('/w/ws/issues/by-identifier/WEB-124');
+    render(<App />);
+    await waitFor(() => expect(window.location.pathname).toBe('/w/ws/issues/issue-1'), {
+      timeout: 3000,
+    });
+  });
+
   it('/skills/marketplace 经扁平迁移收敛至运营区规范深链并直达市场页(design-quality A-01 死链修复)', async () => {
     signIn();
     navigateTo('/skills/marketplace');
@@ -181,8 +228,9 @@ describe('App 路由', () => {
     const input = screen.getByTestId('topbar-search');
     fireEvent.change(input, { target: { value: 'theme' } });
     // §4.9 明确要求键入即展开命令面板同一结果视图并交接焦点/查询。
-    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
-    expect(screen.getByRole('combobox')).toHaveValue('theme');
+    const palette = screen.getByRole('dialog', { name: 'Command palette' });
+    expect(palette).toBeInTheDocument();
+    expect(within(palette).getByRole('combobox')).toHaveValue('theme');
     expect(input).toHaveValue('');
     // 本地命令同步零延迟呈现(§11.4)
     await waitFor(() => expect(screen.getByText('Toggle theme')).toBeInTheDocument());

@@ -1,0 +1,21 @@
+# MES-128 真栈键盘旅程覆盖层。
+# 浏览器仅通过 loopback frontend 同源入口访问；数据库、中间件以及后端直连
+# 端口全部留在 Compose 私网。本层同时补齐 production 鉴权所需签名密钥。
+services:
+  minio:
+    ports: !reset []
+  api:
+    ports: !reset []
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}
+      MESH_SEARCH_CURSOR_SECRET: ${MESH_SEARCH_CURSOR_SECRET:?MESH_SEARCH_CURSOR_SECRET is required}
+  gateway:
+    ports: !reset []
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}
+  worker:
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}

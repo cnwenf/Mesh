@@ -145,16 +145,16 @@ export function InsightsPage(): React.JSX.Element {
 
   if (isLoading) {
     return (
-      <main className="mesh-page">
+      <div className="mesh-page">
         <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
         <InsightsSkeleton label={t('analytics.state.loading')} />
-      </main>
+      </div>
     );
   }
   if (error !== null) {
     const isCostExceeded = error.code === COST_EXCEEDED_CODE;
     return (
-      <main className="mesh-page">
+      <div className="mesh-page">
         <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
         <ErrorState
           title={t('analytics.state.errorTitle')}
@@ -164,15 +164,15 @@ export function InsightsPage(): React.JSX.Element {
           onRetry={() => setReloadKey((k) => k + 1)}
           diagnosticId={diagnosticOf(error)}
         />
-      </main>
+      </div>
     );
   }
   if (workspace === null || data === null) {
     return (
-      <main className="mesh-page">
+      <div className="mesh-page">
         <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
         <EmptyState title={t('analytics.state.empty')} />
-      </main>
+      </div>
     );
   }
 
@@ -193,7 +193,7 @@ export function InsightsPage(): React.JSX.Element {
   ];
 
   return (
-    <main className="mesh-page">
+    <div className="mesh-page">
       <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
       <div className="mesh-analytics__caliber">
         {data.meta.visibility_filtered ? (
@@ -302,6 +302,6 @@ export function InsightsPage(): React.JSX.Element {
           </div>
         </>
       )}
-    </main>
+    </div>
   );
 }

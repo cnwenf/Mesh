@@ -58,8 +58,7 @@ function stubFetch(opts: StubOptions = {}) {
     if (method === 'GET' && url.includes('/cycles')) {
       const params = new URL(url).searchParams;
       const state = params.get('state');
-      const data =
-        state === null ? cycles : cycles.filter((cycle) => cycle.state === state);
+      const data = state === null ? cycles : cycles.filter((cycle) => cycle.state === state);
       return fakeResponse({ body: { data, next_cursor: null } });
     }
     if (method === 'POST' && url.includes('/cycles')) {
@@ -133,9 +132,7 @@ describe('CyclesPage', () => {
       target: { value: '2026-08-01' },
     });
     // 起止倒置:行内错误文案 + 提交禁用(不依赖点击,故无请求)
-    expect(
-      await screen.findByText('End date must be on or after the start date.'),
-    ).toBeDefined();
+    expect(await screen.findByText('End date must be on or after the start date.')).toBeDefined();
     const submit = screen.getByTestId('create-cycle-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     expect(
@@ -208,9 +205,7 @@ describe('CyclesPage', () => {
   it('renders the empty state when there are no cycles', async () => {
     stubFetch({ cycles: [] });
     renderWithProviders(<CyclesPage />, { route: '/cycles' });
-    expect(
-      await screen.findByText('No cycles match the current filters.'),
-    ).toBeDefined();
+    expect(await screen.findByText('No cycles match the current filters.')).toBeDefined();
   });
 
   it('shows the dialog error when creating a cycle fails', async () => {
@@ -219,7 +214,10 @@ describe('CyclesPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'POST' && url.includes('/cycles')) {
-        return fakeResponse({ status: 400, body: { error: { code: 'validation_error', message: 'x' } } });
+        return fakeResponse({
+          status: 400,
+          body: { error: { code: 'validation_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/cycles')) {
         return fakeResponse({ body: { data: [makeCycle()], next_cursor: null } });
@@ -243,7 +241,10 @@ describe('CyclesPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'PATCH' && url.includes('/cycles/')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/cycles')) {
         return fakeResponse({ body: { data: [makeCycle()], next_cursor: null } });
@@ -268,9 +269,7 @@ describe('CyclesPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', implNoWs);
     const { unmount } = renderWithProviders(<CyclesPage />, { route: '/cycles' });
-    expect(
-      await screen.findByText('You are not a member of any workspace yet.'),
-    ).toBeDefined();
+    expect(await screen.findByText('You are not a member of any workspace yet.')).toBeDefined();
     unmount();
     // auto_roll 标签
     stubFetch({ cycles: [makeCycle({ auto_roll: true })] });
@@ -282,10 +281,39 @@ describe('CyclesPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(<CyclesPage />, { route: '/cycles' });
     expect(await screen.findByText('Something went wrong')).toBeDefined();
+  });
+
+  it('loads and appends the next cursor page', async () => {
+    let listCalls = 0;
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/cycles')) {
+        listCalls += 1;
+        return fakeResponse({
+          body:
+            listCalls === 1
+              ? { data: [makeCycle()], next_cursor: 'page-2' }
+              : {
+                  data: [makeCycle({ id: 'cyc-2', name: 'Sprint 13' })],
+                  next_cursor: null,
+                },
+        });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderWithProviders(<CyclesPage />, { route: '/cycles' });
+    await userEvent.click(await screen.findByTestId('cycles-load-more'));
+    expect(await screen.findByText('Sprint 13')).toBeDefined();
+    expect(screen.queryByTestId('cycles-load-more')).toBeNull();
   });
 });

@@ -31,6 +31,10 @@ import type { ShortcutDef } from '../shortcuts';
 import { useSettingsStore } from '../state/settingsStore';
 import type { ThemeMode } from '../state/settingsStore';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
+import {
+  useWorkspaceFeatureFlagsContext,
+  type WorkspaceFeatureFlags,
+} from '../workspace/featureFlags';
 import { useOverlayControls } from './AppShell';
 import { findNavItem, resolveNavTarget } from './navigation';
 
@@ -105,6 +109,8 @@ export interface ShellShortcutEnv {
   /** 当前 pathname;registrar 注入后收藏命令可随路由重注册。 */
   readonly path?: string;
   readonly notify?: (message: string) => void;
+  /** 工作区功能开关；显式关闭的功能不注册入口或快捷键。 */
+  readonly featureFlags?: WorkspaceFeatureFlags;
 }
 
 /** lower-level 注册 API 的 main 兼容调用面。 */
@@ -116,6 +122,8 @@ export interface ShellShortcutOptions {
   readonly path?: string;
   readonly notify?: (message: string) => void;
   readonly getInboxFilter?: () => InboxFilter | undefined;
+  /** 工作区功能开关；显式关闭的功能不注册入口或快捷键。 */
+  readonly featureFlags?: WorkspaceFeatureFlags;
 }
 
 const THEME_MODES: ReadonlyArray<ThemeMode> = ['light', 'dark', 'system'];
@@ -193,6 +201,7 @@ function registerLegacyShellShortcuts(
   const unregisters: Array<() => void> = [];
   const client = getApiClient();
   const appMode = env.path !== undefined;
+  const autopilotEnabled = env.featureFlags?.autopilot !== false;
 
   // 规范深链优先;无工作区上下文时落扁平路由(FlatRouteMigration 解析 active ws)。
   const wsPath = (suffix: string): string =>
@@ -216,6 +225,7 @@ function registerLegacyShellShortcuts(
     'settings',
   ];
   for (const key of navKeys) {
+    if (key === 'autopilots' && !autopilotEnabled) continue;
     const label = labels.nav[key];
     if (label === undefined) continue;
     const to = resolveNavCommandTarget(key, env.workspaceSlug);
@@ -467,13 +477,17 @@ function registerLegacyShellShortcuts(
       group: 'global',
       run: goTo(wsPath('/members')),
     },
-    {
-      id: 'go.autopilot',
-      combo: 'g a',
-      label: labels.actions.goAutopilot,
-      group: 'global',
-      run: goTo(wsPath('/automations/autopilots')),
-    },
+    ...(autopilotEnabled
+      ? [
+          {
+            id: 'go.autopilot',
+            combo: 'g a',
+            label: labels.actions.goAutopilot,
+            group: 'global' as const,
+            run: goTo(wsPath('/automations/autopilots')),
+          },
+        ]
+      : []),
     // `c` 打开 issues 页并展开快速创建(issue.md §4.2);看板上下文激活时由看板 handler 仲裁胜出。
     {
       id: 'new.issue',
@@ -515,6 +529,7 @@ function registerModernShellShortcuts(
   const setTheme = useSettingsStore.getState().setTheme;
   const unregisters: Array<() => void> = [];
   const { role = null, isHuman = true, workspaceSlug = null, workspaceId = null } = options;
+  const autopilotEnabled = options.featureFlags?.autopilot !== false;
   const notify = options.notify ?? (() => undefined);
   const wsPath = (suffix: string): string =>
     workspaceSlug !== null ? `/w/${workspaceSlug}${suffix}` : suffix;
@@ -537,6 +552,7 @@ function registerModernShellShortcuts(
     'approvals',
   ];
   for (const key of navKeys) {
+    if (key === 'autopilots' && !autopilotEnabled) continue;
     const label = labels.nav[key];
     if (label === undefined) continue;
     const to = resolveNavCommandTarget(key, workspaceSlug);
@@ -707,13 +723,17 @@ function registerModernShellShortcuts(
         group: 'global',
         run: goTo(wsPath('/members')),
       },
-      {
-        id: 'go.autopilot',
-        combo: 'g a',
-        label: labels.actions.goAutopilot,
-        group: 'global',
-        run: goTo(wsPath('/automations/autopilots')),
-      },
+      ...(autopilotEnabled
+        ? [
+            {
+              id: 'go.autopilot',
+              combo: 'g a',
+              label: labels.actions.goAutopilot,
+              group: 'global' as const,
+              run: goTo(wsPath('/automations/autopilots')),
+            },
+          ]
+        : []),
       {
         id: 'new.issue',
         combo: 'c',
@@ -775,6 +795,7 @@ export function ShellShortcutsRegistrar(): null {
   const t = useT();
   const { addToast } = useToast();
   const controls = useOverlayControls();
+  const featureFlags = useWorkspaceFeatureFlagsContext();
   const workspaceContext = useOptionalWorkspace();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   const isAdmin = workspaceContext !== null ? workspaceContext.isAdmin : false;
@@ -862,12 +883,23 @@ export function ShellShortcutsRegistrar(): null {
           workspaceId,
           isAdmin,
           path: location.pathname,
+          featureFlags,
           notify: (message) =>
             addToast(message, { tone: 'success', closeLabel: t('a11y.closeDialog') }),
         },
         { openHelp: () => controls?.openHelp() },
       ),
-    [navigate, t, slug, workspaceId, isAdmin, controls, location.pathname, addToast],
+    [
+      navigate,
+      t,
+      slug,
+      workspaceId,
+      isAdmin,
+      controls,
+      location.pathname,
+      featureFlags,
+      addToast,
+    ],
   );
 
   return null;

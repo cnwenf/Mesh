@@ -10,8 +10,14 @@
  */
 /* eslint-disable react-refresh/only-export-components -- categoryTone/saveIndicatorText 为页面内纯助手,与组件同模块契约 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
-import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
+import {
+  MeshApiClient,
+  MeshApiError,
+  errorToI18nKey,
+  getToken,
+  useOptimisticMutation,
+} from '../../api';
 import {
   Avatar,
   Badge,
@@ -30,7 +36,7 @@ import type { BadgeTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { usePageContext, useShortcutRegistry } from '../../shortcuts';
+import { usePageContext } from '../../shortcuts';
 import { AttachmentPanel } from '../attachments';
 import { useSettingsStore } from '../../state/settingsStore';
 import { CommentsPanel } from '../comments';
@@ -54,6 +60,7 @@ import {
   removeDependency as removeDependencyApi,
 } from './api';
 import { IssueProperties } from './IssueProperties';
+import { focusIssueProperty, registerIssueContextShortcuts } from './issueShortcuts';
 import { MoveProjectDialog } from './MoveProjectDialog';
 import { applyIssueDetailFrame } from './realtime';
 import type {
@@ -191,7 +198,11 @@ function resolveCurrentMember(
 function toMentionCandidates(members: readonly MemberSummary[]): MentionCandidate[] {
   return members
     .filter((member) => member.status === 'active')
-    .map((member) => ({ id: member.id, name: member.display_name, member_type: member.member_type }));
+    .map((member) => ({
+      id: member.id,
+      name: member.display_name,
+      member_type: member.member_type,
+    }));
 }
 
 interface ActivityListProps {
@@ -229,6 +240,7 @@ export function IssueDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const { issueId } = useParams<{ issueId: string }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
@@ -238,32 +250,6 @@ export function IssueDetailPage(): React.JSX.Element {
   // issue 详情上下文组(§4.3 S11):['global','board','issue'] —— issue 特异性
   // 最高,同键仲裁胜出(详情抽屉叠于看板之上时 board 组共存而不冲突)。
   usePageContext('board', 'issue');
-
-  useEffect(() => {
-    const registry = useShortcutRegistry.getState();
-    const focusField = (testid: string) => () => {
-      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`)?.focus();
-    };
-    return registry.registerShortcuts([
-      { id: 'issue.edit', combo: 'e', label: t('shortcuts.issueEdit'), group: 'issue', run: focusField('issue-detail-title') },
-      { id: 'issue.status', combo: 's', label: t('shortcuts.issueStatus'), group: 'issue', run: focusField('issue-detail-status') },
-      { id: 'issue.assignee', combo: 'a', label: t('shortcuts.issueAssignee'), group: 'issue', run: focusField('issue-detail-assignee') },
-      { id: 'issue.priority', combo: 'p', label: t('shortcuts.issuePriority'), group: 'issue', run: focusField('issue-detail-priority') },
-      // L:打开标签选择器(评审 P5,label-property.md 既有搜索输入即选择入口)。
-      { id: 'issue.labels', combo: 'l', label: t('shortcuts.issueLabels'), group: 'issue', run: focusField('issue-label-search') },
-      { id: 'issue.milestone', combo: 'm', label: t('shortcuts.issueMilestone'), group: 'issue', run: focusField('issue-detail-milestone') },
-      {
-        id: 'issue.submit.comment',
-        combo: 'mod+enter',
-        label: t('shortcuts.issueSubmitComment'),
-        group: 'issue',
-        run: () => {
-          document.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')?.click();
-        },
-      },
-      { id: 'issue.close', combo: 'esc', label: t('shortcuts.issueClose'), group: 'issue', run: () => navigate(-1) },
-    ]);
-  }, [t, navigate]);
 
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
@@ -283,6 +269,24 @@ export function IssueDetailPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('comments');
+
+  useEffect(
+    () =>
+      registerIssueContextShortcuts({
+        labels: {
+          edit: t('shortcuts.issueEdit'),
+          status: t('shortcuts.issueStatus'),
+          assignee: t('shortcuts.issueAssignee'),
+          priority: t('shortcuts.issuePriority'),
+          labels: t('shortcuts.issueLabels'),
+          milestone: t('shortcuts.issueMilestone'),
+          submitComment: t('shortcuts.issueSubmitComment'),
+          close: t('shortcuts.issueClose'),
+        },
+        close: () => navigate(-1),
+      }),
+    [navigate, t],
+  );
 
   // t 的函数身份每次渲染都变;经 ref 读取,避免加载副作用反复重建(重叠请求竞态)。
   const tRef = useRef(t);
@@ -348,6 +352,15 @@ export function IssueDetailPage(): React.JSX.Element {
       cancelled = true;
     };
   }, [client, issueId, reloadKey]);
+
+  // 看板 S/A 的等价 UI 路径:详情渲染完成后聚焦对应属性控件，并清理一次性 query。
+  useEffect(() => {
+    if (issue === null) return;
+    const target = new URLSearchParams(location.search).get('focus');
+    if (focusIssueProperty(target)) {
+      navigate(location.pathname, { replace: true });
+    }
+  }, [issue, location.pathname, location.search, navigate]);
 
   // 详情级实时合并(§3.6:issue:{id} 频道)
   const issueKey = issue !== null ? issue.id : null;
@@ -466,12 +479,14 @@ export function IssueDetailPage(): React.JSX.Element {
   }
 
   // F7:进度以服务端 children_progress 为准;畸形信封按 unknown 收窄后回退 0(不白屏)。
-  const progress = issue.children_progress as { done?: unknown; total?: unknown } | null | undefined;
+  const progress = issue.children_progress as
+    { done?: unknown; total?: unknown } | null | undefined;
   const doneChildren = typeof progress?.done === 'number' ? progress.done : 0;
   const totalChildren = typeof progress?.total === 'number' ? progress.total : 0;
 
   const header = (
     <header className="mesh-issues-detail__head">
+      <h1 className="sr-only">{issue.title}</h1>
       <span className="mesh-issues-detail__identifier" data-testid="issue-detail-identifier">
         {issue.identifier}
       </span>
@@ -683,7 +698,9 @@ export function IssueDetailPage(): React.JSX.Element {
         title={t('issues.deleteConfirmTitle')}
         closeLabel={t('common.close')}
       >
-        <p className="mesh-text-body-sm">{t('issues.deleteConfirmBody', { identifier: issue.identifier })}</p>
+        <p className="mesh-text-body-sm">
+          {t('issues.deleteConfirmBody', { identifier: issue.identifier })}
+        </p>
         <div className="mesh-issues__confirm-actions">
           <Button
             variant="danger"

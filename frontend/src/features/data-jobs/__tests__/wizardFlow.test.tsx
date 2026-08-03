@@ -149,7 +149,12 @@ describe('ImportWizard full flow', () => {
         { row: 3, field: 'title', code: 'required_field_missing', message: 'title missing' },
       ],
     });
-    const running = makeJob({ status: 'running', total_rows: 3, succeeded_rows: 2, failed_rows: 1 });
+    const running = makeJob({
+      status: 'running',
+      total_rows: 3,
+      succeeded_rows: 2,
+      failed_rows: 1,
+    });
     const request = routedRequest({
       'POST /api/v1/data-jobs/import': created,
       'POST /api/v1/data-jobs/import/dj-1/validate': validated,
@@ -160,7 +165,9 @@ describe('ImportWizard full flow', () => {
     );
 
     // upload 步:有就绪上传 → Next 可用,点击进入 mapping。
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
     // mapping 步:改首列 transform + 删除一列。
@@ -192,8 +199,6 @@ describe('ImportWizard full flow', () => {
     );
   });
 
-
-
   it('surfaces a toast and stays on upload when create fails (typed + untyped error)', async () => {
     mockUploads = [READY_UPLOAD];
     const request = routedRequest({});
@@ -214,11 +219,172 @@ describe('ImportWizard full flow', () => {
     // 异步刷新;覆盖率插桩下第二次同步 click 可能落在按钮仍 busy 的瞬间被吞掉,
     // 使 request 停留 1 次。等按钮重新可用(失败态已落定)再点击,与 i18n 文案无关。
     await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false),
+      expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(screen.queryByTestId('validate-summary')).toBeNull();
+  });
+
+  it('covers JSON project import, validating poll and realtime terminal report', async () => {
+    mockUploads = [
+      { localId: 'uploading', phase: 'uploading', fileName: 'large.json', progress: 0.42 },
+      { ...READY_UPLOAD, fileName: 'issues.json' },
+    ];
+    const created = makeJob({
+      format: 'json',
+      mapping: {
+        columns: [{ source: 'Title', target: 'title', transform: { type: 'direct' } }],
+      },
+    });
+    const validating = makeJob({ status: 'validating', total_rows: 1, mapping: created.mapping });
+    const validated = makeJob({ status: 'pending', total_rows: 1, mapping: created.mapping });
+    const running = makeJob({ status: 'running', total_rows: 1, mapping: created.mapping });
+    const request = routedRequest({
+      'POST /api/v1/data-jobs/import': created,
+      'POST /api/v1/data-jobs/import/dj-1/validate': validating,
+      'GET /api/v1/data-jobs/dj-1': validated,
+      'POST /api/v1/data-jobs/import/dj-1/run': running,
+    });
+    const { value: realtime, client: realtimeClient } = makeRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={realtime}>
+        <ImportWizard
+          open
+          onClose={vi.fn()}
+          workspaceId="ws-1"
+          targetProjectId="prj-1"
+          client={makeClient(request)}
+        />
+      </RealtimeContext.Provider>,
+    );
+
+    expect(screen.getByTestId('upload-uploading').textContent).toContain('42%');
+    const file = new File(['{}'], 'manual.json', { type: 'application/json' });
+    fireEvent.change(screen.getByTestId('import-file-input'), { target: { files: [file] } });
+    expect(mockAddFiles).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+    expect(request).toHaveBeenCalledWith(
+      'POST',
+      '/api/v1/data-jobs/import',
+      expect.objectContaining({
+        body: expect.objectContaining({ format: 'json', target_project_id: 'prj-1' }),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await waitFor(() => expect(screen.getByTestId('validate-summary')).toBeTruthy(), {
+      timeout: 3000,
+    });
+    expect(request).toHaveBeenCalledWith('GET', '/api/v1/data-jobs/dj-1', expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByTestId('confirm-import-button'));
+    await waitFor(() => expect(realtimeClient.subscribe).toHaveBeenCalledWith('data_job:dj-1'));
+
+    pushFrame(realtimeClient, {
+      op: 'event',
+      channel: 'data_job:dj-1',
+      seq: 4,
+      event: 'data_job.updated',
+      payload: {
+        id: 'dj-1',
+        status: 'completed',
+        result_attachment_id: 'att-report',
+        succeeded_rows: 1,
+        updated_at: '2099-01-01T00:00:00Z',
+      },
+    });
+    expect(await screen.findByTestId('error-report-link')).toBeTruthy();
+
+    // 关闭会 reset job;退订前保存的回调即便收到迟到帧也必须保持 null。
+    const staleFrameHandler = lastFrameHandler(realtimeClient);
+    const closeButtons = screen.getAllByRole('button', { name: 'Close' });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    await screen.findByTestId('import-file-input');
+    act(() => staleFrameHandler({ channel: 'data_job:dj-1', event: 'data_job.updated' }));
+  });
+
+  it('ignores a ready upload whose server attachment id is still unavailable', async () => {
+    mockUploads = [
+      { localId: 'ready-without-id', phase: 'ready', fileName: 'issues.csv', progress: 1 },
+    ];
+    const request = vi.fn();
+    renderWithProviders(
+      <ImportWizard open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(request).not.toHaveBeenCalled();
+    expect(screen.getByTestId('import-file-input')).toBeTruthy();
+  });
+
+  it('reuses edited mapping after Back and recovers from validate/run transport failures', async () => {
+    mockUploads = [READY_UPLOAD];
+    const created = makeJob({
+      total_rows: 1,
+      mapping: {
+        columns: [{ source: 'Title', target: 'title', transform: { type: 'direct' } }],
+      },
+    });
+    const validated = makeJob({ total_rows: 1, mapping: created.mapping });
+    const running = makeJob({ status: 'running', total_rows: 1, mapping: created.mapping });
+    let validateAttempts = 0;
+    let runAttempts = 0;
+    const request = vi.fn(async (method: string, path: string) => {
+      if (method === 'POST' && path === '/api/v1/data-jobs/import') return created;
+      if (method === 'POST' && path === '/api/v1/data-jobs/import/dj-1/validate') {
+        validateAttempts += 1;
+        if (validateAttempts === 1) {
+          throw new MeshApiError({ status: 503, code: 'unavailable', message: 'retry' });
+        }
+        if (validateAttempts === 2) throw new Error('validate transport');
+        return validated;
+      }
+      if (method === 'POST' && path === '/api/v1/data-jobs/import/dj-1/run') {
+        runAttempts += 1;
+        if (runAttempts === 1) {
+          throw new MeshApiError({ status: 503, code: 'unavailable', message: 'retry' });
+        }
+        if (runAttempts === 2) throw new Error('run transport');
+        return running;
+      }
+      throw new Error(`unrouted request ${method} ${path}`);
+    });
+    renderWithProviders(
+      <ImportWizard open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await screen.findByTestId('import-file-input');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await waitFor(() => expect(validateAttempts).toBe(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Validate (dry run)' })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await waitFor(() => expect(validateAttempts).toBe(2));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Validate (dry run)' })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await screen.findByTestId('validate-summary');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    fireEvent.click(screen.getByTestId('confirm-import-button'));
+    await waitFor(() => expect(runAttempts).toBe(1));
+    await waitFor(() => expect(screen.getByTestId('confirm-import-button')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('confirm-import-button'));
+    await waitFor(() => expect(runAttempts).toBe(2));
+    await waitFor(() => expect(screen.getByTestId('confirm-import-button')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('confirm-import-button'));
+    expect(await screen.findByTestId('progress-status')).toBeTruthy();
   });
 });
 
@@ -325,7 +491,11 @@ describe('ExportDialog branches', () => {
   });
 
   it('shows failure reason + toast on a failed export', async () => {
-    const failed = makeJob({ kind: 'export', status: 'failed', failure_reason: 'export_too_large' });
+    const failed = makeJob({
+      kind: 'export',
+      status: 'failed',
+      failure_reason: 'export_too_large',
+    });
     const request = routedRequest({ 'POST /api/v1/data-jobs/export': failed });
     renderWithProviders(
       <ExportDialog open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,

@@ -8,6 +8,7 @@
  * 不泄漏工作区存在性(not_found 与不存在同形)。token 仅经路径传递,不落入 UI 文案/日志。
  */
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
@@ -19,7 +20,7 @@ import type {
   InvitationRejectReason,
 } from '../../api/invitations';
 import { getToken } from '../../api/tokenStore';
-import { Button } from '../../design';
+import { Button, PublicFlowShell } from '../../design';
 import {
   beginWorkspaceLoad as beginWorkspaceThemeLoad,
   endWorkspaceContext as endWorkspaceThemeContext,
@@ -105,60 +106,73 @@ export function InviteAcceptPage(props: InviteAcceptPageProps): React.JSX.Elemen
     }
   };
 
+  const renderShell = (title: string, content: ReactNode): React.JSX.Element => (
+    <PublicFlowShell
+      brandLabel={t('brand.name')}
+      brandHref="/"
+      title={title}
+      skipLabel={t('a11y.skipLink')}
+    >
+      {content}
+    </PublicFlowShell>
+  );
+
   if (phase.kind === 'previewing') {
-    return (
-      <div className="mesh-invite" data-testid="invite-loading" role="status">
+    return renderShell(
+      t('title.invite'),
+      <div className="mesh-invite-content" data-testid="invite-loading" role="status">
         {t('common.loading')}
-      </div>
+      </div>,
     );
   }
 
   if (phase.kind === 'rejected') {
-    return (
-      <div className="mesh-invite" data-testid={`invite-reason-${phase.reason}`}>
-        <h1>{t(`invite.reason.${phase.reason}.title`)}</h1>
+    return renderShell(
+      t(`invite.reason.${phase.reason}.title`),
+      <div className="mesh-invite-content" data-testid={`invite-reason-${phase.reason}`}>
         <p>{t(`invite.reason.${phase.reason}.description`)}</p>
         <Link to="/">{t('invite.backHome')}</Link>
-      </div>
+      </div>,
     );
   }
 
   if (phase.kind === 'accepted') {
     const { result } = phase;
-    return (
-      <div className="mesh-invite" data-testid="invite-accepted">
-        <h1>{t('invite.acceptedTitle')}</h1>
+    return renderShell(
+      t('invite.acceptedTitle'),
+      <div className="mesh-invite-content" data-testid="invite-accepted">
         <p>{t('invite.acceptedDescription', { workspace: result.workspace.name })}</p>
         <Button data-testid="invite-enter" onClick={() => navigate(`/w/${result.workspace.slug}`)}>
           {t('invite.enterWorkspace', { workspace: result.workspace.name })}
         </Button>
-      </div>
+      </div>,
     );
   }
 
   if (phase.kind === 'accepting') {
-    return (
-      <div className="mesh-invite" data-testid="invite-accepting" role="status">
+    return renderShell(
+      t('title.invite'),
+      <div className="mesh-invite-content" data-testid="invite-accepting" role="status">
         {t('common.loading')}
-      </div>
+      </div>,
     );
   }
 
   const { preview } = phase;
   if (!preview.valid) {
-    return (
-      <div className="mesh-invite" data-testid={`invite-reason-${preview.reason}`}>
-        <h1>{t(`invite.reason.${preview.reason}.title`)}</h1>
+    return renderShell(
+      t(`invite.reason.${preview.reason}.title`),
+      <div className="mesh-invite-content" data-testid={`invite-reason-${preview.reason}`}>
         <p>{t(`invite.reason.${preview.reason}.description`)}</p>
         <Link to="/">{t('invite.backHome')}</Link>
-      </div>
+      </div>,
     );
   }
 
   const loggedIn = getToken() !== null;
-  return (
-    <div className="mesh-invite" data-testid="invite-preview">
-      <h1>{t('invite.previewTitle', { workspace: preview.workspace_name })}</h1>
+  return renderShell(
+    t('invite.previewTitle', { workspace: preview.workspace_name }),
+    <div className="mesh-invite-content" data-testid="invite-preview">
       <p data-testid="invite-preview-role">
         {t('invite.previewRole', { role: t(`roles.${preview.role}`) })}
       </p>
@@ -182,6 +196,6 @@ export function InviteAcceptPage(props: InviteAcceptPageProps): React.JSX.Elemen
           </Button>
         </>
       )}
-    </div>
+    </div>,
   );
 }

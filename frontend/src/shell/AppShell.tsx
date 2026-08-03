@@ -19,8 +19,9 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { Outlet, useMatch } from 'react-router';
+import { Outlet, useLocation, useMatch, useNavigate } from 'react-router';
 import { MeshApiError, getToken } from '../api';
+import { useToast } from '../design';
 import { env, resolveWsGatewayUrl } from '../env';
 import { useT } from '../i18n';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
@@ -28,17 +29,25 @@ import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
 import { OnboardingChecklist } from '../features/onboarding';
 import { useAuthStore } from '../state/authStore';
+import { usePaletteContext } from '../shortcuts/usePaletteContext';
 import type { RealtimeEventFrame } from '../types/realtime';
 import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
+import {
+  isAutopilotFeaturePath,
+  WorkspaceFeatureGate,
+  WorkspaceFeatureFlagsProvider,
+  useWorkspaceFeatureFlagsValue,
+} from '../workspace/featureFlags';
+import { SIDEBAR_COLLAPSED_STORAGE_KEY } from './navigation';
 import { SeoMeta } from './SeoMeta';
 import { ShellShortcutsRegistrar } from './shortcutsRegistration';
-import { SIDEBAR_COLLAPSED_STORAGE_KEY } from './navigation';
 import { Sidebar } from './Sidebar';
 import { MAIN_CONTENT_ID, SkipLink } from './SkipLink';
 import { MobileMoreDrawer } from './MobileMoreDrawer';
 import { MobileNav } from './MobileNav';
 import { StatusBanner } from './StatusBanner';
 import { TopBar } from './TopBar';
+import { parseAgentTriggerSkipped } from './agentTriggerNotice';
 import './shell.css';
 
 export interface RealtimeContextValue {
@@ -250,6 +259,14 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
 
 export function AppShell(): React.JSX.Element {
   const t = useT();
+  const { addToast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const workspaceMatch = useMatch('/w/:workspaceSlug/*');
+  const workspaceSlug = workspaceMatch?.params.workspaceSlug;
+  // 命令注册身份上下文(GET /users/me 缓存解析):角色门控 + 工作区作用域命令
+  const paletteContext = usePaletteContext(location.pathname);
+  const featureFlags = useWorkspaceFeatureFlagsValue(paletteContext.workspaceId);
   const hasToken = useAuthStore((state) => state.token !== null);
   // theme.md §4.5:登录态偏好回填(GET /me 真源)+ pending 重放触发器。
   usePreferencesBootstrap();
@@ -269,6 +286,34 @@ export function AppShell(): React.JSX.Element {
     },
   });
   reconcilerRef.current = createReconciler(client);
+
+  // agent.md §3.6/§4.6:被生命周期/频率/链深护栏拒绝的触发不能静默。
+  // 订阅工作区 agent 频道，以原因化 toast 呈现；有 issue 时提供等价深链动作。
+  useEffect(() => {
+    const workspaceId = paletteContext.workspaceId;
+    if (workspaceId === null) return;
+    const channel = `workspace:${workspaceId}:agents`;
+    client.subscribe(channel);
+    const off = client.onFrame((frame) => {
+      const notice = parseAgentTriggerSkipped(frame, workspaceId);
+      if (notice === null) return;
+      addToast(t(notice.messageKey, { trigger: notice.trigger }), {
+        tone: notice.tone,
+        durationMs: 12_000,
+        closeLabel: t('a11y.dismiss'),
+        ...(notice.issueId !== null
+          ? {
+              actionLabel: t('agents.triggerSkipped.openIssue'),
+              onAction: () => navigate(`/issues/${notice.issueId}`),
+            }
+          : {}),
+      });
+    });
+    return () => {
+      off();
+      client.unsubscribe(channel);
+    };
+  }, [client, paletteContext.workspaceId, addToast, t, navigate]);
 
   // 跟踪已订阅频道,供离线轮询覆盖页面订阅的 project:/workspace: 频道。
   const [subscribedChannels, setSubscribedChannels] = useState<readonly string[]>([]);
@@ -294,9 +339,6 @@ export function AppShell(): React.JSX.Element {
 
   // 工作区上下文(workspace.md §4.1):/w/:workspaceSlug/* 命中时以 WorkspaceProvider
   // 包裹整个布局子树(TopBar 切换器 / Sidebar 设置入口 / 页面共享当前工作区)。
-  const workspaceMatch = useMatch('/w/:workspaceSlug/*');
-  const workspaceSlug = workspaceMatch?.params.workspaceSlug;
-
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   // 桌面侧栏折叠偏好(design-quality §4.1):持久化到 localStorage,刷新后保持。
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -321,6 +363,13 @@ export function AppShell(): React.JSX.Element {
   const shellClassName = sidebarCollapsed
     ? 'mesh-shell mesh-shell--sidebar-collapsed'
     : 'mesh-shell';
+  const outlet = isAutopilotFeaturePath(location.pathname) ? (
+    <WorkspaceFeatureGate flag="autopilot">
+      <Outlet />
+    </WorkspaceFeatureGate>
+  ) : (
+    <Outlet />
+  );
 
   const layout = (
     <div className={shellClassName}>
@@ -345,7 +394,7 @@ export function AppShell(): React.JSX.Element {
       <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />
-        <Outlet />
+        {outlet}
       </main>
       {/* 手机导航(design-quality §4.3):0–599px 底部主导航 + 「更多」全高抽屉;
           ≥600px 经 CSS 隐藏,桌面侧栏为唯一主导航。 */}
@@ -356,11 +405,13 @@ export function AppShell(): React.JSX.Element {
 
   return (
     <RealtimeContext.Provider value={realtimeValue}>
-      {workspaceSlug !== undefined ? (
-        <WorkspaceProvider slug={workspaceSlug}>{layout}</WorkspaceProvider>
-      ) : (
-        layout
-      )}
+      <WorkspaceFeatureFlagsProvider value={featureFlags}>
+        {workspaceSlug !== undefined ? (
+          <WorkspaceProvider slug={workspaceSlug}>{layout}</WorkspaceProvider>
+        ) : (
+          layout
+        )}
+      </WorkspaceFeatureFlagsProvider>
     </RealtimeContext.Provider>
   );
 }

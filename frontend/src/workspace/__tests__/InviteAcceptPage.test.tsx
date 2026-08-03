@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MAIN_CONTENT_ID } from '../../a11y';
 import { ThemeProvider, ToastProvider } from '../../design';
 import { I18nProvider } from '../../i18n';
 import { useAuthStore } from '../../state/authStore';
@@ -16,11 +17,12 @@ function jsonResponse(status: number, body: unknown): Response {
 
 function stubClient(fetchImpl: ReturnType<typeof vi.fn>) {
   return {
-    request: async (method: string, path: string, opts: { body?: unknown; query?: Record<string, string> } = {}) => {
-      const qs =
-        opts.query !== undefined
-          ? '?' + new URLSearchParams(opts.query).toString()
-          : '';
+    request: async (
+      method: string,
+      path: string,
+      opts: { body?: unknown; query?: Record<string, string> } = {},
+    ) => {
+      const qs = opts.query !== undefined ? '?' + new URLSearchParams(opts.query).toString() : '';
       const response = await fetchImpl(`http://localhost${path}${qs}`, {
         method,
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -43,7 +45,9 @@ function stubClient(fetchImpl: ReturnType<typeof vi.fn>) {
   };
 }
 
-function stubFetch(...responses: Array<{ status: number; body: unknown }>): ReturnType<typeof vi.fn> {
+function stubFetch(
+  ...responses: Array<{ status: number; body: unknown }>
+): ReturnType<typeof vi.fn> {
   const fetchImpl = vi.fn();
   for (const response of responses) {
     fetchImpl.mockImplementationOnce(() =>
@@ -73,7 +77,10 @@ function renderInvite(
   return render(
     <MemoryRouter initialEntries={[`/invite/${token}`]}>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+        <I18nProvider
+          workspaceDefaultLocale={null}
+          reporter={{ report: () => undefined, reported: [] }}
+        >
           <ToastProvider regionLabel="notifications">
             <Routes>
               <Route
@@ -93,6 +100,18 @@ function renderInvite(
 describe('InviteAcceptPage(邀请接受页,§4.3/§4.4)', () => {
   afterEach(() => {
     useAuthStore.getState().clearToken();
+  });
+
+  it('使用公共流程外壳并提供 skip link、稳定 main 与唯一 h1', async () => {
+    const fetchImpl = stubFetch({ status: 200, body: { data: PREVIEW_VALID } });
+    const { container } = renderInvite(fetchImpl);
+
+    await waitFor(() => expect(screen.getByTestId('invite-preview')).toBeTruthy());
+    expect(container.querySelector('.mesh-skip-link')?.getAttribute('href')).toBe(
+      `#${MAIN_CONTENT_ID}`,
+    );
+    expect(screen.getByRole('main').id).toBe(MAIN_CONTENT_ID);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
   });
 
   it('preview 无效四 reason 各呈 UI 态', async () => {
@@ -168,6 +187,20 @@ describe('InviteAcceptPage(邀请接受页,§4.3/§4.4)', () => {
     await user.click(screen.getByTestId('invite-accept'));
 
     await waitFor(() => expect(screen.getByTestId('invite-reason-exhausted')).toBeTruthy());
+  });
+
+  it('接受 invitation_invalid 缺少 reason → not_found 兜底', async () => {
+    useAuthStore.getState().setToken('jwt-user');
+    const fetchImpl = stubFetch(
+      { status: 200, body: { data: PREVIEW_VALID } },
+      {
+        status: 422,
+        body: { error: { code: 'invitation_invalid', message: 'invalid' } },
+      },
+    );
+    renderInvite(fetchImpl);
+    await userEvent.click(await screen.findByTestId('invite-accept'));
+    expect(await screen.findByTestId('invite-reason-not_found')).toBeTruthy();
   });
 
   it('接受其他错误 → not_found 同形兜底', async () => {

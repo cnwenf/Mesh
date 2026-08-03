@@ -115,9 +115,11 @@ export function RolesMatrix(props: RolesMatrixProps): React.JSX.Element {
         <caption>{t('roles.matrixCaption')}</caption>
         <thead>
           <tr>
-            <th>{t('roles.matrixCapability')}</th>
+            <th scope="col">{t('roles.matrixCapability')}</th>
             {MATRIX_ROLES.map((role) => (
-              <th key={role}>{t(`roles.${role}`)}</th>
+              <th scope="col" key={role}>
+                {t(`roles.${role}`)}
+              </th>
             ))}
           </tr>
         </thead>
@@ -144,6 +146,14 @@ export function RolesMatrix(props: RolesMatrixProps): React.JSX.Element {
       ) : null}
       {roster !== null && roster.length > 0 ? (
         <table data-testid="roles-roster">
+          <caption className="sr-only">{t('roles.rosterTitle')}</caption>
+          <thead>
+            <tr className="sr-only">
+              <th scope="col">{t('members.col.name')}</th>
+              <th scope="col">{t('agents.roster.type')}</th>
+              <th scope="col">{t('members.col.role')}</th>
+            </tr>
+          </thead>
           <tbody>
             {roster.map((member) => (
               <tr key={member.id} data-testid="roles-roster-row">

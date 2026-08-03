@@ -6,6 +6,7 @@
  * - user_code 未命中 → 统一 not_found(不区分原因)。
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../../../i18n';
@@ -20,23 +21,31 @@ vi.mock('../../../state/authStore', () => ({
 const apiState = vi.hoisted(() => ({
   confirmation: null as unknown,
   confirmShouldThrow: false,
+  approveShouldThrow: false,
+  denyShouldThrow: false,
   approveCalls: [] as { userCode: string; workspaceId: string }[],
   denyCalls: [] as string[],
 }));
 
 vi.mock('../../../api/instance', () => ({
   getApiClient: () => ({
-    request: (_method: string, path: string, opts?: { query?: Record<string, string>; body?: unknown }) => {
+    request: (
+      _method: string,
+      path: string,
+      opts?: { query?: Record<string, string>; body?: unknown },
+    ) => {
       if (path === '/api/v1/auth/device') {
         if (apiState.confirmShouldThrow) return Promise.reject(new Error('404'));
         return Promise.resolve(apiState.confirmation);
       }
       if (path === '/api/v1/auth/device/approve') {
+        if (apiState.approveShouldThrow) return Promise.reject(new Error('approve failed'));
         const body = opts?.body as { user_code: string; workspace_id: string };
         apiState.approveCalls.push({ userCode: body.user_code, workspaceId: body.workspace_id });
         return Promise.resolve({ status: 'approved' });
       }
       if (path === '/api/v1/auth/device/deny') {
+        if (apiState.denyShouldThrow) return Promise.reject(new Error('deny failed'));
         const body = opts?.body as { user_code: string };
         apiState.denyCalls.push(body.user_code);
         return Promise.resolve({ status: 'denied' });
@@ -49,7 +58,10 @@ vi.mock('../../../api/instance', () => ({
 function renderPage(initialUrl = '/device'): ReturnType<typeof render> {
   return render(
     <MemoryRouter initialEntries={[initialUrl]}>
-      <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+      <I18nProvider
+        workspaceDefaultLocale={null}
+        reporter={{ report: () => undefined, reported: [] }}
+      >
         <DeviceAuthorizationPage />
       </I18nProvider>
     </MemoryRouter>,
@@ -72,6 +84,8 @@ beforeEach(() => {
   authState.token = 'access-jwt';
   apiState.confirmation = null;
   apiState.confirmShouldThrow = false;
+  apiState.approveShouldThrow = false;
+  apiState.denyShouldThrow = false;
   apiState.approveCalls = [];
   apiState.denyCalls = [];
 });
@@ -81,7 +95,7 @@ describe('DeviceAuthorizationPage', () => {
     authState.token = null;
     renderPage();
     // Not signed in → a sign-in link is offered.
-    expect(screen.getByRole('link')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sign in' })).toBeTruthy();
   });
 
   it('prefills but keeps the input editable and validates the typed code', async () => {
@@ -148,5 +162,23 @@ describe('DeviceAuthorizationPage', () => {
     fireEvent.click((screen.getAllByRole('button') as HTMLButtonElement[])[2]);
     await waitFor(() => expect(apiState.denyCalls).toEqual(['DDDD-EEEE']));
     await waitFor(() => expect(screen.getByRole('status')).toBeTruthy());
+  });
+
+  it.each([
+    ['approve', 'Approval failed — try again.'],
+    ['deny', 'Denial failed — try again.'],
+  ] as const)('shows the %s request error', async (action, message) => {
+    const user = userEvent.setup();
+    apiState.confirmation = TWO_WS;
+    apiState[`${action}ShouldThrow`] = true;
+    renderPage();
+    await user.type(screen.getByRole('textbox'), 'FAIL-CODE');
+    await user.click(screen.getByRole('button', { name: 'Check code' }));
+    await waitFor(() => expect(screen.getByRole('note')).toBeTruthy());
+    await user.selectOptions(screen.getByRole('combobox'), 'ws-1');
+    await user.click(
+      screen.getByRole('button', { name: action === 'approve' ? 'Approve' : 'Deny' }),
+    );
+    expect(await screen.findByText(message)).toBeTruthy();
   });
 });

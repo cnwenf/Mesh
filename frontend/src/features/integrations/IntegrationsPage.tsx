@@ -750,14 +750,15 @@ export function IntegrationsPage(): React.JSX.Element {
       )}
       {integrations !== null && integrations.length > 0 && (
         <table className="mesh-integrations__table" data-testid="integrations-table">
+          <caption className="sr-only">{t('integrations.title')}</caption>
           <thead>
             <tr>
-              <th>{t('integrations.columns.name')}</th>
-              <th>{t('integrations.columns.kind')}</th>
-              <th>{t('integrations.columns.status')}</th>
-              <th>{t('integrations.columns.bindings')}</th>
-              <th>{t('integrations.columns.events7d')}</th>
-              <th>{t('integrations.columns.actions')}</th>
+              <th scope="col">{t('integrations.columns.name')}</th>
+              <th scope="col">{t('integrations.columns.kind')}</th>
+              <th scope="col">{t('integrations.columns.status')}</th>
+              <th scope="col">{t('integrations.columns.bindings')}</th>
+              <th scope="col">{t('integrations.columns.events7d')}</th>
+              <th scope="col">{t('integrations.columns.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -770,15 +771,16 @@ export function IntegrationsPage(): React.JSX.Element {
               >
                 <td
                   className="mesh-integrations__cell-name"
+                  data-label={t('integrations.columns.name')}
                   data-testid={`integration-name-${integration.id}`}
                 >
                   {integration.name}
                 </td>
-                <td>
+                <td data-label={t('integrations.columns.kind')}>
                   <Icon name={KIND_ICON[integration.kind]} size={16} />{' '}
                   {t(`integrations.kind.${integration.kind}`)}
                 </td>
-                <td>
+                <td data-label={t('integrations.columns.status')}>
                   <StatusDot
                     tone={INTEGRATION_STATUS_TONE[integration.status]}
                     label={t(`integrations.status.${integration.status}`)}
@@ -811,14 +813,21 @@ export function IntegrationsPage(): React.JSX.Element {
                       </span>
                     )}
                 </td>
-                <td data-testid={`integration-bindings-${integration.id}`}>
+                <td
+                  data-label={t('integrations.columns.bindings')}
+                  data-testid={`integration-bindings-${integration.id}`}
+                >
                   {bindingCounts[integration.id] ?? 0}
                 </td>
-                <td data-testid={`integration-events7d-${integration.id}`}>
+                <td
+                  data-label={t('integrations.columns.events7d')}
+                  data-testid={`integration-events7d-${integration.id}`}
+                >
                   {integration.events_7d}
                 </td>
                 <td
                   className="mesh-integrations__actions"
+                  data-label={t('integrations.columns.actions')}
                   onClick={(event) => event.stopPropagation()}
                 >
                   <IconButton
@@ -877,7 +886,7 @@ export function IntegrationsPage(): React.JSX.Element {
                       onClick={() => setDeleteTarget(integration)}
                       data-testid={`integration-delete-${integration.id}`}
                     >
-                      ⋯
+                      <Icon name="trash" size={16} />
                     </IconButton>
                   )}
                 </td>

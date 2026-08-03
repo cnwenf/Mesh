@@ -44,10 +44,25 @@ function card(id: string, overrides: Partial<BoardCard> = {}): BoardCard {
 
 function view(overrides: Partial<View> = {}): View {
   return {
-    id: 'v1', workspace_id: 'ws-1', project_id: null, owner_member_id: 'm1', name: 'L',
-    layout: 'list', visibility: 'private', filters: {}, group_by: null, sub_group_by: null,
-    sort: [], display_fields: [], board_settings: {}, position: 1, is_default: true,
-    created_at: '', updated_at: UPDATED_AT, can_write: true, ...overrides,
+    id: 'v1',
+    workspace_id: 'ws-1',
+    project_id: null,
+    owner_member_id: 'm1',
+    name: 'L',
+    layout: 'list',
+    visibility: 'private',
+    filters: {},
+    group_by: null,
+    sub_group_by: null,
+    sort: [],
+    display_fields: [],
+    board_settings: {},
+    position: 1,
+    is_default: true,
+    created_at: '',
+    updated_at: UPDATED_AT,
+    can_write: true,
+    ...overrides,
   };
 }
 
@@ -64,8 +79,17 @@ function defaultGroups(): BoardGroup[] {
   return [
     { key: 'todo', label: 'Todo', count: 1, wip: null, data: [card('i1')] },
     {
-      key: 'in_progress', label: 'In Progress', count: 1, wip: null,
-      data: [card('i2', { state_category: 'in_progress', priority: 'low', assignee: { id: 'm1', name: 'Alice' } })],
+      key: 'in_progress',
+      label: 'In Progress',
+      count: 1,
+      wip: null,
+      data: [
+        card('i2', {
+          state_category: 'in_progress',
+          priority: 'low',
+          assignee: { id: 'm1', name: 'Alice' },
+        }),
+      ],
     },
   ];
 }
@@ -108,7 +132,10 @@ describe('BoardListView', () => {
     renderList({
       groups: [
         {
-          key: 'todo', label: 'Todo', count: 2, wip: null,
+          key: 'todo',
+          label: 'Todo',
+          count: 2,
+          wip: null,
           data: [card('i1', { priority: 'high' }), card('i3', { priority: 'urgent' })],
         },
       ],
@@ -152,25 +179,44 @@ describe('BoardListView', () => {
     fireEvent.change(input, { target: { value: 'New title' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(updateIssue).toHaveBeenCalledTimes(1));
-    expect(updateIssue).toHaveBeenCalledWith(fakeClient, 'i1', { title: 'New title', version: 1 }, UPDATED_AT);
+    expect(updateIssue).toHaveBeenCalledWith(
+      fakeClient,
+      'i1',
+      { title: 'New title', version: 1 },
+      UPDATED_AT,
+    );
     expect(props.onChanged).toHaveBeenCalledTimes(1);
   });
 
   it('优先级菜单 PATCH {priority}', async () => {
     renderList();
-    fireEvent.click(within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change priority' }));
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change priority' }),
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: 'Urgent' }));
     await waitFor(() =>
-      expect(updateIssue).toHaveBeenCalledWith(fakeClient, 'i1', { priority: 'urgent', version: 1 }, UPDATED_AT),
+      expect(updateIssue).toHaveBeenCalledWith(
+        fakeClient,
+        'i1',
+        { priority: 'urgent', version: 1 },
+        UPDATED_AT,
+      ),
     );
   });
 
   it('状态菜单 PATCH {status_id: columnTargetStatus[cat]}', async () => {
     renderList();
-    fireEvent.click(within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change status' }));
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change status' }),
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: 'In Progress' }));
     await waitFor(() =>
-      expect(updateIssue).toHaveBeenCalledWith(fakeClient, 'i1', { status_id: 'st_ip', version: 1 }, UPDATED_AT),
+      expect(updateIssue).toHaveBeenCalledWith(
+        fakeClient,
+        'i1',
+        { status_id: 'st_ip', version: 1 },
+        UPDATED_AT,
+      ),
     );
   });
 
@@ -187,15 +233,20 @@ describe('BoardListView', () => {
         changes: { status_id: 'st_ip' },
       }),
     );
+    await waitFor(() => expect(screen.queryByTestId('bulk-bar')).not.toBeInTheDocument());
     expect(props.onChanged).toHaveBeenCalled();
 
     // 批量后选择被清空;重新全选再删除
     fireEvent.click(screen.getByTestId('list-select-all'));
+    await screen.findByTestId('bulk-bar');
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('list-delete-confirm'));
     await waitFor(() =>
-      expect(bulkIssues).toHaveBeenCalledWith(fakeClient, { issue_ids: ['i1', 'i2'], delete: true }),
+      expect(bulkIssues).toHaveBeenCalledWith(fakeClient, {
+        issue_ids: ['i1', 'i2'],
+        delete: true,
+      }),
     );
   });
 
@@ -225,7 +276,9 @@ describe('BoardListView', () => {
   it('批量部分失败呈现 成功/失败 结果 toast', async () => {
     vi.mocked(bulkIssues).mockRejectedValue(
       new MeshApiError({
-        status: 422, code: 'bulk_partial_failure', message: 'x',
+        status: 422,
+        code: 'bulk_partial_failure',
+        message: 'x',
         details: { succeeded: 1, failed: 1, errors: [] },
       }),
     );
@@ -285,7 +338,9 @@ describe('BoardListView', () => {
 
   it('300 行渲染不崩溃', () => {
     const manyCards = Array.from({ length: 300 }, (_, index) => card(`c${index}`));
-    renderList({ groups: [{ key: 'todo', label: 'Todo', count: 300, wip: null, data: manyCards }] });
+    renderList({
+      groups: [{ key: 'todo', label: 'Todo', count: 300, wip: null, data: manyCards }],
+    });
     expect(screen.getByTestId('list-row-c299')).toBeInTheDocument();
     expect(screen.getByTestId('list-card-c299')).toBeInTheDocument();
   });
@@ -346,14 +401,20 @@ describe('BoardListView', () => {
 
   it('行操作菜单:打开 issue 与删除确认', async () => {
     const { props } = renderList();
-    fireEvent.click(within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }));
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }),
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open' }));
     expect(props.onOpenIssue).toHaveBeenCalledWith('i1');
 
-    fireEvent.click(within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }));
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }),
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
     fireEvent.click(screen.getByTestId('list-delete-confirm'));
-    await waitFor(() => expect(bulkIssues).toHaveBeenCalledWith(fakeClient, { issue_ids: ['i1'], delete: true }));
+    await waitFor(() =>
+      expect(bulkIssues).toHaveBeenCalledWith(fakeClient, { issue_ids: ['i1'], delete: true }),
+    );
   });
 
   it('批量非 MeshApiError 回退通用错误 toast', async () => {
@@ -381,7 +442,9 @@ describe('BoardListView', () => {
       new MeshApiError({ status: 409, code: 'conflict', message: 'x' }),
     );
     renderList();
-    fireEvent.click(within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change priority' }));
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change priority' }),
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: 'Urgent' }));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
   });
@@ -391,7 +454,9 @@ describe('BoardListView', () => {
       new MeshApiError({ status: 409, code: 'conflict', message: 'x' }),
     );
     renderList();
-    fireEvent.click(within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change status' }));
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Change status' }),
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: 'In Progress' }));
     await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
   });
@@ -399,7 +464,13 @@ describe('BoardListView', () => {
   it('状态为空与非法更新时间降级渲染', () => {
     renderList({
       groups: [
-        { key: 'todo', label: 'Todo', count: 1, wip: null, data: [card('z1', { status: null, updated_at: 'not-a-date' })] },
+        {
+          key: 'todo',
+          label: 'Todo',
+          count: 1,
+          wip: null,
+          data: [card('z1', { status: null, updated_at: 'not-a-date' })],
+        },
       ],
     });
     // StatusBadge 回退分类文案;UpdatedCell 对非法时间回退原始串

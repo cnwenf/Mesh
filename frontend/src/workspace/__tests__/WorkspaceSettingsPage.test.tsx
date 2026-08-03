@@ -64,7 +64,9 @@ function stubClient(fetchImpl: ReturnType<typeof vi.fn>) {
   };
 }
 
-function stubFetch(...responses: Array<{ status: number; body: unknown }>): ReturnType<typeof vi.fn> {
+function stubFetch(
+  ...responses: Array<{ status: number; body: unknown }>
+): ReturnType<typeof vi.fn> {
   const fetchImpl = vi.fn();
   for (const response of responses) {
     fetchImpl.mockImplementationOnce(() =>
@@ -129,7 +131,10 @@ function renderSettings(
   const tree = (): React.JSX.Element => (
     <MemoryRouter initialEntries={[route]}>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+        <I18nProvider
+          workspaceDefaultLocale={null}
+          reporter={{ report: () => undefined, reported: [] }}
+        >
           <ToastProvider regionLabel="notifications">
             <WorkspaceProvider slug="acme" client={stubClient(wrapper) as never}>
               <Routes>
@@ -212,7 +217,10 @@ describe('G11 工作区默认主题入口(theme.md §4.1)', () => {
 
   it('改默认主题保存 → PATCH 载荷含 settings.default_theme', async () => {
     const user = userEvent.setup();
-    const api = stubFetch({ status: 200, body: { data: { ...DETAIL, settings: { ...DETAIL.settings, default_theme: 'dark' } } } });
+    const api = stubFetch({
+      status: 200,
+      body: { data: { ...DETAIL, settings: { ...DETAIL.settings, default_theme: 'dark' } } },
+    });
     renderSettings(api, { role: 'admin' });
     await waitFor(() => expect(screen.getByTestId('ws-default-theme-select')).toBeTruthy());
 
@@ -230,6 +238,34 @@ describe('G11 工作区默认主题入口(theme.md §4.1)', () => {
     renderSettings(stubFetch(), { role: 'member' });
     await waitFor(() => expect(screen.getByTestId('ws-settings-denied')).toBeTruthy());
     expect(screen.queryByTestId('ws-default-theme-select')).toBeNull();
+  });
+});
+
+describe('G15 工作区功能开关(workspace.md §2.2)', () => {
+  it('admin 可见自动值守开关；关闭后 PATCH settings.feature_flags 且保留浅合并语义', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({
+      status: 200,
+      body: {
+        data: {
+          ...DETAIL,
+          settings: { ...DETAIL.settings, feature_flags: { autopilot: false } },
+        },
+      },
+    });
+    renderSettings(api, { role: 'admin' });
+    await waitFor(() => expect(screen.getByTestId('ws-feature-autopilot')).toBeTruthy());
+
+    expect(screen.getByTestId('ws-feature-autopilot')).toBeChecked();
+    await user.click(screen.getByTestId('ws-feature-autopilot'));
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() => {
+      const [, init] = api.mock.calls[0] as [string, { method: string; body: string }];
+      expect(JSON.parse(init.body)).toEqual({
+        settings: { feature_flags: { autopilot: false } },
+      });
+    });
   });
 });
 
@@ -261,7 +297,9 @@ describe('基本信息 dirty/save(§4.2)', () => {
     await user.type(screen.getByTestId('ws-logo-input'), 'http://evil.example/x.png');
     await user.click(screen.getByTestId('ws-save'));
 
-    expect(screen.getByTestId('ws-basic-error').textContent).toBe('Logo URL must start with https://');
+    expect(screen.getByTestId('ws-basic-error').textContent).toBe(
+      'Logo URL must start with https://',
+    );
     expect(api).not.toHaveBeenCalled();
   });
 
@@ -269,7 +307,13 @@ describe('基本信息 dirty/save(§4.2)', () => {
     const user = userEvent.setup();
     const api = stubFetch({
       status: 422,
-      body: { error: { code: 'unsupported_locale', message: 'x', details: { supported: ['zh-CN', 'en'] } } },
+      body: {
+        error: {
+          code: 'unsupported_locale',
+          message: 'x',
+          details: { supported: ['zh-CN', 'en'] },
+        },
+      },
     });
     renderSettings(api);
     await waitFor(() => screen.getByTestId('ws-timezone-select'));
@@ -296,7 +340,9 @@ describe('基本信息 dirty/save(§4.2)', () => {
     await user.type(slugInput, 'acme-corp');
     await user.click(screen.getByTestId('ws-save'));
 
-    await waitFor(() => expect(screen.getByText('Slug changed — old links will redirect.')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('Slug changed — old links will redirect.')).toBeTruthy(),
+    );
   });
 
   it('无变更时保存按钮禁用', async () => {
@@ -307,7 +353,10 @@ describe('基本信息 dirty/save(§4.2)', () => {
 
   it('保存返回 slug_taken → 具名错误态', async () => {
     const user = userEvent.setup();
-    const api = stubFetch({ status: 409, body: { error: { code: 'slug_taken', message: 'taken' } } });
+    const api = stubFetch({
+      status: 409,
+      body: { error: { code: 'slug_taken', message: 'taken' } },
+    });
     renderSettings(api);
     await waitFor(() => expect(screen.getByTestId('ws-name-input')).toBeTruthy());
     const nameInput = screen.getByTestId('ws-name-input') as HTMLInputElement;
@@ -319,7 +368,10 @@ describe('基本信息 dirty/save(§4.2)', () => {
 
   it('保存返回 invalid_timezone → 具名错误态', async () => {
     const user = userEvent.setup();
-    const api = stubFetch({ status: 422, body: { error: { code: 'invalid_timezone', message: 'bad tz' } } });
+    const api = stubFetch({
+      status: 422,
+      body: { error: { code: 'invalid_timezone', message: 'bad tz' } },
+    });
     renderSettings(api);
     await waitFor(() => expect(screen.getByTestId('ws-timezone-select')).toBeTruthy());
     await user.selectOptions(screen.getByTestId('ws-timezone-select'), 'Asia/Shanghai');
@@ -336,7 +388,8 @@ describe('基本信息 dirty/save(§4.2)', () => {
     const api = vi.fn(async (...args: [string, { method?: string; body?: string }]) => {
       const [url, init] = args;
       if (url.includes('/by-slug/')) return jsonResponse(200, { data: current });
-      if (url.includes('/members')) return jsonResponse(404, { error: { code: 'not_found', message: 'x' } });
+      if (url.includes('/members'))
+        return jsonResponse(404, { error: { code: 'not_found', message: 'x' } });
       if (init.method === 'PATCH' && typeof init.body === 'string') {
         current = { ...current, ...(JSON.parse(init.body) as Record<string, unknown>) };
       }
@@ -457,7 +510,9 @@ describe('基本信息 dirty/save(§4.2)', () => {
     renderSettings(stubFetch(), { detail });
     await waitFor(() => expect(screen.getByTestId('ws-locale-select')).toBeTruthy());
     expect((screen.getByTestId('ws-locale-select') as HTMLSelectElement).value).toBe('en');
-    expect((screen.getByTestId('ws-default-theme-select') as HTMLSelectElement).value).toBe('system');
+    expect((screen.getByTestId('ws-default-theme-select') as HTMLSelectElement).value).toBe(
+      'system',
+    );
   });
 });
 

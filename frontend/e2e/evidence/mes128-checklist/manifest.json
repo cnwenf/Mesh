@@ -1,0 +1,2384 @@
+{
+  "schema_version": 1,
+  "issue": "MES-128",
+  "source": "docs/specs/frontend/competitor-parity-checklist.md#3",
+  "generated_by": "scripts/generate-checklist-evidence-manifest.mjs",
+  "variants": {
+    "desktop_light": {
+      "mode": "desktop",
+      "theme": "light",
+      "viewport": { "width": 1440, "height": 900 }
+    },
+    "desktop_dark": {
+      "mode": "desktop",
+      "theme": "dark",
+      "viewport": { "width": 1440, "height": 900 }
+    },
+    "mobile_light": {
+      "mode": "mobile",
+      "theme": "light",
+      "viewport": { "width": 390, "height": 844 }
+    },
+    "mobile_dark": {
+      "mode": "mobile",
+      "theme": "dark",
+      "viewport": { "width": 390, "height": 844 }
+    }
+  },
+  "rows": [
+    {
+      "id": 1,
+      "key": "auth",
+      "label": "登录/注册/忘记",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/desktop-login-light.png",
+          "sha256": "988fd5deadde050708ece23518bae3b27cec79394158338f555aef0242f1488b",
+          "byte_size": 47038,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/login",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["login-account-submit visible"],
+            "shown_scope": ["登录 PublicFlowShell 、账号字段、主提交动作与恢复入口"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/desktop-login-dark.png",
+          "sha256": "9d3d0f8fe01fc9218c465a73990f360ede8a48b37ac27338d59da2a281b5c183",
+          "byte_size": 47083,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/login",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["login-account-submit visible"],
+            "shown_scope": ["登录 PublicFlowShell 、账号字段、主提交动作与恢复入口"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/phone-login-light.png",
+          "sha256": "016694c702cf33223b03cf6a893ef64f28e87b8dc89542e4d0306a28e75a1c81",
+          "byte_size": 40197,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/login",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["login-account-submit visible"],
+            "shown_scope": ["登录 PublicFlowShell 、账号字段、主提交动作与恢复入口"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/phone-login-dark.png",
+          "sha256": "84c460a06a3b46fae7f046553dd1cac09c75d748de4ff3b942badbc8b8f90fd8",
+          "byte_size": 40167,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/login",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["login-account-submit visible"],
+            "shown_scope": ["登录 PublicFlowShell 、账号字段、主提交动作与恢复入口"]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "key": "device",
+      "label": "OAuth/设备码/邀请",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-02-device-light.png",
+          "sha256": "f42eecc94501189467fa237b7a1ad47764427e9766f3f16312200985a76e2b82",
+          "byte_size": 52794,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/device?user_code=MESH-2026",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["#device-code visible", "Mesh CLI confirmation visible"],
+            "shown_scope": ["设备码授权：手工码、客户端、scope、工作区与安全提示"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-02-device-dark.png",
+          "sha256": "66d00ecdda8c8d7c56d6fcf5f1bb65cacfbae5e96d144663c670cc5a0eb3bdd3",
+          "byte_size": 52652,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/device?user_code=MESH-2026",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["#device-code visible", "Mesh CLI confirmation visible"],
+            "shown_scope": ["设备码授权：手工码、客户端、scope、工作区与安全提示"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-02-device-light.png",
+          "sha256": "e2a733c88cbfe3d27351e2e3e7dfaec6e1cb5417f5b8eac97770f0a84cc512b0",
+          "byte_size": 45595,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/device?user_code=MESH-2026",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["#device-code visible", "Mesh CLI confirmation visible"],
+            "shown_scope": ["设备码授权：手工码、客户端、scope、工作区与安全提示"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-02-device-dark.png",
+          "sha256": "309c8a1eb54eee2a60ea2f830bd6f52483d89cf803a6c84a92c226bbada32fb4",
+          "byte_size": 45748,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/device?user_code=MESH-2026",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["#device-code visible", "Mesh CLI confirmation visible"],
+            "shown_scope": ["设备码授权：手工码、客户端、scope、工作区与安全提示"]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "key": "home",
+      "label": "首页",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/desktop-home-light.png",
+          "sha256": "2183b65a5ccb90cd6a9e2abbb28407ffc513b47e48e7bc3d7d52df2fba8ba57c",
+          "byte_size": 113148,
+          "image": { "width": 1440, "height": 1303 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["home-dashboard visible"],
+            "shown_scope": ["工作台的我的工作、快速创建、等待确认、AI 运行与最近项目"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/desktop-home-dark.png",
+          "sha256": "8cf68d6a8d5cc7e2b0783d1109464672f90d04b8e46e9a8f9bed7a521cbbf4e8",
+          "byte_size": 113267,
+          "image": { "width": 1440, "height": 1303 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["home-dashboard visible"],
+            "shown_scope": ["工作台的我的工作、快速创建、等待确认、AI 运行与最近项目"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/phone-home-light.png",
+          "sha256": "b7b4d4199e1c61a373fc9d20e392539b2f2042335fe362df13ec70f10586091b",
+          "byte_size": 80230,
+          "image": { "width": 390, "height": 1415 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["home-dashboard visible"],
+            "shown_scope": ["工作台的我的工作、快速创建、等待确认、AI 运行与最近项目"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b1/phone-home-dark.png",
+          "sha256": "6e2acd7e1c1c4f492d0af2421f4c326289bc7e25f3d39d5fb88ad35c94eb9f12",
+          "byte_size": 80962,
+          "image": { "width": 390, "height": 1415 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/mes111-b1-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b1/README.md",
+            "ready_assertions": ["home-dashboard visible"],
+            "shown_scope": ["工作台的我的工作、快速创建、等待确认、AI 运行与最近项目"]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "key": "app-shell",
+      "label": "AppShell",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-04-app-shell-light.png",
+          "sha256": "029f336b38c49dd6f792c1cb64c33d8e02350dfa63e989013d7a5888602cb13f",
+          "byte_size": 71616,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "home-dashboard visible",
+              "workspace switcher or mobile navigation dialog visible"
+            ],
+            "shown_scope": ["桌面工作区切换层或手机更多导航抽屉，含顶栏/导航/主内容关系"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-04-app-shell-dark.png",
+          "sha256": "b440fa11c0045e93ec938b6c1966fba4a879ce9e1473422a358046edc2bb26a8",
+          "byte_size": 65917,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "home-dashboard visible",
+              "workspace switcher or mobile navigation dialog visible"
+            ],
+            "shown_scope": ["桌面工作区切换层或手机更多导航抽屉，含顶栏/导航/主内容关系"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-04-app-shell-light.png",
+          "sha256": "0f4196b1bf576eb2fa3319a1859efc8c1e2c14220fed54cd32482c495a055a16",
+          "byte_size": 24172,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "home-dashboard visible",
+              "workspace switcher or mobile navigation dialog visible"
+            ],
+            "shown_scope": ["桌面工作区切换层或手机更多导航抽屉，含顶栏/导航/主内容关系"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-04-app-shell-dark.png",
+          "sha256": "f6790c5ecf2a08cfaf1006ca8210ccdaa975b91632d34f35e8f184448d2972ad",
+          "byte_size": 23831,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "home-dashboard visible",
+              "workspace switcher or mobile navigation dialog visible"
+            ],
+            "shown_scope": ["桌面工作区切换层或手机更多导航抽屉，含顶栏/导航/主内容关系"]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "key": "command-palette",
+      "label": "命令面板/快捷键帮助",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-palette-light.png",
+          "sha256": "dfaafbf9354f5028e668745265d562da59776ca2aed41eea9081ce229d410ca8",
+          "byte_size": 123492,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["command palette dialog visible", "search results visible"],
+            "shown_scope": ["命令面板搜索结果与键盘导航界面"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-palette-dark.png",
+          "sha256": "10c8e9969f4b566107bd19771f9b428a9e65ac57476e7e25515d0bbf34ab4be8",
+          "byte_size": 102353,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["command palette dialog visible", "search results visible"],
+            "shown_scope": ["命令面板搜索结果与键盘导航界面"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-palette-light.png",
+          "sha256": "03400bad51c101fbd75485985e47e8a454ab3cea97b5ad38a0e2b2f9ad1c37fe",
+          "byte_size": 60987,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["command palette dialog visible", "search results visible"],
+            "shown_scope": ["命令面板搜索结果与键盘导航界面"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-palette-dark.png",
+          "sha256": "cbb32a898cb732c5ad377d93abc8e397353cca957d1ded6c99fa5a2fcf84cf43",
+          "byte_size": 97303,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["command palette dialog visible", "search results visible"],
+            "shown_scope": ["命令面板搜索结果与键盘导航界面"]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "key": "inbox",
+      "label": "收件箱/铃铛/通知偏好",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-light-05-inbox-preview.png",
+          "sha256": "37f64c5973084b948ff098452cf7ec7841c8e13b9864d528fff45c4d3e6d2f5b",
+          "byte_size": 86858,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/inbox",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["inbox preview visible"],
+            "shown_scope": ["收件箱分组列表、选中通知预览与优先级/来源"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-dark-05-inbox-preview.png",
+          "sha256": "9bb3d0ccfbfc92fd794f40a45362659ef5d258bea87faa8ac9ddcf81eccb921c",
+          "byte_size": 87489,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/inbox",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["inbox preview visible"],
+            "shown_scope": ["收件箱分组列表、选中通知预览与优先级/来源"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-light-05-inbox-preview.png",
+          "sha256": "d2370f45fcc115d0c544924833d4e934a8e720ba3159552eda744a56911ab0aa",
+          "byte_size": 40492,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/inbox",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["inbox preview visible"],
+            "shown_scope": ["收件箱分组列表、选中通知预览与优先级/来源"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-dark-05-inbox-preview.png",
+          "sha256": "1f14e53733b0b3a0a915a788f7538cac78a356c88fd4d741cc8cd3a3d8bc87b0",
+          "byte_size": 41628,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/inbox",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["inbox preview visible"],
+            "shown_scope": ["收件箱分组列表、选中通知预览与优先级/来源"]
+          }
+        }
+      }
+    },
+    {
+      "id": 7,
+      "key": "projects",
+      "label": "项目列表/详情 tabs",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-07-projects-light.png",
+          "sha256": "4d0006f0dc2ef62e431437cf5c61da0e2c38e4728a0ccd5d0f6dd9bc5398c74d",
+          "byte_size": 51562,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/projects",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["project-card-project-1 visible"],
+            "shown_scope": ["项目列表卡片、负责人、健康度、进度与状态"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-07-projects-dark.png",
+          "sha256": "7bd35d1871c7970af82c825d92c644e2720993c1066008817b3a81f3cfae2e4a",
+          "byte_size": 51931,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/projects",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["project-card-project-1 visible"],
+            "shown_scope": ["项目列表卡片、负责人、健康度、进度与状态"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-07-projects-light.png",
+          "sha256": "95fe1b8caa953a007e8ab248115fd217b88e2dbaac55a905e430b2aa8bd7964f",
+          "byte_size": 29747,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/projects",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["project-card-project-1 visible"],
+            "shown_scope": ["项目列表卡片、负责人、健康度、进度与状态"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-07-projects-dark.png",
+          "sha256": "f7db262c04be2a56b0c197abcce10c359784a0bf01d66a5b10c3138731d80cb0",
+          "byte_size": 29936,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/projects",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["project-card-project-1 visible"],
+            "shown_scope": ["项目列表卡片、负责人、健康度、进度与状态"]
+          }
+        }
+      }
+    },
+    {
+      "id": 8,
+      "key": "cycles",
+      "label": "周期",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-08-cycles-light.png",
+          "sha256": "cd20272b15b6f4a619393ac1584f6df8b01bc7373decd0fc3cbbfdb8b781c66c",
+          "byte_size": 50349,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/cycles",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["cycle-row-cycle-1 visible"],
+            "shown_scope": ["周期列表、日期范围、状态与自动顺延信息"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-08-cycles-dark.png",
+          "sha256": "8442307a520288f14a12c4b6eda7e1fed35bb96d7ed74fa739be74bee80f1570",
+          "byte_size": 50564,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/cycles",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["cycle-row-cycle-1 visible"],
+            "shown_scope": ["周期列表、日期范围、状态与自动顺延信息"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-08-cycles-light.png",
+          "sha256": "283acfbc41b0122b3efdba162bcbc7b65fc14723ff841b6c19a9953a6131f618",
+          "byte_size": 28360,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/cycles",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["cycle-row-cycle-1 visible"],
+            "shown_scope": ["周期列表、日期范围、状态与自动顺延信息"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-08-cycles-dark.png",
+          "sha256": "82a353f675d45c4f44e205e0c1a9bc3c14b71e0d30863749719138f8af241d2f",
+          "byte_size": 28436,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/cycles",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["cycle-row-cycle-1 visible"],
+            "shown_scope": ["周期列表、日期范围、状态与自动顺延信息"]
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "key": "issues",
+      "label": "issue 列表",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-issues-light.png",
+          "sha256": "eac4e72098089f00633aac3448945fc7830e06ab17f99f65eb816b74cb3c83f4",
+          "byte_size": 62933,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/issues",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-row-MESH-1 visible"],
+            "shown_scope": ["issue 表格、过滤/排序控件与列表字段"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-issues-dark.png",
+          "sha256": "f757b006ebcd20c63f978fac836a0658f23759addaa2444d86d59cf0e05d1455",
+          "byte_size": 63592,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/issues",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-row-MESH-1 visible"],
+            "shown_scope": ["issue 表格、过滤/排序控件与列表字段"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-issues-light.png",
+          "sha256": "a8c544bbc5bc7d2caab5fa39c99a54b85f3501bb23a61fd1d1524a62d2f0a3ea",
+          "byte_size": 36765,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/issues",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-row-MESH-1 visible"],
+            "shown_scope": ["issue 表格、过滤/排序控件与列表字段"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-issues-dark.png",
+          "sha256": "0041a8a9eba39cd7cc6654c5cfd140780232f2c8717bcfeb112379c4acaed465",
+          "byte_size": 37226,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/issues",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-row-MESH-1 visible"],
+            "shown_scope": ["issue 表格、过滤/排序控件与列表字段"]
+          }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "key": "issue-detail",
+      "label": "issue 详情",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-issue-detail-light.png",
+          "sha256": "ad43ad06601f24af7c4b040e14fa71806180b7dbf61cac2f2c7faa6e2c794cd0",
+          "byte_size": 141996,
+          "image": { "width": 1440, "height": 1393 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-detail visible", "comments-panel visible"],
+            "shown_scope": ["issue 标题、属性、评论面板与活动区"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-issue-detail-dark.png",
+          "sha256": "1e67faf11c07713ec77f49c01ad29c2a9e27e0e37a63ce1ee56c080da2b51e30",
+          "byte_size": 143656,
+          "image": { "width": 1440, "height": 1393 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-detail visible", "comments-panel visible"],
+            "shown_scope": ["issue 标题、属性、评论面板与活动区"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-issue-detail-light.png",
+          "sha256": "0192c85a4b4e53b43b8e309dd23f937a73198d508e991c4cdc2f88b262accc12",
+          "byte_size": 75602,
+          "image": { "width": 390, "height": 1639 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-detail visible", "comments-panel visible"],
+            "shown_scope": ["issue 标题、属性、评论面板与活动区"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-issue-detail-dark.png",
+          "sha256": "033a398e1b0d67faa4fe611bca72d829179fd7c64cfb67f650347306247ed689",
+          "byte_size": 77154,
+          "image": { "width": 390, "height": 1639 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["issue-detail visible", "comments-panel visible"],
+            "shown_scope": ["issue 标题、属性、评论面板与活动区"]
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "key": "board",
+      "label": "看板",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-board-light.png",
+          "sha256": "613e3ae06d17f50a259739062a2882f9e35d731a0f7fe83d755bfe161f4065fd",
+          "byte_size": 76949,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/board",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["board-card-issue-1 visible"],
+            "shown_scope": ["宽屏分栏或手机紧凑看板及可见 issue 卡片"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-board-dark.png",
+          "sha256": "f9f92ded1d6da72c208c30448e587fe9760d6b1bf93ffe11fbc7f1d737e1f6d0",
+          "byte_size": 77465,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/board",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["board-card-issue-1 visible"],
+            "shown_scope": ["宽屏分栏或手机紧凑看板及可见 issue 卡片"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-board-light.png",
+          "sha256": "3eb17cbc638b2985ea14f8fb5eae52fa4e4b465c56257afbfecf688a90f00537",
+          "byte_size": 49051,
+          "image": { "width": 390, "height": 1158 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/board",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["board-card-issue-1 visible"],
+            "shown_scope": ["宽屏分栏或手机紧凑看板及可见 issue 卡片"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-board-dark.png",
+          "sha256": "c0b94b1fc0956ad699be6a159b8b45dd677fca301f8ed279ef2c87ae3ed6499a",
+          "byte_size": 49656,
+          "image": { "width": 390, "height": 1158 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/board",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["board-card-issue-1 visible"],
+            "shown_scope": ["宽屏分栏或手机紧凑看板及可见 issue 卡片"]
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "key": "members",
+      "label": "成员",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-light-01-members-roster.png",
+          "sha256": "b40c65767530c92a4c53bca39ce0b6087e62fe21e3fdbc0ea1da00421a0a9d32",
+          "byte_size": 88243,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/members",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["member roster visible"],
+            "shown_scope": ["人类与 agent 同一名册、角色、状态、头像与 AI 标识"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-dark-01-members-roster.png",
+          "sha256": "b4a44664928fb3f34dc99af03b909a5ffe7a4f51c75903e02dfac0bd941c3e8f",
+          "byte_size": 89473,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/members",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["member roster visible"],
+            "shown_scope": ["人类与 agent 同一名册、角色、状态、头像与 AI 标识"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-light-01-members-roster.png",
+          "sha256": "a031816327a24eefb0a924b68eedb7803fd36eb60225dc8d496320843a2845d8",
+          "byte_size": 58324,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/members",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["member roster visible"],
+            "shown_scope": ["人类与 agent 同一名册、角色、状态、头像与 AI 标识"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-dark-01-members-roster.png",
+          "sha256": "e401c813ebfe07955ae09ecc0be346a03ef7b37b02b4c140155a8c1e085d464d",
+          "byte_size": 59383,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/members",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["member roster visible"],
+            "shown_scope": ["人类与 agent 同一名册、角色、状态、头像与 AI 标识"]
+          }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "key": "agents",
+      "label": "agent 详情/向导",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-light-03-agent-detail.png",
+          "sha256": "60f90eb1654dceefb00655dcc0aff03a4caea2bd7dec08933484f10b57b9a0df",
+          "byte_size": 98004,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/agents/agent-1",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["agent detail visible"],
+            "shown_scope": ["agent 详情头部、运行态、容量与能力信息"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-dark-03-agent-detail.png",
+          "sha256": "0c1fb03fb5ec37b74b4a69151da94e6d1b3b272a462a72cb725b1d92a0b09d2c",
+          "byte_size": 97947,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/agents/agent-1",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["agent detail visible"],
+            "shown_scope": ["agent 详情头部、运行态、容量与能力信息"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-light-03-agent-detail.png",
+          "sha256": "09b7914a142a670d81fe1bd3a4b628ed3f674c13839d0cff49781f104ee23d5e",
+          "byte_size": 63344,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/agents/agent-1",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["agent detail visible"],
+            "shown_scope": ["agent 详情头部、运行态、容量与能力信息"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-dark-03-agent-detail.png",
+          "sha256": "f48ef55dfec4a505a58ef5f4063d5eb896bec8c849713eb665925e2051c3cf14",
+          "byte_size": 64956,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/agents/agent-1",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["agent detail visible"],
+            "shown_scope": ["agent 详情头部、运行态、容量与能力信息"]
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "key": "skills",
+      "label": "技能",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-14-skills-light.png",
+          "sha256": "0101ec81f35e23d2685c1d58adfb131d73484bb392d0cfa09a9be4b41ab27087",
+          "byte_size": 64025,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/skills",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["skill-card-skill-1 visible"],
+            "shown_scope": ["技能卡片、信任/来源、版本、能力与标签"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-14-skills-dark.png",
+          "sha256": "e96609badd4b5c84426870ba80a04a682ef0ec10ddce0c38f85c699cfc2813ac",
+          "byte_size": 64304,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/skills",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["skill-card-skill-1 visible"],
+            "shown_scope": ["技能卡片、信任/来源、版本、能力与标签"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-14-skills-light.png",
+          "sha256": "d27e67ace5ef0748f1a65385cc5cf295078c359091f1fd5476dbcd584f02b9c7",
+          "byte_size": 43434,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/skills",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["skill-card-skill-1 visible"],
+            "shown_scope": ["技能卡片、信任/来源、版本、能力与标签"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-14-skills-dark.png",
+          "sha256": "c023dd353db16d7fd9c34dac36034cce588fd148a08e70554af56d7723e27e40",
+          "byte_size": 43629,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/skills",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["skill-card-skill-1 visible"],
+            "shown_scope": ["技能卡片、信任/来源、版本、能力与标签"]
+          }
+        }
+      }
+    },
+    {
+      "id": 15,
+      "key": "chat",
+      "label": "聊天",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-light-10-chat-streamed.png",
+          "sha256": "ac806bfb8036f82b8dd5c7a16a1b1f0922883069eda4a04ae86ef5ae62fcad24",
+          "byte_size": 116262,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/chat",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["chat streamed response visible"],
+            "shown_scope": ["会话列表、消息气泡、agent 流式回复与输入区"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/desktop-dark-10-chat-streamed.png",
+          "sha256": "7ed8c73f2fbf94cb3ad069597ab836b821689caa291257f684aaecb33eaee298",
+          "byte_size": 115401,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/chat",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["chat streamed response visible"],
+            "shown_scope": ["会话列表、消息气泡、agent 流式回复与输入区"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-light-10-chat-streamed.png",
+          "sha256": "8a59ab4bf788814932d1bb7400a6142a3382bc2fc6431b3d4e1096494d59c4d3",
+          "byte_size": 66029,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/chat",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["chat streamed response visible"],
+            "shown_scope": ["会话列表、消息气泡、agent 流式回复与输入区"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b3/phone-dark-10-chat-streamed.png",
+          "sha256": "4934f5fcdf75e7851e0e3919018a4e6d1bd5cb66ff4bc7a27e324ca150694b00",
+          "byte_size": 66686,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/chat",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b3-evidence.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b3/README.md",
+            "ready_assertions": ["chat streamed response visible"],
+            "shown_scope": ["会话列表、消息气泡、agent 流式回复与输入区"]
+          }
+        }
+      }
+    },
+    {
+      "id": 16,
+      "key": "squads",
+      "label": "小队",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-16-squads-light.png",
+          "sha256": "3333071f7a76c4b37018342af0f2cdfa3cef6724c453e3580dbfe607d5dbc1ed",
+          "byte_size": 54469,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/squads",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["squad-card-squad-1 visible"],
+            "shown_scope": ["小队卡片、领导者、成员墙、类型、状态与活跃任务"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-16-squads-dark.png",
+          "sha256": "220d3b99f196e0adf0131906030164128c67d3c04b76828f1a2f0370c8ecf687",
+          "byte_size": 54344,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/squads",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["squad-card-squad-1 visible"],
+            "shown_scope": ["小队卡片、领导者、成员墙、类型、状态与活跃任务"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-16-squads-light.png",
+          "sha256": "d111b899cdf47e10d7ea8e8bd04aaeefb6e5903fbacfd0189c3f00a95020c843",
+          "byte_size": 33018,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/squads",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["squad-card-squad-1 visible"],
+            "shown_scope": ["小队卡片、领导者、成员墙、类型、状态与活跃任务"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-16-squads-dark.png",
+          "sha256": "0ed1ce0513664153cef316cd0f37f6f937264fff8b8bd5ce4bd913e10ad78244",
+          "byte_size": 32995,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/squads",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["squad-card-squad-1 visible"],
+            "shown_scope": ["小队卡片、领导者、成员墙、类型、状态与活跃任务"]
+          }
+        }
+      }
+    },
+    {
+      "id": 17,
+      "key": "runtimes",
+      "label": "runtime",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-17-runtimes-light.png",
+          "sha256": "001842bdc4a1da3946c955c6bc6bddb5ef23db6d34d8b717036a078cd9d8a16c",
+          "byte_size": 57960,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/runtimes",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["runtime-row-runtime-1 visible"],
+            "shown_scope": ["runtime 状态、类型、负载、心跳与操作列"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-17-runtimes-dark.png",
+          "sha256": "3826e03a7ddd80a20a1d66b22808b5de5329a354096f67146c27cf4c37a07e02",
+          "byte_size": 58321,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/runtimes",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["runtime-row-runtime-1 visible"],
+            "shown_scope": ["runtime 状态、类型、负载、心跳与操作列"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-17-runtimes-light.png",
+          "sha256": "455c170743d10d5e7c0ac1d531467b805f213e92691fcbab3c45b3f84bed2a91",
+          "byte_size": 35271,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/runtimes",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["runtime-row-runtime-1 visible"],
+            "shown_scope": ["runtime 状态、类型、负载、心跳与操作列"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-17-runtimes-dark.png",
+          "sha256": "eda99ae29d60f4a26940e62733421a8eb46c1c3d7c1bd24521f7e3dec9627d9b",
+          "byte_size": 35626,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/runtimes",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["runtime-row-runtime-1 visible"],
+            "shown_scope": ["runtime 状态、类型、负载、心跳与操作列"]
+          }
+        }
+      }
+    },
+    {
+      "id": 18,
+      "key": "execution",
+      "label": "execution",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-execution-light.png",
+          "sha256": "f164347cb0e70ddf3aa471412110c82adec8077d9e44802cf0645f8a089f2583",
+          "byte_size": 80371,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/executions/exec-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["execution-detail-page visible", "execution-panel-logs visible"],
+            "shown_scope": ["执行详情、状态、进度、日志与时间信息"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-execution-dark.png",
+          "sha256": "1c5abd36067c2fa5b8a9bdccf543ae23a9e3f352ff01de93760601515b2de59e",
+          "byte_size": 80324,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/executions/exec-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["execution-detail-page visible", "execution-panel-logs visible"],
+            "shown_scope": ["执行详情、状态、进度、日志与时间信息"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-execution-light.png",
+          "sha256": "365fee8ec66560571c4a388edddc326d4b775ef27fc9bb892cbb00b433693fd0",
+          "byte_size": 48160,
+          "image": { "width": 390, "height": 988 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/executions/exec-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["execution-detail-page visible", "execution-panel-logs visible"],
+            "shown_scope": ["执行详情、状态、进度、日志与时间信息"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-execution-dark.png",
+          "sha256": "74f130e1d091fe1eb5e87eff873b363f7cd691c27d5ccd91c7b6e69aa48da901",
+          "byte_size": 48116,
+          "image": { "width": 390, "height": 988 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/executions/exec-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["execution-detail-page visible", "execution-panel-logs visible"],
+            "shown_scope": ["执行详情、状态、进度、日志与时间信息"]
+          }
+        }
+      }
+    },
+    {
+      "id": 19,
+      "key": "autopilots",
+      "label": "autopilot",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-autopilots-light.png",
+          "sha256": "2e9e10afda1900a33e449cbac8f71734e8c51e755fd5107df612974a3580dc79",
+          "byte_size": 79367,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/autopilots",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["autopilot-row-autopilot-1 visible"],
+            "shown_scope": ["autopilot 列表、状态、触发类型与最近运行"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-autopilots-dark.png",
+          "sha256": "03ec6acbf7f1a627f60aa6bf6bdc35422744b3e108ce97a91acb167819baccc4",
+          "byte_size": 79563,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/autopilots",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["autopilot-row-autopilot-1 visible"],
+            "shown_scope": ["autopilot 列表、状态、触发类型与最近运行"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-autopilots-light.png",
+          "sha256": "187255e59b641154411201fad4a228c44902b96c8343f0ae80ace30088af8130",
+          "byte_size": 46626,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/autopilots",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["autopilot-row-autopilot-1 visible"],
+            "shown_scope": ["autopilot 列表、状态、触发类型与最近运行"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-autopilots-dark.png",
+          "sha256": "775918aabdf815c678f755a641645092fd62b43de3ae0fa2446fef77b521c971",
+          "byte_size": 46893,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/autopilots",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["autopilot-row-autopilot-1 visible"],
+            "shown_scope": ["autopilot 列表、状态、触发类型与最近运行"]
+          }
+        }
+      }
+    },
+    {
+      "id": 20,
+      "key": "integrations",
+      "label": "integrations/webhooks",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-integrations-light.png",
+          "sha256": "6815930e7689c39f9c3247ee7e9a04884fce798a45e786086e923148f9fa34a0",
+          "byte_size": 102516,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/integrations",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["integration-row-integration-1 visible"],
+            "shown_scope": ["集成目录、provider、连接状态与操作"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/desktop-integrations-dark.png",
+          "sha256": "313d0b4313d38c8b5fd38676162cc2b6deaa552d8e753564540acc6103c9bde6",
+          "byte_size": 103081,
+          "image": { "width": 1440, "height": 1132 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/integrations",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["integration-row-integration-1 visible"],
+            "shown_scope": ["集成目录、provider、连接状态与操作"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-integrations-light.png",
+          "sha256": "5b150e501a063fcb609f425f2dbc299e64cbaf77b427bb18867fed414edee68c",
+          "byte_size": 90743,
+          "image": { "width": 390, "height": 1919 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/integrations",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["integration-row-integration-1 visible"],
+            "shown_scope": ["集成目录、provider、连接状态与操作"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b5/mobile-integrations-dark.png",
+          "sha256": "20807f777f093a2c2f75ebba3ba8cf57f2c2b9a049641cf8a6c737d34248d349",
+          "byte_size": 91577,
+          "image": { "width": 390, "height": 1919 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/integrations",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/a11y/mes128-axe.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b5/README.md",
+            "ready_assertions": ["integration-row-integration-1 visible"],
+            "shown_scope": ["集成目录、provider、连接状态与操作"]
+          }
+        }
+      }
+    },
+    {
+      "id": 21,
+      "key": "insights",
+      "label": "insights",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-insights-data-light.png",
+          "sha256": "2bfe12b9fd873b592930307798e2417725784e5e8d0e281915d9191f9ed5ce8f",
+          "byte_size": 75197,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/insights",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["insights data view visible"],
+            "shown_scope": ["洞察指标、时间范围、趋势图与成员维度"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-insights-data-dark.png",
+          "sha256": "63d068d7a4042cd1841d97f4353c7e892c65f64e6fc416a46d0378aefab53c8f",
+          "byte_size": 75582,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/insights",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["insights data view visible"],
+            "shown_scope": ["洞察指标、时间范围、趋势图与成员维度"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-insights-data-light.png",
+          "sha256": "d8da551ec656bd9ea4416a7ef781cbca5d325a8e49e74b285499b90679c8b454",
+          "byte_size": 40908,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/insights",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["insights data view visible"],
+            "shown_scope": ["洞察指标、时间范围、趋势图与成员维度"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-insights-data-dark.png",
+          "sha256": "a5a6fd2d868f1c0ed449129bdd5a77de0b21a7a91a12980c4383828e411b6e80",
+          "byte_size": 41391,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/insights",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["insights data view visible"],
+            "shown_scope": ["洞察指标、时间范围、趋势图与成员维度"]
+          }
+        }
+      }
+    },
+    {
+      "id": 22,
+      "key": "data-management",
+      "label": "import/export",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-22-data-management-light.png",
+          "sha256": "7fdc93bd124984ba46613c19126a494d29b151e65cd4500647673a78d7075ed6",
+          "byte_size": 80533,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/w/acme/settings/data",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["job-row-job-1 visible", "open-import-wizard visible"],
+            "shown_scope": ["数据作业列表、导入/导出入口、行计数与作业状态"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-22-data-management-dark.png",
+          "sha256": "8c977cdc5c1bf4db361dd138d713bf017b0c25c1749f94b3d86d1f4f7629f650",
+          "byte_size": 80479,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/w/acme/settings/data",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["job-row-job-1 visible", "open-import-wizard visible"],
+            "shown_scope": ["数据作业列表、导入/导出入口、行计数与作业状态"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-22-data-management-light.png",
+          "sha256": "c4cb37791bca153b1bce60e13a5f38feb1855cf55c6634859dc53e6c88836667",
+          "byte_size": 43781,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/w/acme/settings/data",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["job-row-job-1 visible", "open-import-wizard visible"],
+            "shown_scope": ["数据作业列表、导入/导出入口、行计数与作业状态"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-22-data-management-dark.png",
+          "sha256": "3f243a874c89675973ea491dd5e5fb7198eb74bd0240b81bccc13950276af89a",
+          "byte_size": 43870,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/w/acme/settings/data",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["job-row-job-1 visible", "open-import-wizard visible"],
+            "shown_scope": ["数据作业列表、导入/导出入口、行计数与作业状态"]
+          }
+        }
+      }
+    },
+    {
+      "id": 23,
+      "key": "workspace-settings",
+      "label": "workspace settings",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-ws-settings-light.png",
+          "sha256": "8a3e00339cba99b644e877abb30491038d2f89f7145ba6c791e0e6b4ca124ea6",
+          "byte_size": 97098,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/w/acme/settings/general",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["workspace settings general visible"],
+            "shown_scope": ["工作区设置导航与基本信息表单"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-ws-settings-dark.png",
+          "sha256": "bfeeb568fdc82250d6d27acca954203c3ecdadbe87a38a5d136f65142c08926a",
+          "byte_size": 101503,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/w/acme/settings/general",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["workspace settings general visible"],
+            "shown_scope": ["工作区设置导航与基本信息表单"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-ws-settings-light.png",
+          "sha256": "5051952c028339ed31a74b43dd7c1b4ed224fb359f1a2ba6364bd8ada2451fb6",
+          "byte_size": 39154,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/w/acme/settings/general",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["workspace settings general visible"],
+            "shown_scope": ["工作区设置导航与基本信息表单"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-ws-settings-dark.png",
+          "sha256": "156e2af4893d1551edb0e6857f429ee76893618fa5fe1f27f5024a6e43dc1325",
+          "byte_size": 54227,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/w/acme/settings/general",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["workspace settings general visible"],
+            "shown_scope": ["工作区设置导航与基本信息表单"]
+          }
+        }
+      }
+    },
+    {
+      "id": 24,
+      "key": "personal-settings",
+      "label": "personal settings",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-settings-light.png",
+          "sha256": "bbd0b0fbc7403288b336c6fbaff405e79d8cda5e544f3e00b1d6ed013dd7856c",
+          "byte_size": 82206,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/settings/appearance",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["theme-select visible"],
+            "shown_scope": ["个人外观、语言与时区偏好"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-settings-dark.png",
+          "sha256": "b7261a56002929d77324aca60eead8f4a84b16f37be9e10ab086004093b6b1d1",
+          "byte_size": 76317,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/settings/appearance",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["theme-select visible"],
+            "shown_scope": ["个人外观、语言与时区偏好"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-settings-light.png",
+          "sha256": "7e9de8959e9f6a4dc678ce0468fb2b47342789d2848f38dcef7986dc1433ad5d",
+          "byte_size": 49320,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/settings/appearance",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["theme-select visible"],
+            "shown_scope": ["个人外观、语言与时区偏好"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-settings-dark.png",
+          "sha256": "852472aa1015199402f74efd30ac0e60764e42e9a82db36b621d797a57674edc",
+          "byte_size": 46016,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/settings/appearance",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["theme-select visible"],
+            "shown_scope": ["个人外观、语言与时区偏好"]
+          }
+        }
+      }
+    },
+    {
+      "id": 25,
+      "key": "approvals",
+      "label": "approvals",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-approvals-light.png",
+          "sha256": "5555c7a8f0c5fd9a0b2a497fd9603deb2ea1793a80819aa789ba093e12081bfb",
+          "byte_size": 45341,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/approvals",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["approvals page visible"],
+            "shown_scope": ["待确认列表页、筛选与空/内容状态"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/desktop-approvals-dark.png",
+          "sha256": "5ecada31568230afa09073c2988e4ba4ba37732c6cc0600e58aed55e628bf888",
+          "byte_size": 45459,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/approvals",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["approvals page visible"],
+            "shown_scope": ["待确认列表页、筛选与空/内容状态"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-approvals-light.png",
+          "sha256": "d4b51d41e93f150cefac8020aff183be13c5e29016a8421b043a45e426f6a80b",
+          "byte_size": 28122,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/approvals",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["approvals page visible"],
+            "shown_scope": ["待确认列表页、筛选与空/内容状态"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes111-b4/mobile-approvals-dark.png",
+          "sha256": "668713b0dd8755862b4cf62381fe9ac0cc5908cdb3e980ca1b3767d4f0763d9f",
+          "byte_size": 30439,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/approvals",
+            "backend_kind": "real_stack",
+            "database_provenance": false,
+            "generator": "e2e/real-mes111-b4.spec.ts",
+            "source_readme": "e2e/evidence/mes111-b4/README.md",
+            "ready_assertions": ["approvals page visible"],
+            "shown_scope": ["待确认列表页、筛选与空/内容状态"]
+          }
+        }
+      }
+    },
+    {
+      "id": 26,
+      "key": "onboarding",
+      "label": "onboarding",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-26-onboarding-light.png",
+          "sha256": "594a7629184dd8657be16b91d2284692c25bb662dc00bbd9a45f4d41a741df27",
+          "byte_size": 112722,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["onboarding-card visible", "create_first_issue step visible"],
+            "shown_scope": ["五步上手清单、进度、完成来源与首个待办 CTA"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-26-onboarding-dark.png",
+          "sha256": "b7cd0ea7db5f5640c13de6e59bd6de850784a9c75ec9c6b6e71bcb65b2c8658f",
+          "byte_size": 112610,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["onboarding-card visible", "create_first_issue step visible"],
+            "shown_scope": ["五步上手清单、进度、完成来源与首个待办 CTA"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-26-onboarding-light.png",
+          "sha256": "16d83a1c175ceff9ce05771e6a232c2407883c9e0e308f3179f0f5f7bd876a1d",
+          "byte_size": 74247,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["onboarding-card visible", "create_first_issue step visible"],
+            "shown_scope": ["五步上手清单、进度、完成来源与首个待办 CTA"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-26-onboarding-dark.png",
+          "sha256": "d077a7392476f2ac7db195f9c31699a639c6025625ac664956d946b9a5ef59b2",
+          "byte_size": 74184,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["onboarding-card visible", "create_first_issue step visible"],
+            "shown_scope": ["五步上手清单、进度、完成来源与首个待办 CTA"]
+          }
+        }
+      }
+    },
+    {
+      "id": 27,
+      "key": "attachment-lightbox",
+      "label": "attachment lightbox",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-light.png",
+          "sha256": "7b75658c81b27e552868133d0d59d23908c6dde5f9b900b4ae8c8746e030d7ff",
+          "byte_size": 95704,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "attachment-thumb-img-1 visible",
+              "lightbox-image and controls visible"
+            ],
+            "shown_scope": ["图片附件灯箱、原图、缩放、旋转、定位与下载控件"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-dark.png",
+          "sha256": "37ec79d0fe3ecb2d7dc85a727e2fedd2b7a7dbf93f5cf14967c47d4d8e0e7ae5",
+          "byte_size": 88646,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "attachment-thumb-img-1 visible",
+              "lightbox-image and controls visible"
+            ],
+            "shown_scope": ["图片附件灯箱、原图、缩放、旋转、定位与下载控件"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-light.png",
+          "sha256": "259c23725a8613dcacb71ac49bc0ec7dfa1dd8b32101c2031c3ae1f92e6fc584",
+          "byte_size": 28577,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "attachment-thumb-img-1 visible",
+              "lightbox-image and controls visible"
+            ],
+            "shown_scope": ["图片附件灯箱、原图、缩放、旋转、定位与下载控件"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-dark.png",
+          "sha256": "b438fcf0d21b4738a966cb33f60ac63987caf5d0fe0e31061e302d239ef06de2",
+          "byte_size": 25798,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/issues/issue-1",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": [
+              "attachment-thumb-img-1 visible",
+              "lightbox-image and controls visible"
+            ],
+            "shown_scope": ["图片附件灯箱、原图、缩放、旋转、定位与下载控件"]
+          }
+        }
+      }
+    },
+    {
+      "id": 28,
+      "key": "not-found",
+      "label": "404/error/permission/offline",
+      "cells": {
+        "desktop_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-28-not-found-light.png",
+          "sha256": "e0fa7bfa97ffc305f8cb9bd29a24905e30974ba44077f1ed0b302d1825163bc3",
+          "byte_size": 45041,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "light",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/checklist-route-not-found",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["notfound-home visible"],
+            "shown_scope": ["404 未找到页与返回首页恢复动作"]
+          }
+        },
+        "desktop_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/desktop-28-not-found-dark.png",
+          "sha256": "ccfd2d927549e9b444a8945efa398b4c67dd9d0f774187db7021ad7b47175deb",
+          "byte_size": 45187,
+          "image": { "width": 1440, "height": 900 },
+          "provenance": {
+            "mode": "desktop",
+            "theme": "dark",
+            "viewport": { "width": 1440, "height": 900 },
+            "route": "/checklist-route-not-found",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["notfound-home visible"],
+            "shown_scope": ["404 未找到页与返回首页恢复动作"]
+          }
+        },
+        "mobile_light": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-28-not-found-light.png",
+          "sha256": "845df15f32456f4f55a5ef9e5e018faaf779d240fba49c50e2bdab326d75483d",
+          "byte_size": 23635,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "light",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/checklist-route-not-found",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["notfound-home visible"],
+            "shown_scope": ["404 未找到页与返回首页恢复动作"]
+          }
+        },
+        "mobile_dark": {
+          "status": "verified",
+          "evidence_path": "e2e/evidence/mes128-checklist/mobile-28-not-found-dark.png",
+          "sha256": "cf1e8dc8b6f9c978790476c02a39785581ff40acb20788f100913b98dc3ab275",
+          "byte_size": 23607,
+          "image": { "width": 390, "height": 844 },
+          "provenance": {
+            "mode": "mobile",
+            "theme": "dark",
+            "viewport": { "width": 390, "height": 844 },
+            "route": "/checklist-route-not-found",
+            "backend_kind": "mock_contract",
+            "database_provenance": false,
+            "generator": "e2e/visual/checklist-evidence.spec.ts",
+            "source_readme": "e2e/visual/checklist-evidence.spec.ts",
+            "ready_assertions": ["notfound-home visible"],
+            "shown_scope": ["404 未找到页与返回首页恢复动作"]
+          }
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total_cells": 112,
+    "verified_cells": 112,
+    "not_applicable_cells": 0,
+    "gap_cells": 0
+  }
+}

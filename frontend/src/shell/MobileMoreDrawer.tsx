@@ -12,6 +12,7 @@ import { NavLink } from 'react-router';
 import { Drawer, Icon } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
+import { isNavItemEnabled, useWorkspaceFeatureFlagsContext } from '../workspace/featureFlags';
 import { NAV_GROUPS, MORE_DRAWER_KEYS, resolveNavTarget } from './navigation';
 import type { NavGroupDef, NavItemDef } from './navigation';
 
@@ -30,6 +31,7 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
   const { open, onClose } = props;
   const t = useT();
   const workspaceContext = useOptionalWorkspace();
+  const featureFlags = useWorkspaceFeatureFlagsContext();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   const showWorkspaceSettings =
     workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
@@ -67,7 +69,9 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
           <section key={group.key} className="mesh-mobile-drawer__group">
             <h2 className="mesh-mobile-drawer__group-title">{t('nav.group.' + group.key)}</h2>
             <ul className="mesh-mobile-drawer__list">
-              {group.items.map(renderItem)}
+              {group.items
+                .filter((item) => isNavItemEnabled(item.key, featureFlags))
+                .map(renderItem)}
               {group.key === 'admin' && showWorkspaceSettings && workspace !== null ? (
                 <li className="mesh-mobile-drawer__item">
                   <NavLink

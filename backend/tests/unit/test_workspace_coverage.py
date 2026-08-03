@@ -73,6 +73,7 @@ async def _setup(session_factory, slug: str):
         ({"invitation_max_lifetime_hours_cap": 0}, "validation_error"),
         ({"seat_limit": "fifty"}, "validation_error"),
         ({"feature_flags": "on"}, "validation_error"),
+        ({"feature_flags": {"autopilot": "off"}}, "validation_error"),
     ],
 )
 async def test_settings_known_key_type_errors(session_factory, settings, code):

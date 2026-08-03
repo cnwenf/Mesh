@@ -12,7 +12,7 @@
  *   @font-face 分层(latin / 简中)+ `* { font-family: 'Mesh Visual Font' }` 强制
  *   覆盖 + `font-display: block` + document.fonts.ready 等待,杜绝字体回退抖动;
  * - 冻结时钟:page.clock.install 固定时间戳,相对时间恒定(动态时间区另以 mask 排除);
- * - 预热(warmUpPages):首跑前预编译六路由模块,消除 Vite 按需编译/依赖再优化与
+ * - 预热(warmUpPages):首跑前预编译核心路由模块,消除 Vite 按需编译/依赖再优化与
  *   被测导航的竞争(冷启动偶发 ErrorBoundary 的确定性漏洞)。
  */
 import type { Browser, Locator, Page } from '@playwright/test';
@@ -55,15 +55,44 @@ export interface VisualPageSpec {
 
 /**
  * 核心页注册表(键为中文页名,供 navigateToPage 与 forced-colors 共用)。
- * 六页:看板 / issue 详情 / 成员 / 聊天 / 运行详情 / 收件箱(§5.4 异常态矩阵页面)。
+ * design-quality §13.5 的 13 个核心页。注册表也是视觉、媒体偏好、axe、reflow
+ * 与证据矩阵的单一真源；新增核心页必须在这里登记，避免门禁之间页面集漂移。
  */
 export const PAGES: Record<string, VisualPageSpec> = {
+  登录: {
+    snapshotKey: 'login',
+    path: '/login',
+    ready: async (page) => {
+      await page.getByTestId('login-account-submit').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
+  工作台: {
+    snapshotKey: 'home',
+    path: '/',
+    ready: async (page) => {
+      await page.getByTestId('home-greeting').waitFor({ state: 'visible' });
+      await page.getByTestId('home-dashboard').waitFor({ state: 'visible' });
+    },
+    masks: (page) => [page.locator('.mesh-home time')],
+  },
+  'issue 列表': {
+    snapshotKey: 'issues',
+    path: '/w/acme/issues',
+    ready: async (page) => {
+      await page.locator('.mesh-empty-state').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
   看板: {
     // 卡片/列计数全由 seed 决定,无时间/随机色;遮罩重同步横幅。
     snapshotKey: 'board',
-    path: '/board',
+    path: '/w/acme/board',
     ready: async (page) => {
-      await page.getByTestId('board-columns').waitFor({ state: 'visible' });
+      const compact = await page.evaluate(() => matchMedia('(max-width: 599px)').matches);
+      await page
+        .getByTestId(compact ? 'board-compact' : 'board-columns')
+        .waitFor({ state: 'visible' });
       await page.getByTestId('board-card-issue-1').waitFor({ state: 'visible' });
     },
     masks: (page) => [page.locator('[data-testid="board-resync-banner"]')],
@@ -74,7 +103,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
     // 形态后直达详情渲染;旧 `/issues/issue-1` 扁平形态在 MES-79 路由态下构成
     // identifier 重定向自循环,不再使用。
     snapshotKey: 'issue-detail',
-    path: '/issues/by-identifier/MESH-1',
+    path: '/w/acme/issues/0d3a1f7c-9b2e-4c5a-8f1d-6e7b8c9a0d1e',
     ready: async (page) => {
       await page.getByTestId('issue-detail').waitFor({ state: 'visible' });
       await page.getByTestId('comments-panel').waitFor({ state: 'visible' });
@@ -88,17 +117,19 @@ export const PAGES: Record<string, VisualPageSpec> = {
   成员: {
     // 无时间戳;头像底色为 CSS 变量(主题确定),文字来自 seed。
     snapshotKey: 'members',
-    path: '/members',
+    path: '/w/acme/members',
     ready: async (page) => {
-      await page.locator('table.mesh-members__table').waitFor({ state: 'visible' });
-      await page.getByTestId('member-open-member-human-1').waitFor({ state: 'visible' });
+      const compact = await page.evaluate(() => matchMedia('(max-width: 599px)').matches);
+      await page
+        .getByTestId(compact ? 'member-card-member-human-1' : 'member-open-member-human-1')
+        .waitFor({ state: 'visible' });
     },
     masks: () => [],
   },
   聊天: {
     // 选中首个会话展开对话;会话/消息时间戳为相对时间,遮罩。
     snapshotKey: 'chat',
-    path: '/chat',
+    path: '/w/acme/chat',
     ready: async (page) => {
       await page.getByTestId('chat-session-panel').waitFor({ state: 'visible' });
       await page.getByTestId('chat-session-sess-1').waitFor({ state: 'visible' });
@@ -116,7 +147,7 @@ export const PAGES: Record<string, VisualPageSpec> = {
   运行详情: {
     // exec-1 终态 completed:elapsed 计时器/进度条遮罩(秒级 tick)。
     snapshotKey: 'execution',
-    path: '/executions/exec-1',
+    path: '/w/acme/executions/exec-1',
     ready: async (page) => {
       await page.getByTestId('execution-detail-page').waitFor({ state: 'visible' });
       await page.getByTestId('execution-panel-logs').waitFor({ state: 'visible' });
@@ -129,12 +160,44 @@ export const PAGES: Record<string, VisualPageSpec> = {
   收件箱: {
     // 行内相对时间戳遮罩;未读红点/计数来自 seed(确定)。
     snapshotKey: 'inbox',
-    path: '/inbox',
+    path: '/w/acme/inbox',
     ready: async (page) => {
       await page.getByTestId('inbox-page').waitFor({ state: 'visible' });
       await page.getByTestId('inbox-groups').waitFor({ state: 'visible' });
     },
     masks: (page) => [page.locator('.mesh-inbox__row time')],
+  },
+  自动值守: {
+    snapshotKey: 'autopilots',
+    path: '/w/acme/automations/autopilots',
+    ready: async (page) => {
+      await page.getByTestId('autopilot-row-autopilot-1').waitFor({ state: 'visible' });
+    },
+    masks: (page) => [page.locator('[data-testid^="autopilot-last-run-"]')],
+  },
+  集成: {
+    snapshotKey: 'integrations',
+    path: '/w/acme/automations/integrations',
+    ready: async (page) => {
+      await page.getByTestId('integration-row-integration-1').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
+  洞察: {
+    snapshotKey: 'insights',
+    path: '/w/acme/insights',
+    ready: async (page) => {
+      await page.getByTestId('insights-range').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
+  设置: {
+    snapshotKey: 'settings',
+    path: '/settings/appearance',
+    ready: async (page) => {
+      await page.getByTestId('theme-select').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
   },
 };
 
@@ -162,29 +225,79 @@ export function buildFontFaceCss(): string {
  * 经 addInitScript 在每个文档脚本执行前写入 localStorage,ThemeProvider 直接读取
  * 显式偏好整组切换 data-theme,不经工作区协商链。
  */
-export async function injectSession(page: Page, theme: 'light' | 'dark'): Promise<void> {
+export interface VisualPreferenceOverrides {
+  readonly locale?: string;
+  readonly timezone?: string;
+}
+
+/**
+ * The visual fixture injects an explicit local preference per test. Keep the
+ * account-preference bootstrap on its documented local-mirror fallback path;
+ * otherwise a generic `/api/v1/me` fixture without per-test settings can race
+ * the screenshot and replace a requested dark theme with the workspace default.
+ */
+export async function preserveInjectedPreferences(page: Page): Promise<void> {
+  await page.route('**/api/v1/me', async (route, request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/me') {
+      await route.abort('failed');
+      return;
+    }
+    await route.fallback();
+  });
+}
+
+export async function injectSession(
+  page: Page,
+  theme: 'light' | 'dark',
+  overrides: VisualPreferenceOverrides = {},
+): Promise<void> {
+  await preserveInjectedPreferences(page);
   await page.addInitScript(
-    ({ token, theme: mode }) => {
-      window.localStorage.setItem(
-        'mesh.auth.v1',
-        JSON.stringify({ state: { token, refreshToken: null }, version: 0 }),
-      );
+    ({ token, theme: mode, locale, timezone }) => {
+      // /login 是核心视觉矩阵中的公开页。每次文档初始化按目标 path 建立准确
+      // 会话态，使同一注册表既能跑公开页，也能跑受保护页，且循环导航不串态。
+      if (window.location.pathname === '/login') {
+        window.localStorage.removeItem('mesh.auth.v1');
+      } else {
+        window.localStorage.setItem(
+          'mesh.auth.v1',
+          JSON.stringify({ state: { token, refreshToken: null }, version: 0 }),
+        );
+      }
       window.localStorage.setItem(
         'mesh.settings.v1',
         JSON.stringify({
-          state: { preferences: { theme: mode, locale: 'zh-CN', timezone: 'UTC' } },
+          state: { preferences: { theme: mode, locale, timezone } },
           version: 2,
         }),
       );
     },
-    { token: VISUAL_TOKEN, theme },
+    {
+      token: VISUAL_TOKEN,
+      theme,
+      locale: overrides.locale ?? 'zh-CN',
+      timezone: overrides.timezone ?? 'UTC',
+    },
   );
 }
 
 /** 注入字体样式表并等待字体就绪(杜绝字体回退/渐显抖动)。 */
 export async function applyFonts(page: Page): Promise<void> {
   await page.addStyleTag({ content: buildFontFaceCss() });
-  await page.evaluate(() => document.fonts.ready);
+  const loadedWeights = await page.evaluate(
+    async ({ family, weights }) => {
+      const sample = 'Mesh 中文 0123456789';
+      const loaded = await Promise.all(
+        weights.map((weight) => document.fonts.load(`${weight} 16px "${family}"`, sample)),
+      );
+      await document.fonts.ready;
+      return loaded.map((faces) => faces.length);
+    },
+    { family: VISUAL_FONT_FAMILY, weights: [...FONT_WEIGHTS] },
+  );
+  if (loadedWeights.some((count) => count === 0)) {
+    throw new Error(`visual font preload failed for weights: ${loadedWeights.join(',')}`);
+  }
 }
 
 /**
@@ -231,9 +344,13 @@ export function commonMasks(page: Page): Locator[] {
  * 准备一个确定性的可视化页面上下文:冻结时钟 → 注入会话/偏好。
  * 调用方随后 navigateToPage → waitForStable → (mask →)toHaveScreenshot。
  */
-export async function prepareVisualPage(page: Page, theme: 'light' | 'dark'): Promise<void> {
+export async function prepareVisualPage(
+  page: Page,
+  theme: 'light' | 'dark',
+  overrides: VisualPreferenceOverrides = {},
+): Promise<void> {
   await page.clock.install({ time: FIXED_NOW });
-  await injectSession(page, theme);
+  await injectSession(page, theme, overrides);
 }
 
 /**

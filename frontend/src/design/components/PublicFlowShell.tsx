@@ -12,6 +12,7 @@
  * - `brandHref` 提供时品牌为可返回首页的链接(§4.2),否则呈现已读品牌(非交互)。
  */
 import type { ReactNode } from 'react';
+import { MAIN_CONTENT_ID } from '../../a11y';
 import './publicFlow.css';
 
 export interface PublicFlowShellProps {
@@ -21,6 +22,8 @@ export interface PublicFlowShellProps {
   brandHref?: string;
   /** 单任务卡主标题(渲染为唯一 h1,§10.2) */
   title: string;
+  /** 跳到主内容链接文案;公共页面由 i18n 调用方提供。 */
+  skipLabel?: string;
   /** 标题下的说明文案(可选) */
   description?: string;
   /** 单任务卡主体(表单/状态/结果) */
@@ -58,9 +61,14 @@ function BrandMark(): React.JSX.Element {
 }
 
 export function PublicFlowShell(props: PublicFlowShellProps): React.JSX.Element {
-  const { brandLabel, brandHref, title, description, children, footer } = props;
+  const { brandLabel, brandHref, title, skipLabel, description, children, footer } = props;
   return (
     <div className="mesh-public-flow">
+      {skipLabel !== undefined ? (
+        <a className="mesh-skip-link" href={`#${MAIN_CONTENT_ID}`}>
+          {skipLabel}
+        </a>
+      ) : null}
       <div className="mesh-public-flow__frame">
         <header className="mesh-public-flow__brand">
           {brandHref !== undefined ? (
@@ -76,7 +84,7 @@ export function PublicFlowShell(props: PublicFlowShellProps): React.JSX.Element 
           )}
         </header>
 
-        <main className="mesh-public-flow__card">
+        <main className="mesh-public-flow__card" id={MAIN_CONTENT_ID} tabIndex={-1}>
           <h1 className="mesh-public-flow__title mesh-text-title-1">{title}</h1>
           {description !== undefined && description.length > 0 ? (
             <p className="mesh-public-flow__description">{description}</p>

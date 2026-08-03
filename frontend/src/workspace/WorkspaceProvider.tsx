@@ -94,6 +94,9 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
   const [error, setError] = useState<MeshApiError | null>(null);
   // 加载代次守卫:slug 切换时丢弃上一轮的迟到响应。
   const epochRef = useRef(0);
+  // `workspace` 在新 slug 请求完成前仍可能是上一工作区。记录它实际由哪个
+  // 路由 slug 加载，避免 W6 把正常 A→B 切换误判成“B 是 A 的历史别名”。
+  const loadedForSlugRef = useRef<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     const epoch = ++epochRef.current;
@@ -102,6 +105,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
     try {
       const detail = await getWorkspaceBySlug(client, slug);
       if (epochRef.current !== epoch) return;
+      loadedForSlugRef.current = slug;
       setWorkspace(detail);
       setStatus('ready');
     } catch (err) {
@@ -113,11 +117,15 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
       }
       setWorkspace(null);
       setStatus('error');
-      setError(err instanceof MeshApiError ? err : new MeshApiError({
-        status: 0,
-        code: 'unknown',
-        message: 'unknown error',
-      }));
+      setError(
+        err instanceof MeshApiError
+          ? err
+          : new MeshApiError({
+              status: 0,
+              code: 'unknown',
+              message: 'unknown error',
+            }),
+      );
     }
   }, [client, slug]);
 
@@ -147,7 +155,9 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
     }
     if (status !== 'ready' || workspace === null) return;
     const value = workspace.settings?.default_theme;
-    useWorkspaceThemeBridge.getState().setWorkspaceDefault(typeof value === 'string' ? value : null);
+    useWorkspaceThemeBridge
+      .getState()
+      .setWorkspaceDefault(typeof value === 'string' ? value : null);
     // pending 队列主体分区(workspace 维,theme.md §2.3)。
     setActiveWorkspace(workspace.id);
   }, [status, workspace]);
@@ -155,12 +165,12 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
   // W6 重定向:历史 slug 解析到当前工作区后规范化 URL(replace,子路径保留)。
   useEffect(() => {
     if (workspace === null) return;
+    if (loadedForSlugRef.current !== slug) return;
     if (workspace.slug === slug) return;
     const prefix = `/w/${slug}`;
     const rest = location.pathname.startsWith(prefix) ? location.pathname.slice(prefix.length) : '';
     navigate(`/w/${workspace.slug}${rest}`, { replace: true });
   }, [workspace, slug, location.pathname, navigate]);
-
 
   const patch = useCallback(
     async (changes: WorkspacePatch): Promise<WorkspaceDetail> => {

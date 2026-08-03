@@ -5,7 +5,9 @@
  * 视觉上默认移出视口,聚焦时滑入(样式见 shell.css .mesh-skip-link)。
  * 无硬编码可见文案(label 由调用方经 i18n 提供)。
  */
-export const MAIN_CONTENT_ID = 'mesh-main-content';
+import { MAIN_CONTENT_ID } from '../a11y';
+
+export { MAIN_CONTENT_ID } from '../a11y';
 
 export interface SkipLinkProps {
   /** 链接可见文案(如「跳到主内容」) */
