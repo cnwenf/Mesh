@@ -6,7 +6,7 @@
 > - `label-property.md`(标签与自定义属性)——提供可作为筛选/分组/排序依据的 `label` 与自定义字段。
 > - `project.md`(项目)、`member.md`(统一成员抽象,含 AI agent)。
 > **文档性质**:可直接指导开发的实现规格;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
-> **实现状态**:`views` 定义层(v0.11.6)+ issue 投影层(v0.12.0:分组投影整体游标 / 原子 move + WIP 强制 / 每视图手工排序 / 实时增量合并 / `view.presence` / 跨项目迁移视图侧入口 / 前端真实数据看板)已落地。**label / 自定义字段的分组与筛选**依赖 `issue_labels` / `issue_custom_field_values` 关联层(并行线,尚未合入 main),本层对其按 issue 模块同口径门控(`group_by=label` → 400;label/自定义字段筛选 → `projection_field_pending`),待关联层落地后接通——属分阶段交付,非本 Spec 设计缺陷。
+> **实现状态**:`views` 定义层(v0.11.6)+ issue 投影层(v0.12.0:分组投影整体游标 / 原子 move + WIP 强制 / 每视图手工排序 / 实时增量合并 / `view.presence` / 跨项目迁移视图侧入口 / 前端真实数据看板)已落地。**泳道协议**已在本 Spec 定义为兼容的一维/二维投影,当前运行时仍为 `sub_group_by=NULL` 的一维投影,泳道实现待后续切片。**label / 自定义字段的分组与筛选**依赖 `issue_labels` / `issue_custom_field_values` 关联层;关联层合入前,`group_by=label`、`sub_group_by=label`、任一轴的自定义字段与对应筛选均返回 `400 projection_field_pending`,合入后按 §2.4 映射接通——属分阶段交付,非本 Spec 设计缺陷。
 
 ---
 
@@ -28,9 +28,9 @@
 
 ### 1.1 定位
 
-视图(View)是同一批 issue 的可保存"投影":用户配置好**筛选(filters)+ 分组(group)+ 排序(sort)+ 显示字段(display)+ 看板专属设置(board_settings)** 后存为命名视图,可在看板(board)、列表(list)等 layout 间复用。视图**不存储 issue 集合**——每次打开视图,按其配置实时查询 issues 合成结果。看板是 `layout='board'` 的视图,把 issue 按分组渲染为可拖拽的列与卡片。
+视图(View)是同一批 issue 的可保存"投影":用户配置好**筛选(filters)+ 主/子分组(group/sub_group)+ 排序(sort)+ 显示字段(display)+ 看板专属设置(board_settings)** 后存为命名视图,可在看板(board)、列表(list)等 layout 间复用。视图**不存储 issue 集合**——每次打开视图,按其配置实时查询 issues 合成结果。看板是 `layout='board'` 的视图,把 issue 按分组渲染为可拖拽的列、泳道与卡片。
 
-实时性是本模块的核心体验:他人改状态/拖拽/改字段,所有打开同一视图的成员**按视图 filters 做增量合并**(插入/移动/移除单张卡片),而非整板刷新。
+实时性是本模块的核心体验:他人改状态/拖拽/改字段,所有打开同一视图的成员**按视图 filters 做增量合并**(在列/单元格插入、移动或移除单张卡片),而非整板刷新。
 
 ### 1.2 功能点与场景
 
@@ -40,16 +40,16 @@
 |--------|------|----------|
 | 列 = 分组值 | 每列对应一个分组值;默认 `group_by=state_category`,每列 = 一个状态类别 | 列:Todo / In Progress / In Review / Done |
 | 拖拽改状态 | 跨列拖卡片即修改其 `status_id`(落入目标列对应状态) | 把卡片拖进 In Progress |
-| 列内排序 | 同列内拖拽改 `issues.position`(浮点中点法,见 §4.3) | 把最紧急卡片拖到列顶 |
+| 单元格内排序 | 同一 `(group_key,sub_group_key)` 单元格内拖拽改 `view_issue_positions.position`(浮点中点法,见 §4.3;一维视图的 `sub_group_key=''`) | 把最紧急卡片拖到单元格顶部 |
 | 分组切换 | `group_by` 可选 `state_category`(默认)/`status`/`assignee`/`priority`/`project`/`label`/自定义字段 | 按 assignee 分列看 workload |
-| 子分组(泳道) | `sub_group_by` 横向二级分组(如 project / priority) | 泳道按项目,列按状态 |
+| 子分组(泳道) | `layout='board'` 且 `sub_group_by` 非空时生成二维投影:泳道为外层,主列为泳道内单元格;泳道头显示 label + 总数,列头显示跨泳道 count/WIP | 泳道按项目,列按状态 |
 | 筛选 | 按 assignee/priority/label/due/自定义字段过滤卡片 | 只看 high 优先级 |
-| 排序 | 列内按 `position`/`priority`/`due_date`/`created_at` 排序 | 按到期日排序 |
-| WIP 限制 | 给列设最大在制品数;超限软警告(`warn`)或硬阻止(`block`) | In Progress 限 5,超出标红/拒收 |
+| 排序 | 单元格内按 `position`/`priority`/`due_date`/`created_at` 排序 | 按到期日排序 |
+| WIP 限制 | 给主列设最大在制品数并跨泳道汇总;超限软警告(`warn`)或硬阻止(`block`) | In Progress 限 5,超出标红/拒收 |
 | 折叠列 | `collapsed_columns` 折叠某列节省空间 | 折叠 Done 列 |
 | 卡片字段显示 | `card_fields` 配置卡片展示哪些字段 | 卡片显示估点 + 子任务 3/5 |
-| 快速创建 | 列底"+ 新增卡片"就地建 issue(继承该列分组值) | 在 Todo 列底快速加卡片 |
-| 在制品计数 | 列头显示 `count` 及 WIP `4/5` | "In Progress 4/5" |
+| 快速创建 | 单元格底部"+ 新增卡片"就地建 issue(继承主列分组值;有泳道时同时继承泳道子分组值) | 在项目 A / Todo 单元格快速加卡片 |
+| 在制品计数 | 列头显示跨全部泳道汇总的 `count` 及 WIP `4/5`;泳道头另显示泳道总数 | "In Progress 4/5" |
 
 #### 列表视图(List,`layout='list'`)
 
@@ -86,7 +86,8 @@
 
 - **视图层不定义状态机**。状态流转规则、`completed_at` 写入、依赖校验全部由 issue.md 负责;视图只把状态机可视化,并对"进入某 category"动作施加 WIP 约束。
 - **视图不持久化 issue 集合**。不存在 `view_issues` 这类关联表;issue 是否属于视图,永远由查询期执行 filters 决定。
-- **不在本期范围**:时间线/甘特(`layout='timeline'`)与表格高级透视(`layout='table'` 的复杂聚合)仅在枚举中预留取值,不实现 UI;跨视图的 issue 全局排序;离线编辑。
+- **不在本期范围**:时间线/甘特(`layout='timeline'`)与表格高级透视(`layout='table'` 的复杂聚合)仅在枚举中预留取值,不实现 UI;跨视图的 issue 全局排序;离线编辑;泳道手工排序与泳道折叠。
+- **泳道只在看板投影**:`layout='list'` 可保存 `sub_group_by` 配置但不渲染泳道;切换回 board 后恢复投影。`layout` 不是保存或校验 `sub_group_by` 的障碍。
 - **不重复实现筛选字段语义**。label / 自定义字段的定义与值校验在 label-property.md;本模块只消费它们作为 filters/group/sort 的输入。
 
 ---
@@ -101,7 +102,7 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
                      ├── owner: members(创建者,复合 FK)
                      ├── 1:N──► board_wip_limits(可选独立表;亦可内嵌 board_settings.wip)
                      ├── 1:N──► view_issue_positions(每视图手工排序,见 §2.7)
-                     └── 查询期按 filters/group/sort 投影 issues —— 无持久外键,合成结果
+                     └── 查询期按 filters/group/sub_group/sort 投影 issues —— 无持久外键,合成结果
                                         │
                                         ▼
                                    issues(见 issue.md;`issues.position` 是规范默认排序,
@@ -124,7 +125,7 @@ realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成�
 | `visibility` | TEXT | NOT NULL, CHECK IN (`'private'`,`'shared'`) | `'private'` | 私有/共享 |
 | `filters` | JSONB | NOT NULL | `'{}'` | 筛选条件(结构见 §2.3) |
 | `group_by` | TEXT | NULL | NULL | 分组字段;NULL 时 board 默认 `state_category` |
-| `sub_group_by` | TEXT | NULL | NULL | 泳道二级分组 |
+| `sub_group_by` | TEXT | NULL | NULL | 泳道二级分组;可选字段集与 `group_by` 相同,仅 `layout='board'` 时参与投影 |
 | `sort` | JSONB | NOT NULL | `'[]'` | 排序规则数组 |
 | `display_fields` | JSONB | NOT NULL | `'[]'` | 展示字段/列配置 |
 | `board_settings` | JSONB | NOT NULL | `'{}'` | 看板专属(列序、折叠、卡片字段、内嵌 WIP) |
@@ -136,6 +137,9 @@ realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成�
 - 同一作用域内默认视图唯一:`CREATE UNIQUE INDEX uq_views_default ON views (workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000')) WHERE is_default;`(服务层在同事务内保证"取消旧默认 + 设新默认")。
 - 目标表唯一键:`UNIQUE (workspace_id, id)`(供 `view_issue_positions.view_id` 等复合 FK 引用,README §6.2)。
 - `layout IN ('timeline','table')` 可写入但本期 UI 不渲染(返回 501 由前端兜底为 board/list)。
+- `group_by` / `sub_group_by` 的可选集均为 §2.4 的 `state_category` / `status` / `assignee` / `priority` / `project` / `label` / 自定义字段(`field_def_id`);创建与 `PATCH` 均执行同一白名单校验。
+- `sub_group_by` 与实际 `group_by` 为同一字段时返回 `400 validation_error`;board 的 `group_by=NULL` 先按默认 `state_category` 归一后再比较,禁止两轴投影同一字段。该校验同样适用于当前不渲染泳道的 list 视图。
+- 关联层合入前,`sub_group_by=label` / 自定义字段与 `group_by` 的同类配置使用同一门控,返回 `400 projection_field_pending`;不得因其位于子分组轴而绕过字段可用性与权限校验。
 
 ### 2.3 `filters` / `sort` / `board_settings` 结构
 
@@ -177,10 +181,10 @@ realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成�
 }
 ```
 
-### 2.4 列分组映射(group_by → 列)
+### 2.4 主列/泳道分组映射(`group_by` / `sub_group_by`)
 
-| `group_by` | 列来源 | 列 `key` | 列 `label` | 拖入改 |
-|------------|--------|----------|-----------|--------|
+| 分组字段 | 值来源 | `key` | `label` | 拖入改 |
+|----------|--------|-------|---------|--------|
 | `state_category`(默认/NULL) | 7 个固定类别 | category 值,如 `in_progress` | 类别显示名 | `status_id` → 目标 category 的默认 status |
 | `status` | `issue_statuses` 行 | `status_id` | status.name | `status_id` → 该列 status |
 | `assignee` | 成员 | `member_id`(含 `__none__`) | 成员名 | `assignee_id` |
@@ -189,7 +193,9 @@ realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成�
 | `label` | 标签 | `label_id` | 标签名 | 增/删 `issue_labels` |
 | 自定义字段(`field_def_id`) | 字段值 | 序列化值(枚举为 option_id) | 值显示名 | 该字段值 |
 
-> **默认状态映射**:`group_by=state_category` 时,把卡片拖入某列 = 把 `status_id` 改为该 category 下 `is_default=true` 的 `issue_statuses` 行;若该 category 无默认 status,取 `position` 最小者。前端在 `GET /views/{id}/issues` 响应里拿到 `column_target_status` 映射,拖拽时直接 PATCH 目标 `status_id`。
+> **默认状态映射**:`group_by=state_category` 时,把卡片拖入某列 = 把 `status_id` 改为该 category 下 `is_default=true` 的 `issue_statuses` 行;若该 category 无默认 status,取 `position` 最小者。前端在 `GET /views/{id}/issues` 响应里拿到 `column_target_status` 映射,并把目标列 key 交给 `POST /views/{id}/moves`;不得用 `PATCH /issues/{id}` 绕过视图级 WIP。
+
+`group_by` 生成主列,`sub_group_by` 生成泳道,二者的 `key` / `label` / 值改写规则均复用上表。泳道顺序也与同字段作为 `group_by` 时完全一致;空值统一归入 `key='__none__'` 的泳道且恒排最后。本期不持久化泳道顺序,也不提供泳道手工排序。
 
 ### 2.5 `board_wip_limits`(可选独立表)
 
@@ -236,15 +242,19 @@ realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成�
 | `view_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, view_id)→views(workspace_id, id)` ON DELETE CASCADE | — | 所属视图 |
 | `issue_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, issue_id)→issues(workspace_id, id)` ON DELETE CASCADE | — | 卡片对应 issue |
 | `group_key` | TEXT | NOT NULL | `''` | 卡片所在分组键(对齐 §2.4;空串=未分组/默认) |
-| `position` | REAL | NOT NULL | `0` | 该视图内、该分组内的手工排序值(浮点中点法,见 §4.3) |
+| `sub_group_key` | TEXT | NOT NULL | `''` | 卡片所在泳道键(对齐 §2.4;一维视图/存量行为空串) |
+| `position` | REAL | NOT NULL | `0` | 该视图内、该 `(group_key, sub_group_key)` 单元格的手工排序值(浮点中点法,见 §4.3) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | UNIQUE | `(view_id, issue_id)` | | | 每视图每 issue 至多一条排序记录 |
 
 **语义**:
 - `view_issue_positions` 记录的是**某个视图内**某 issue 的手工顺序;**视图 A 的拖拽只写视图 A 的行,不影响视图 B**(README §6.14 排序契约)。
 - **未保存排序记录的视图**(或某 issue 在当前视图无行)回退到 `issues.position` **规范默认排序** / 视图 `sort` 配置;即"手工排序优先,缺省回退规范顺序"。
-- **`issues.position` 不再被视图拖拽写入**——它只是全局规范默认排序(由 issue 创建/规范排序维护),视图内拖拽一律 upsert 本表。
+- **`issues.position` 不再被视图拖拽写入**——它只是全局规范默认排序(由 issue 创建/规范排序维护),视图内拖拽一律 upsert 本表;同一次 upsert 同时更新 `group_key` / `sub_group_key` / `position`。
+- 排序作用域是单元格 `(group_key, sub_group_key)`;一维视图统一使用 `sub_group_key=''`,故其排序行为与存量契约完全相同。跨列、跨泳道或斜向拖拽仍只更新该视图中该 issue 的唯一一行。
 - 视图删除时其排序行级联清除(ON DELETE CASCADE);issue 删除同理。
+
+**迁移**:在既有表上新增 `sub_group_key TEXT NOT NULL DEFAULT ''`,存量行全部保留为空串;`UNIQUE(view_id, issue_id)` 不变。删除旧 `(view_id, group_key, position)` 索引并以 §2.8 的四列索引替换,不复制排序行、不改变现有一维视图顺序。
 
 ### 2.8 关键索引
 
@@ -260,7 +270,7 @@ CREATE UNIQUE INDEX uq_views_ws_id ON views(workspace_id, id);   -- 供复合 FK
 CREATE INDEX idx_board_wip_view ON board_wip_limits(view_id);
 -- 每视图手工排序
 CREATE UNIQUE INDEX uq_vip_view_issue ON view_issue_positions(view_id, issue_id);
-CREATE INDEX idx_vip_view_group_pos ON view_issue_positions(view_id, group_key, position);
+CREATE INDEX idx_vip_view_group_pos ON view_issue_positions(view_id, group_key, sub_group_key, position);
 -- 视图内 issue 查询命中 issue.md 既有索引(idx_issues_project_status / idx_issues_position 等);
 -- 自定义字段筛选命中 label-property.md 的 idx_icfv_value_json (GIN)。
 ```
@@ -322,7 +332,7 @@ class ViewIssuePosition(Base):
     __tablename__ = "view_issue_positions"
     __table_args__ = (
         UniqueConstraint("view_id", "issue_id", name="uq_vip_view_issue"),
-        Index("idx_vip_view_group_pos", "view_id", "group_key", "position"),
+        Index("idx_vip_view_group_pos", "view_id", "group_key", "sub_group_key", "position"),
         ForeignKeyConstraint(["workspace_id", "view_id"],
                              ["views.workspace_id", "views.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(["workspace_id", "issue_id"],
@@ -335,6 +345,7 @@ class ViewIssuePosition(Base):
     view_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)    # 复合 FK 见 __table_args__
     issue_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)   # 复合 FK 见 __table_args__
     group_key: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    sub_group_key: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     position: Mapped[float] = mapped_column(REAL, nullable=False, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=False,
@@ -361,11 +372,11 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | POST | `/views/{id}/duplicate` | 复制视图(新 owner = 当前成员) |
 | GET | `/views/{id}/issues` | 执行视图配置,返回分组/排序后的 issue |
 | PATCH | `/views/{id}/wip` | 设置某列 WIP 限制 |
-| POST | `/views/{id}/moves` | **看板拖拽的原子 move 命令**(乐观锁 + advisory lock + WIP 校验 + 状态变更 + 每视图排序 upsert,单事务,见 §3.2/§4.3;`to_group_key` 为 project 分组值时触发**跨项目迁移协议**:预览→确认→单事务映射/清除,见 §3.2) |
-| POST | `/views/{id}/reorder` | 仅调整某视图内卡片顺序(不改状态、不跨列;走 `view_issue_positions`) |
+| POST | `/views/{id}/moves` | **看板拖拽的原子 move 命令**(乐观锁 + advisory lock + 主列 WIP 校验 + 分组/子分组字段变更 + 每视图排序 upsert,单事务,见 §3.2/§4.3);新增可选 `to_sub_group_key`;任一轴为 project 且发生跨项目移动时触发**跨项目迁移协议**:预览→确认→单事务映射/清除 |
+| POST | `/views/{id}/reorder` | 仅调整某视图同一单元格内的卡片顺序(不改分组字段、不跨列/泳道;走 `view_issue_positions`) |
 | PATCH | `/workspaces/{ws}/views/reorder` | 调整视图在侧栏的顺序(`position`) |
 
-> **拖拽必须走 move 命令**:`POST /views/{id}/moves` 是唯一能执行**视图级 WIP 限制**的写路径(它带 `view_id`,服务端可在事务内按视图 filters 计数目标列并强制 WIP)。**不带 `view_id` 的 `PATCH /issues/{id}`(issue.md)无法感知视图,不能执行视图级 WIP**——因此 UI 跨列拖拽**必须**用 move 命令;`PATCH /issues/{id}` 仅用于**非拖拽**的字段编辑(详情侧栏改 assignee/priority/状态等)。列内纯排序亦可走 `POST /views/{id}/reorder`。
+> **拖拽必须走 move 命令**:`POST /views/{id}/moves` 是唯一能执行**视图级 WIP 限制**的写路径(它带 `view_id`,服务端可在事务内按视图 filters 计数目标主列并强制 WIP)。**不带 `view_id` 的 `PATCH /issues/{id}`(issue.md)无法感知视图,不能执行视图级 WIP**——因此 UI 跨列/跨泳道拖拽**必须**用 move 命令;`PATCH /issues/{id}` 仅用于**非拖拽**的字段编辑(详情侧栏改 assignee/priority/状态等)。同一单元格纯排序亦可走 `POST /views/{id}/reorder`。
 
 ### 3.2 请求/响应示例
 
@@ -379,6 +390,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
     { "field": "cycle_id",  "op": "eq", "value": "cyc_12" },
     { "field": "priority",  "op": "in", "value": ["high","urgent"] } ] },
   "group_by": "state_category",
+  "sub_group_by": "project",
   "board_settings": {
     "wip": { "in_progress": { "limit": 5, "enforcement": "warn" } },
     "card_fields": ["labels","estimate","assignee"] }
@@ -386,7 +398,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 // 201 Response —— 返回完整视图对象(含生成的 id、created_at/updated_at)
 ```
 
-**执行视图** `GET /api/v1/views/{id}/issues?limit=100`
+**执行一维视图** `GET /api/v1/views/{id}/issues?limit=100`(`sub_group_by=NULL`,响应形状保持不变)
 ```jsonc
 // 分组查询统一整体游标(README §6.14):每组只给 count(组内总数)+ data(当前页切片),
 // 顶层 next_cursor 驱动下一页;响应中【不含每组独立 cursor】。
@@ -405,16 +417,49 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 }
 ```
 
+**执行泳道视图** `GET /api/v1/views/{id}/issues?limit=100`(`sub_group_by` 非空)
+```jsonc
+// columns 是主列跨泳道汇总;lanes 是外层,每个 lane.groups 是各主列单元格。
+// count 均为未分页总数,data 才是当前整体页切片;任何层级都不带独立 cursor。
+{
+  "layout": "board",
+  "group_by": "state_category",
+  "sub_group_by": "project",
+  "column_target_status": { "todo": "st_todo", "in_progress": "st_in_progress", "done": "st_done" },
+  "columns": [
+    { "key": "todo", "label": "Todo", "count": 5, "wip": null },
+    { "key": "in_progress", "label": "In Progress", "count": 4,
+      "wip": { "limit": 5, "enforcement": "warn" } }
+  ],
+  "lanes": [
+    { "key": "prj_web", "label": "Web", "count": 6, "groups": [
+      { "key": "todo", "count": 3,
+        "data": [ { "id": "iss_1", "identifier": "WEB-124", "title": "...", "position": 1.0 } ] },
+      { "key": "in_progress", "count": 3, "data": [ /* 当前页切片 */ ] }
+    ] },
+    { "key": "__none__", "label": "No project", "count": 3, "groups": [
+      { "key": "todo", "count": 2, "data": [ /* 当前页切片 */ ] },
+      { "key": "in_progress", "count": 1, "data": [] }
+    ] }
+  ],
+  "next_cursor": "opaque-or-null"
+}
+```
+
+二维整体游标按确定性顺序把网格展平:先依 §2.4 的泳道顺序遍历 `lanes`,再按主列顺序遍历该泳道的 `groups`;`next_cursor` 是响应顶层唯一游标,续页接着这一顺序取数。`columns[].count` / `wip` 始终按主列汇总全部泳道,`lanes[].count` 为该泳道全部主列之和,单元格 `groups[].count` 为格内总数。`sub_group_by=NULL` 时不得返回 `columns` / `lanes`,继续使用上方既有 `groups[]` 形状,保证已交付客户端兼容。
+
 **看板拖拽(原子 move)** `POST /api/v1/views/{id}/moves`
 ```jsonc
-// Request —— 一次拖拽 = 一个事务(乐观锁 + advisory lock + WIP 计数 + 状态变更 + 排序 upsert)
-{ "issue_id": "iss_1", "to_group_key": "in_progress", "position": 2.5, "version": 7 }
+// Request —— to_sub_group_key 可选;本例为斜向拖入「In Progress / Web」单元格。
+{ "issue_id": "iss_1", "to_group_key": "in_progress", "to_sub_group_key": "prj_web",
+  "position": 2.5, "version": 7 }
 // 服务端在同一事务内:
 //  (a) 乐观锁 issue(WHERE id=$1 AND version=$version;不匹配 → 409 conflict)
 //  (b) SELECT pg_advisory_xact_lock(hashtext('wip:' || view_id || ':' || to_group_key))  -- 串行化目标列
-//  (c) 按视图 filters 计数目标分组当前成员数
-//  (d) 强制 WIP:block 且 count>=limit → 422 wip_limit_exceeded;warn → 放行并发 wip_exceeded 事件
-//  (e) 按 column_target_status[to_group_key] 改 status_id + upsert view_issue_positions(view_id,issue_id,group_key,position)
+//  (c) 按视图 filters 计数目标主列全部泳道的当前成员数
+//  (d) 强制 WIP:block 且 count>=limit → 422 wip_limit_exceeded;warn → 放行并发 view.wip_exceeded 事件
+//  (e) 按 §2.4 同时改写主分组/子分组字段 +
+//      upsert view_issue_positions(view_id,issue_id,group_key,sub_group_key,position)
 // 200 Response
 { "data": { "id": "iss_1", "status": { "id": "st_in_progress", "category": "in_progress" },
             "position": 2.5, "version": 8, "updated_at": "2026-07-24T10:00:01Z" } }
@@ -422,31 +467,40 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 // version 与服务端不符 → 409 conflict
 ```
 
+WIP 校验只约束**主列成员数增加**的 move。纯跨泳道移动的 `to_group_key` 与当前主列相同,不会改变该列总数,即使该列已达 limit 也不得把这次泳道内搬移误判为新增并拒绝。
+
+`to_sub_group_key` 语义:
+- **省略**:不改 issue 的子分组字段;排序 upsert 的 `sub_group_key` 取该 issue 当前解析出的泳道 key。一维视图的所有 move 均沿用此路径并写 `sub_group_key=''`。
+- **视图没有 `sub_group_by` 却传入**:返回 `400 validation_error`,事务不写 issue 或排序行。
+- **指定**:按 §2.4 映射在同一事务内改写子分组字段。它可与 `to_group_key` 组合;斜向拖拽必须把主列字段变更、子分组字段变更与 `view_issue_positions` upsert 作为一个原子提交,任一步失败则全部回滚。
+
 > **不要再用 `PATCH /issues/{id}` 拖拽**:不带 `view_id` 的 PATCH 无法执行视图级 WIP(见 §3.1)。`PATCH /issues/{id}` 仅供详情侧栏等**非拖拽**字段编辑。
 
-**跨项目拖拽(`group_by=project`)** `POST /api/v1/views/{id}/moves`
+**跨项目拖拽(`group_by=project` 或 `sub_group_by=project`)** `POST /api/v1/views/{id}/moves`
 
-> `group_by=project` 视图把卡片拖到**另一项目**列时,`to_group_key` 即目标 `project_id`,本命令为 issue.md §3.8 跨项目迁移契约的**视图侧入口**:先预览并要求确认,再单事务完成迁移(README §6.14 两步式契约)。
+> project 位于主列轴时,`to_group_key` 是目标 `project_id`;project 位于泳道轴时,`to_sub_group_key` 是目标 `project_id`。只要目标项目发生变化,本命令就复用 issue.md §3.8 的**完整两步式跨项目迁移契约**:先预览并要求确认,再单事务完成迁移;不得以子分组参数为由裸改 `project_id` 或绕过源/目标权限检查。
 ```jsonc
-// Request —— group_by=project 视图,把卡片拖到另一项目列
-{ "issue_id": "iss_1", "to_group_key": "prj_app", "position": 1.5, "version": 7 }
+// Request —— sub_group_by=project 视图,把卡片拖到另一项目泳道;to_group_key 保持目标主列。
+{ "issue_id": "iss_1", "to_group_key": "in_progress", "to_sub_group_key": "prj_app",
+  "position": 1.5, "version": 7 }
 // 未确认 → 422(客户端先展示预览并要求确认)
 { "error": { "code": "move_confirmation_required",
   "message": "跨项目迁移将影响以下字段,请确认后重试",
-  "details": { "preview": { "mapped_fields": [ {"field":"status","from":"st_web_dev","to":"st_app_todo"} ],
+  "details": { "preview": { "mapped_fields": [ {"field":"status","from":"st_web_dev","to":"st_app_dev"} ],
     "cleared_fields": [ {"field":"milestone_id"}, {"field":"cycle_id"},
       {"field":"labels","items":["lbl_web_only"]}, {"field":"custom_field_values","items":["cf_web_severity"]} ],
     "kept_fields": ["priority","due_date","assignee_id","workspace 级标签/字段"] } } } }
 // 确认(携 confirm:true)→ 单事务迁移(乐观锁 + project_id 变更 + status 映射 + 清除项目私有字段 + 排序 upsert)
-{ "issue_id": "iss_1", "to_group_key": "prj_app", "position": 1.5, "version": 7, "confirm": true }
+{ "issue_id": "iss_1", "to_group_key": "in_progress", "to_sub_group_key": "prj_app",
+  "position": 1.5, "version": 7, "confirm": true }
 // 200 Response
 { "data": { "id": "iss_1", "project_id": "prj_app",
-            "status": { "id": "st_app_todo", "category": "todo" },
+            "status": { "id": "st_app_dev", "category": "in_progress" },
             "position": 1.5, "version": 8,
             "move_result": { "mapped_fields": [...], "cleared_fields": [...] } } }
 ```
 
-> **迁移语义以 issue.md §3.8 为权威**:项目私有 status → 目标项目同 category 默认 status;项目私有 milestone/cycle/label/自定义字段值清除;工作区级字段保留;迁移产生 `issue.project_changed` 事件携带映射/清除清单(经 outbox → realtime 唯一写入路径,README §6.6/§6.7)。本节 moves 命令在 `group_by=project` 时为其视图侧入口,未确认返回 422 `move_confirmation_required`;`dry_run: true` 等价 issue.md 的 `move-preview`(仅返回预览不落库)。
+> **迁移语义以 issue.md §3.8 为权威**:项目私有 status → 目标项目同 category 默认 status;项目私有 milestone/cycle/label/自定义字段值清除;工作区级字段保留。斜向拖拽同时改变状态主列时,最终 status 必须落在目标项目的 `to_group_key` 对应列(示例为目标项目的 `in_progress` 默认 status),不能用源列映射覆盖主列目标。迁移产生 `issue.project_changed` 事件携带映射/清除清单(经 outbox → realtime 唯一写入路径,README §6.6/§6.7)。本节 moves 命令在 project 位于任一分组轴时均为其视图侧入口,未确认返回 422 `move_confirmation_required`;`dry_run: true` 等价 issue.md 的 `move-preview`(仅返回预览不落库)。
 
 **设置 WIP** `PATCH /api/v1/views/{id}/wip`
 ```jsonc
@@ -454,12 +508,15 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 // 200:返回更新后的 board_wip_limits / 同步写入 board_settings.wip
 ```
 
+WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` 唯一,advisory lock key 仍为 `'wip:'||view_id||':'||group_key`;计数包含该主列全部泳道,不新增单元格级 limit、锁或计数口径。
+
 ### 3.3 错误码
 
 | HTTP | code | 场景 |
 |------|------|------|
-| 400 | `validation_error` | 非法 filters/layout/op;字段类型与 op 不匹配 |
+| 400 | `validation_error` | 非法 filters/layout/op;字段类型与 op 不匹配;`sub_group_by` 与 `group_by` 同字段;无子分组的视图传 `to_sub_group_key` |
 | 400 | `filter_too_complex` | filters 嵌套深度 >3 或条件数 >20(README §6.14) |
+| 400 | `projection_field_pending` | label / 自定义字段关联层未就绪时用于 `group_by` / `sub_group_by` / filters |
 | 401 | `unauthorized` | 缺失/失效 token |
 | 403 | `forbidden` | 编辑他人私有视图;对共享视图无写权限 |
 | 404 | `not_found` | 视图不存在或不可见 |
@@ -472,11 +529,12 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 ### 3.4 分页、鉴权与安全
 
-- **分页(README §6.14 整体游标契约)**:视图列表游标分页,游标编码 `(position, id)`;视图内 issue 执行后亦游标分页——**分组场景统一整体游标**:响应顶层为 `{ "groups": [{key,label,count,wip?,data}], "next_cursor": ... }`,`count` 为组内总数,`data` 为当前页切片;**不得**在响应中给每组独立 `cursor`(与 issue.md 统一此契约)。
+- **分页(README §6.14 整体游标契约)**:视图列表游标分页,游标编码 `(position, id)`;视图内 issue 执行后亦游标分页。`sub_group_by=NULL` 的一维形状保持 `{ "groups": [{key,label,count,wip?,data}], "next_cursor": ... }`;`sub_group_by` 非空时使用 `{ "columns": [{key,label,count,wip}], "lanes": [{key,label,count,groups:[{key,count,data}]}], "next_cursor": ... }`,整体游标按 lanes → lane 内 groups 遍历。两种形状都只有顶层 `next_cursor`,`count` 都是未分页总数,**不得**给组、单元格或泳道独立 cursor。
 - **过滤限制(README §6.14)**:视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底;超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded`(建议收窄条件)。
 - **鉴权**:私有视图仅 `owner_member_id` 可见可写;`shared` 视图工作区成员可读,写需 owner 或具备共享视图写权限(工作区 admin / 项目 lead)。执行视图(`GET /views/{id}/issues`)时,服务端**再次**按成员可见范围裁剪 issues(不暴露其无权 issue)。
+- **move 子分组权限**:`to_sub_group_key` 先按视图的 `sub_group_by` 白名单与可见值域解析,不得作为任意字段名或 SQL 片段。`sub_group_by=project` 的预览、未确认与确认路径全部复用 issue.md §3.8 的源 issue 读门、目标项目写门与私有源 payload 脱敏;鉴权失败只返回统一 403/404,不得泄漏项目、泳道或迁移预览是否存在。
 - **无前缀端点 404 口径(workspace.md §5.3)**:`/views/{id}` 各路径对「id 不存在」「存在但非成员」「软删除」返回同一 `view not found`,成员门 404 在路由层转写,无视图存在性 oracle。
-- **乐观并发**:`PATCH /views/{id}` 与拖拽 `PATCH /issues/{id}` 支持 `If-Match: <updated_at>`;版本不符返回 `409 conflict`,客户端拉取最新后重试或提示。
+- **乐观并发**:`PATCH /views/{id}` 与 `POST /views/{id}/moves` 支持 `If-Match: <updated_at>` / `version`;版本不符返回 `409 conflict`,客户端拉取最新后重试或提示。
 - **JSONB 安全**:`filters`/`sort` 经白名单 Pydantic schema 校验,`field` 必须落在内置字段集或为合法 `field_def_id`;查询编译时一律参数化绑定,杜绝从 JSON 拼接 SQL。
 - **统一错误信封**:
 ```jsonc
@@ -500,14 +558,15 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 | 事件 | data(关键字段) | 客户端增量动作 |
 |------|------------------|----------------|
-| `issue.created` | issue 全量 | 按视图 filters 判定:命中 → 插入对应列;否则忽略 |
-| `issue.updated` | `id` + 变更字段 diff + 新 `updated_at` | 按 filters 重判:仍命中 → 就地更新/跨列移动;不再命中 → 移除 |
-| `issue.moved` | `id`、`from_group`、`to_group`、`position` | 精确移动单卡;`updated_at` 旧于本地则丢弃(防回退) |
+| `issue.created` | issue 全量 | 按视图 filters 判定:命中 → 插入对应列/单元格;否则忽略 |
+| `issue.updated` | `id` + 变更字段 diff + 新 `updated_at` | 按 filters 重判:仍命中 → 就地更新/跨单元格移动;不再命中 → 移除 |
+| `issue.moved` | `id`、`from_group`、`to_group`、`position`;二维视图增加 `from_sub_group` / `to_sub_group` | 按 `(group_key, sub_group_key)` 精确移动单卡;`updated_at` 旧于本地则丢弃(防回退) |
 | `issue.deleted` | `id` | 若在视图内 → 移除卡片 |
-| `view.updated` | 视图配置 diff | 配置变更:若 filters/group/sort 变 → 整板重拉;仅 card_fields 变 → 局部刷新 |
+| `view.updated` | 视图配置 diff | 配置变更:若 filters/group/sub_group/sort 变 → 整板重拉;仅 card_fields 变 → 局部刷新 |
 | `view.presence` | `view_id`、成员列表(可选) | 渲染协作者头像(事件名取 README §6.7 词汇注册表) |
 
-- **增量合并原则**:收到 `issue.*` 后,客户端用**当前视图 filters** 在本地重判该 issue 归属,做单卡插入/移动/移除,**禁止整板刷新**(仅 `view.updated` 改到投影规则或收到 `resync_required` 时才整板重拉)。
+- **`issue.moved` payload**:泳道视图必须同时携带 `from_sub_group` / `to_sub_group`(值为 §2.4 的泳道 key);一维视图**省略这两个字段**,不发送 `null` 占位,保持既有 payload 兼容。列内/单元格内重排时 from/to key 相同。
+- **增量合并原则**:收到 `issue.*` 后,客户端用**当前视图 filters** 在本地重判该 issue 归属。二维视图以 `(group_key, sub_group_key)` 二元组作为单元格身份,做单卡插入/移动/移除;一维视图等价使用 `(group_key, '')`。**禁止整板刷新**(仅 `view.updated` 改到投影规则或收到 `resync_required` 时才整板重拉)。
 - **降级**:WS 断开 → 30s 轮询 `GET /views/{id}/issues?since=<最大 updated_at>` 增量拉取。
 
 ---
@@ -524,9 +583,10 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 主区(看板布局 layout=board)
    ├── 顶部工具条:视图名 | 筛选 | 分组 | 排序 | 显示字段 | [保存/另存]
-   ├── (可选)横向泳道(sub_group_by)
-   └── 列容器(横向滚动)
-        每列:列头(状态色 + 名称 + 计数 + WIP) → 卡片堆叠(纵向滚动) → 列底"+ 新增"
+   ├── 主列头(columns,横向):状态色 + 名称 + 跨泳道计数 + WIP
+   └── 泳道列表(lanes,sub_group_by 非空时;纵向)
+        每条泳道:泳道头(label + 泳道总数)
+                 └── 主列单元格(groups,横向):卡片堆叠 → 单元格底部"+ 新增"
 
 主区(列表布局 layout=list)
    ├── 顶部工具条(同上)
@@ -536,34 +596,35 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 ### 4.2 关键组件
 
 - **视图切换器**:侧栏视图列表;当前视图高亮;切换时 URL 同步 `/views/{id}`(可分享/收藏);未保存改动时切换弹"保存/另存/丢弃"。
-- **看板列**:列头含状态色、名称、计数(及 WIP `4/5`;超限 warn 变黄、block 变红);列体可滚动;支持折叠(`collapsed_columns`)。
+- **看板列**:列头由顶层 `columns` 渲染,含状态色、名称、跨泳道计数(及 WIP `4/5`;超限 warn 变黄、block 变红);支持折叠(`collapsed_columns`)。一维视图继续从 `groups` 渲染同样的列头。
+- **泳道**:泳道为外层行,泳道头显示 `label` + `count`,其 `groups` 与主列对齐组成单元格;空值 `__none__` 泳道在最后。本期无泳道折叠、无泳道拖拽调序。
 - **卡片**:`identifier` + 标题 + 状态色条 + assignee 头像(人/agent 区分) + 标签点 + 估点 + 子任务进度;悬停出快捷操作;显示内容受 `card_fields` 控制。
 - **筛选器弹层**:多条件组合(字段 + 操作符 + 值),字段下拉自动列出内置字段 + 所有自定义字段(枚举字段渲染为选项多选);实时预览命中数;支持 AND/OR 嵌套。
-- **分组/排序下拉**:选 `group_by`(默认 state_category)、`sub_group_by`(泳道)、`sort` 字段与方向。
+- **分组/排序下拉**:选 `group_by`(默认 state_category)、`sub_group_by`(泳道)、`sort` 字段与方向;两轴不能选同一字段,泳道顺序不可手调。
 - **视图保存条**:配置改动未保存时,工具条出现"保存 / 另存为新视图 / 丢弃"。
 
 ### 4.3 拖拽:乐观更新 + 版本校验 + position 浮点中点法
 
-**跨列拖拽(改状态)**
-1. 鼠标按住卡片 → 拖向目标列(目标列高亮;若 WIP 将超限,列头实时预警:warn 黄色、block 红色 + 禁用落点)。
-2. 松手 → **乐观落位**:UI 立即把卡片渲染进目标列。
-3. 计算 `position`(列内插入点)→ 发 **`POST /views/{id}/moves`** 携 `{ issue_id, to_group_key, position, version }`(原子 move 命令,见 §3.2;服务端单事务完成乐观锁 + advisory lock + WIP 计数 + `status_id` 变更 + `view_issue_positions` upsert)。**不再用 `PATCH /issues/{id}` 拖拽**——它不带 `view_id`,无法执行视图级 WIP。
+**跨列/跨泳道拖拽**
+1. 鼠标按住卡片 → 拖向目标单元格(目标主列与泳道同时高亮;若目标主列 WIP 将超限,列头实时预警:warn 黄色、block 红色 + 禁用落点)。
+2. 松手 → **乐观落位**:非跨项目移动时,UI 立即把卡片渲染进目标单元格。
+3. 在目标 `(group_key, sub_group_key)` 单元格计算 `position` → 发 **`POST /views/{id}/moves`** 携 `{ issue_id, to_group_key, to_sub_group_key?, position, version }`。仅跨主列时省略 `to_sub_group_key` 以保持原泳道;跨泳道时传目标 key;斜向拖拽同时传两轴目标。服务端单事务完成乐观锁 + 主列 WIP 锁/计数 + 两轴字段改写 + `view_issue_positions` upsert。**不再用 `PATCH /issues/{id}` 拖拽**——它不带 `view_id`,无法执行视图级 WIP。
 4. 成功 → 用响应的新 `version`/`updated_at` 更新本地版本;失败处理:
-   - `422 wip_limit_exceeded`(block)→ **卡片弹回原列** + toast 提示。
+   - `422 wip_limit_exceeded`(block)→ **卡片弹回原单元格** + toast 提示。
    - `409 conflict`(他人同时改了该卡)→ 拉最新 issue,按服务端结果收敛(后到事件覆盖)。
 
-**跨项目拖拽(`group_by=project`)**
-1. 在 `group_by=project` 视图把卡片拖向**另一项目**列 → 松手后**不直接落位**,而是弹出**迁移预览模态**:列出将被**映射**的 status(项目私有 status → 目标项目同 category 默认 status)、将被**清除**的项目私有 milestone/cycle/标签/自定义字段值,以及保留的工作区级字段(预览来自 `moves` 未确认返回的 422 `details.preview`,或先以 `dry_run: true` 取预览,见 §3.2 / issue.md §3.8)。
-2. 用户确认 → 发 `POST /views/{id}/moves` 携 `{ issue_id, to_group_key:<目标 project_id>, position, version, confirm: true }` → 服务端**单事务**完成 `project_id` 变更 + status 映射 + 清除项目私有字段 + 排序 upsert。
-3. 成功 → 卡片落位目标项目列,响应携带 `move_result`(映射/清除清单),UI 明确呈现"拖入项目后哪些字段为何变化"对用户可见;`422 move_confirmation_required`(未确认)→ **卡片弹回原列** + 重新展示预览;`409 conflict` → 拉最新收敛。迁移语义以 issue.md §3.8 为权威(README §6.14 两步式契约),迁移产生 `issue.project_changed` 事件。
+**跨项目拖拽(`group_by=project` 或 `sub_group_by=project`)**
+1. 把卡片拖向**另一项目**列/泳道 → 松手后**不直接落位**,而是弹出**迁移预览模态**:列出将被**映射**的 status(项目私有 status → 目标项目同 category 默认 status)、将被**清除**的项目私有 milestone/cycle/标签/自定义字段值,以及保留的工作区级字段(预览来自 `moves` 未确认返回的 422 `details.preview`,或先以 `dry_run: true` 取预览,见 §3.2 / issue.md §3.8)。
+2. 用户确认 → 发 `POST /views/{id}/moves`;project 在主列轴时传 `to_group_key:<目标 project_id>`,在泳道轴时传 `to_sub_group_key:<目标 project_id>`,并携 `position` / `version` / `confirm:true` → 服务端**单事务**完成 `project_id` 变更 + status 映射 + 清除项目私有字段 + 两轴排序 upsert。
+3. 成功 → 卡片落位目标项目列/泳道,响应携带 `move_result`(映射/清除清单),UI 明确呈现"拖入项目后哪些字段为何变化"对用户可见;`422 move_confirmation_required`(未确认)→ **卡片弹回原单元格** + 重新展示预览;`409 conflict` → 拉最新收敛。迁移语义以 issue.md §3.8 为权威(README §6.14 两步式契约),迁移产生 `issue.project_changed` 事件。
 
-**列内排序(浮点中点法,写入 `view_issue_positions`)**
+**单元格内排序(浮点中点法,写入 `view_issue_positions`)**
 - 拖到两张相邻卡片 `A`(position=pA)与 `B`(pB)之间 → 新 `position = (pA + pB) / 2`。
-- 拖到列顶 → `position = first.position - 1.0`;拖到列底 → `position = last.position + 1.0`。
-- 经 `POST /views/{id}/moves`(同列,`to_group_key` 不变)或 `POST /views/{id}/reorder` upsert **当前视图的** `view_issue_positions(view_id, issue_id, group_key, position)`;**不写 `issues.position`**——一个视图的排序不污染其它视图(README §6.14)。服务端广播 `issue.moved`(payload 带 `view_id`)。
-- **精度耗尽**:当 `|pB - pA|` 小于阈值(如 `1e-6`,REAL 精度逼近)时,触发该视图该列**整列重排**——服务端按当前顺序重新分配整数间隔序列(如 1.0, 2.0, 3.0 …)写回 `view_issue_positions`,广播全列 `issue.moved`。
+- 拖到单元格顶 → `position = first.position - 1.0`;拖到底 → `position = last.position + 1.0`。
+- 经 `POST /views/{id}/moves`(两轴 key 不变)或 `POST /views/{id}/reorder` upsert **当前视图的** `view_issue_positions(view_id, issue_id, group_key, sub_group_key, position)`;**不写 `issues.position`**——一个视图的排序不污染其它视图(README §6.14)。服务端广播 `issue.moved`(payload 带 `view_id`;二维视图带相同的 from/to subgroup key)。
+- **精度耗尽**:当 `|pB - pA|` 小于阈值(如 `1e-6`,REAL 精度逼近)时,只触发该视图该 `(group_key, sub_group_key)` **单元格整格重排**——服务端按格内当前顺序重新分配整数间隔序列(如 1.0, 2.0, 3.0 …)写回 `view_issue_positions`,广播该单元格的 `issue.moved`;不得重排同主列的其它泳道。
 
-**实时一致性**:服务端按 `version`/`updated_at` 版本仲裁;客户端丢弃 `updated_at` 旧于本地缓存的事件,保证多人同时拖同一卡片时 UI 平滑收敛到最新写。
+**实时一致性**:服务端按 `version`/`updated_at` 版本仲裁;客户端丢弃 `updated_at` 旧于本地缓存的事件,并以 `(group_key, sub_group_key)` 归并卡片,保证多人同时拖同一卡片时 UI 平滑收敛到最新写。
 
 ### 4.4 WIP 软警告 / 硬阻止
 
@@ -572,14 +633,14 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | `warn`(软) | 允许拖入,列头预警 | 卡片正常落位 | 列头红色徽章 `6/5` + 顶部 toast 提示 |
 | `block`(硬) | 落点禁用,提示"已达上限" | move 命令(`POST /views/{id}/moves`)在事务内计数后返回 `422 wip_limit_exceeded` → 卡片弹回 | 列头红色 + 拖拽过程禁用高亮 |
 
-- 列头计数实时 = 当前可见卡片数 / WIP `limit`;超限 warn 黄、block 红。
+- 列头计数取顶层 `columns[].count`,即该主列全部泳道的当前可见卡片数 / WIP `limit`;WIP 配置、advisory lock 与服务端事务内计数均只按 `group_key` 汇总,不按单元格拆分。纯跨泳道移动不增加主列计数,不得因该列已满而拒绝。超限 warn 黄、block 红。
 - (可选)超限时通知列负责人——属通知模块,本模块只发事件。
 
 ### 4.5 关键交互流程
 
 - **保存视图**:调好筛选/分组/排序 → 工具条"另存为" → 命名 + 选 `visibility` → 保存 → 出现在侧栏。
 - **切换视图**:点侧栏视图项 → 按其配置 `GET /views/{id}/issues` 重新查询渲染;URL 同步,可分享。
-- **快速创建**:列底"+ 新增" → 轻量表单(标题 + 继承该列分组值,如默认 status)→ 回车 → 新卡片出现并广播 `issue.created`。
+- **快速创建**:单元格底部"+ 新增" → 轻量表单(标题 + 继承主列分组值;存在泳道时同时继承子分组值)→ 回车 → 新卡片出现在原单元格并广播 `issue.created`。一维视图保持只继承列分组值。
 
 ### 4.6 状态流转(视图层不改变 issue 状态机)
 
@@ -593,15 +654,17 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 - [ ] 可创建/读取/更新/删除/复制视图;`layout`/`visibility` 取值受 CHECK 约束,非法值返回 `400`。
 - [ ] 视图配置(filters/group_by/sub_group_by/sort/display_fields/board_settings)以 JSONB 持久化,**不持久化任何 issue 集合**。
-- [ ] `GET /views/{id}/issues` 按配置实时合成结果,返回 `groups` + 每组 `count`/`wip` + **顶层整体 `next_cursor`**;**响应不含每组独立 cursor**(README §6.14)。
+- [ ] **子分组配置校验**:`sub_group_by` 可选集与 `group_by` 完全一致;两轴同字段(含 `group_by=NULL` 归一后的默认 `state_category`)在创建与 PATCH 均返回 `400 validation_error`;关联层未就绪时 label/自定义字段两轴均返回 `400 projection_field_pending`;list 可保存但不渲染 `sub_group_by`。
+- [ ] **一维兼容**:`sub_group_by=NULL` 时,`GET /views/{id}/issues` 继续返回既有 `groups[{key,label,count,wip?,data}]` + 顶层 `next_cursor`,不得出现 `columns` / `lanes`,已交付响应形状零变化。
+- [ ] **二维投影**:`sub_group_by` 非空时,响应精确包含顶层 `columns[{key,label,count,wip}]`(主列跨泳道汇总)、`lanes[{key,label,count,groups:[{key,count,data}]}]` 与唯一顶层 `next_cursor`;单元格 `count` 为格内总数、`data` 为当前页切片,无组/单元格/泳道独立 cursor;整体游标依次遍历 lanes → lane 内 groups。
 - [ ] **过滤限制(README §6.14)**:视图 filters 嵌套 >3 或条件 >20 返回 `400 filter_too_complex`;成本/`statement_timeout` 超限返回 `422 query_cost_exceeded`。
-- [ ] 看板默认按 `state_category` 分列;可切换 `group_by=status/assignee/priority/project/label/自定义字段`,列 key/label/拖入改写目标符合 §2.4 映射表。
+- [ ] 看板默认按 `state_category` 分列;主列与泳道均可切换 `state_category/status/assignee/priority/project/label/自定义字段`,两轴 key/label/拖入改写目标符合 §2.4 同一映射表;泳道顺序与同字段主列顺序一致,`__none__` 恒最后,无手工泳道排序。
 - [ ] 拖拽 `group_by=state_category` 时,`status_id` 改为目标 category 的默认 status(`column_target_status` 映射正确)。
-- [ ] **看板拖拽走原子 move 命令** `POST /views/{id}/moves`(乐观锁 + advisory lock + WIP 计数 + 状态变更 + `view_issue_positions` upsert,单事务);`PATCH /issues/{id}` 不用于拖拽。
-- [ ] **跨项目拖拽(R2,README §9 T22)**:`group_by=project` 视图把卡片拖入另一项目列,未确认的 `moves` 返回 `422 move_confirmation_required` 且 `details.preview` 携带字段映射/清除预览;携 `confirm: true` 后**单事务**完成 `project_id` 变更 + 项目私有 status 映射 + 项目私有 milestone/cycle/label/自定义字段值清除(工作区级保留),迁移后不存在"当前项目 + 旧项目私有字段"脏状态;`issue.project_changed` 事件正确携带映射/清除清单(迁移语义以 issue.md §3.8 为权威,README §6.14)。
-- [ ] **每视图排序隔离(README §6.14)**:列内拖拽用浮点中点法计算 `position` 并写入**当前视图**的 `view_issue_positions`;**在视图 A 拖动卡片不改变视图 B 的顺序**;无保存排序的视图回退 `issues.position` 规范顺序;精度耗尽触发该视图整列重排且 UI 收敛正确。
-- [ ] WIP `warn`:超限允许拖入 + 红色徽章 + toast + `wip_exceeded` 事件;WIP `block`:超限拖入(move 命令事务内计数)返回 `422 wip_limit_exceeded` 且卡片弹回原列。
-- [ ] 折叠列、卡片字段显示(`card_fields`)、列底快速创建均生效;快速创建的 issue 继承该列分组值。
+- [ ] **看板拖拽走原子 move 命令** `POST /views/{id}/moves`:省略 `to_sub_group_key` 不改泳道;一维视图传入该参数返回 `400 validation_error`;指定时按 §2.4 改写子分组字段;斜向拖拽在单事务内完成两轴字段变更 + `view_issue_positions(group_key,sub_group_key,position)` upsert;`PATCH /issues/{id}` 不用于拖拽。
+- [ ] **跨项目拖拽(R2,README §9 T22)**:project 位于主列或泳道轴时,对应 `to_group_key` / `to_sub_group_key` 均复用 issue.md §3.8 两步迁移;未确认返回 `422 move_confirmation_required` + 完整授权后的预览,`confirm:true` 后单事务完成 `project_id` 变更、status 映射、项目私有字段清除与排序 upsert,不存在裸改/越权预览旁路。
+- [ ] **每视图/单元格排序隔离(README §6.14)**:`view_issue_positions` 含 `sub_group_key TEXT NOT NULL DEFAULT ''`,唯一键仍为 `(view_id,issue_id)`,查询索引为 `(view_id,group_key,sub_group_key,position)`;浮点中点按单元格计算,精度耗尽只重排该视图该单元格;视图 A 拖动不改变视图 B,一维存量行与缺省回退顺序不变。
+- [ ] **主列 WIP**:`columns[].count/wip` 汇总该列全部泳道;`board_wip_limits` 键与 `'wip:'||view_id||':'||group_key` advisory lock 不变,无单元格级 WIP。`warn` 超限允许拖入 + 徽章/toast + `view.wip_exceeded`;`block` 仅在主列成员数增加时事务内汇总计数并可能返回 `422`,纯跨泳道移动即使主列已满也不拒绝。
+- [ ] 折叠列、卡片字段显示(`card_fields`)生效;泳道头显示 label + 泳道总数,本期无泳道折叠;单元格快速创建同时继承主列值与泳道值,一维快速创建行为不变。
 - [ ] 列表视图支持可配置列、列头排序、行内编辑、多选批量(走 `POST /issues/bulk`)。
 - [ ] 视图作用域鉴权:私有仅 owner 可见;共享工作区成员可读;写需 owner/共享写权限;执行视图时按成员可见范围裁剪 issues。
 - [ ] 默认视图唯一约束生效;重复设默认返回 `409`。
@@ -612,11 +675,11 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 - [ ] WebSocket 遵循 README §6.7(频道内单调 `seq`、`realtime_events` 重放);断线重连 `resume_from` 可重放缺口,过旧触发 `resync_required` + REST 对账水位后整板重拉。
 - [ ] **每频道游标(R2)**:原"单视图单游标"设计已删除;断线重放按**频道** `last_seq`(客户端每频道各自记录,§2.6 / §3.5),不存在"每视图一个总游标";可选的服务端 `realtime_channel_cursors` 经复合 FK `(workspace_id, member_id)→members(workspace_id, id)` 强制同租户(README §9 T1 同类),且仅作跨设备断线续传定位、真源为 `realtime_events`。
-- [ ] 他人改状态/拖拽/改字段/新建/删除,本地看板按视图 filters **增量合并单卡**(插入/移动/移除),非整板刷新。
-- [ ] `issue.updated` 触发本地按 filters 重判:仍命中就地更新/跨列移动,不再命中移除。
+- [ ] 他人改状态/拖拽/改字段/新建/删除,本地看板按视图 filters **增量合并单卡**(插入/移动/移除),二维视图以 `(group_key,sub_group_key)` 判定单元格,非整板刷新。
+- [ ] 二维视图的 `issue.moved` payload 携 `from_sub_group` / `to_sub_group`;一维视图省略两字段并保持原 payload;`issue.updated` 触发 filters 重判后在正确单元格就地更新/移动或移除。
 - [ ] 拖拽乐观更新 + `If-Match: <updated_at>` 版本校验;`409` 时拉最新收敛,多人同拖同卡 UI 平滑收敛到最新写。
 - [ ] 客户端丢弃 `updated_at` 旧于本地的事件,无卡片回退/闪烁。
-- [ ] `view.updated`:仅 card_fields 变局部刷新;filters/group/sort 变整板重拉。
+- [ ] `view.updated`:仅 card_fields 变局部刷新;filters/group/sub_group/sort 变整板重拉。
 - [ ] WS 断开自动降级为 30s 轮询 `?since=<updated_at>`,恢复后回到增量模式。
 
 ### 5.3 非功能验收
@@ -624,8 +687,8 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 - [ ] **拖拽性能**(README §10 基准下构成验收标准):单次拖拽从松手到乐观落位 < 50ms(本地);服务端 move 命令 P95 指标按 README §10 标注冷/热缓存;1000 张卡片的列滚动帧率 ≥ 50fps(虚拟滚动)。
 - [ ] **增量合并性能**:单条实时事件本地处理 < 16ms,不触发整板 re-render。
 - [ ] **查询性能**(README §10 基准):执行视图(命中 issue.md 索引)在 10 万 issue 工作区、热缓存下 P95 < 500ms;自定义字段筛选命中 GIN 索引。
-- [ ] **WIP 并发不穿透(集成测试)**:`enforcement=block`、`limit=N` 的列,并发(>N)拖入同一列时,move 命令经 `pg_advisory_xact_lock(hashtext('wip:'||view_id||':'||group_key))` 串行化 + 事务内计数,**最终列内成员数 ≤ N**,多余拖入返回 `422 wip_limit_exceeded`,无并发穿透(README §9 乐观冲突 T9 同类)。
+- [ ] **WIP 并发不穿透(集成测试)**:`enforcement=block`、`limit=N` 的主列,从多个不同泳道并发(>N)拖入该列时,move 命令经 `pg_advisory_xact_lock(hashtext('wip:'||view_id||':'||group_key))` 串行化 + 事务内跨泳道汇总计数,**最终主列成员总数 ≤ N**,多余拖入返回 `422 wip_limit_exceeded`,无按泳道拆锁导致的并发穿透。
 - [ ] **一致性**:并发拖拽同一卡片最终一致(服务端 `version`/`updated_at` 仲裁,无丢失更新,README §9 T9)。
 - [ ] **跨租户隔离(README §9 T1)**:`view_issue_positions` / `views` 的复合 FK 拒绝跨 workspace 引用(视图引用别区 issue/member 在 INSERT 被拒);A 区凭证访问 B 区视图返回 403/404。
-- [ ] **安全**:filters/sort 经白名单校验 + 参数化绑定,无 SQL 注入;跨工作区/越权访问返回 `403`/`404`。
+- [ ] **安全**:filters/sort 与 `to_sub_group_key` 经白名单/值域校验 + 参数化绑定,无 SQL 注入;project 泳道迁移的预览与确认均执行源读门/目标写门并遵循私有源 payload 脱敏;跨工作区/越权访问返回 `403`/`404` 且不泄漏泳道/预览存在性。
 - [ ] **限流**:视图执行接口有 rate limit,超限返回 `429`。

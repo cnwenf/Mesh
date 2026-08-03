@@ -722,7 +722,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 
 - **未携带 `confirm: true`** → 422 `move_confirmation_required`,`details.preview` 返回第一步的预览清单(客户端必须展示并要求确认,README §6.14)。
 - 版本不符 → 409 `conflict`;目标项目不存在/不可见 → 404 `not_found` / 403 `forbidden`。
-- 看板 `group_by=project` 拖拽经 `POST /views/{id}/moves`(`confirm=true`)调用同一事务契约(与 kanban.md §3.2 统一,README §6.14)。
+- 看板 `group_by=project` 列拖拽(`to_group_key`)或 `sub_group_by=project` 泳道拖拽(`to_sub_group_key`)均经 `POST /views/{id}/moves`(`confirm=true`)调用同一事务契约;子分组参数不得成为裸改 `project_id` 或鉴权旁路。若斜向拖拽的另一轴同时指定目标状态/category,目标项目 status 映射以该目标主列为最终落点,不得用源 category 覆盖它(与 kanban.md §3.2 统一,README §6.14)。
 
 ---
 
