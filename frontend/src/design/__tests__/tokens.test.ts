@@ -18,6 +18,7 @@ const appicaTokensCss = readFileSync(
   path.resolve(process.cwd(), 'src/design/appica-tokens.css'),
   'utf8',
 );
+const baseCss = readFileSync(path.resolve(process.cwd(), 'src/design/base.css'), 'utf8');
 
 /** 生成产物的首行「禁止手改」标记(gen-tokens.mjs 契约)。 */
 const GENERATED_HEADER =
@@ -60,6 +61,14 @@ describe('设计 token(README §6.12 主题契约)', () => {
         `${name}: ${value};`,
       );
     }
+  });
+
+  it('Tailwind preflight 不抹除存量原生文本控件边界,且不覆盖 Appica data-slot 控件', () => {
+    expect(baseCss).toContain(':not([data-slot])');
+    expect(baseCss).toContain('select:not([data-slot])');
+    expect(baseCss).not.toContain('):not([data-slot]) {');
+    expect(baseCss).toContain('border: 1px solid var(--color-border);');
+    expect(baseCss).toContain('background-color: var(--color-surface);');
   });
 
   it('tokens-print.css 在 @media print 强制亮色:颜色 token 取 LIGHT_TOKENS 值,非颜色 token 不出现', () => {
