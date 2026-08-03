@@ -593,7 +593,8 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                 "imq-audit-retention",
                 lambda: integration_queue_audit_retention_loop(session_factory, settings=settings, stop=stop),
             ),
-        ]
+        ],
+        shutdown_event=stop,
     )
 
     # integrations.md §3.2 (MES-87): DingTalk Stream long-connection receive

@@ -85,7 +85,7 @@ Mesh 服务端由以下**独立可部署单元**组成。起步可合并进程�
 | 单元 | 职责 | 竞争/并发模型 | 故障责任与自愈 | 扩容方式 |
 | --- | --- | --- | --- | --- |
 | **API(FastAPI/uvicorn)** | REST + 鉴权 + 业务写入;所有业务事务**同事务写 `outbox_events`** | 多 worker 无状态 | 单 worker 崩溃仅丢 in-flight 请求,客户端重试(幂等键兜底) | 水平加 worker/实例 |
-| **Outbox relay** | 轮询 `outbox_events(status='pending')` → 分发到对应处理器(执行入队 / 通知 fan-out / autopilot 事件 / **realtime projector**)→ 置 `published` | `FOR UPDATE SKIP LOCKED` 抢占;**每条事件独立短事务(一次只预锁一行)**,慢处理器不预占批内后续行;多副本不重复处理;`UNIQUE(idempotency_key)` 兜底 | 崩溃后未发布事件由其他副本/重启后继续投递(at-least-once);锁/语句超时等瞬时 DB 竞争短退避且不消耗失败预算;业务失败指数退避,`delivery_attempts` 超限进 `failed` 告警 | 加副本即提高吞吐 |
+| **Outbox relay** | 轮询 `outbox_events(status='pending')` → 分发到对应处理器(执行入队 / 通知 fan-out / autopilot 事件 / **realtime projector**)→ 置 `published` | `FOR UPDATE SKIP LOCKED` 抢占;**每条事件独立短事务(一次只预锁一行)**,慢处理器不预占批内后续行;多副本不重复处理;`UNIQUE(idempotency_key)` 兜底 | 崩溃后未发布事件由其他副本/重启后继续投递(at-least-once);**进程内 relay 协程异常、意外取消或未收到共享停机信号却正常返回,均由 1s 存活看门狗发结构化 ERROR 并退避重启**;锁/语句超时等瞬时 DB 竞争短退避且不消耗失败预算;业务失败指数退避,`delivery_attempts` 超限进 `failed` 告警 | 加副本即提高吞吐 |
 | **调度 worker(autopilot/scheduler)** | 扫描到期 `autopilots.next_run_at` 与一次性定时,原子抢占创建 run | `FOR UPDATE SKIP LOCKED` + `next_run_at` 前移,多副本不重复触发 | 崩溃后下一扫描周期补发(misfire_policy 决定补发策略) | 加副本;按 workspace 哈希分片(规模化时) |
 | **租约 reaper** | 扫描 `execution_attempts` 租约过期/心跳失联 → 回收 attempt(requeue 新 attempt 或转 failed);扫描过期 approval(§6.10) | 单 leader(数据库 advisory lock)或多副本 SKIP LOCKED 分行 | reaper 全挂 → 任务卡 claimed;由监控告警;恢复后批量回收 | 一般单副本足够;分行扫描可多副本 |
 | **通知 fan-out worker** | 消费 outbox 中通知类事件 → 写 `notifications` + 邮件摘要队列(通知的实时推送**不直接写 `realtime_events`**,而是产生 outbox 的 `realtime.publish` 事件交 realtime projector 统一登记,§6.6/§6.7) | SKIP LOCKED;`notification_delivery.UNIQUE(notification_id,channel,destination_key)` 幂等(R3:目的地粒度,IM 多目的地并发投递,§6.13/comment-inbox.md §2.8) | 崩溃后由 outbox 重投;邮件失败重试 | 加副本 |
@@ -93,7 +93,7 @@ Mesh 服务端由以下**独立可部署单元**组成。起步可合并进程�
 | **附件处理 worker** | 隔离区对象的 MIME 嗅探(读 magic bytes)、SHA-256 校验、病毒扫描、缩略图 | SKIP LOCKED 扫 `attachments(scan_status='pending')` | 崩溃后重扫;`scan_status='error'` 重试上限 | 加副本 |
 | **实时网关(WebSocket)** | 客户端长连接;订阅频道时**逐资源授权**;从 `realtime_events` 重放 + Redis fan-out 实时推送 | 每连接单线程;多网关经 Redis pub/sub 广播 | 网关崩溃 → 客户端重连,凭 `resume_from` 从 `realtime_events` 补齐;游标过旧 → `resync_required` | 水平加网关,Redis pub/sub 联通 |
 
-**部署形态**:起步 = 1 个 API 进程(含 uvicorn 多 worker)+ 1 个 worker 进程(运行 relay/scheduler/reaper/fan-out/附件处理,各为独立 asyncio 任务)+ 1 个 realtime 网关进程;三者可容器化独立伸缩。worker 各任务之间以 SKIP LOCKED 解耦,**任何单一任务循环卡死不得阻塞其他任务**(看门狗 + 独立取消域)。
+**部署形态**:起步 = 1 个 API 进程(含 uvicorn 多 worker)+ 1 个 worker 进程(运行 relay/scheduler/reaper/fan-out/附件处理,各为独立 asyncio 任务)+ 1 个 realtime 网关进程;三者可容器化独立伸缩。worker 各任务之间以 SKIP LOCKED 解耦,**任何单一任务循环死亡不得拖停或静默移除其他任务**:外层看门狗每 1s 检查各任务终态,将异常、意外取消、意外正常返回统一记录为结构化错误并按任务独立指数退避重启(某任务退避不得阻塞其他 slot 的检查);worker 与看门狗必须共享同一 shutdown Event,仅该 Event 已置位时的返回/取消属于正常关停,不得告警或重启。独立取消域只隔离单任务故障,Supervisor 自身关停则置位共享 Event、取消并 await 全部子任务,不得泄漏后台协程。
 
 **数据与中间件凭据安全(MES-83,权威)**:任何数据存储 / 中间件(PostgreSQL、Redis、MinIO 及 `mesh_app` 角色)的凭据与网络暴露遵循以下硬约束:
 
@@ -774,7 +774,7 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 | T2 | **并发 claim** | N(≥10)台 runtime 并发领取同一批任务:恰有任务数台成功,无重复领取;`execution_attempts` 每 execution 仅一条 claimed |
 | T3 | **容量竞争** | `max_concurrent=2` 的 runtime 并发发起 5 次 claim:成功 ≤2;attempt 终态后 current_load 幂等归零(不出现负数/泄漏) |
 | T4 | **requeue 审计** | 领取后杀 runtime → reaper 回收 → 新 attempt 领取成功;旧 attempt 行(runtime/claimed_at/日志引用)完整保留 |
-| T5 | **outbox 崩溃恢复** | 业务提交后、relay 分发前杀 relay 进程 → 重启后事件仍被投递(执行被创建、通知生成、实时事件可重放),无丢失 |
+| T5 | **outbox 崩溃恢复** | 业务提交后、relay 分发前杀 relay 进程 → 重启后事件仍被投递(执行被创建、通知生成、实时事件可重放),无丢失;另在真实数据库中注入进程内 relay 常驻协程意外取消/返回 → 看门狗在 1～2 tick 内记录结构化错误并自愈重启,`delivery_attempts=0` 的 pending 积压被 drain,worker 进程和健康兄弟任务不中断 |
 | T6 | **WS 重放过期** | 客户端持过旧 `resume_from` 重连 → 收到 `resync_required` + REST 对账水位 → 对账后视图与服务端一致 |
 | T7 | **重复触发** | §6.9 矩阵逐行:重复分派同一 assignee=no-op;同评论重复 @=一次执行;编辑评论新增/移除 @ 的触发/不触发;无关文字编辑不重复触发 |
 | T8 | **审批过期** | 创建 approval → 到期 → 关联执行转 cancelled(approval_expired) + 请求者收通知;过期后 approve → no-op/410 |
