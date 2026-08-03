@@ -23,6 +23,7 @@ from mesh.integrations.im_outbound import (
     derive_im_deliveries_from_fanout,
 )
 from mesh.outbox.service import emit_event
+from mesh.workers.main import _fanout_with_im_derivation
 from tests.unit.integrations_support import TEST_SIGNING_SECRET, encrypt, seed_world
 
 CORP = "dingcorpDERIVE"
@@ -202,6 +203,56 @@ async def test_comment_created_long_body_chunked(session_factory):
         assert evt.idempotency_key.endswith(chunk_idempotency_key(notification_id, index))
     deliveries = await _deliveries(session_factory)
     assert json.loads(deliveries[0].external_target)["chunks_total"] == len(events)
+
+
+async def test_comment_created_honors_configured_max_chunks(session_factory):
+    world = await _world(session_factory)
+    await _notify(session_factory, world, ntype="comment_created")
+    long_body = ("段落内容" * 2000 + "\n\n") * 6
+    event = await _fanout_event(session_factory, world, {
+        "type": "comment_created", "execution_id": str(world["execution"]),
+        "body": long_body,
+    })
+
+    async with session_factory() as session, session.begin():
+        await derive_im_deliveries_from_fanout(session, event, max_chunks=2)
+
+    events = await _im_events(session_factory)
+    assert len(events) == 2
+    delivery = (await _deliveries(session_factory))[0]
+    assert json.loads(delivery.external_target)["chunks_total"] == 2
+
+
+async def test_fanout_wrapper_forwards_configured_max_chunks(monkeypatch):
+    captured: dict[str, int] = {}
+
+    class _BaseHandler:
+        async def handle(self, session, event):
+            return None
+
+    class _NestedTransaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class _Session:
+        def begin_nested(self):
+            return _NestedTransaction()
+
+    async def _derive(session, event, *, max_chunks):
+        captured["max_chunks"] = max_chunks
+
+    monkeypatch.setattr(
+        "mesh.integrations.im_outbound.derive_im_deliveries_from_fanout",
+        _derive,
+    )
+    handler = _fanout_with_im_derivation(_BaseHandler(), max_chunks=3)
+
+    await handler(_Session(), object())
+
+    assert captured == {"max_chunks": 3}
 
 
 async def test_review_requested_derives_card_event(session_factory):

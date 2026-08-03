@@ -255,7 +255,6 @@ async def _enqueue_acked_item(
             item=item,
             ack_template="✅ 已接收，处理中",
             coalesce_window=timedelta(seconds=5),
-            conversation_type="group",
         )
     return item
 
@@ -512,7 +511,7 @@ async def test_e2e_token_single_flight_two_replicas(fake_dingtalk, session_facto
             await session.flush()
             await elect_ack_leader(
                 session, item=item2, ack_template="✅ 已接收，处理中",
-                coalesce_window=timedelta(seconds=5), conversation_type="group",
+                coalesce_window=timedelta(seconds=5),
             )
 
         async def _both_sent():

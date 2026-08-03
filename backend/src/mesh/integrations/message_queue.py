@@ -48,9 +48,10 @@ from mesh.db.models.integration import (
     IntegrationEvent,
     IntegrationMessageQueue,
 )
+from mesh.integrations.ack import elect_ack_leader
 from mesh.integrations.connectors import NormalizedEvent
 from mesh.integrations.inbound_guards import InboundGuardRejected
-from mesh.integrations.queue_events import IM_SEND_EVENT, emit_queue_updated
+from mesh.integrations.queue_events import emit_queue_updated
 from mesh.integrations.queue_keys import (
     build_conversation_key,
     build_sender_identity_key,
@@ -67,7 +68,6 @@ DEFAULT_EXECUTION_TIMEOUT_SECONDS = 1800
 
 _BINDING_DISPLAY_LIMIT = 200
 _SEQ_RETRY_LIMIT = 3
-_ACK_IDEMPOTENCY_SUFFIX = "ack"
 
 
 @dataclass(frozen=True)
@@ -184,36 +184,6 @@ async def _effective_dispatch_mode(
     return "serial_conversation" if (serial_residue or 0) > 0 else "parallel"
 
 
-async def _find_covering_leader(
-    session: AsyncSession,
-    *,
-    conversation_key: str,
-    window_at: datetime,
-    window_floor: datetime,
-) -> uuid.UUID | None:
-    """Leader whose lock-ordered window covers ``window_at`` (§3.8).
-
-    Window ``[L.ack_window_at, L.ack_window_at + W)`` ⟺
-    ``L.ack_window_at <= window_at AND L.ack_window_at > window_floor``
-    where ``window_floor = window_at - W``. A leader self-references
-    (``ack_leader_id = id``); the most recent covering leader by seq wins.
-    Relay arrival order is irrelevant — leadership is fixed at enqueue time
-    under the imq_seq lock.
-    """
-    row = await session.execute(
-        select(IntegrationMessageQueue.id)
-        .where(
-            IntegrationMessageQueue.conversation_key == conversation_key,
-            IntegrationMessageQueue.ack_leader_id == IntegrationMessageQueue.id,
-            IntegrationMessageQueue.ack_window_at <= window_at,
-            IntegrationMessageQueue.ack_window_at > window_floor,
-        )
-        .order_by(IntegrationMessageQueue.seq.desc())
-        .limit(1)
-    )
-    return row.scalar_one_or_none()
-
-
 async def enqueue_message(
     session: AsyncSession,
     *,
@@ -271,23 +241,9 @@ async def enqueue_message(
     # 3. ack window leadership by seq (§3.8 leader determination).
     ack_template = str((integration.config or {}).get("ack_template", "✅ 已接收，处理中"))
     ack_enabled = ack_template != ""
-    leader_id: uuid.UUID | None = None
     is_leader = False
-    if ack_enabled:
-        window_floor = window_at - timedelta(
-            seconds=settings.im_ack_coalesce_window_seconds
-        )
-        leader_id = await _find_covering_leader(
-            session,
-            conversation_key=conversation_key,
-            window_at=window_at,
-            window_floor=window_floor,
-        )
-        is_leader = leader_id is None
 
     item_id = uuid.uuid4()
-    if ack_enabled and is_leader:
-        leader_id = item_id  # self-reference
 
     # 4. parallel optimistic direct-dispatch (§3.2 flow): only when the
     # snapshot mode is parallel (serial residue would have forced serial).
@@ -318,7 +274,7 @@ async def enqueue_message(
         "target_agent_id": binding.bound_agent_id,
         "message_excerpt": sanitize_excerpt(event.text or "", limit=120),
         "sender_identity_key": sender_key,
-        "ack_leader_id": leader_id,
+        "ack_leader_id": None,
         "ack_window_at": window_at,
         "lease_expires_at": lease_expires_at,
     }
@@ -352,24 +308,16 @@ async def enqueue_message(
         .scalar_one()
     )
 
-    # 6. leader writes the ack outbox event; followers write nothing external
-    # (represented semantics expressed via ack_leader_id; T2 back-fills
-    # ack_represented_at after the leader's outbound succeeds — MES-89).
-    if ack_enabled and is_leader:
-        position = await compute_position(session, item=item)
-        await emit_event(
+    # 6. The shared ack primitive determines leader/follower state and writes
+    # the leader's sole outbox event while the conversation lock is held.
+    if ack_enabled:
+        is_leader = await elect_ack_leader(
             session,
-            workspace_id=integration.workspace_id,
-            event_type=IM_SEND_EVENT,
-            payload={
-                "kind": "ack",
-                "integration_id": str(integration.id),
-                "conversation_key": conversation_key,
-                "queue_item_id": str(item.id),
-                "template": ack_template,
-                "position_snapshot": position,
-            },
-            idempotency_key=_ack_key(item.id),
+            item=item,
+            ack_template=ack_template,
+            coalesce_window=timedelta(
+                seconds=settings.im_ack_coalesce_window_seconds
+            ),
         )
 
     # 7. parallel direct-dispatch writes execution.enqueue immediately
@@ -447,8 +395,3 @@ async def compute_position(
         )
     )
     return int(ahead or 0) + 1
-
-
-def _ack_key(item_id: uuid.UUID) -> str:
-    """§6.5 registered key: sha256(queue_item_id | 'ack')."""
-    return hashlib.sha256(f"{item_id}|{_ACK_IDEMPOTENCY_SUFFIX}".encode()).hexdigest()

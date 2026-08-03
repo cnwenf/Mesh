@@ -1184,7 +1184,7 @@ ack 快 relay(outbox relay 同进程集合的高优先级受监督任务,目标�
 - **follower 有界等待(覆盖刷新超时窗口,写死)**:未抢到锁的副本(follower)→ **500ms 双检重读共享缓存,循环至 `MESH_TOKEN_FOLLOWER_WAIT`(默认 12s = 刷新请求超时 10s + 2s 缓冲)——正常刷新(≤10s)期间 follower 必然等到新令牌,不得在 leader 合法刷新期间终态失败** → 等待窗口耗尽仍无令牌 → **尝试重抢一次**(持锁者可能已崩溃且租约到期)→ 仍未得 → 本次出站结果为 **`token_refresh_busy`(可重试退避结果,非终态失败):outbox 事件保持 `pending`,仅后移 `available_at`(README §6.6 权威字段,短退避默认 +2s)、**不递增 `delivery_attempts`——不消耗失败预算、不终态,`available_at` 过滤防热循环**(**#58 迁移落点:该字段随 README §6.6 权威 DDL 入 migration,relay 领取 SQL 按 `available_at <= now()` 过滤**);出站投递台账记一次 busy 尝试;**仅凭据真失败(refresh 端点返回 invalid app_secret 类错误 → `invalid_credentials` 终态)或刷新端点连续失败超 relay 重试预算(`upstream_error` 终态,递增 `delivery_attempts`)才终态 `failed`**。
 - **崩溃恢复与迟到的旧 owner**:锁持有者崩溃 → 租约 30s 自动释放,等待副本经"尝试重抢"接管;接管后**旧 owner 迟到释放被 Lua owner 比对拒绝**(锁值已是新 owner token,DEL 不执行)——**任何时刻至多一个有效刷新者**;共享缓存写入是先于锁释放的独立 SET,持有者写后崩溃不影响令牌可用。
 - **平台侧失效强制刷新**:钉钉返回令牌失效错误码(如 `40014`/`88`)→ 作废旧缓存 + 按上述所有权协议抢锁强制刷新**一次**(幂等:刷新后重试原请求仅一次,仍失败记 `failed`),全副本经共享缓存失效一致。
-- 刷新彻底失败/凭据撤销 → 出站投递记 `failed` + 告警(不阻塞其他集成);**令牌值与 appSecret 永不回显响应/日志/出站请求调试信息**(README §6.16 全通道脱敏:**解密后的 app_secret/accessToken 一律登记 `redact_in_logs` 黑名单**;`connections/open`/`accessToken` 等携带明文秘钥的出站请求体在日志、错误台账、投递详情中以 `***` 替换,502 排障仅记 `method/url/status`,不记 body)。
+- 刷新彻底失败/凭据撤销 → 出站投递记 `failed` + 告警(不阻塞其他集成);**令牌值与 appSecret 永不回显响应/日志/出站请求调试信息**(README §6.16 全通道脱敏:长期凭据 `app_secret` 的解密值登记 `redact_in_logs` 黑名单；持续轮换的 `accessToken` 不依赖不可完备的字面值黑名单，改由适配器落实**结构化零日志**——`connections/open`/`accessToken` 等请求体、响应体与鉴权头值均不记录、不进入错误台账或投递详情，502 排障仅记 `method/url/status`)。
 
 **发送通道**:
 

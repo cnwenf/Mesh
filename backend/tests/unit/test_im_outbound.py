@@ -167,6 +167,36 @@ def test_falls_back_to_line_boundary():
         assert chunk.endswith("\n")
 
 
+def test_prefers_line_boundary_outside_fenced_code_block():
+    prefix = "p" * 55 + "\n"
+    text = (
+        prefix
+        + "```python\n"
+        + "first = 1\n\n"
+        + "second = 2\n"
+        + "third = 3\n"
+        + "```\n\n"
+        + "tail"
+    )
+
+    chunks = split_markdown_chunks(text, max_bytes=90)
+
+    # The later paragraph boundary is inside the code fence. The earlier
+    # plain line boundary must win so the first chunk does not cut code.
+    assert chunks[0] == prefix
+    assert chunks[1].startswith("```python\n")
+
+
+def test_uses_fenced_line_boundary_when_no_outside_boundary_fits():
+    first_code_line = "x" * 40 + "\n"
+    text = "```python\n" + first_code_line + "y" * 40 + "\n```\ntail"
+
+    chunks = split_markdown_chunks(text, max_bytes=70)
+
+    assert chunks[0] == "```python\n" + first_code_line
+    assert "".join(chunks) == text
+
+
 def test_utf8_safe_hard_cut_without_boundaries():
     text = "中" * 10000  # 3 bytes/char, no whitespace at all
     chunks = split_markdown_chunks(text, max_bytes=9000)
