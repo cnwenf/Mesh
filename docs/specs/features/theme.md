@@ -34,8 +34,8 @@
 | T3 | 工作区默认 | `workspaces.settings.default_theme`(默认 `system`,admin 写);账号偏好 absent/`null` 时生效 | 团队统一暗色 |
 | T4 | 偏好协商链 | 用户偏好(absent/`null` 跳过;显式 `system` 在本级终止并跟随 OS)→ 工作区默认 → 系统(→`prefers-color-scheme`);未登录场景从第 2 级起 | 邀请接受页随工作区 |
 | T5 | 暗色整组替换 | `:root[data-theme='dark']` 属性选择器整组覆盖语义 token;暗色颜色 token 与亮色一一对应(测试断言无遗漏/多余) | 一处切换全局生效 |
-| T6 | 切换即时无刷新 | 仅改 `<html data-theme>`,CSS 变量级联即时生效;不重载不重建路由 | 设置页即时预览 |
-| T7 | 防闪烁(FOUC) | `<head>` 同步内联脚本首帧前执行 §2.3 **三级链路**(精确注入 `__MESH_APPEARANCE__` → active-partition locator + 分区镜像 → skeleton;**键值显式白名单:非 `light|dark` 一律丢弃,回落 system 解析**)→ 解析 system → 设 `data-theme`;存储访问 try/catch | 刷新无白闪 |
+| T6 | 切换即时无刷新 | 改 `<html data-theme>` 并同步 `.light`/`.dark` 兼容类,CSS 变量级联即时生效;`data-theme` 仍为 Mesh 权威契约,兼容类仅供组件库 dark variant 消费;不重载不重建路由 | 设置页即时预览 |
+| T7 | 防闪烁(FOUC) | `<head>` 同步内联脚本首帧前执行 §2.3 **三级链路**(精确注入 `__MESH_APPEARANCE__` → active-partition locator + 分区镜像 → skeleton;**键值显式白名单:非 `light\|dark` 一律丢弃,回落 system 解析**)→ 解析 system → 同步设 `data-theme` 与 `.light`/`.dark`;组件库 Provider 只消费解析结果,自带首帧脚本被置为惰性数据节点且不写 storage;存储访问 try/catch | 刷新无白闪 |
 | T8 | 系统偏好实时跟随 | `system` 模式监听 `prefers-color-scheme` `change` 实时切换;显式 light/dark 忽略;卸载注销 | 操作系统切换即跟随 |
 | T9 | `color-scheme` 联动 | `:root` 声明 `color-scheme: light`,暗色声明 `dark`——原生滚动条/下拉/自动填充随主题 | 原生控件不刺眼 |
 | T10 | `prefers-reduced-motion` | 减少动效偏好下关过渡/动画;主题切换不做首帧渐变 | 无障碍 |
@@ -99,9 +99,10 @@
 
 ### 2.3 单一事实源(前端)
 
-- **token 唯一事实源为 `tokenValues.ts` 的 `LIGHT_TOKENS`/`DARK_TOKENS`**;`tokens.css`(`:root`)/`tokens-dark.css`(`:root[data-theme='dark']`)是**由构建脚本从该事实源生成的产物**(`npm run gen:tokens`,或等效构建步骤),文件头带「本文件由 tokenValues.ts 生成,禁止手改」标记(评审 M4 收口:此前「三份镜像须逐项一致」实为三个事实源,必然漂移):
-  - 新增/修改 token **只改 `tokenValues.ts` 一处**,重新生成两份 CSS;
+- **token 唯一事实源为 `tokenValues.ts` 的 `LIGHT_TOKENS`/`DARK_TOKENS`/`APPICA_TOKEN_ALIASES`**;`tokens.css`(`:root`)/`tokens-dark.css`(`:root[data-theme='dark']`)/`tokens-print.css`(`@media print`)/`appica-tokens.css`(组件库原始 token → Mesh 语义 token 别名)是**由构建脚本从该事实源生成的四个产物**(`npm run gen:tokens`,或等效构建步骤),文件头带「本文件由 `tokenValues.ts` 生成,禁止手改」标记(评审 M4 收口:此前「三份镜像须逐项一致」实为多个事实源,必然漂移):
+  - 新增/修改 token 或组件库映射**只改 `tokenValues.ts` 一处**,重新生成四份 CSS;
   - **CI 幂等断言**:生成步骤运行后工作区无 diff(手改生成文件即 CI 失败);既有「解析 CSS 断言与 TS 逐项一致」的测试保留为第二道防线;
+  - **组件库主题桥接**:`ThemeProvider` 把 Mesh 协商链的二值结果作为 `forcedTheme` 传入组件库 Provider,关闭其 system/color-scheme/storage 能力,并同步 `.light`/`.dark` 兼容类;组件库不得成为偏好或首帧主题的第二事实源;
 - **首帧主题:一条可运行的三级链路(评审 R2-H5 写死,优先级「精确注入 → 精确镜像 → skeleton」)**:
   - **① 精确注入(首选,正常导航的默认链路)**:Web 应用的 HTML 文档请求(应用路由的 GET,非 XHR/fetch)携带 **HttpOnly 会话 cookie `mesh_session`**(auth.md 会话模型的 httpOnly + Secure cookie 形态,§5.5「refresh 优先 httpOnly + Secure cookie」条款;Bearer 仅用于 API 调用,不承担 HTML 请求鉴权)。服务端入口(渲染 index.html 的应用入口中间件)**用该会话解析请求者协商链**——账号偏好取会话用户的 `users.settings.theme`,**工作区默认取路由路径中的 `/w/{workspace_slug}/` 段**解析出的 `workspaces.settings.default_theme`(无工作区段 → `system`;邀请接受页 `/invite?token=` → 经 invitation preview 同源数据)——并把**非敏感** `window.__MESH_APPEARANCE__ = { mode: "light"|"dark" }`(仅解析后的二值主题模式,**不含任何工作区标识/名称等可枚举信息**)内联注入入口 HTML;`<head>` 同步脚本首帧读取该注入值设置 `data-theme`;
   - **② 精确镜像(回退:入口为纯静态缓存 / CDN 边缘副本 / 离线 Service Worker 命中,注入缺失)**:读 **active-partition locator**——首帧可读的单键 `mesh.theme.active`,值为 `{ id: "<route_id>", mode: "light"|"dark" }`。**`route_id` 由当前 URL 可同步确定的路由身份分区(评审 R3-H3 写死)**——内联脚本首帧即拥有 `location`,按下表**本地推导期望 `route_id`**(不依赖任何异步状态/远端数据):`/w/{slug}/…` → `{host}:w:{slug}`;`/invite…` 公开入口 → `{host}:invite`;其余已登录应用路由 → `{host}:app`;其余公开页 → `{host}:anon`(host = API 基址 origin)。**读取时校验 locator 的 `id` 与当前路由推导的期望 `route_id` 完全匹配——不匹配(或无法证明匹配)即丢弃该镜像、进 ③ skeleton**(localStorage 跨 tab 共享:暗色工作区 A 与浅色工作区 B 双开时,B 最后写入的 locator `id` 与 A 的期望不符,A 宁走 skeleton 也**不读 B 的分区**);匹配时取 `mode`,**显式白名单**——非 `light|dark` 一律丢弃进 ③(localStorage 可被同源脚本写入,不得成为攻击者可控的属性落点)。偏好 store 在**每次解析完成、登录、切换工作区**后以当前路由身份回写 `{id, mode}`(单键覆盖);**登出时清理 locator + 当前 host 下残留的旧分区键**(防下一账号串用);locator 缺失(冷启动/登出后/换设备)→ 不得猜测或沿用残留值,直接进 ③。**身份不含 user_id 的残留风险由「登出清理 + 登录后首次解析必回写 + 正常导航走 ① 注入」三层覆盖**(镜像链路仅在静态缓存入口生效,该场景无会话上下文可精确到用户);
@@ -239,7 +240,7 @@
 
 - [ ] **协商链优先级正确**:用户偏好(absent/`null` 跳过;显式 `system` 本级终止跟随 OS)→ 工作区默认 → 系统;账号未设 + 工作区默认 `dark` → 应用暗色;**显式 `system` + 工作区默认 `dark` + OS 浅色 → 应用浅色(忽略工作区)**;账号 `null` 写入后恢复跟随工作区默认;未登录进入邀请接受页 → 按 invitation preview 返回的工作区默认解析(**不再硬编码回退 `system`,不经过成员接口**)。
 - [ ] **无闪错主题 e2e 三场景(评审 H2)**:① **A→B 工作区切换**:已登录用户从默认暗色的工作区 A 切到默认浅色的 B,首帧即 B 的解析主题,无「先暗后浅」闪烁;② **换账号**:登出暗色偏好账号、登入无账号偏好账号,不串用上一账号主题(分区键已按登出清理);③ **邀请接受页**:未登录打开默认暗色工作区的邀请链接,首帧即暗色(来自 invitation preview 注入),无白闪无错主题。
-- [ ] **三态切换即时无刷新**:light/dark/system 切换仅改 `<html data-theme>`,无路由重建;`system` 下操作系统切换深浅色**实时跟随**(`matchMedia change`),显式 light/dark 时忽略系统变化。
+- [ ] **三态切换即时无刷新**:light/dark/system 切换同步改 `<html data-theme>` 与 `.light`/`.dark` 兼容类,无路由重建;`data-theme` 为权威值,兼容类不得自行解析偏好;`system` 下操作系统切换深浅色**实时跟随**(`matchMedia change`),显式 light/dark 时忽略系统变化。
 - [ ] **防闪烁**:冷启动(清本地镜像)刷新无白闪;冷缓存首帧按 §2.3 **三级链路**(精确注入 → locator/分区镜像 → skeleton,不闪错主题):**已登录正常导航命中注入链路**(断言入口 HTML 含 `__MESH_APPEARANCE__` 且与请求者协商结果一致);静态缓存入口命中 locator 链路;两者皆无时渲染中性 skeleton 至协商完成;内联脚本 try/catch 存储访问;静态 HTML 不预置 `data-theme`。
 - [ ] **locator 路由身份分区(R3-H3)**:① **A 暗 / B 浅双 tab**:默认暗色工作区 A 与浅色工作区 B 同时打开,B 最后写入 locator 后,A 以静态缓存/离线入口刷新 → **首帧不读 B 的分区**(locator `id` 与 A 路由推导不符 → skeleton → 协商后暗色),无闪错主题;② **前进/后退**:A → B → 返回 A 的每次首帧按当前 URL 推导的 `route_id` 校验 locator,不匹配即 skeleton 而非沿用上一路由镜像;③ **离线静态入口**:断网下以 Service Worker 缓存 shell 打开 `/w/{slug}/…`,locator 匹配则应用镜像值、不匹配或非法则 skeleton(不崩溃、不闪错);④ 登出后 locator 与残留分区键被清理,下一账号登录不串用。
 - [ ] **暗色整组替换**:暗色颜色 token 与亮色**一一对应**(测试断言无遗漏/多余);抽查核心页面(看板/issue 详情/成员/聊天/运行详情/收件箱)暗色下无硬编码死角。
@@ -269,7 +270,7 @@
 
 ### 5.4 验收门禁(CI,防回归)
 
-- [ ] **token 生成幂等门禁(评审 M4)**:`tokens.css`/`tokens-dark.css` 为 `tokenValues.ts` 的生成产物(§2.3);CI 运行生成步骤后断言 git 工作区**无 diff**(手改生成文件即失败);「解析 CSS 与 TS 逐项一致」测试保留为第二道防线。
+- [ ] **token 生成幂等门禁(评审 M4)**:`tokens.css`/`tokens-dark.css`/`tokens-print.css`/`appica-tokens.css` 为 `tokenValues.ts` 的生成产物(§2.3);CI 运行生成步骤后断言 git 工作区**无 diff**(手改生成文件即失败);「解析 CSS 与 TS 逐项一致」测试保留为第二道防线。
 - [ ] **对比度 CI 关卡**:独立脚本 import 单一事实源(`LIGHT_TOKENS`/`DARK_TOKENS` + 配对表 + 对比度公式),正文/状态色文本 ≥4.5:1、图形元件 ≥3:1、**大文本(WCAG 2.1:≥24px,或 ≥18.66px 加粗)≥3:1(评审 T4:配对表登记字号/字重维度,CI 按大文本阈值校验对应配对并在校验报告中单列大文本组)**,亮/暗两套逐对校验,任一不达标 PR 失败;新增颜色 token 须先登记配对表。
 - [ ] **forced-colors 验收(评审 T1,§4.3)**:**仿真 + 真机双通道**——Playwright `page.emulateMedia({ forcedColors: 'active' })` 覆盖核心页面矩阵(§5.4 暗色视觉回归同一页面集),断言语义 token 落系统色(Canvas/CanvasText/Highlight/GrayText/LinkText)、结构边界可见(显式 border,阴影失效不破坏层级辨识)、自证对比区 `forced-color-adjust: none` 生效;**真机通道**:Windows 高对比/对比主题(Edge)手工核对清单随 PR 模板登记(仿真引擎与真实 Windows 强制色存在实现差,真机为最终依据)。
 - [ ] **硬编码色值扫描(AST 级,评审 M4)**:以 **CSS/TS AST 级规则**扫描(Stylelint 自定义规则覆盖 `*.css`;ESLint 自定义规则覆盖 `*.tsx`/`*.ts`),命中面包括 `#hex`/`rgb()/rgba()/hsl()/hsla()/oklch()/oklab()`/命名色/**内联 `style` 颜色属性**/**SVG `fill`/`stroke` 字面量**(白名单放行 `transparent/currentColor/inherit/initial/revert/unset`),颜色值必须 `var(--*)`;**不做整文件白名单**——豁免仅到「逐文件 + 行级注释原因」的显式登记数据色例外(§2.5),新增例外需评审。

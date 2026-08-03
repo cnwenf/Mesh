@@ -8,6 +8,7 @@ describe('Badge(§7.2 图标+文案,颜色不是唯一信号)', () => {
     render(<Badge>草稿</Badge>);
     const badge = screen.getByText('草稿').closest('span')!;
     expect(badge).toHaveClass('mesh-badge', 'mesh-badge--neutral');
+    expect(badge).toHaveAttribute('data-slot', 'badge');
     expect(badge.querySelector('svg')).not.toBeNull();
   });
 

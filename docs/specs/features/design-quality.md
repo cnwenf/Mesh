@@ -677,6 +677,16 @@ features/
 
 当前目录可渐进迁移，不要求一次性移动所有文件；但新组件必须遵循该依赖方向：`features → patterns → primitives → foundations`，禁止反向依赖。
 
+**MES-158 组件底座契约**：前端以精确锁定的 `@appica/ui-react@1.0.0` 作为 UI 原语与应用外壳基础，仅从公开子路径按需导入，禁止根 barrel import。Mesh 的 `design/components` 继续是业务层唯一稳定接口：适配层负责保留既有 props、className、路由、权限和状态语义，feature 不直接绑定第三方组件 API。桌面侧栏、顶栏搜索和基础 Button/Input/Badge/Avatar/Kbd/Skeleton 由该底座渲染；后端接口、数据模型、路由表、Zustand 状态、Realtime 契约与 RBAC 均不得因视觉迁移改变。
+
+依赖接入还须满足以下约束：
+
+- `@appica/ui-react`、Tailwind CSS 与 Vite 插件均精确锁版本，lockfile 必须提交；
+- 全局样式只从 `design/base.css` 引入，业务 CSS 不直接导入第三方样式；`design/base.css` 以 Appica 发布包为 Tailwind source，应用代码仍只允许按组件子路径导入；
+- Mesh 主题协商链是唯一偏好事实源，组件库主题只能消费 Mesh 已解析的 `light|dark`；其 storage、首帧脚本与 system 解析均须禁用或惰性化，不得成为第二条主题权威链；
+- `APPICA_TOKEN_ALIASES` 由 `tokenValues.ts` 生成 `appica-tokens.css`，把组件库原始 token 映射到 Mesh 语义 token；亮暗模式不得另建色值真源；
+- `check:appica` 在 CI 校验精确版本、已安装包许可、THIRD_PARTY_NOTICES、样式入口、子路径导入和 token 桥接；`npm audit --audit-level=high` 必须同时通过。
+
 ### 11.2 CSS 策略
 
 - token/基础组件使用全局稳定类；业务样式使用 feature 前缀。
@@ -688,12 +698,13 @@ features/
 
 ### 11.3 兼容迁移
 
-1. 新 token 先加入，旧 token 作为别名。
-2. 重做 Button/Input/Select/Icon，不改业务接口。
-3. 引入 PageHeader、DataView、DetailLayout，按页面族迁移。
-4. 外壳和手机导航独立上线；旧侧栏保留桌面兼容直到全部入口迁移。
-5. 每个页面迁移后删除对应散落样式，不保留双实现。
-6. 一个发布周期后删除旧 token 别名，并通过静态扫描阻止回归。
+1. 先建立组件库 token → Mesh 语义 token 的生成式桥接，旧 Mesh token 继续作为兼容接口。
+2. 在 `design/components` 内适配 Button/Input/Select/Icon，不改业务 props、事件或状态接口。
+3. 以组件库 Navigation/Input/Button 迁移桌面侧栏和顶栏；导航清单、深链、权限与业务数据流保持原实现。
+4. 引入 PageHeader、DataView、DetailLayout，按页面族迁移。
+5. 外壳和手机导航独立上线；旧侧栏保留桌面兼容直到全部入口迁移。
+6. 每个页面迁移后删除对应散落样式，不保留双实现。
+7. 一个发布周期后删除旧 token 别名，并通过静态扫描阻止回归。
 
 ### 11.4 性能预算
 
@@ -779,6 +790,7 @@ features/
 
 ### 13.2 令牌与组件
 
+- [x] `@appica/ui-react@1.0.0` 以精确版本、子路径导入和 MIT notice 接入；组件库 token 全部桥接到 Mesh 语义 token，主题无第二事实源（`check:appica` + token 幂等测试）。
 - [x] 色彩、字体、间距、圆角、阴影、动效、z-index 均令牌化（token 生成幂等 + ESLint/Stylelint）。
 - [x] 业务 CSS 无新增原始颜色；旧别名由精确 baseline 阻止增加（`lint:css`、`check:legacy-token-debt`）。
 - [x] Button、字段、Select、菜单、Dialog、Drawer 覆盖完整状态矩阵（design component UT + styleguide visual）。

@@ -2,6 +2,7 @@
  * 按键帽:快捷键帮助层的 <kbd> 展示单元。
  */
 import type { ReactNode } from 'react';
+import { Kbd as AppicaKbd } from '@appica/ui-react/kbd';
 import './components.css';
 
 export interface KbdProps {
@@ -9,5 +10,5 @@ export interface KbdProps {
 }
 
 export function Kbd(props: KbdProps): React.JSX.Element {
-  return <kbd className="mesh-kbd">{props.children}</kbd>;
+  return <AppicaKbd className="mesh-kbd">{props.children}</AppicaKbd>;
 }

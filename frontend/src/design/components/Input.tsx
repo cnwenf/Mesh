@@ -5,6 +5,7 @@
  */
 import type { InputHTMLAttributes } from 'react';
 import { forwardRef, useId } from 'react';
+import { Input as AppicaInput } from '@appica/ui-react/input';
 import './components.css';
 
 export type InputSize = 'md' | 'lg';
@@ -47,10 +48,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       <label className="mesh-field__label" htmlFor={inputId}>
         {label}
       </label>
-      <input
+      <AppicaInput
         ref={ref}
         id={inputId}
         className={controlClasses}
+        inputSize={size === 'lg' ? 'lg' : 'md'}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
         {...rest}

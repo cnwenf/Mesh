@@ -19,14 +19,18 @@ describe('Button', () => {
     expect(button).toHaveAttribute('type', 'button');
     expect(button.className).toContain('mesh-button--primary');
     expect(button.className).toContain('mesh-button--md');
+    expect(button).toHaveAttribute('data-slot', 'button');
   });
 
-  it.each(['primary', 'secondary', 'ghost', 'danger'] as const)('variant=%s 落到类名', (variant) => {
-    render(<Button variant={variant}>V</Button>);
-    expect(screen.getByRole('button', { name: 'V' }).className).toContain(
-      `mesh-button--${variant}`,
-    );
-  });
+  it.each(['primary', 'secondary', 'ghost', 'danger'] as const)(
+    'variant=%s 落到类名',
+    (variant) => {
+      render(<Button variant={variant}>V</Button>);
+      expect(screen.getByRole('button', { name: 'V' }).className).toContain(
+        `mesh-button--${variant}`,
+      );
+    },
+  );
 
   it('size=sm 落到类名', () => {
     render(<Button size="sm">S</Button>);

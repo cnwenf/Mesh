@@ -4,7 +4,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { forwardRef } from 'react';
 import type { ButtonSize, ButtonVariant } from './Button';
-import { buttonClasses } from './Button';
+import { Button } from './Button';
 import './components.css';
 
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -20,12 +20,22 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   { label, variant = 'ghost', size = 'md', type = 'button', className, children, ...rest },
   ref,
 ) {
-  const classes = [buttonClasses(variant, size, className), 'mesh-icon-button', `mesh-icon-button--${size}`].join(' ');
+  const classes = ['mesh-icon-button', `mesh-icon-button--${size}`, className]
+    .filter((part): part is string => Boolean(part))
+    .join(' ');
   return (
-    <button ref={ref} type={type} className={classes} aria-label={label} {...rest}>
+    <Button
+      ref={ref}
+      type={type}
+      variant={variant}
+      size={size}
+      className={classes}
+      aria-label={label}
+      {...rest}
+    >
       <span className="mesh-icon-button__icon" aria-hidden="true">
         {children}
       </span>
-    </button>
+    </Button>
   );
 });

@@ -59,12 +59,14 @@ cd frontend
 npm install -D license-checker
 
 # 扫描：仅允许以下宽松许可
-npx license-checker --summary --onlyAllow \
-  "MIT;ISC;Apache-2.0;OFL-1.1;BSD-2-Clause;BSD-3-Clause;CC-BY-4.0;CC0-1.0;Unlicense;0BSD;Python-2.0"
+npx license-checker --excludePrivatePackages --summary --onlyAllow \
+  "MIT;ISC;Apache-2.0;OFL-1.1;BSD-2-Clause;BSD-3-Clause;CC-BY-4.0;CC0-1.0;Unlicense;0BSD;Python-2.0;MIT-0;BlueOak-1.0.0;MPL-2.0"
 
 # 详细输出（排查用）
 npx license-checker --csv --out licenses.csv
 ```
+
+`--excludePrivatePackages` 只排除仓库自身的 `private: true` 根包，不排除任何第三方依赖。MPL-2.0 仅用于当前 axe/lightningcss 等未改写依赖的文件级弱 copyleft 场景，须保留其许可且不得复制修改后的 MPL 文件而不公开对应文件源码。
 
 **不通过即阻断合入**：任何 GPL / AGPL / LGPL / SSPL / EUPL / 专有许可的包均不得进入依赖树。
 
@@ -94,6 +96,15 @@ print('PASS: no high/critical vulnerabilities')
 npm ci --dry-run
 # 若有 diff 则说明 lockfile 过期——必须 npm install 后重新提交
 ```
+
+### 3.4 Appica UI 底座专项门禁（MES-158）
+
+```bash
+cd frontend
+npm run check:appica
+```
+
+该门禁 fail closed 校验 `@appica/ui-react@1.0.0` 与 Tailwind 构建依赖均为精确版本、实际安装包为 MIT、`THIRD_PARTY_NOTICES.md` 含完整声明、样式与 token 桥接入口存在，并拒绝根 barrel import。其结果不能替代 §3.1 全依赖树许可扫描或 §3.2 漏洞审计；三者均须通过。
 
 ---
 

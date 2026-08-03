@@ -16,10 +16,15 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { ThemeProvider as AppicaThemeProvider } from '@appica/ui-react/providers/theme-provider';
 import { useSettingsStore } from '../state/settingsStore';
 import { useWorkspaceThemeBridge } from '../state/workspaceThemeBridge';
 import { writeThemeLocator } from './themeLocator';
-import { resolveThemeChain, routeExpectsWorkspaceDefault, ROUTE_CHANGE_EVENT } from './themeNegotiation';
+import {
+  resolveThemeChain,
+  routeExpectsWorkspaceDefault,
+  ROUTE_CHANGE_EVENT,
+} from './themeNegotiation';
 import type { ResolvedTheme } from './themeNegotiation';
 import { DARK_TOKENS, LIGHT_TOKENS } from './tokenValues';
 import { THEME_CHANGED_EVENT } from './ugcColorGuard';
@@ -27,6 +32,11 @@ import { ThemeSkeleton } from './ThemeSkeleton';
 
 const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 const PENDING_ATTR = 'data-theme-pending';
+const APPICA_THEMES = ['light', 'dark'];
+const INERT_APPICA_SCRIPT_PROPS = {
+  type: 'application/json',
+  'data-mesh-theme-bridge': '',
+};
 
 /** 兼容导出:将主题模式解析为实际应用的主题(system 跟随系统偏好)。 */
 export function resolveTheme(
@@ -43,6 +53,17 @@ export function resolveTheme(
 function firstFrameHasTheme(): boolean {
   const el = document.documentElement;
   return el.hasAttribute('data-theme') && !el.hasAttribute(PENDING_ATTR);
+}
+
+function readAppliedTheme(): ResolvedTheme | null {
+  const value = document.documentElement.dataset.theme;
+  return value === 'light' || value === 'dark' ? value : null;
+}
+
+/** Appica 的 dark variant 读取 class；Mesh 的服务端/业务契约读取 data-theme。 */
+function syncThemeClass(el: HTMLElement, mode: ResolvedTheme): void {
+  el.classList.remove('light', 'dark');
+  el.classList.add(mode);
 }
 
 /**
@@ -97,6 +118,9 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
   // - 注入/locator 首帧(firstFrameHint)→ 保持首帧,不 skeleton;
   // - 仅「已登录 + 工作区路由 + 桥接未就绪 + 无任何首帧提示」这一窄窗口才 skeleton。
   const pending = !chainReady && !firstFrameHint.current && sessionProbed;
+  // 链尚未可信时沿用服务端注入/locator 的首帧值；无提示时业务内容被 skeleton
+  // 覆盖，临时 mode 不可见。Appica 只消费该解析结果，不拥有偏好存储。
+  const appicaMode = chainReady ? mode : (readAppliedTheme() ?? mode);
 
   // system 偏好实时跟随(T8):matchMedia change 监听,卸载注销。
   useEffect(() => {
@@ -127,11 +151,14 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
     const el = document.documentElement;
     if (!chainReady) {
       if (firstFrameHint.current) {
+        const firstFrameMode = readAppliedTheme();
+        if (firstFrameMode !== null) syncThemeClass(el, firstFrameMode);
         el.removeAttribute(PENDING_ATTR); // 首帧提示已绘制,清 pending 标记
       }
       return;
     }
     el.dataset.theme = mode;
+    syncThemeClass(el, mode);
     el.removeAttribute(PENDING_ATTR);
     writeThemeLocator(mode);
     syncMetaThemeColor(mode, userTheme === 'light' || userTheme === 'dark');
@@ -144,7 +171,17 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
   // 保持挂载——其中恰含供给工作区默认的 WorkspaceProvider,卸载会死锁协商链。
   // 非 pending 时包裹层 display:contents,布局中性(无生成盒)。
   return (
-    <>
+    <AppicaThemeProvider
+      forcedTheme={appicaMode}
+      defaultTheme={appicaMode}
+      themes={APPICA_THEMES}
+      enableSystem={false}
+      enableColorScheme={false}
+      storageKey=""
+      // Mesh 已在 index.html 以 CSP-safe 脚本完成首帧协商；把库自带脚本设为
+      // 惰性数据节点，避免第二条脚本/存储链与服务端注入竞争。
+      scriptProps={INERT_APPICA_SCRIPT_PROPS}
+    >
       <div
         data-testid="theme-children-root"
         style={pending ? { display: 'none' } : { display: 'contents' }}
@@ -152,6 +189,6 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
         {props.children}
       </div>
       {pending ? <ThemeSkeleton /> : null}
-    </>
+    </AppicaThemeProvider>
   );
 }

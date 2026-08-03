@@ -2,10 +2,11 @@
 /**
  * 语义 token CSS 生成器(theme.md §2.3 单一事实源)。
  *
- * 从 `src/design/tokenValues.ts`(唯一事实源)生成三个产物:
+ * 从 `src/design/tokenValues.ts`(唯一事实源)生成四个产物:
  * - `src/design/tokens.css`        `:root` 亮色全量(分组注释来自 LIGHT_TOKEN_GROUPS)
  * - `src/design/tokens-dark.css`   `:root[data-theme='dark']` 暗色整组替换
  * - `src/design/tokens-print.css`  `@media print` 强制亮色(仅颜色 token,取亮色值)
+ * - `src/design/appica-tokens.css` Appica 原始 token → Mesh 语义 token 别名
  *
  * 产物首行一律带「禁止手改」标记;CI 幂等断言:重跑本脚本后工作区无 diff。
  * 改 token 只改 tokenValues.ts,随后 `npm run gen:tokens`(或 `npm run build` 自动串联)。
@@ -89,12 +90,23 @@ export function renderPrintCss(lightTokens) {
   return lines.join('\n');
 }
 
+/** 渲染 Appica 适配文件:只允许别名/尺寸值,亮暗取值由 Mesh 语义 token 决定。 */
+export function renderAppicaCss(aliases) {
+  const lines = [GENERATED_HEADER, ':root {'];
+  for (const [name, value] of Object.entries(aliases)) {
+    lines.push(`  ${name}: ${value};`);
+  }
+  lines.push('}', '');
+  return lines.join('\n');
+}
+
 async function main() {
   const mod = await loadTokenValues();
   const files = [
     [path.join(OUT_DIR, 'tokens.css'), renderLightCss(mod.LIGHT_TOKEN_GROUPS)],
     [path.join(OUT_DIR, 'tokens-dark.css'), renderDarkCss(mod.DARK_TOKENS)],
     [path.join(OUT_DIR, 'tokens-print.css'), renderPrintCss(mod.LIGHT_TOKENS)],
+    [path.join(OUT_DIR, 'appica-tokens.css'), renderAppicaCss(mod.APPICA_TOKEN_ALIASES)],
   ];
   for (const [file, content] of files) {
     writeFileSync(file, content, 'utf8');

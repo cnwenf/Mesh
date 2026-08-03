@@ -13,6 +13,13 @@
  *   上下文外保持 navigation.ts 的静态路径,由 FlatRouteMigration 迁移。
  */
 import { NavLink, useLocation } from 'react-router';
+import { Button as AppicaButton } from '@appica/ui-react/button';
+import {
+  Navigation,
+  NavigationItem,
+  NavigationLink,
+  NavigationList,
+} from '@appica/ui-react/navigation';
 import { Icon, Tooltip } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
@@ -31,6 +38,10 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'mesh-sidebar__link mesh-sidebar__link--active' : 'mesh-sidebar__link';
 }
 
+function targetIsActive(pathname: string, target: string, end: boolean): boolean {
+  return end ? pathname === target : pathname === target || pathname.startsWith(`${target}/`);
+}
+
 export function Sidebar(props: SidebarProps): React.JSX.Element {
   const { collapsed, onToggleCollapsed } = props;
   const t = useT();
@@ -47,24 +58,29 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
       item.key === 'board' &&
       (location.pathname.startsWith('/views/') ||
         (workspace !== null && location.pathname.startsWith(`/w/${workspace.slug}/views/`)));
+    const target = resolveNavTarget(item, workspace?.slug ?? null);
+    const active = isBoardView || targetIsActive(location.pathname, target, item.end === true);
     const link = (
-      <NavLink
-        to={resolveNavTarget(item, workspace?.slug ?? null)}
+      <NavigationLink
+        render={<NavLink to={target} end={item.end === true} />}
+        active={active}
         title={t('nav.' + item.key)}
-        end={item.end === true}
         data-testid={'nav-' + testKey}
-        className={({ isActive }) => navLinkClassName({ isActive: isActive || isBoardView })}
+        className={navLinkClassName({ isActive: active })}
       >
         <Icon name={item.icon} size={20} className="mesh-sidebar__link-icon" />
         <span className="mesh-sidebar__link-label">{t('nav.' + item.key)}</span>
-      </NavLink>
+      </NavigationLink>
     );
     // 折叠态:图标按钮语义经 Tooltip 补齐可读名(§7.1)
     return collapsed ? <Tooltip content={t('nav.' + item.key)}>{link}</Tooltip> : link;
   };
 
   return (
-    <nav
+    <Navigation
+      orientation="vertical"
+      variant="pill"
+      size="md"
       className={collapsed ? 'mesh-sidebar mesh-sidebar--collapsed' : 'mesh-sidebar'}
       aria-label={t('a11y.sidebar')}
     >
@@ -73,48 +89,56 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
           {collapsed ? null : (
             <h2 className="mesh-sidebar__group-title">{t('nav.group.' + group.key)}</h2>
           )}
-          <ul className="mesh-sidebar__list">
+          <NavigationList className="mesh-sidebar__list">
             {group.items
               .filter((item) => isNavItemEnabled(item.key, featureFlags))
               .map((item) => (
-                <li key={item.key} className="mesh-sidebar__item">
+                <NavigationItem key={item.key} className="mesh-sidebar__item">
                   {renderItem(item, item.key)}
-                </li>
+                </NavigationItem>
               ))}
             {group.key === 'admin' && showWorkspaceSettings && workspace !== null ? (
-              <li className="mesh-sidebar__item">
+              <NavigationItem className="mesh-sidebar__item">
                 {collapsed ? (
                   <Tooltip content={t('nav.workspaceSettings')}>
-                    <NavLink
-                      to={`/w/${workspace.slug}/settings`}
+                    <NavigationLink
+                      render={<NavLink to={`/w/${workspace.slug}/settings`} />}
+                      active={location.pathname.startsWith(`/w/${workspace.slug}/settings`)}
                       title={t('nav.workspaceSettings')}
                       data-testid="nav-workspace-settings"
-                      className={navLinkClassName}
+                      className={navLinkClassName({
+                        isActive: location.pathname.startsWith(`/w/${workspace.slug}/settings`),
+                      })}
                     >
                       <Icon name="settings" size={20} className="mesh-sidebar__link-icon" />
                       <span className="mesh-sidebar__link-label">{t('nav.workspaceSettings')}</span>
-                    </NavLink>
+                    </NavigationLink>
                   </Tooltip>
                 ) : (
-                  <NavLink
-                    to={`/w/${workspace.slug}/settings`}
+                  <NavigationLink
+                    render={<NavLink to={`/w/${workspace.slug}/settings`} />}
+                    active={location.pathname.startsWith(`/w/${workspace.slug}/settings`)}
                     title={t('nav.workspaceSettings')}
                     data-testid="nav-workspace-settings"
-                    className={navLinkClassName}
+                    className={navLinkClassName({
+                      isActive: location.pathname.startsWith(`/w/${workspace.slug}/settings`),
+                    })}
                   >
                     <Icon name="settings" size={20} className="mesh-sidebar__link-icon" />
                     <span className="mesh-sidebar__link-label">{t('nav.workspaceSettings')}</span>
-                  </NavLink>
+                  </NavigationLink>
                 )}
-              </li>
+              </NavigationItem>
             ) : null}
-          </ul>
+          </NavigationList>
         </section>
       ))}
       <div className="mesh-sidebar__footer">
         <Tooltip content={collapsed ? t('a11y.sidebarExpand') : t('a11y.sidebarCollapse')}>
-          <button
+          <AppicaButton
             type="button"
+            variant="ghost"
+            size="md"
             className="mesh-sidebar__toggle"
             data-testid="sidebar-toggle"
             aria-label={collapsed ? t('a11y.sidebarExpand') : t('a11y.sidebarCollapse')}
@@ -123,9 +147,9 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
           >
             <Icon name="panel-left" size={20} className="mesh-sidebar__toggle-icon" />
             <span className="mesh-sidebar__link-label">{t('a11y.sidebarCollapse')}</span>
-          </button>
+          </AppicaButton>
         </Tooltip>
       </div>
-    </nav>
+    </Navigation>
   );
 }

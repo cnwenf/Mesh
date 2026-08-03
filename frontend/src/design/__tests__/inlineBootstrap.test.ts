@@ -32,6 +32,7 @@ beforeEach(() => {
   localStorage.clear();
   delete document.documentElement.dataset.theme;
   document.documentElement.removeAttribute('data-theme-pending');
+  document.documentElement.classList.remove('light', 'dark');
   delete window.__MESH_APPEARANCE__;
   window.history.pushState({}, '', '/');
 });
@@ -47,6 +48,8 @@ describe('① 精确注入链路', () => {
     window.__MESH_APPEARANCE__ = { mode: 'dark' };
     runBootstrap();
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(document.documentElement).toHaveClass('dark');
+    expect(document.documentElement).not.toHaveClass('light');
     expect(document.documentElement.hasAttribute('data-theme-pending')).toBe(false);
   });
 

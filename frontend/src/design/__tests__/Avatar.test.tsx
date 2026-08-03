@@ -1,6 +1,8 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { avatarHueIndex, avatarInitials, Avatar } from '../components/Avatar';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('avatarInitials(§7.2 姓名缩写)', () => {
   it('拉丁双词名取两词首字母大写', () => {
@@ -54,6 +56,8 @@ describe('Avatar 组件', () => {
     render(<Avatar name="Ada Lovelace" />);
     const avatar = screen.getByRole('img', { name: 'Ada Lovelace' });
     expect(avatar).toHaveTextContent('AL');
+    expect(avatar).toHaveAttribute('data-slot', 'avatar');
+    expect(avatar.querySelector('[data-slot="avatar-fallback"]')).not.toBeNull();
     expect(avatar.className).toMatch(/mesh-avatar--h\d/);
     expect(avatar).toHaveClass('mesh-avatar--32');
   });
@@ -65,11 +69,29 @@ describe('Avatar 组件', () => {
     expect(container.querySelector('svg')).not.toBeNull();
   });
 
-  it('有 src 时渲染图片(alt 留空,名称由旁侧文案承载)', () => {
+  it('有 src 且加载成功时渲染图片(alt 留空,名称由旁侧文案承载)', async () => {
+    class LoadedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      complete = false;
+      naturalWidth = 0;
+      crossOrigin: string | null = null;
+      referrerPolicy = '';
+      sizes = '';
+      srcset = '';
+
+      set src(_value: string) {
+        this.complete = true;
+        this.naturalWidth = 32;
+      }
+    }
+    vi.stubGlobal('Image', LoadedImage);
     const { container } = render(<Avatar name="Ada" src="/avatar.png" />);
-    const img = container.querySelector('img')!;
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
     expect(img).toHaveAttribute('src', '/avatar.png');
     expect(img).toHaveAttribute('alt', '');
+    expect(img).toHaveAttribute('data-slot', 'avatar-image');
   });
 
   it('src 为空字符串时仍回退缩写', () => {

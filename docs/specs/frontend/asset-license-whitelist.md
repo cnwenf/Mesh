@@ -11,7 +11,7 @@
 | 档位 | 含义 |
 |------|------|
 | ✅ 允许 | 宽松许可（MIT / ISC / Apache-2.0 / OFL-1.1 / BSD），商用无障碍，保留署名即可 |
-| 🟡 有条件允许 | 可用但须满足附加条件（署名文件、动态链接、不得用其品牌背书等），条件列于备注 |
+| 🟡 有条件允许 | 可用但须满足附加条件（署名文件、MPL-2.0 文件级义务、不得用其品牌背书等），条件列于备注 |
 | ❌ 禁止 | 传染性许可（GPL / AGPL / SSPL）、来源不明素材、参考产品专有资产——一律不得引入 |
 
 **通用规则**：
@@ -26,6 +26,7 @@
 
 | 库 | 许可 | 商用 | 署名 | 风险/备注 | 结论 |
 |----|------|------|------|-----------|------|
+| Appica UI React (`@appica/ui-react@1.0.0`) | MIT | ✅ | 保留 LICENSE/版权声明 | Mesh 的组件与应用外壳底座；必须精确锁版、仅子路径导入，并通过 `check:appica` 校验 notice 与许可 | ✅ 允许（MES-158 选定） |
 | Radix UI Primitives | MIT | ✅ | 保留 LICENSE | 无样式、无品牌绑定；headless 原语，与自建设计系统天然兼容 | ✅ 允许 |
 | Headless UI (Tailwind Labs) | MIT | ✅ | 保留 LICENSE | 同上，headless；与 Tailwind 生态绑定较紧但可独立使用 | ✅ 允许 |
 | React Aria (Adobe) | Apache-2.0 | ✅ | 保留 NOTICE | 无障碍能力最完整的 headless 库；Apache-2.0 含专利授权 | ✅ 允许 |
@@ -36,7 +37,7 @@
 | 参考产品 UI 组件/源码 | 专有（修改版 Apache-2.0 + 额外限制） | ❌ | — | **明确禁止**，任何复制/改写/搬运均构成侵权 | ❌ 禁止 |
 | 任何 GPL/AGPL 组件库 | GPL/AGPL | ❌（传染性） | — | 传染性许可，引入后整个前端须开源，商业产品不可接受 | ❌ 禁止 |
 
-**推荐**：Radix UI Primitives（headless 原语 + 自建设计令牌，完全掌控视觉）。
+**推荐**：Appica UI React（MIT 组件/外壳基础）经 Mesh `design/components` 适配层与语义 token 桥接使用；Radix UI 仅供当前未覆盖的 headless 原语按需补充。
 
 ---
 
@@ -130,7 +131,7 @@
 | styled-components | MIT | ✅ | 保留 LICENSE | 运行时 CSS-in-JS；MIT；运行时开销 | ✅ 允许 |
 | PostCSS / Autoprefixer | MIT | ✅ | — | 工具链，无许可风险 | ✅ 允许 |
 
-**推荐**：维持现有方案（CSS 自定义属性设计令牌 + CSS Modules），零新增依赖。
+**推荐**：CSS 自定义属性设计令牌 + CSS Modules 为业务样式主路径；Tailwind CSS v4 仅用于编译 Appica UI 已发布 class，并由 `appica-tokens.css` 桥接 Mesh 语义 token。
 
 ---
 
@@ -138,14 +139,15 @@
 
 | 类别 | 推荐 | 许可 | 理由 |
 |------|------|------|------|
-| 组件原语 | **Radix UI Primitives** | MIT | headless、无视觉绑定、无障碍完善 |
+| 组件原语与外壳 | **Appica UI React 1.0.0** | MIT | 组件/外壳基础，经 Mesh 适配层保持业务 API 与主题权威契约 |
+| 补充 headless 原语 | **Radix UI Primitives** | MIT | 仅在 Appica 未覆盖时按需使用，无视觉绑定、无障碍完善 |
 | 图标 | **Lucide** | ISC | 风格中性、按需 SVG、社区活跃 |
 | 英文字体 | **Inter** | OFL-1.1 | UI 专用、可变字重、与对标方向吻合 |
 | 中文字体 | **Noto Sans SC** | OFL-1.1 | 全覆盖、OFL、子集化成熟 |
 | 等宽字体 | **JetBrains Mono** | OFL-1.1 | 代码专用、连字、OFL |
 | 动效 | **Framer Motion** | MIT | React 声明式、生态成熟 |
 | 图表 | **Recharts** | MIT | React 原生、轻量 |
-| 样式 | **CSS 自定义属性 + CSS Modules**（现有） | MIT (Vite) | 零新增依赖、已验证 |
+| 样式 | **Mesh 语义 token + CSS Modules + Tailwind v4 编译层** | MIT | 业务样式保持原路径，组件库 token 由生成式别名桥接 |
 
 ---
 

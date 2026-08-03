@@ -1,7 +1,12 @@
+@import '@appica/ui-react/styles.css';
 @import './tokens.css';
 @import './tokens-dark.css';
 @import './tokens-print.css';
+@import './appica-tokens.css';
 @import './typography.css';
+
+/* Tailwind 默认跳过 node_modules；显式启用 Appica 的发布包来源。 */
+@source '@appica/ui-react';
 
 /*
  * 基线样式入口(README §6.12):语义 token + 最小 reset + 焦点可见 +

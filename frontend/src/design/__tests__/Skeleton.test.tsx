@@ -13,6 +13,7 @@ describe('Skeleton(异常态矩阵 loading 行)', () => {
     const { container } = render(<Skeleton loadingLabel="Loading" />);
     const shape = container.querySelector('.mesh-skeleton__shape');
     expect(shape).not.toBeNull();
+    expect(shape).toHaveAttribute('data-slot', 'skeleton');
     expect(shape).toHaveAttribute('aria-hidden', 'true');
   });
 

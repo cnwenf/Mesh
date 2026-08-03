@@ -20,6 +20,8 @@
         var doc = document.documentElement;
         function apply(mode) {
           doc.setAttribute('data-theme', mode);
+          doc.classList.remove('light', 'dark');
+          doc.classList.add(mode);
         }
         // ① 精确注入
         try {
