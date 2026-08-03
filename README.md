@@ -190,3 +190,8 @@ pip install -r requirements-dev.lock   # 可复现安装(lockfile 为权威来�
 pip install -e . --no-deps
 pytest --cov=mesh --cov-report=term-missing   # 单测 + 真实 e2e(需本地 PostgreSQL 16 与 Redis)
 ```
+
+> **后端测试并行边界(MES-149)**:当前 CI 保持全量串行;共享数据库/
+> Redis 上不启用 xdist。如做分片,必须在独立真实服务栈的 GitHub jobs 间
+> 按 `tests/e2e` / `tests/unit` 拆分,上传原始 coverage data 并在唯一聚合 gate
+> `coverage combine` 后统一执行 ≥90% 门禁;分片必须证明 node id 全集无重无漏。
