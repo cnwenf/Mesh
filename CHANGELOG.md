@@ -5,6 +5,8 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-08-04
+
 ### Fixed
 
 - **数据作业 e2e 确定性收敛(MES-149)**:清零两处 `@pytest.mark.flaky`——`source_changed` 失败通知改为按目标 job group key 轮询 critical 终态;H2 同 checkpoint 双崩溃用例将真实 worker 改为每例生命周期,杜绝模块级后台 reaper 与受控时钟抢锁,并经真实 in-process outbox relay 消费第二次 resume,联合等待 outbox published、job 精确 completed、租约/checkpoint/计数与实体台账全部收敛。同步记录 CI 分片取舍:不在共享数据库/Redis 上启用 xdist,后续仅采用独立服务栈的 job 级分片 + 原始 coverage data 聚合门禁。
