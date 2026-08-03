@@ -47,6 +47,20 @@ describe('LoginPage', () => {
     expect(screen.getByTestId('home-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('login-email')).not.toBeInTheDocument();
   });
+
+  it('initialMode=register 时以注册标题和注册表单作为首屏', () => {
+    renderWithProviders(
+      <Routes>
+        <Route path="/register" element={<LoginPage initialMode="register" />} />
+      </Routes>,
+      { route: '/register' },
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Create account' })).toBeInTheDocument();
+    expect(screen.getByTestId('login-mode-register')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('login-display-name')).toBeInTheDocument();
+    expect(screen.queryByTestId('login-remember')).not.toBeInTheDocument();
+  });
 });
 
 /** 具名错误与交互补齐所用桩 client:与 LoginPageReal 同形(request 直连 mock fetch)。 */
@@ -82,7 +96,9 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-function stubFetch(...responses: Array<{ status: number; body: unknown }>): ReturnType<typeof vi.fn> {
+function stubFetch(
+  ...responses: Array<{ status: number; body: unknown }>
+): ReturnType<typeof vi.fn> {
   const fetchImpl = vi.fn();
   for (const response of responses) {
     fetchImpl.mockImplementationOnce(() =>
@@ -279,13 +295,11 @@ describe('LoginPage(具名错误与交互补齐 · auth.md §6.14)', () => {
 
   it('注册模式切回登录模式:错误清除且登录态控件复原', async () => {
     const user = userEvent.setup();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse(422, {
-          error: { code: 'invalid_credentials', message: 'incorrect email or password' },
-        }),
-      );
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        error: { code: 'invalid_credentials', message: 'incorrect email or password' },
+      }),
+    );
     renderLoginWithStub(fetchImpl);
     await submitCredentials(user);
     await waitFor(() => expect(screen.getByTestId('login-error')).toBeTruthy());

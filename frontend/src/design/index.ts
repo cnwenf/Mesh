@@ -50,8 +50,8 @@ export { Toolbar } from './components/Toolbar';
 export type { ToolbarProps } from './components/Toolbar';
 export { IconButton } from './components/IconButton';
 export type { IconButtonProps } from './components/IconButton';
-export { Input } from './components/Input';
-export type { InputProps, InputSize } from './components/Input';
+export { Input, InputControl } from './components/Input';
+export type { InputControlProps, InputProps, InputSize } from './components/Input';
 export { Kbd } from './components/Kbd';
 export type { KbdProps } from './components/Kbd';
 export { Select } from './components/Select';
@@ -88,13 +88,7 @@ export type { TabItem, TabsProps } from './components/Tabs';
 export { Tooltip } from './components/Tooltip';
 export type { TooltipProps } from './components/Tooltip';
 export { focusableElements, trapTabKey, useFocusTrap } from './components/useFocusTrap';
-export {
-  BulkBar,
-  DataView,
-  DetailLayout,
-  FilterChips,
-  useListKeyboardSelection,
-} from './patterns';
+export { BulkBar, DataView, DetailLayout, FilterChips, useListKeyboardSelection } from './patterns';
 export type {
   BulkBarProps,
   DataViewProps,

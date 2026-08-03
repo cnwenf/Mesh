@@ -15,14 +15,7 @@ import type { RecentEntry } from './recents';
 import type { ShortcutCommand } from './registry';
 
 export type PaletteGroupKey =
-  | 'favorites'
-  | 'recents'
-  | 'commands'
-  | 'issues'
-  | 'members'
-  | 'projects'
-  | 'views'
-  | 'chats';
+  'favorites' | 'recents' | 'commands' | 'issues' | 'members' | 'projects' | 'views' | 'chats';
 
 /** 分组组头 i18n 键(§4.1;键值见 .mes127-i18n/palette.json) */
 export const GROUP_LABEL_KEYS: Readonly<Record<PaletteGroupKey, string>> = Object.freeze({
@@ -431,6 +424,26 @@ export interface ActivationOptions {
 }
 
 /**
+ * 对不可信 URL 做运行时类型守卫、同源相对路径校验与 WHATWG 路径归一化。
+ * 这里只承担导航安全边界，不冒充业务层的「规范深链」路由校验；具体实体路径
+ * 仍由服务端契约与路由表负责。协议 URL、协议相对路径和反斜杠主机逃逸均拒绝。
+ */
+export function normalizeSameOriginPaletteUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value, 'https://mesh.invalid');
+    if (parsed.origin !== 'https://mesh.invalid' || parsed.protocol !== 'https:') {
+      return null;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 激活一个选项:命令 → run() + 计数 + recent;实体/收藏 → 深链导航或新标签。
  * Enter 竞态安全由调用方在 keydown 瞬间捕获 option 保证(§4.3.1)。
  */
@@ -446,8 +459,8 @@ export function activatePaletteOption(
     deps.onAfter?.();
     return;
   }
-  const url = option.url;
-  if (url === undefined) {
+  const url = normalizeSameOriginPaletteUrl(option.url);
+  if (url === null) {
     return;
   }
   if (opts.newTab) {

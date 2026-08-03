@@ -4,15 +4,14 @@
  * → 图表网格(吞吐/workload/agent)。数字 tabular-nums;空窗/成本超限/通用错误
  * 四部分呈现;骨架与最终布局同形。聚合按请求者可见性过滤并给轻提示(§4.3 R3)。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, Navigate, useParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { EmptyState, ErrorState } from '../../design';
+import { Banner, Button, EmptyState, ErrorState, PageHeader, Select, Toolbar } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useDocumentTitle } from '../../shell/hooks';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspace, WorkspaceGate } from '../../workspace/WorkspaceProvider';
 import { ChartFrame } from './ChartFrame';
 import { Kpi } from './Kpi';
 import { KpiStrip } from './KpiStrip';
@@ -68,6 +67,10 @@ function diagnosticOf(err: MeshApiError): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function isPermissionError(error: MeshApiError): boolean {
+  return error.status === 403 || error.code === 'forbidden' || error.code === 'project_not_visible';
+}
+
 /** 口径回显时区:优先顶层 meta.display_timezone,回退吞吐 calendar_timezone。 */
 function echoTimezone(data: WorkspaceDashboardData): string {
   return data.meta.display_timezone ?? data.throughput.meta.calendar_timezone;
@@ -98,87 +101,114 @@ function InsightsSkeleton(props: { readonly label: string }): React.JSX.Element 
 export function InsightsPage(): React.JSX.Element {
   const t = useT();
   useDocumentTitle(t('analytics.insights.title')); // G19 标签页标题
+  return (
+    <div className="mesh-page mesh-analytics__workbench">
+      <PageHeader title={t('analytics.insights.title')} />
+      <WorkspaceGate>
+        <InsightsDashboard />
+      </WorkspaceGate>
+    </div>
+  );
+}
+
+interface LoadedDashboard {
+  readonly scopeKey: string;
+  readonly data: WorkspaceDashboardData;
+  readonly rangeDays: RangeDays;
+  readonly granularity: Granularity;
+}
+
+/** WorkspaceGate 只在 ready 时挂载；route slug 再封住 Provider A→B 的过渡帧。 */
+function InsightsDashboard(): React.JSX.Element {
+  const t = useT();
+  const { workspace } = useWorkspace();
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
-  const [data, setData] = useState<WorkspaceDashboardData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<MeshApiError | null>(null);
+  const routeMatchesWorkspace =
+    workspace !== null && (workspaceSlug === undefined || workspace.slug === workspaceSlug);
+  const scopeKey = routeMatchesWorkspace ? workspace.id : null;
+  const [loadedDashboard, setLoadedDashboard] = useState<LoadedDashboard | null>(null);
+  const [isDashboardLoading, setIsDashboardLoading] = useState(false);
+  const [failure, setFailure] = useState<{
+    readonly scopeKey: string;
+    readonly error: MeshApiError;
+  } | null>(null);
   const [rangeDays, setRangeDays] = useState<RangeDays>(30);
   const [granularity, setGranularity] = useState<Granularity>('day');
-  const [reloadKey, setReloadKey] = useState(0);
+  const [dashboardReloadKey, setDashboardReloadKey] = useState(0);
+  const data =
+    scopeKey !== null && loadedDashboard?.scopeKey === scopeKey ? loadedDashboard.data : null;
+  const dashboardError = scopeKey !== null && failure?.scopeKey === scopeKey ? failure.error : null;
 
   useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
+    if (scopeKey === null) return;
+    const controller = new AbortController();
+    const requestedRange = rangeDays;
+    const requestedGranularity = granularity;
+    setIsDashboardLoading(true);
+    setFailure(null);
+    const now = new Date();
+    fetchWorkspaceDashboard(client, scopeKey, {
+      from: windowStartIso(requestedRange, now),
+      to: windowEndIso(now),
+      granularity: requestedGranularity,
+      signal: controller.signal,
+    })
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setLoadedDashboard({
+          scopeKey,
+          data: result,
+          rangeDays: requestedRange,
+          granularity: requestedGranularity,
+        });
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(toApiError(err));
+        if (!controller.signal.aborted) {
+          setFailure({ scopeKey, error: toApiError(err) });
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsDashboardLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
+    return () => controller.abort();
+  }, [client, scopeKey, rangeDays, granularity, dashboardReloadKey]);
 
-  const load = useCallback(() => {
-    if (workspace === null) {
-      setIsLoading(false);
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-    const now = new Date();
-    fetchWorkspaceDashboard(client, workspace.workspace_id, {
-      from: windowStartIso(rangeDays, now),
-      to: windowEndIso(now),
-      granularity,
-    })
-      .then((result) => setData(result))
-      .catch((err: unknown) => setError(toApiError(err)))
-      .finally(() => setIsLoading(false));
-  }, [client, workspace, rangeDays, granularity]);
+  if (dashboardError !== null && isPermissionError(dashboardError)) {
+    const workspacePath =
+      workspace !== null && routeMatchesWorkspace
+        ? `/w/${encodeURIComponent(workspace.slug)}`
+        : undefined;
+    const query =
+      workspacePath === undefined ? '' : `?workspace=${encodeURIComponent(workspacePath)}`;
+    return <Navigate to={`/forbidden${query}`} replace />;
+  }
 
-  useEffect(() => {
-    load();
-  }, [load, reloadKey]);
+  const initialLoading = scopeKey === null || (data === null && dashboardError === null);
+  if (initialLoading) {
+    return <InsightsSkeleton label={t('analytics.state.loading')} />;
+  }
 
-  if (isLoading) {
+  if (dashboardError !== null && data === null) {
+    const isCostExceeded = dashboardError.code === COST_EXCEEDED_CODE;
     return (
-      <div className="mesh-page">
-        <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
-        <InsightsSkeleton label={t('analytics.state.loading')} />
-      </div>
+      <ErrorState
+        title={t('analytics.state.errorTitle')}
+        description={t(
+          isCostExceeded ? 'analytics.state.costExceeded' : errorToI18nKey(dashboardError),
+        )}
+        impact={isCostExceeded ? undefined : t('analytics.state.errorImpact')}
+        retryLabel={t('analytics.state.retry')}
+        onRetry={() => setDashboardReloadKey((key) => key + 1)}
+        diagnosticId={diagnosticOf(dashboardError)}
+      />
     );
   }
-  if (error !== null) {
-    const isCostExceeded = error.code === COST_EXCEEDED_CODE;
-    return (
-      <div className="mesh-page">
-        <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
-        <ErrorState
-          title={t('analytics.state.errorTitle')}
-          description={t(isCostExceeded ? 'analytics.state.costExceeded' : errorToI18nKey(error))}
-          impact={isCostExceeded ? undefined : t('analytics.state.errorImpact')}
-          retryLabel={t('analytics.state.retry')}
-          onRetry={() => setReloadKey((k) => k + 1)}
-          diagnosticId={diagnosticOf(error)}
-        />
-      </div>
-    );
-  }
-  if (workspace === null || data === null) {
-    return (
-      <div className="mesh-page">
-        <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
-        <EmptyState title={t('analytics.state.empty')} />
-      </div>
-    );
-  }
+  if (workspace === null || data === null || loadedDashboard === null) return <></>;
 
   const throughput = data.throughput;
   const kpis = deriveWindowKpis(data);
-  const windowHint = t('analytics.kpi.windowHint', { days: rangeDays });
+  const windowHint = t('analytics.kpi.windowHint', { days: loadedDashboard.rangeDays });
   const throughputSeries = [
     {
       name: t('analytics.throughput.created'),
@@ -193,8 +223,31 @@ export function InsightsPage(): React.JSX.Element {
   ];
 
   return (
-    <div className="mesh-page">
-      <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
+    <div data-testid="insights-content" aria-busy={isDashboardLoading ? true : undefined}>
+      {isDashboardLoading ? (
+        <p className="mesh-analytics__refreshing" role="status" data-testid="insights-refreshing">
+          {t('analytics.state.refreshing')}
+        </p>
+      ) : null}
+      {dashboardError !== null ? (
+        <div data-testid="insights-refresh-error">
+          <Banner tone="danger" politeness="assertive">
+            <div className="mesh-analytics__inline-error">
+              <div>
+                <strong>{t('analytics.state.refreshErrorTitle')}</strong>
+                <p>{t('analytics.state.refreshErrorImpact')}</p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setDashboardReloadKey((key) => key + 1)}
+              >
+                {t('analytics.state.retry')}
+              </Button>
+            </div>
+          </Banner>
+        </div>
+      ) : null}
       <div className="mesh-analytics__caliber">
         {data.meta.visibility_filtered ? (
           <p data-testid="insights-visibility-note">{t('analytics.insights.visibilityNote')}</p>
@@ -202,48 +255,44 @@ export function InsightsPage(): React.JSX.Element {
         <p data-testid="insights-tz-note">{t('analytics.tzNote', { tz: echoTimezone(data) })}</p>
         <p data-testid="insights-caliber">
           {t('analytics.caliber.window', {
-            days: rangeDays,
-            granularity: t(`analytics.granularity.${granularity}`),
+            days: loadedDashboard.rangeDays,
+            granularity: t(`analytics.granularity.${loadedDashboard.granularity}`),
           })}
         </p>
       </div>
-      <div className="mesh-analytics__toolbar">
-        <label>
-          {t('analytics.range.label')}
-          <select
-            value={String(rangeDays)}
-            data-testid="insights-range"
-            onChange={(e) => setRangeDays(Number(e.target.value) as RangeDays)}
-          >
-            {RANGE_PRESETS.map((d) => (
-              <option key={d} value={d}>
-                {t('analytics.range.days', { count: d })}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('analytics.granularity.label')}
-          <select
-            value={granularity}
-            data-testid="insights-granularity"
-            onChange={(e) => setGranularity(e.target.value as Granularity)}
-          >
-            {GRANULARITIES.map((g) => (
-              <option key={g} value={g}>
-                {t(`analytics.granularity.${g}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <Toolbar label={t('analytics.controls.label')} className="mesh-analytics__toolbar">
+        <Select
+          label={t('analytics.range.label')}
+          value={String(rangeDays)}
+          data-testid="insights-range"
+          onChange={(event) => setRangeDays(Number(event.target.value) as RangeDays)}
+        >
+          {RANGE_PRESETS.map((days) => (
+            <option key={days} value={days}>
+              {t('analytics.range.days', { count: days })}
+            </option>
+          ))}
+        </Select>
+        <Select
+          label={t('analytics.granularity.label')}
+          value={granularity}
+          data-testid="insights-granularity"
+          onChange={(event) => setGranularity(event.target.value as Granularity)}
+        >
+          {GRANULARITIES.map((item) => (
+            <option key={item} value={item}>
+              {t(`analytics.granularity.${item}`)}
+            </option>
+          ))}
+        </Select>
+      </Toolbar>
 
       {isWindowEmpty(data) ? (
         <EmptyState
           title={t('analytics.state.windowEmpty')}
           description={t('analytics.state.windowEmptyHint')}
           action={
-            <Link className="mesh-page__link" to="/issues?create=1">
+            <Link className="mesh-page__link" to={`/w/${workspace.slug}/issues?create=1`}>
               {t('analytics.state.createIssue')}
             </Link>
           }
@@ -291,7 +340,7 @@ export function InsightsPage(): React.JSX.Element {
               ) : (
                 <LineChart
                   series={throughputSeries}
-                  xLabels={throughput.series.map((b) => b.label)}
+                  xLabels={throughput.series.map((bucket) => bucket.label)}
                   ariaLabel={t('analytics.throughput.chartAria')}
                 />
               )}

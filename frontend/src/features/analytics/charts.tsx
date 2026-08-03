@@ -47,10 +47,7 @@ export function LineChart(props: LineChartProps): React.JSX.Element {
   const width = props.width ?? 560;
   const height = props.height ?? 220;
   const pointCount = Math.max(1, xLabels.length);
-  const maxFromSeries = series.reduce(
-    (acc, s) => Math.max(acc, ...s.points.map((p) => p.y)),
-    0,
-  );
+  const maxFromSeries = series.reduce((acc, s) => Math.max(acc, ...s.points.map((p) => p.y)), 0);
   const yMax = props.yMax ?? niceMax(maxFromSeries);
   const innerW = width - PAD_LEFT - PAD_RIGHT;
   const innerH = height - PAD_TOP - PAD_BOTTOM;
@@ -126,6 +123,8 @@ export function LineChart(props: LineChartProps): React.JSX.Element {
 
 export interface BarGroup {
   readonly label: string;
+  /** 突出当前周期；标签仍带文字，视觉强调不是唯一信号。 */
+  readonly emphasized?: boolean;
   readonly bars: ReadonlyArray<{
     readonly name: string;
     readonly value: number;
@@ -145,9 +144,7 @@ export function GroupedBarChart(props: GroupedBarChartProps): React.JSX.Element 
   const { groups, ariaLabel } = props;
   const width = props.width ?? 560;
   const height = props.height ?? 220;
-  const yMax = niceMax(
-    groups.reduce((acc, g) => Math.max(acc, ...g.bars.map((b) => b.value)), 0),
-  );
+  const yMax = niceMax(groups.reduce((acc, g) => Math.max(acc, ...g.bars.map((b) => b.value)), 0));
   const innerW = width - PAD_LEFT - PAD_RIGHT;
   const innerH = height - PAD_TOP - PAD_BOTTOM;
   const groupWidth = innerW / Math.max(1, groups.length);
@@ -172,7 +169,12 @@ export function GroupedBarChart(props: GroupedBarChartProps): React.JSX.Element 
       {groups.map((group, gi) => {
         const groupX = PAD_LEFT + gi * groupWidth + groupWidth * 0.15;
         return (
-          <g key={`${group.label}-${gi}`}>
+          <g
+            key={`${group.label}-${gi}`}
+            className={
+              group.emphasized === true ? 'mesh-analytics__bar-group--emphasized' : undefined
+            }
+          >
             <text
               x={PAD_LEFT + gi * groupWidth + groupWidth / 2}
               y={height - 6}

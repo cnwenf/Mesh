@@ -17,6 +17,7 @@ import { getApiClient } from '../api/instance';
 import { fetchMe } from '../features/members/api';
 import { NotFoundPage } from '../shell/pages/NotFoundPage';
 import { recordLastWorkspace, resolveActiveWorkspaceSlug } from './lastWorkspace';
+import { useOptionalWorkspace } from './WorkspaceProvider';
 
 export interface FlatRouteRule {
   /** 精确匹配旧扁平路径(不含 query/hash) */
@@ -39,7 +40,10 @@ export const FLAT_ROUTE_RULES: readonly FlatRouteRule[] = [
   { pattern: /^\/members$/, build: (_m, slug) => `/w/${slug}/members` },
   { pattern: /^\/members\/([^/]+)$/, build: (m, slug) => `/w/${slug}/members/${m[1]}` },
   { pattern: /^\/projects$/, build: (_m, slug) => `/w/${slug}/projects` },
-  { pattern: /^\/projects\/([^/]+)\/settings$/, build: (m, slug) => `/w/${slug}/projects/${m[1]}/settings` },
+  {
+    pattern: /^\/projects\/([^/]+)\/settings$/,
+    build: (m, slug) => `/w/${slug}/projects/${m[1]}/settings`,
+  },
   { pattern: /^\/projects\/([^/]+)$/, build: (m, slug) => `/w/${slug}/projects/${m[1]}` },
   { pattern: /^\/issues$/, build: (_m, slug) => `/w/${slug}/issues` },
   {
@@ -50,7 +54,10 @@ export const FLAT_ROUTE_RULES: readonly FlatRouteRule[] = [
   { pattern: /^\/chat$/, build: (_m, slug) => `/w/${slug}/chat` },
   { pattern: /^\/chat\/([^/]+)$/, build: (m, slug) => `/w/${slug}/chat/${m[1]}` },
   { pattern: /^\/squads$/, build: (_m, slug) => `/w/${slug}/squads` },
-  { pattern: /^\/squads\/([^/]+)\/tasks\/([^/]+)$/, build: (m, slug) => `/w/${slug}/squads/${m[1]}/tasks/${m[2]}` },
+  {
+    pattern: /^\/squads\/([^/]+)\/tasks\/([^/]+)$/,
+    build: (m, slug) => `/w/${slug}/squads/${m[1]}/tasks/${m[2]}`,
+  },
   { pattern: /^\/squads\/([^/]+)$/, build: (m, slug) => `/w/${slug}/squads/${m[1]}` },
   { pattern: /^\/cycles$/, build: (_m, slug) => `/w/${slug}/cycles` },
   { pattern: /^\/executions\/([^/]+)$/, build: (m, slug) => `/w/${slug}/executions/${m[1]}` },
@@ -61,9 +68,15 @@ export const FLAT_ROUTE_RULES: readonly FlatRouteRule[] = [
   // 自动化运营区:旧 /autopilots、/runtimes、/webhooks、/skills 收敛至 automations/*。
   { pattern: /^\/automation$/, build: (_m, slug) => `/w/${slug}/automations/autopilots` },
   { pattern: /^\/autopilots$/, build: (_m, slug) => `/w/${slug}/automations/autopilots` },
-  { pattern: /^\/autopilots\/(.+)$/, build: (m, slug) => `/w/${slug}/automations/autopilots/${m[1]}` },
+  {
+    pattern: /^\/autopilots\/(.+)$/,
+    build: (m, slug) => `/w/${slug}/automations/autopilots/${m[1]}`,
+  },
   { pattern: /^\/runtimes$/, build: (_m, slug) => `/w/${slug}/automations/runtimes` },
-  { pattern: /^\/runtimes\/([^/]+)$/, build: (m, slug) => `/w/${slug}/automations/runtimes/${m[1]}` },
+  {
+    pattern: /^\/runtimes\/([^/]+)$/,
+    build: (m, slug) => `/w/${slug}/automations/runtimes/${m[1]}`,
+  },
   { pattern: /^\/webhooks$/, build: (_m, slug) => `/w/${slug}/automations/webhooks` },
   { pattern: /^\/skills$/, build: (_m, slug) => `/w/${slug}/automations/skills` },
   { pattern: /^\/skills\/(.+)$/, build: (m, slug) => `/w/${slug}/automations/skills/${m[1]}` },
@@ -105,6 +118,7 @@ export function matchFlatRoute(pathname: string): ((slug: string) => string) | n
 export function FlatRouteMigration(): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
+  const workspaceContext = useOptionalWorkspace();
   const [isNotFound, setIsNotFound] = useState(false);
 
   useEffect(() => {
@@ -143,7 +157,11 @@ export function FlatRouteMigration(): React.JSX.Element {
   }, [location, navigate]);
 
   if (isNotFound) {
-    return <NotFoundPage />;
+    const workspacePath =
+      workspaceContext?.status === 'ready' && workspaceContext.workspace !== null
+        ? `/w/${encodeURIComponent(workspaceContext.workspace.slug)}`
+        : undefined;
+    return <NotFoundPage embedded workspacePath={workspacePath} />;
   }
   // 解析中:不渲染占位(replace navigation 即完成,避免闪烁)。
   return <></>;

@@ -15,6 +15,7 @@ describe('design 桶导出', () => {
     expect(design.Button).toBeTruthy();
     expect(design.IconButton).toBeTruthy();
     expect(design.Input).toBeTruthy();
+    expect(design.InputControl).toBeTruthy();
     expect(design.Select).toBeTruthy();
     expect(design.Skeleton).toBeTypeOf('function');
     expect(design.EmptyState).toBeTypeOf('function');

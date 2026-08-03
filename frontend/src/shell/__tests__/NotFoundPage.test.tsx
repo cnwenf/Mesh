@@ -22,8 +22,40 @@ describe('NotFoundPage', () => {
       '#mesh-main-content',
     );
     expect(screen.getByRole('main')).toHaveAttribute('id', 'mesh-main-content');
+    expect(screen.getByTestId('notfound-page').tagName).toBe('MAIN');
     expect(screen.getByText(/does not exist/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('notfound-home'));
     expect(screen.getByTestId('home-stub')).toBeInTheDocument();
+  });
+
+  it('嵌入 shell 时使用 section，并提供安全的工作区恢复链接', () => {
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/missing"
+          element={
+            <main data-testid="shell-main">
+              <NotFoundPage embedded workspacePath="/w/team" />
+            </main>
+          }
+        />
+        <Route path="/w/team" element={<div data-testid="workspace-stub" />} />
+      </Routes>,
+      { route: '/missing' },
+    );
+
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getByTestId('notfound-page').tagName).toBe('SECTION');
+    expect(screen.queryByRole('link', { name: 'Skip to main content' })).toBeNull();
+    expect(screen.getByTestId('notfound-workspace')).toHaveAttribute('href', '/w/team');
+
+    fireEvent.click(screen.getByTestId('notfound-workspace'));
+    expect(screen.getByTestId('workspace-stub')).toBeInTheDocument();
+  });
+
+  it('拒绝跨站工作区恢复路径', () => {
+    renderWithProviders(<NotFoundPage workspacePath="https://evil.example/workspace" />);
+    expect(screen.queryByTestId('notfound-workspace')).toBeNull();
+    expect(screen.getByTestId('notfound-home')).toHaveAttribute('href', '/');
   });
 });

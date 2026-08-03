@@ -121,14 +121,6 @@
   font-size: var(--font-size-md);
 }
 
-.mesh-onboarding__badge {
-  font-size: var(--font-size-sm);
-  color: var(--color-info);
-  border: 1px solid var(--color-info);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-1);
-}
-
 .mesh-onboarding__step-detail {
   display: flex;
   align-items: center;

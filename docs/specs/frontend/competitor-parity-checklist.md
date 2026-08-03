@@ -86,7 +86,7 @@
 - [ ] URL 状态同步：列表筛选/分页/排序、详情 Tab、看板视图等页面状态同步到 URL，刷新不丢失、可分享可收藏（依据: kanban.md §5.1 视图 URL；MES-108 交互优化）— 现状 🟡（看板 `/views/{id}`、issue 列表 useSearchParams 已实现；其余页面待验）
 - [ ] 浏览器标签页标题随页面语义变化（如「MES-123 修复登录 · Mesh」），通知未读可反映到标题/favicon（依据: MES-108 完成品体验）— 现状 🟡（MES-124 批次①经 `hooks/useDocumentTitle` 覆盖登录/注册/MFA/找回/重置/设备/邀请/首页；MES-111 批次④经 `shell/hooks/useDocumentTitle` 补设置、工作区设置、洞察、审批页及异步名称组合，单测见 `shell/hooks/__tests__/useDocumentTitle.test.ts`；其余应用实体页与未读标题/favicon 仍待补）
 - [x] 工作区切换器（左上角下拉）列出用户全部工作区 +「创建工作区」，切换后整页上下文刷新（依据: workspace.md §4.1）— 现状 ✅
-- [ ] 404 页提供回首页/回工作区的可操作出口，非裸错误（依据: README §6.12 异常态矩阵）— 现状 ⬜ 待实机
+- [x] 404 页提供回首页/回工作区的可操作出口，非裸错误（依据: README §6.12 异常态矩阵）— 现状 ✅（MES-161：`NotFoundPage` standalone/embedded 双态；AppShell 内不重复主地标，工作区上下文可用时提供安全概览深链，真浏览器亮暗/桌面手机存证见 `e2e/evidence/mes161/`）
 
 ### 1.2 设计令牌与视觉语言
 
@@ -143,8 +143,8 @@
 - [x] `Ctrl/Cmd+K` 任意页面（含输入框内）打开命令面板；居中浮层 ~640px，限高内滚动，选中行始终可视（依据: search-command-palette.md §4.1）— 现状 ✅（`shortcuts/CommandPalette.tsx`；`e2e/real-mes111-b4.spec.ts` 桌面真实键盘路径）
 - [x] **六类对象跨模块搜索**：issue（identifier/标题）、成员、agent、项目、视图、聊天会话，按类型分组组头（依据: search-command-palette.md §1.2 S2）— 现状 ✅（MES-111 批次④：`backend/src/mesh/search/` + `shortcuts/usePaletteData.ts`/`PaletteResults.tsx`；后端真实 e2e 见 `backend/tests/e2e/test_search_e2e.py`，浏览器存证见 `e2e/evidence/mes111-b4/`）
 - [x] 顶栏搜索框为真实控件：输入即展开同一结果视图，`/` 聚焦（依据: search-command-palette.md §1.2）— 现状 ✅（MES-111 批次④：`shell/TopBar.tsx` 与面板共用 `PaletteResults` + `usePaletteData`；`TopBar.test.tsx` 与 `e2e/real-mes111-b4.spec.ts` 覆盖输入、键盘、鼠标路径）
-- [ ] 命令全集九组：顶层导航、设置子页、待审批、新建 issue、主题×4、复制当前深链、收藏/取消收藏、标记全部已读（随当前 filter）、帮助层；无权命令不注册不渲染（依据: search-command-palette.md §1.2 S3）— 现状 🟡（MES-111 批次④已由 `shell/shortcutsRegistration.ts` 落地顶层导航、角色门控设置、待审批、主题×4、复制深链、收藏、随 filter 全部已读及帮助层；新建 issue 当前仅有 `C` 快捷键/鼠标入口，尚未注册为面板命令，见 `shortcutsRegistration.test.ts`）
-- [ ] 空 query 数据流：favorites → recents（本地三元组隔离键）→ 常用命令；失权对象惰性清理（依据: search-command-palette.md §4.2.1）— 现状 🟡（MES-111 批次④已由 `usePaletteData.ts`/`recents.ts`/`paletteModel.ts` 落地三段组装、同目标去重与 host+user+workspace 隔离；`removeRecent` 清理出口已有，但失权对象打开面板即自动剔除尚未接线）
+- [x] 命令全集九组：顶层导航、设置子页、待审批、新建 issue、主题×4、复制当前深链、收藏/取消收藏、标记全部已读（随当前 filter）、帮助层；无权命令不注册不渲染（依据: search-command-palette.md §1.2 S3）— 现状 ✅（`shell/shortcutsRegistration.ts` 的 `issue.new` 与其余角色门控命令同源注册；MES-161 复验零查询面板与真实键盘/触控入口）
+- [x] 空 query 数据流：favorites → recents（本地三元组隔离键）→ 常用命令；失权对象惰性清理（依据: search-command-palette.md §4.2.1）— 现状 ✅（`usePaletteData.ts` 在打开面板时校验实体并调用 `removeRecent` 清理失权项；MES-161 补齐回归与不安全 URL 负向测试）
 - [x] identifier 精确命中（`web-124` → `WEB-124`）顶置直达，跳过防抖（依据: search-command-palette.md §2.2）— 现状 ✅（`useEntitySearch.ts` 跳过 120ms 防抖；`backend/tests/e2e/test_search_e2e.py` 与 `e2e/real-mes111-b4.spec.ts` 覆盖大小写直达）
 - [x] 模糊搜索分层打分 + 命中字符高亮（字重/下划线叠加，不以颜色为唯一信号）（依据: search-command-palette.md §3.1/§4.1）— 现状 ✅（`backend/src/mesh/search/scoring.py` 分层打分，`PaletteResults.tsx` 以 `<mark>` 字重+下划线渲染；对应后端 e2e 与 `PaletteResults.test.tsx`）
 - [x] no-results：提示 + 建议 +「新建 issue "xxx"」快捷动作（仅有权限者可见，预填不直接提交）（依据: search-command-palette.md §4.2）— 现状 ✅（`CommandPalette.tsx` 权限门控并只打开预填入口；`CommandPalette.test.tsx` 覆盖有权/无权与不直提）
@@ -155,7 +155,7 @@
 
 ### 1.7 键盘快捷键
 
-- [ ] 全局组：`mod+K` 面板、`/` 搜索、`C` 新建 issue、`?` 帮助层、`G then I/B/M/A` 序列键（超时窗口 ~1s + 等待提示）、`Esc` 关闭（依据: search-command-palette.md §4.3）— 现状 🟡（`g i/g b/g m/g a`、`c`、`/`、`mod+k` 已注册；序列键等待态提示待验）
+- [x] 全局组：`mod+K` 面板、`/` 搜索、`C` 新建 issue、`?` 帮助层、`G then I/B/M/A` 序列键（超时窗口 ~1s + 等待提示）、`Esc` 关闭（依据: search-command-palette.md §4.3）— 现状 ✅（MES-161 组件测试覆盖 IME 豁免、序列等待/超时、分层 Esc 与平台化键帽；`real-mes161-global.spec.ts` 真实复验桌面键盘/手机触控入口及分层 Esc）
 - [x] 看板上下文组：方向键/JKHL 二维网格选卡、`C` 当前列新建（预填分组值）、`S` 状态、`A` 分派、`Enter` 打开、`F` 筛选（依据: search-command-palette.md §4.3）— 现状 ✅（§4 G9 已核销；原基线 ❌（目录声明分组但看板页无注册））
 - [x] issue 详情上下文组：`E` 编辑、`S` 状态、`A` 分派、`P` 优先级、`mod+Enter` 提交评论、`Esc`/`X` 关闭、`←/→` 上下个 issue（依据: search-command-palette.md §4.3）— 现状 ✅（§4 G9 已核销；原基线 ❌（未注册））
 - [ ] 聊天上下文组：`Enter` 发送 / `Shift+Enter` 换行、`mod+↑` 编辑上一条、`Esc` 退出焦点（依据: search-command-palette.md §4.3）— 现状 ⬜ 待实机
@@ -172,7 +172,7 @@
 - [x] loading = skeleton 骨架屏（非全屏 spinner），gated 于 prefers-reduced-motion（依据: README §6.12）— 现状 ✅（48 个 feature 文件使用）
 - [x] empty = 空态插画 + 文案 + 主操作 + 深链既有向导（依据: onboarding.md §1.2.2）— 现状 ✅（六大空态已接入）
 - [x] error = 具名错误文案 + 重试按钮，非「网络错误」了事；97 个错误码本地化映射（依据: README §6.12；i18n.md §5.1）— 现状 ✅
-- [ ] permission denied =「无权限」页 + 联系入口（依据: README §6.12）— 现状 ⬜ 待实机（guest 视角走查）
+- [x] permission denied =「无权限」页 + 联系入口（依据: README §6.12）— 现状 ✅（MES-161：受保护 `/forbidden` 禁用工作区级命令面板并提供成员名册/首页安全出口；组件测试验证 Analytics 403 导向该隔离页，production 真栈验证恢复链接实际导航）
 - [ ] offline = 顶部横幅「网络已断开」+ 乐观操作排队 + 自动重连（依据: README §6.12）— 现状 🟡（StatusBanner + StatusDot 六态已实现；「乐观操作排队」离线队列待验）
 - [x] stale/resync =「正在重新同步…」对账后无感消失（依据: README §6.12）— 现状 ✅（StatusDot resyncing 态）
 - [x] partial failure = 逐项成功/失败标记 + 失败项重试（依据: README §6.12）— 现状 ✅（批量操作返回计数与原因）
@@ -258,23 +258,23 @@
 
 ### 2.1 认证（登录 / 注册 / 忘记密码 / OAuth / 设备码）
 
-页面：`/login`、`/forgot`、`/reset`、`/auth/oauth/callback/:provider`、`/device`（依据: auth.md §4）。
+页面：`/login`、`/register`、`/forgot`、`/reset`、`/auth/oauth/callback/:provider`、`/device`（依据: auth.md §4）。
 
 - [x] 登录页：邮箱+密码、「记住我」、「忘记密码?」、第三方登录按钮组（vendor 中立 env 配置）、注册入口切换（依据: auth.md §4.1）— 现状 ✅
 - [x] 登录失败统一「邮箱或密码不正确」不暴露账号存在性；锁定 423 / 限流 429+Retry-After 具名提示（依据: auth.md §4.1）— 现状 ✅（具名错误 409/400/422/423/429）
 - [x] MFA 二步：TOTP 验证码输入（启用流含密钥+二维码+备用码）（依据: auth.md §4.2）— 现状 ✅
-- [x] 注册页：密码强度条 + 实时校验；提交后「已发验证邮件」结果页（依据: auth.md §4.1）— 现状 ✅
+- [x] 注册页：`/register` 独立公开深链；密码强度条 + 实时校验；提交后「已发验证邮件」结果页（依据: auth.md §4.1）— 现状 ✅（MES-161：复用登录页安全流程并以注册模式首屏呈现；真栈完成注册、自动登录与安全回跳）
 - [x] 忘记密码/重置完整流程可用，重置后旧会话失效（依据: auth.md §4.1）— 现状 ✅
 - [ ] OAuth 回调页：授权中/成功/失败三态；首登自动建号绑定后进新用户引导（依据: auth.md §5.2）— 现状 🟡（MES-124 批次①:三态 + 失败具名 + 恢复动作经 PublicFlowShell;首登引导由 onboarding 模块承载,待实机）
 - [x] 设备码确认页（CLI 配套）：手工录入 user_code + 工作区 0/1/多分流 + scope 展示 + 批准/拒绝（依据: auth.md §5.1）— 现状 ✅（MES-124 批次① 迁入 PublicFlowShell;单测覆盖绑定所录码/0-1-多工作区）
-- [ ] 回跳守卫 safeNextPath 防开放重定向（控字符预检 + origin 一致 + 路径 `/` 开头）（依据: auth.md §4.1）— 现状 ⬜ 待实机（构造恶意 next 验证）
+- [x] 回跳守卫 safeNextPath 防开放重定向（控字符预检 + origin 一致 + 路径 `/` 开头）（依据: auth.md §4.1）— 现状 ✅（MES-161 真栈从 `/register?next=//outside.example/path` 注册后安全回落 `/`，未发生站外跳转）
 - [x] **无脚手架残留**：dev token 直填入口移除、`login.phaseNote` 占位文案清除（依据: MES-107）— 现状 ✅（MES-124 批次① 核查:dev token 直填/`login.phaseNote`/`PlaceholderPage` 均无残留,旧 `mesh-login` 样式已删）
 - [x] 四组合走查：登录/注册/忘记密码页 × 桌面亮/暗、手机亮/暗（手机端表单可用性重点）— 现状 ✅（MES-124 批次① + 整改补全 注册/找回 四组合,存证 `e2e/evidence/mes111-b1/`）
 
 ### 2.2 应用外壳（AppShell：TopBar / Sidebar / 布局）
 
 - [x] AppShell = TopBar + StatusBanner + Sidebar + Outlet 结构稳定（依据: README §6.12 信息架构）— 现状 ✅
-- [ ] TopBar：工作区切换器、搜索入口（真实控件，见 §1.6）、铃铛、命令面板入口、用户菜单（依据: search-command-palette.md §1.2；comment-inbox.md §4.2）— 现状 🟡（搜索为死输入框）
+- [ ] TopBar：工作区切换器、搜索入口（真实控件，见 §1.6）、铃铛、命令面板入口、用户菜单（依据: search-command-palette.md §1.2；comment-inbox.md §4.2）— 现状 🟡（工作区切换、统一搜索结果、`/` 聚焦、铃铛、命令/帮助入口已接线；MES-161 完成平台化快捷键、IME、Appica 与移动端复验；用户菜单仍待补）
 - [ ] 用户菜单：个人设置入口、主题快捷切换（system 态标注解析值）、帮助/快捷键入口、登出（依据: theme.md §3.2）— 现状 ⬜ 待实机
 - [ ] Sidebar 分组与顺序符合信息架构约定；当前页高亮；折叠/展开（依据: README §6.12）— 现状 ⬜ 待实机
 - [x] PlaceholderPage 等脚手架组件清除（不得被任何路由引用）（依据: MES-107）— 现状 ✅（MES-124 批次① 核查:`PlaceholderPage.tsx` 已不存在、无路由引用）
@@ -506,7 +506,7 @@
 - [x] 六核心页面空状态四要素（插画+文案+主操作+深链），插画随主题适配亮/暗（依据: onboarding.md §1.2.2）— 现状 ✅（六大空态接入）
 - [ ] 键盘入口可发现性：首次进入一次性内联提示（⌘K + ?），顶栏搜索占位「搜索或输入命令…(⌘K)」；已关闭不再现（依据: onboarding.md §4.2）— 现状 ⬜ 待实机（依赖顶栏搜索真实化）
 - [ ] 步骤完成实时增量刷新（onboarding.progress 私有频道）；WS 不可用 30s 轮询（依据: onboarding.md §4.5）— 现状 ⬜ 待实机
-- [ ] 四组合走查：清单卡片/庆祝态/六空态 × 四组合 — 现状 ⬜
+- [ ] 四组合走查：清单卡片/庆祝态/六空态 × 四组合 — 现状 🟡（`e2e/evidence/mes128-checklist/` 已覆盖清单卡片四组合，MES-161 真栈复验新账号桌面/手机入口；庆祝态与六空态的完整四组合仍待补）
 
 ### 2.18 集成
 
@@ -545,10 +545,10 @@
 - [x] 项目仪表盘：时间范围选择器（预设+自定义）+ velocity 卡（当前周期高亮 hover 明细）+ burndown 卡（理想虚线 vs 实际实线 + count/points 切换）+ cycle time 卡（P50/P90 + 分布 + sample_size/insufficient_data 标注）（依据: analytics.md §4.2）— 现状 ✅
 - [ ] 可见性轻提示：「按你的项目可见范围统计」；admin/owner 见全量（依据: analytics.md §4.3）— 现状 ⬜ 待实机（非 admin 账号验证）
 - [ ] agent 详情统计卡：KPI + sparkline + 成功/失败/超时堆叠 + token 区（coverage <100% 标注）+ 运行历史深链（依据: analytics.md §4.4）— 现状 ⬜ 待实机
-- [ ] 图表语义色亮/暗各校准；burndown 线型虚实区分（颜色非唯一信号）；尊重 reduced-motion（依据: analytics.md §4.5）— 现状 ⬜ 待实机（暗色下图表逐张核对）
-- [ ] 空/异常态：无数据空态 +「调整范围/新建 issue」；query_cost_exceeded「收窄后重试」；无可见性「无权限」页（依据: analytics.md §4.6）— 现状 ⬜ 待实机
-- [ ] 本地日历分桶：时区切换后日期标签与桶边界同步不错位；`meta.display_timezone` 回显；「当前归属」口径提示（依据: analytics.md §2.2.3/§2.4）— 现状 ⬜ 待实机
-- [ ] 四组合走查：所有图表 × 四组合（暗色图表可读性重点）— 现状 ⬜
+- [x] 图表语义色亮/暗各校准；burndown 线型虚实区分（颜色非唯一信号）；尊重 reduced-motion（依据: analytics.md §4.5）— 现状 ✅（MES-161 增加当前周期文字强调、cycle-time 分位条与 agent 结果文本图例并由组件测试覆盖；真实有数据图表与暗色工作区图表存证见 `e2e/evidence/analytics/`，MES-161 另复验双主题空窗）
+- [x] 空/异常态：无数据空态 +「调整范围/新建 issue」；query_cost_exceeded「收窄后重试」；无可见性「无权限」页（依据: analytics.md §4.6）— 现状 ✅（MES-161：首次加载骨架、筛选刷新保留旧数据并可重试、403 专用态、空窗规范深链；组件测试与真实空窗旅程覆盖）
+- [ ] 本地日历分桶：时区切换后日期标签与桶边界同步不错位；`meta.display_timezone` 回显；「当前归属」口径提示（依据: analytics.md §2.2.3/§2.4）— 现状 🟡（页面已使用服务端 meta 回显时区与当前归属口径，既有真实旅程覆盖回显；切换时区后的桶边界真浏览器复验仍待补）
+- [ ] 四组合走查：所有图表 × 四组合（暗色图表可读性重点）— 现状 🟡（MES-127 已覆盖工作区洞察有数据态桌面/手机 × 亮暗；项目与 agent 图表的完整四组合仍待补）
 
 ### 2.21 账号设置（个人 / 安全 / Tokens / 审计）
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一条命令拉起隔离真栈、执行 1440/320/390px 键盘旅程并回收专属容器/卷。
+# 一条命令拉起隔离真栈，执行键盘/主题与全局辅助页旅程并回收专属容器/卷。
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,3 +31,8 @@ cd "${ROOT}/frontend"
 MES128_FRONTEND_PORT=18430 \
 MES128_PG_CONTAINER="${PROJECT}-postgres-1" \
   npx playwright test --config playwright.mes128-real.config.ts
+
+# MES-161：同一安全真栈继续验收全局辅助页族；使用独立账号，互不污染前一旅程。
+MES161_FRONTEND_PORT=18430 \
+MES161_PG_CONTAINER="${PROJECT}-postgres-1" \
+  npx playwright test --config playwright.mes161.config.ts

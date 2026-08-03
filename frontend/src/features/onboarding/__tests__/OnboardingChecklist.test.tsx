@@ -42,7 +42,12 @@ const ROSTER = {
   next_cursor: null,
 };
 
-function step(key: string, status: string, via: string | null, at: string | null): Record<string, unknown> {
+function step(
+  key: string,
+  status: string,
+  via: string | null,
+  at: string | null,
+): Record<string, unknown> {
   return { step_key: key, status, completed_via: via, completed_at: at };
 }
 
@@ -79,9 +84,12 @@ function stubApi(overrides: Record<string, unknown> = {}): RoutedCalls {
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-    if (url.includes('/onboarding/state')) return fakeResponse({ body: { data: stateBody(overrides) } });
+    if (url.includes('/onboarding/state'))
+      return fakeResponse({ body: { data: stateBody(overrides) } });
     if (url.includes('/onboarding/dismiss')) {
-      return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: '2026-07-25T08:30:00Z' } } });
+      return fakeResponse({
+        body: { data: { id: 'obs-1', dismissed_at: '2026-07-25T08:30:00Z' } },
+      });
     }
     if (url.includes('/issues')) {
       return fakeResponse({
@@ -146,11 +154,16 @@ describe('OnboardingChecklist', () => {
 
   it('shows the auto badge only for auto-completed steps and highlights the first pending', async () => {
     renderChecklist();
-    await waitFor(() =>
-      expect(screen.getByTestId('onboarding-auto-badge-create_workspace')).toBeInTheDocument(),
+    await waitFor(() => expect(screen.getByText('Auto-completed')).toBeInTheDocument());
+    const autoBadge = screen
+      .getByText('Auto-completed')
+      .closest<HTMLElement>('[data-slot="badge"]');
+    expect(autoBadge).toHaveClass('mesh-badge--success');
+    expect(screen.getByTestId('onboarding-auto-badge-create_workspace')).toContainElement(
+      autoBadge,
     );
     // manual 完成的步骤无 auto 角标
-    expect(screen.queryByTestId('onboarding-auto-badge-invite_member_or_add_agent')).toBeNull();
+    expect(screen.getAllByText('Auto-completed')).toHaveLength(1);
     // 首个未完成步骤高亮(create_first_issue)
     const current = screen.getByTestId('onboarding-step-create_first_issue');
     expect(current.className).toContain('mesh-onboarding__step--current');

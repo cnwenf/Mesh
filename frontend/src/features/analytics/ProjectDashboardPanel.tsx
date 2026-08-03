@@ -4,9 +4,10 @@
  * 图表经 ChartFrame 统一外壳(标题 + 图例:文字 + 线型/色块,颜色非唯一信号);
  * cycle time 数值走 KPI 条(tabular + 口径 hint),insufficient 诚实标注(§4.6)。
  */
-import { useCallback, useEffect, useState } from 'react';
-import type { MeshApiClient } from '../../api';
-import { EmptyState, ErrorState, Skeleton } from '../../design';
+import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router';
+import { MeshApiError, errorToI18nKey, type MeshApiClient } from '../../api';
+import { Banner, Button, EmptyState, ErrorState, Select, Skeleton } from '../../design';
 import { useT } from '../../i18n';
 import { ChartFrame } from './ChartFrame';
 import { Kpi } from './Kpi';
@@ -20,9 +21,20 @@ import './analytics.css';
 const RANGE_PRESETS = [30, 90] as const;
 type RangeDays = (typeof RANGE_PRESETS)[number];
 
+function toApiError(error: unknown): MeshApiError {
+  if (error instanceof MeshApiError) return error;
+  return new MeshApiError({ status: 0, code: 'unknown', message: 'unknown error' });
+}
+
+function isPermissionError(error: MeshApiError): boolean {
+  return error.status === 403 || error.code === 'forbidden' || error.code === 'project_not_visible';
+}
+
 export interface ProjectDashboardPanelProps {
   readonly client: MeshApiClient;
   readonly workspaceId: string;
+  /** 403 恢复页使用规范 workspace slug；API scope 仍唯一使用 workspaceId。 */
+  readonly workspaceSlug?: string;
   readonly projectId: string;
 }
 
@@ -48,66 +60,132 @@ function burndownSeriesOf(
   ];
 }
 
-export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.JSX.Element {
-  const { client, workspaceId, projectId } = props;
+function CycleTimeDistribution(props: {
+  readonly p50: number | null;
+  readonly p90: number | null;
+}): React.JSX.Element | null {
+  const { p50, p90 } = props;
   const t = useT();
-  const [data, setData] = useState<ProjectDashboardData | null>(null);
+  if (p50 === null && p90 === null) return null;
+
+  const maximum = Math.max(p50 ?? 0, p90 ?? 0, 1);
+  const values = [
+    { label: t('analytics.cycleTime.p50'), value: p50 },
+    { label: t('analytics.cycleTime.p90'), value: p90 },
+  ];
+
+  return (
+    <div
+      className="mesh-analytics__quantiles"
+      data-testid="project-dashboard-cycle-distribution"
+      role="img"
+      aria-label={t('analytics.cycleTime.distributionAria', {
+        p50: formatDurationSeconds(p50),
+        p90: formatDurationSeconds(p90),
+      })}
+    >
+      {values.map((item) => (
+        <div className="mesh-analytics__quantile" key={item.label}>
+          <span className="mesh-analytics__quantile-label">{item.label}</span>
+          <span className="mesh-analytics__quantile-track" aria-hidden="true">
+            <span
+              className="mesh-analytics__quantile-fill"
+              style={{ inlineSize: `${((item.value ?? 0) / maximum) * 100}%` }}
+            />
+          </span>
+          <span className="mesh-analytics__quantile-value">
+            {formatDurationSeconds(item.value)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.JSX.Element {
+  const { client, workspaceId, workspaceSlug, projectId } = props;
+  const t = useT();
+  const scopeKey = `${workspaceId}:${projectId}`;
+  const [loadedDashboard, setLoadedDashboard] = useState<{
+    readonly scopeKey: string;
+    readonly data: ProjectDashboardData;
+  } | null>(null);
+  // 项目路由原地切换时绝不渲染上一项目的数据，范围刷新仍保留同 scope 的成功响应。
+  const data = loadedDashboard?.scopeKey === scopeKey ? loadedDashboard.data : null;
   const [burndownOverride, setBurndownOverride] = useState<BurndownData | null>(null);
   const [metric, setMetric] = useState<BurndownMetric>('points');
   const [rangeDays, setRangeDays] = useState<RangeDays>(30);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{
+    readonly scopeKey: string;
+    readonly error: MeshApiError;
+  } | null>(null);
+  const error = failure?.scopeKey === scopeKey ? failure.error : null;
   const [reloadKey, setReloadKey] = useState(0);
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    const controller = new AbortController();
     setIsLoading(true);
-    setError(null);
+    setFailure(null);
     const now = new Date();
     fetchProjectDashboard(client, workspaceId, projectId, {
       from: windowStartIso(rangeDays, now),
       to: windowEndIso(now),
+      signal: controller.signal,
     })
       .then((result) => {
-        setData(result);
+        if (controller.signal.aborted) return;
+        setLoadedDashboard({ scopeKey, data: result });
         setBurndownOverride(null);
       })
-      .catch(() => setError(t('analytics.state.error')))
-      .finally(() => setIsLoading(false));
-  }, [client, workspaceId, projectId, rangeDays, t]);
-
-  useEffect(() => {
-    load();
-  }, [load, reloadKey]);
+      .catch((loadError: unknown) => {
+        if (!controller.signal.aborted) {
+          setFailure({ scopeKey, error: toApiError(loadError) });
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+    return () => controller.abort();
+  }, [client, workspaceId, projectId, scopeKey, rangeDays, reloadKey]);
 
   // count/points 切换:单独重查 burndown(保持其 scope)
   useEffect(() => {
     if (data === null || data.burndown === null) return;
     if (data.burndown.metric === metric) return;
-    let cancelled = false;
+    const controller = new AbortController();
     fetchBurndown(client, workspaceId, {
       cycleId: data.burndown.scope.type === 'cycle' ? data.burndown.scope.id : undefined,
       milestoneId: data.burndown.scope.type === 'milestone' ? data.burndown.scope.id : undefined,
       metric,
+      signal: controller.signal,
     })
       .then((result) => {
-        if (!cancelled) setBurndownOverride(result);
+        if (!controller.signal.aborted) setBurndownOverride(result);
       })
       .catch(() => {
         /* 保留原曲线;失败不打断整页 */
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [client, workspaceId, data, metric]);
 
-  if (isLoading) {
-    return <Skeleton loadingLabel={t('analytics.state.loading')} className="mesh-analytics__card" />;
+  if (error !== null && isPermissionError(error)) {
+    const workspacePath =
+      workspaceSlug === undefined ? undefined : `/w/${encodeURIComponent(workspaceSlug)}`;
+    const query =
+      workspacePath === undefined ? '' : `?workspace=${encodeURIComponent(workspacePath)}`;
+    return <Navigate to={`/forbidden${query}`} replace />;
   }
-  if (error !== null || data === null) {
+  if (data === null && (isLoading || (loadedDashboard?.scopeKey !== scopeKey && error === null))) {
+    return (
+      <Skeleton loadingLabel={t('analytics.state.loading')} className="mesh-analytics__card" />
+    );
+  }
+  if (data === null) {
     return (
       <ErrorState
         title={t('analytics.state.errorTitle')}
-        description={error ?? undefined}
+        description={error !== null ? t(errorToI18nKey(error)) : t('analytics.state.error')}
         retryLabel={t('analytics.state.retry')}
         onRetry={() => setReloadKey((k) => k + 1)}
       />
@@ -118,7 +196,11 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
   const idealLabel = t('analytics.burndown.ideal');
   const actualLabel = t('analytics.burndown.actual');
   const velocityGroups = data.velocity.cycles.map((cycle) => ({
-    label: cycle.name,
+    label:
+      cycle.state === 'active'
+        ? t('analytics.velocity.activeCycle', { name: cycle.name })
+        : cycle.name,
+    emphasized: cycle.state === 'active',
     bars: [
       {
         name: t('analytics.velocity.issues'),
@@ -134,22 +216,44 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
   }));
 
   return (
-    <div className="mesh-analytics__grid-layout" data-testid="project-dashboard">
+    <div
+      className="mesh-analytics__grid-layout"
+      data-testid="project-dashboard"
+      aria-busy={isLoading ? true : undefined}
+    >
+      {isLoading ? (
+        <p className="mesh-analytics__refreshing" role="status">
+          {t('analytics.state.refreshing')}
+        </p>
+      ) : null}
+      {error !== null ? (
+        <div data-testid="project-dashboard-refresh-error">
+          <Banner tone="danger" politeness="assertive">
+            <div className="mesh-analytics__inline-error">
+              <div>
+                <strong>{t('analytics.state.refreshErrorTitle')}</strong>
+                <p>{t('analytics.state.refreshErrorImpact')}</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+                {t('analytics.state.retry')}
+              </Button>
+            </div>
+          </Banner>
+        </div>
+      ) : null}
       <div className="mesh-analytics__toolbar">
-        <label>
-          {t('analytics.range.label')}
-          <select
-            value={String(rangeDays)}
-            data-testid="project-dashboard-range"
-            onChange={(e) => setRangeDays(Number(e.target.value) as RangeDays)}
-          >
-            {RANGE_PRESETS.map((d) => (
-              <option key={d} value={d}>
-                {t('analytics.range.days', { count: d })}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Select
+          label={t('analytics.range.label')}
+          value={String(rangeDays)}
+          data-testid="project-dashboard-range"
+          onChange={(e) => setRangeDays(Number(e.target.value) as RangeDays)}
+        >
+          {RANGE_PRESETS.map((d) => (
+            <option key={d} value={d}>
+              {t('analytics.range.days', { count: d })}
+            </option>
+          ))}
+        </Select>
       </div>
 
       <ChartFrame
@@ -164,10 +268,7 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
         {velocityGroups.length === 0 ? (
           <EmptyState title={t('analytics.state.noData')} />
         ) : (
-          <GroupedBarChart
-            groups={velocityGroups}
-            ariaLabel={t('analytics.velocity.chartAria')}
-          />
+          <GroupedBarChart groups={velocityGroups} ariaLabel={t('analytics.velocity.chartAria')} />
         )}
       </ChartFrame>
 
@@ -189,19 +290,19 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
         ) : (
           <>
             <div className="mesh-analytics__toolbar">
-              <label>
-                {t('analytics.burndown.metricLabel')}
-                <select
-                  value={metric}
-                  data-testid="project-dashboard-metric"
-                  onChange={(e) => setMetric(e.target.value as BurndownMetric)}
-                >
-                  <option value="points">{t('analytics.burndown.points')}</option>
-                  <option value="count">{t('analytics.burndown.count')}</option>
-                </select>
-              </label>
+              <Select
+                label={t('analytics.burndown.metricLabel')}
+                value={metric}
+                data-testid="project-dashboard-metric"
+                onChange={(e) => setMetric(e.target.value as BurndownMetric)}
+              >
+                <option value="points">{t('analytics.burndown.points')}</option>
+                <option value="count">{t('analytics.burndown.count')}</option>
+              </Select>
               <span className="mesh-analytics__card-note">
-                <span className="mesh-tnum">{t('analytics.burndown.total', { total: burndown.total })}</span>
+                <span className="mesh-tnum">
+                  {t('analytics.burndown.total', { total: burndown.total })}
+                </span>
               </span>
             </div>
             <LineChart
@@ -233,6 +334,10 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
             hint={t('analytics.cycleTime.caliberHint')}
           />
         </KpiStrip>
+        <CycleTimeDistribution
+          p50={data.cycle_time.p50_seconds}
+          p90={data.cycle_time.p90_seconds}
+        />
         {data.cycle_time.meta.insufficient_data > 0 ? (
           <p className="mesh-analytics__card-note" data-testid="project-dashboard-insufficient">
             {t('analytics.cycleTime.insufficient', {

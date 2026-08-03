@@ -220,10 +220,10 @@ jobs:
           retention-days: 7
 
   mes128-real-stack-e2e:
-    # MES-128/MES-158:production 鉴权隔离栈；1440/320/390px 分别完成真实键盘
-    # 旅程和 light→dark→light 主题往返，同时断言真实 HTTP 响应、容器内 PostgreSQL
-    # 真值及 Appica shell runtime。只有 loopback 前端端口发布到宿主，所有中间件
-    # 凭据均为本 job 即时生成的强随机值。
+    # MES-128/MES-158/MES-161:production 鉴权隔离栈；1440/320/390px 完成真实键盘
+    # 旅程与主题往返，再以 1440/390px 验收全局辅助页族，同时断言真实 HTTP 响应、
+    # 容器内 PostgreSQL 真值及 Appica shell runtime。只有 loopback 前端端口发布到
+    # 宿主，所有中间件凭据均为本 job 即时生成的强随机值。
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: quality
@@ -253,7 +253,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mes128-real-stack-evidence
-          path: frontend/e2e/evidence/mes111-b5-real
+          path: |
+            frontend/e2e/evidence/mes111-b5-real
+            frontend/e2e/evidence/mes161
           retention-days: 14
 
       - name: Upload Playwright report (real stack)

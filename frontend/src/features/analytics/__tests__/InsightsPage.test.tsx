@@ -3,11 +3,37 @@
  * 时间窗/粒度切换重查、空态/错误态。MeshApiClient 经 vi.mock 以桩替代。
  */
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../test-utils/render';
 import { InsightsPage } from '../InsightsPage';
 
 const requestCalls: Array<{ path: string; query?: Record<string, unknown> }> = [];
+
+const WORKSPACE = {
+  id: 'ws1',
+  name: 'WS',
+  slug: 'ws',
+  logo_url: null,
+  timezone: 'UTC',
+  settings: {},
+  my_role: 'member' as const,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+};
+
+vi.mock('../../../workspace/WorkspaceProvider', () => ({
+  useWorkspace: () => ({
+    status: 'ready',
+    workspace: WORKSPACE,
+    error: null,
+    isAdmin: false,
+    isOwner: false,
+    refresh: async () => undefined,
+    patch: async () => WORKSPACE,
+  }),
+  WorkspaceGate: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const DASHBOARD = {
   throughput: {
@@ -62,7 +88,12 @@ const DASHBOARD = {
         timeout_rate: 0.25,
         avg_duration_seconds: 845,
         retry_rate: 0.0,
-        tokens: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, token_coverage: 0.25 },
+        tokens: {
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          total_tokens: 150,
+          token_coverage: 0.25,
+        },
         meta: { token_note: 'tokens cover autopilot runs only' },
       },
     ],
@@ -83,21 +114,6 @@ vi.mock('../../../api', async (importOriginal) => {
     MeshApiClient: class {
       async request(_method: string, path: string, opts?: { query?: Record<string, unknown> }) {
         requestCalls.push({ path, query: opts?.query });
-        if (path === '/api/v1/users/me') {
-          return {
-            user: { id: 'u1', email: 'u1@x.io', display_name: 'U1' },
-            memberships: [
-              {
-                workspace_id: 'ws1',
-                workspace_name: 'WS',
-                workspace_slug: 'ws',
-                role: 'member',
-                status: 'active',
-                joined_at: null,
-              },
-            ],
-          };
-        }
         if (shouldFail) throw new Error('boom');
         return dashboardToReturn;
       }
@@ -130,6 +146,7 @@ describe('InsightsPage', () => {
     expect(screen.getByText('WA (agent)')).toBeInTheDocument();
     // token 覆盖率 < 1 → 口径标注
     expect(screen.getByText('Tokens cover autopilot-triggered runs only.')).toBeInTheDocument();
+    expect(requestCalls.some((call) => call.path === '/api/v1/users/me')).toBe(false);
   });
 
   it('omits the visibility note for unfiltered (admin) aggregates', async () => {
@@ -162,7 +179,7 @@ describe('InsightsPage', () => {
     });
     expect(screen.queryByTestId('insights-throughput')).toBeNull();
     const action = screen.getByRole('link');
-    expect(action).toHaveAttribute('href', '/issues?create=1');
+    expect(action).toHaveAttribute('href', '/w/ws/issues?create=1');
   });
 
   it('keeps per-section empty states when only some sections are empty', async () => {
@@ -227,6 +244,16 @@ describe('InsightsPage', () => {
     await waitFor(() => {
       expect(requestCalls.some((c) => c.query?.granularity === 'week')).toBe(true);
     });
+  });
+
+  it('uses design-system controls and an accessible workload scroll region', async () => {
+    const { container } = renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await screen.findByTestId('insights-workload');
+
+    expect(screen.getByTestId('insights-range')).toHaveClass('mesh-field__control');
+    expect(screen.getByTestId('insights-granularity')).toHaveClass('mesh-field__control');
+    expect(screen.getByRole('region', { name: 'Workload' })).toHaveAttribute('tabindex', '0');
+    expect(container.querySelectorAll('.mesh-analytics__member-type-icon')).toHaveLength(2);
   });
 
   it('renders the error state and retries', async () => {

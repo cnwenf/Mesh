@@ -595,11 +595,13 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
     },
     { timeout: RESPONSE_TIMEOUT },
   );
-  await page.keyboard.type(secondIssueTitle);
-  // 产品模式在首字符后把查询与焦点交接给完整命令面板；后续键盘导航
-  // 应断言面板内 combobox，而非已清空的顶栏入口。
+  // 首字符触发顶栏 → 命令面板的异步焦点交接；确认交接完成后再继续键入，
+  // 避免真实浏览器把后续字符仍投递给正在卸载的顶栏控件。
+  await page.keyboard.type(secondIssueTitle.slice(0, 1));
   const paletteInput = page.getByRole('dialog').getByRole('combobox');
   await expect(paletteInput).toBeFocused();
+  await expect(paletteInput).toHaveValue(secondIssueTitle.slice(0, 1));
+  await page.keyboard.type(secondIssueTitle.slice(1));
   const searchResponse = await searchResponsePromise;
   expect(searchResponse.status()).toBe(200);
   const searchData =

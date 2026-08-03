@@ -1,8 +1,9 @@
 import type { Page } from '@playwright/test';
 
-/** mock 服务地址(默认契约端口 8901;同机多 run 隔离经 MESH_MOCK_BASE 覆盖,
- * 与 mock-server.mjs 的 MESH_MOCK_PORT 配套) */
-export const MOCK_BASE = process.env.MESH_MOCK_BASE ?? 'http://127.0.0.1:8901';
+/** mock 服务地址(默认契约端口 8901;同机多 run 可按完整 URL 或端口隔离)。 */
+export const MOCK_BASE =
+  process.env.MESH_MOCK_BASE ??
+  `http://127.0.0.1:${String(process.env.MESH_E2E_MOCK_PORT ?? '8901')}`;
 
 /** mock 契约登录凭证(auth/login 签发同形:mesh-dev:<workspace-id>) */
 export const MOCK_TOKEN = 'mesh-dev:ws-1';

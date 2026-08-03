@@ -128,7 +128,7 @@ function OptionRow(props: OptionRowProps): React.JSX.Element {
         selected ? 'mesh-palette__option mesh-palette__option--active' : 'mesh-palette__option'
       }
       onMouseEnter={() => onHover(option.stableId)}
-      onClick={() => onActivate(option, { newTab: false })}
+      onClick={(event) => onActivate(option, { newTab: event.metaKey || event.ctrlKey })}
       onAuxClick={(event) => {
         if (event.button === 1) {
           event.preventDefault();

@@ -1,5 +1,5 @@
 /**
- * 实体搜索 hook(search-command-palette.md §4.7:防抖 150ms + 过期请求取消)。
+ * 实体搜索 hook(search-command-palette.md §4.7:防抖 120ms + 过期请求取消)。
  *
  * - 本地命令过滤在面板层同步进行(零延迟);本 hook 只负责服务端对象检索;
  * - 防抖:query 变化后等待 debounceMs 再发请求;完整 identifier 形态
@@ -18,7 +18,7 @@ import { searchWorkspace } from './api';
 import type { SearchResultItem } from './types';
 
 /** 默认防抖窗口(§4.7) */
-export const SEARCH_DEBOUNCE_MS = 150;
+export const SEARCH_DEBOUNCE_MS = 120;
 
 /** 完整 identifier 形态(§2.2:canonical uppercase 规范化等值在小写侧不敏感) */
 export const IDENTIFIER_QUERY_PATTERN = /^\s*[a-zA-Z0-9]+-\d+\s*$/;
@@ -103,9 +103,7 @@ export function useEntitySearch(options: UseEntitySearchOptions): EntitySearchSt
           if (err instanceof MeshApiError) {
             setError(err);
           } else {
-            setError(
-              new MeshApiError({ status: 0, code: 'network', message: 'search failed' }),
-            );
+            setError(new MeshApiError({ status: 0, code: 'network', message: 'search failed' }));
           }
           setCompletedQuery(trimmed); // 失败亦属「已完成」:错误态由 error 驱动呈现
           setLoading(false);

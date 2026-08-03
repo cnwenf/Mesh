@@ -7,7 +7,7 @@
  * - 进度真源在数据库(§3.7):CTA 仅深链,步骤推进经领域事件 + 实时帧重拉。
  */
 import { useNavigate } from 'react-router';
-import { Button, Icon } from '../../design';
+import { Badge, Button, Icon } from '../../design';
 import { useT } from '../../i18n';
 import { AhaCelebration } from './illustrations';
 import { stepDeeplink } from './deeplinks';
@@ -46,10 +46,14 @@ function StepRow(props: StepRowProps): React.JSX.Element {
         ) : (
           <span className="mesh-onboarding__check" aria-hidden="true" />
         )}
-        <span className="mesh-onboarding__step-name">{t(`onboarding.step.${step.step_key}.name`)}</span>
+        <span className="mesh-onboarding__step-name">
+          {t(`onboarding.step.${step.step_key}.name`)}
+        </span>
         {completed && step.completed_via === 'auto' ? (
-          <span className="mesh-onboarding__badge" data-testid={`onboarding-auto-badge-${step.step_key}`}>
-            {t('onboarding.autoBadge')}
+          <span data-testid={`onboarding-auto-badge-${step.step_key}`}>
+            <Badge tone="success" size="sm" className="mesh-onboarding__badge">
+              {t('onboarding.autoBadge')}
+            </Badge>
           </span>
         ) : null}
       </span>
@@ -87,7 +91,11 @@ function ChecklistCard(props: ChecklistCardProps): React.JSX.Element {
     STEP_KEYS.find((key) => stepsByKey.get(key)?.status === 'pending') ?? null;
 
   return (
-    <section className="mesh-onboarding" data-testid="onboarding-card" aria-label={t('onboarding.title')}>
+    <section
+      className="mesh-onboarding"
+      data-testid="onboarding-card"
+      aria-label={t('onboarding.title')}
+    >
       <header className="mesh-onboarding__head">
         <h2 className="mesh-onboarding__title">{t('onboarding.title')}</h2>
         <button
@@ -141,7 +149,11 @@ interface AhaCardProps {
 function AhaCard(props: AhaCardProps): React.JSX.Element {
   const t = useT();
   return (
-    <section className="mesh-onboarding mesh-onboarding--aha" data-testid="onboarding-aha-card" aria-label={t('onboarding.aha.title')}>
+    <section
+      className="mesh-onboarding mesh-onboarding--aha"
+      data-testid="onboarding-aha-card"
+      aria-label={t('onboarding.aha.title')}
+    >
       <AhaCelebration />
       <h2 className="mesh-onboarding__aha-title">{t('onboarding.aha.title')}</h2>
       <p className="mesh-onboarding__aha-description">{t('onboarding.aha.description')}</p>
@@ -168,12 +180,7 @@ export function OnboardingChecklist(): React.JSX.Element | null {
   if (loading || state === null || state.dismissed_at !== null) return null;
 
   if (state.aha_reached_at !== null) {
-    return (
-      <AhaCard
-        onDismiss={() => void dismiss()}
-        onOpenInbox={() => navigate('/inbox')}
-      />
-    );
+    return <AhaCard onDismiss={() => void dismiss()} onOpenInbox={() => navigate('/inbox')} />;
   }
 
   return (

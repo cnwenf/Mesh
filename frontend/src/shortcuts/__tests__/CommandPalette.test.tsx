@@ -162,7 +162,9 @@ describe('CommandPalette — 既有 prop 面回归', () => {
   it('打开后:dialog 以 title 标注,搜索框聚焦,空 query 列出全部命令', () => {
     renderPalette();
     expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
-    const input = screen.getByRole('combobox');
+    const input = screen.getByRole('combobox', { name: 'Search commands' });
+    expect(input).toHaveAttribute('data-slot', 'input');
+    expect(input).toHaveAccessibleName('Search commands');
     expect(input).toHaveFocus();
     expect(input).toHaveAttribute('placeholder', 'Search commands');
     const options = screen.getAllByRole('option');
@@ -241,6 +243,34 @@ describe('CommandPalette — 既有 prop 面回归', () => {
     await user.keyboard('{Enter}');
     expect(spies.gotoBoard).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('IME 组合输入期间 Enter 不执行选中项也不关闭', () => {
+    const onClose = vi.fn();
+    renderPalette({ onClose });
+    const input = screen.getByRole('combobox');
+
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 });
+
+    expect(spies.newIssue).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['isComposing', { isComposing: true, keyCode: 0 }],
+    ['legacy keyCode 229', { isComposing: false, keyCode: 229 }],
+  ])('IME 组合输入(%s)期间 Escape 只交给输入法,不失焦或关闭', (_label, init) => {
+    const onClose = vi.fn();
+    renderPalette({ onClose });
+    const input = screen.getByRole('combobox');
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: 'Escape', ...init });
+
+    expect(input).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
   });
 
   it('无选项时 Enter 不执行也不关闭', async () => {
@@ -471,7 +501,9 @@ describe('CommandPalette — no-results / 错误 / offline', () => {
     renderPalette({ canCreateIssue: true, onOpenIssueCreate });
     await user.type(screen.getByRole('combobox'), 'zzz');
     await waitFor(() => expect(screen.getByTestId('palette-no-results')).toBeInTheDocument());
-    await user.click(screen.getByTestId('palette-create-issue'));
+    const createButton = screen.getByTestId('palette-create-issue');
+    expect(createButton).toHaveAttribute('data-slot', 'button');
+    await user.click(createButton);
     expect(onOpenIssueCreate).toHaveBeenCalledWith('zzz');
   });
 

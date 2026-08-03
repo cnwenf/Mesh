@@ -25,6 +25,8 @@ export interface WindowParams {
   readonly to?: string;
   readonly tz?: string;
   readonly refresh?: boolean;
+  /** 页面筛选变化或卸载时取消已过期的只读聚合请求。 */
+  readonly signal?: AbortSignal;
 }
 
 /** GET /analytics/cycle-time */
@@ -42,6 +44,7 @@ export async function fetchCycleTime(
       tz: params.tz,
       refresh: params.refresh,
     },
+    signal: params.signal,
   });
 }
 
@@ -49,7 +52,10 @@ export async function fetchCycleTime(
 export async function fetchVelocity(
   client: MeshApiClient,
   workspaceId: string,
-  params: WindowParams & { readonly projectId?: string; readonly cycleIds?: readonly string[] } = {},
+  params: WindowParams & {
+    readonly projectId?: string;
+    readonly cycleIds?: readonly string[];
+  } = {},
 ): Promise<VelocityData> {
   return client.request<VelocityData>('GET', analyticsPath(workspaceId, 'velocity'), {
     query: {
@@ -60,6 +66,7 @@ export async function fetchVelocity(
       tz: params.tz,
       refresh: params.refresh,
     },
+    signal: params.signal,
   });
 }
 
@@ -83,6 +90,7 @@ export async function fetchThroughput(
       calendar_timezone: params.calendarTimezone,
       refresh: params.refresh,
     },
+    signal: params.signal,
   });
 }
 
@@ -95,6 +103,7 @@ export async function fetchWorkload(
     readonly memberType?: 'human' | 'agent';
     readonly cursor?: string;
     readonly limit?: number;
+    readonly signal?: AbortSignal;
   } = {},
 ): Promise<WorkloadEnvelope> {
   return client.list<WorkloadEnvelope['data'][number]>(analyticsPath(workspaceId, 'workload'), {
@@ -104,6 +113,7 @@ export async function fetchWorkload(
       cursor: params.cursor,
       limit: params.limit,
     },
+    signal: params.signal,
   });
 }
 
@@ -125,6 +135,7 @@ export async function fetchBurndown(
       tz: params.tz,
       refresh: params.refresh,
     },
+    signal: params.signal,
   });
 }
 
@@ -144,6 +155,7 @@ export async function fetchAgentStats(
         to: params.to,
         refresh: params.refresh,
       },
+      signal: params.signal,
     },
   );
 }
@@ -166,6 +178,7 @@ export async function fetchProjectDashboard(
         tz: params.tz,
         refresh: params.refresh,
       },
+      signal: params.signal,
     },
   );
 }
@@ -191,6 +204,7 @@ export async function fetchWorkspaceDashboard(
         calendar_timezone: params.calendarTimezone,
         refresh: params.refresh,
       },
+      signal: params.signal,
     },
   );
 }

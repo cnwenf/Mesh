@@ -408,6 +408,7 @@ export function ProjectDetailPage(): React.JSX.Element {
         <ProjectDashboardPanel
           client={client}
           workspaceId={workspace.workspace_id}
+          workspaceSlug={workspace.workspace_slug}
           projectId={project.id}
         />
       ) : null}

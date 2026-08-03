@@ -320,6 +320,12 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     // analytics §4 文案占位符(MES-71):净流量 / 日历时区回显
     net: 2,
     tz: 'UTC',
+    // analytics 结果分布与周期分位数的可访问文本
+    success: '90%',
+    failure: '5%',
+    timeout: '5%',
+    p50: '2d',
+    p90: '5d',
     // MES-111 批次② 看板拖拽/键盘移动/触控/评论草稿占位符
     // (identifier 复用上方 WEB-124 占位,合并去重)
     position: 2,

@@ -59,6 +59,7 @@ describe('ShortcutHelp restore section', () => {
       />,
     );
     const button = screen.getByTestId('help-restore-onboarding');
+    expect(button).toHaveAttribute('data-slot', 'button');
     expect(button).toHaveTextContent('Show the getting-started checklist again');
     await user.click(button);
     expect(onRestore).toHaveBeenCalledTimes(1);
