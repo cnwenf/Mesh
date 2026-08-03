@@ -5,6 +5,12 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-08-04
+
+### Fixed
+
+- **Worker 常驻协程静默死亡自愈(MES-148)**:worker Supervisor 引入统一 1s 存活看门狗——全部常驻任务(outbox relay、webhook 投递、im-send-relay、realtime/outbox/集成台账保留清理、邀请清扫、到期提醒、设备授权清扫、附件扫描/维护、技能导入、runtime reaper、autopilot 调度/执行、数据作业 reaper、搜索对账、集成队列派发器/审计保留、钉钉 Stream 等 slot)每秒检查终态;异常、意外取消、意外正常返回统一记录结构化 ERROR(`event=worker_loop_died`,含 `worker_task`/`exit_kind`/`restart_count`/`restart_delay_seconds`),并按任务独立指数退避重启(base 1s、封顶 30s),单一任务死亡或退避不阻塞其他健康 sibling 的检查与运行。worker 与看门狗共用同一 shutdown Event:仅该 Event 置位后的返回/取消属正常关停,不误告警、不重启;Supervisor 自身关停置位共享 Event、取消并 await 全部子任务,不泄漏后台协程。TaskFactory 的同步异常被隔离在受监督 task 内,不击穿 watchdog 自身调用路径。新增真实 PostgreSQL 回归:注入 relay 常驻协程意外取消,看门狗 1~2 tick 内记录结构化错误并自愈重建,pending outbox 被真实 projector drain 且 `delivery_attempts=0`(不消耗投递失败预算);`supervisor.py` 行 + 分支覆盖 100%(106 stmt / 40 branch),整体覆盖率 91.68%(≥90% 门禁),真实 worker 进程 e2e(集成队列 FIFO/两段式停机)全绿,安全审核通过(无 CRITICAL/HIGH/MEDIUM)。
+
 ## [0.27.1] - 2026-08-04
 
 ### Fixed
