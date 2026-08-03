@@ -19,7 +19,6 @@ from mesh.integrations.dingtalk_api import (
     DingTalkUpstreamError,
     InvalidCredentials,
     TokenRefreshBusy,
-    redact_body_for_log,
 )
 from tests.unit.integrations_dingtalk_support import (
     ScriptedDingTalkTransport,
@@ -79,40 +78,6 @@ def test_rate_limited_carries_flow_controlled_staff_ids():
 def test_token_refresh_busy_is_retryable_marker():
     exc = TokenRefreshBusy()
     assert exc.code == "token_refresh_busy"
-
-
-# ---------------------------------------------------------------------------
-# Request-body redaction (README §6.16)
-# ---------------------------------------------------------------------------
-
-
-def test_redact_body_replaces_secret_keys_only():
-    body = {
-        "appKey": "dingxxxx",
-        "appSecret": "s3cr3t-value",
-        "robotCode": "dingxxxx",
-    }
-    redacted = redact_body_for_log(body)
-    assert redacted == {"appKey": "dingxxxx", "appSecret": "***", "robotCode": "dingxxxx"}
-    # the original dict is NOT mutated (immutability)
-    assert body["appSecret"] == "s3cr3t-value"
-
-
-def test_redact_body_covers_client_secret_and_access_token():
-    redacted = redact_body_for_log(
-        {"clientId": "a", "clientSecret": "b", "accessToken": "c", "keep": "d"}
-    )
-    assert redacted == {"clientId": "a", "clientSecret": "***", "accessToken": "***", "keep": "d"}
-
-
-def test_redact_body_none_and_non_dict():
-    assert redact_body_for_log(None) == {}
-    assert redact_body_for_log("not-a-dict") == {}  # type: ignore[arg-type]
-
-
-def test_redact_body_without_sensitive_keys_is_identity():
-    body = {"robotCode": "dingxxxx", "msgKey": "sampleText"}
-    assert redact_body_for_log(body) == body
 
 
 # ---------------------------------------------------------------------------

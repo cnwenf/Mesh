@@ -167,7 +167,7 @@ def _compose_execution_finished(squad_handler, comment_service):
     return _handle
 
 
-def _fanout_with_im_derivation(base_handler):
+def _fanout_with_im_derivation(base_handler, *, max_chunks: int):
     """integrations.md §3.10: after the baseline notification fanout,
     derive IM deliveries (notification_delivery(channel='im') ledger +
     im.send events) for integration-triggered executions. The derivation
@@ -179,7 +179,11 @@ def _fanout_with_im_derivation(base_handler):
         await base_handler.handle(session, event)
         try:
             async with session.begin_nested():
-                await derive_im_deliveries_from_fanout(session, event)
+                await derive_im_deliveries_from_fanout(
+                    session,
+                    event,
+                    max_chunks=max_chunks,
+                )
         except Exception:  # noqa: BLE001
             logger.exception("IM delivery derivation failed for event %s", event.id)
         return None
@@ -269,7 +273,8 @@ def build_relay(
             NotificationFanoutHandler(
                 aggregation_window_seconds=settings.notification_aggregation_window,
                 mailer=mailer,
-            )
+            ),
+            max_chunks=settings.im_max_chunks,
         ),
         # squad.md: plan decisions (§6.10) and execution-terminal observation
         # (§4.4) are applied relay-side, keeping runtime decoupled from squad.

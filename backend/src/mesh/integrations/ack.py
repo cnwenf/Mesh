@@ -97,8 +97,6 @@ async def elect_ack_leader(
     item: IntegrationMessageQueue,
     ack_template: str,
     coalesce_window: timedelta,
-    conversation_type: str,
-    target_user_key: str = "",
 ) -> bool:
     """Decide the ack window role of a just-enqueued item and, for a
     leader, write the ``im.send`` outbox event — ALL inside the enqueue
@@ -124,6 +122,7 @@ async def elect_ack_leader(
     covering_leader = await session.scalar(
         select(IntegrationMessageQueue)
         .where(
+            IntegrationMessageQueue.workspace_id == item.workspace_id,
             IntegrationMessageQueue.conversation_key == item.conversation_key,
             IntegrationMessageQueue.id != item.id,
             # self-referencing rows only — leaders own their window
@@ -151,11 +150,8 @@ async def elect_ack_leader(
         event_type=IM_SEND_EVENT_TYPE,
         payload={
             "kind": IM_SEND_KIND_ACK,
-            "workspace_id": str(item.workspace_id),
             "integration_id": str(item.integration_id) if item.integration_id else None,
             "conversation_key": item.conversation_key,
-            "conversation_type": conversation_type,
-            "target_user_key": target_user_key,
             "template": ack_template,
             "queue_item_id": str(item.id),
             "position_snapshot": position,

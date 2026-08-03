@@ -52,6 +52,11 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 > runner 只将前端绑定到 `127.0.0.1`；PostgreSQL、Redis、MinIO、API 与 gateway 不发布
 > 宿主端口。随机强凭据写入 gitignored、mode 600 的本地 `stack.env`，结束时删除容器和卷。
 >
+> **钉钉临时令牌安全口径**：长期凭据解密值进入 `redact_in_logs`；持续轮换的
+> `accessToken` 不依赖字面值黑名单，而由适配器执行结构化零日志——请求体、响应体、
+> 鉴权头值均不记录或持久化，失败诊断仅保留 `method/url/status`。权威约束见
+> [`docs/specs/README.md` §6.16](docs/specs/README.md#616-凭证全通道脱敏与用户可控-url权威mes-4-安全约束)。
+>
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | 前端设计质量与体验升级([design-quality.md](docs/specs/features/design-quality.md)) | 🚧 实施中(MES-111) | MES-109 完成逐页审查 + 设计 Spec(MES-110 竞品对照清单 343 条验收基线);MES-107 去脚手架化 v0.23.1;MES-111 已完成 Phase 0(手机可达性:底栏/更多抽屉/统一搜索入口/技能死链/390px 溢出)与 Phase 1 设计系统底座(令牌三层扩展 + 双主题校准、排版体系、Icon/Badge/Avatar/Tooltip/Menu/Tabs/Accordion/Drawer 原语与组件全状态矩阵、错误态四部分模板);Stage 1 系统层收敛(MES-115)已在底座上补齐 Field/Textarea/Checkbox/Switch/Popover/PageHeader/Toolbar/DataTable 与 Icon 注册表扩充、桌面分组可折叠侧栏 + 手机底栏/抽屉同源导航(navigation.ts 唯一入口表)、emoji/字符图标全站清偿、静态门禁(eslint mesh/no-emoji-icons + stylelint mesh/zindex-token-only)、/styleguide 组件 fixture 与 1440/1024/768/390 × 亮暗视觉回归基础;**MES-127 批次④(已完成)**:账号/工作区设置二级导航(SettingsLayout 沉淀至 `design/patterns`,dirty + 保存反馈 + 危险区 + 权限不可见)+ **G11** 工作区默认主题前端入口(协商链真实生效)+ 统一搜索/命令面板(顶栏同一结果视图 + Ctrl/Cmd+K 六类业务对象检索 + favorites/recents + identifier 直达 + 120ms 防抖/可取消/旧响应不覆盖新查询 + 键盘全流程 + aria-live 播报 + `/` 聚焦)+ `/insights` 洞察 UI 重做(KPI 条 + 口径/时区回显行 + 空窗/数据不足/可见性过滤态 + tabular-nums + 颜色非唯一信号)+ `/approvals` 统一审批页(**G10**)+ **G19** 动态标签页标题公共 hook + 模态 Esc 任意焦点可关(修复焦点圈养竞态漏关);真实 e2e 桌面 + 手机双视口 10/10 全绿 + 四组合走查存证 22 张互异;单测 3856 例、逐文件 90% 门禁(189 文件)全过。后续逐页分批(移动收尾/剩余页面族/路由收口)经 MES-111 并行子 Issue 调度 |

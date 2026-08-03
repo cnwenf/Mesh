@@ -652,6 +652,28 @@ async def test_ack_mes88_payload_direct_delivery(session_factory, redis_client):
     assert transport.group_sends() == []
 
 
+async def test_target_derivation_ignores_cross_workspace_source_event(
+    session_factory, redis_client
+):
+    from mesh.db.models.integration import IntegrationMessageQueue
+
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    item = await _enqueue_item_with_event(session_factory, world, conversation_type="1")
+    mismatched_item = IntegrationMessageQueue(
+        workspace_id=uuid.uuid4(),
+        integration_event_id=item.integration_event_id,
+        sender_identity_key=item.sender_identity_key,
+    )
+    payload: dict[str, str] = {}
+    relay = _relay(session_factory, redis_client, ScriptedDingTalkTransport())
+
+    async with session_factory() as session:
+        await relay._fill_target_from_item(session, payload, item=mismatched_item)
+
+    assert payload == {"conversation_type": "group"}
+
+
 async def test_command_feedback_kind_delivered(session_factory, redis_client):
     """MES-88 /stop//btw two-phase feedback (queue_events.py payload shape,
     no workspace_id — the outbox row carries it)."""
