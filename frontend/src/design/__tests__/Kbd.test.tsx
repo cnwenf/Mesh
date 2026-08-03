@@ -8,5 +8,6 @@ describe('Kbd(快捷键帮助层的按键帽)', () => {
     const element = screen.getByText('K');
     expect(element.tagName).toBe('KBD');
     expect(element.className).toContain('mesh-kbd');
+    expect(element).toHaveAttribute('data-slot', 'kbd');
   });
 });

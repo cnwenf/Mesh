@@ -591,6 +591,9 @@ describe('MembersPage', () => {
       { route: '/members' },
     );
     await waitForTable();
+    // 全量 coverage 并发下 effect 订阅可能晚于表格首帧；先证明真实 handler
+    // 已挂载再发帧，避免把调度时序误判为 presence 归一化失败。
+    await waitFor(() => expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence'));
     act(() => {
       rt.emit({ channel: 'agent:agt-9:presence', payload: { queued: 2 } });
     });

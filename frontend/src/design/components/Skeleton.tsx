@@ -3,6 +3,7 @@
  * 容器 role="status" + sr-only 加载文案(loadingLabel 必填,状态不止于动画/视觉)。
  */
 import './components.css';
+import { Skeleton as AppicaSkeleton } from '@appica/ui-react/skeleton';
 
 export interface SkeletonProps {
   /** sr-only 加载文案(必填):读屏可感知的加载状态 */
@@ -18,7 +19,7 @@ export function Skeleton(props: SkeletonProps): React.JSX.Element {
     .join(' ');
   return (
     <div className="mesh-skeleton" role="status">
-      <span className={shapeClasses} aria-hidden="true" />
+      <AppicaSkeleton className={shapeClasses} effect="shimmer" />
       <span className="sr-only">{loadingLabel}</span>
     </div>
   );

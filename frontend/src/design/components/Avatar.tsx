@@ -6,6 +6,11 @@
  * - 有图时渲染图片(alt 留空:头像旁的名称文案承载可访问名)。
  */
 import { Icon } from './Icon';
+import {
+  Avatar as AppicaAvatar,
+  AvatarFallback as AppicaAvatarFallback,
+  AvatarImage as AppicaAvatarImage,
+} from '@appica/ui-react/avatar';
 import './primitives.css';
 
 export type AvatarSize = 20 | 24 | 32 | 40 | 56;
@@ -60,26 +65,28 @@ export function Avatar(props: AvatarProps): React.JSX.Element {
 
   if (src !== undefined && src.length > 0) {
     return (
-      <span className={baseClasses}>
-        <img src={src} alt="" />
-      </span>
+      <AppicaAvatar className={baseClasses} size={size}>
+        <AppicaAvatarImage src={src} alt="" />
+      </AppicaAvatar>
     );
   }
 
   if (kind === 'agent') {
     const classes = [baseClasses, 'mesh-avatar--agent'].join(' ');
     return (
-      <span className={classes} role="img" aria-label={name}>
-        <Icon name="agent" size={size >= 40 ? 24 : 16} />
-      </span>
+      <AppicaAvatar className={classes} size={size} role="img" aria-label={name}>
+        <AppicaAvatarFallback>
+          <Icon name="agent" size={size >= 40 ? 24 : 16} />
+        </AppicaAvatarFallback>
+      </AppicaAvatar>
     );
   }
 
   const hue = avatarHueIndex(name);
   const classes = [baseClasses, `mesh-avatar--h${hue}`].join(' ');
   return (
-    <span className={classes} role="img" aria-label={name}>
-      {avatarInitials(name)}
-    </span>
+    <AppicaAvatar className={classes} size={size} role="img" aria-label={name}>
+      <AppicaAvatarFallback>{avatarInitials(name)}</AppicaAvatarFallback>
+    </AppicaAvatar>
   );
 }

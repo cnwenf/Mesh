@@ -172,9 +172,9 @@ async function persistEvidence(
 ): Promise<void> {
   await mkdir(EVIDENCE_DIR, { recursive: true });
   let projects: Readonly<Record<string, ProjectEvidence>> = {};
-  // Full runs start with phone-320; reset stale project metadata while fixed-name
-  // screenshots are overwritten. A single-project phone-390 rerun preserves 320.
-  if (project !== 'phone-320') {
+  // Full runs start with desktop-1440; reset stale project metadata while fixed-name
+  // screenshots are overwritten. Later/single-project reruns preserve earlier projects.
+  if (project !== 'desktop-1440') {
     try {
       const prior = JSON.parse(await readFile(EVIDENCE_MANIFEST, 'utf8')) as EvidenceManifest;
       projects = prior.projects;
@@ -314,7 +314,47 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   const loginData = await dataOf<{ access_token: string }>(loginResponse);
   expect(loginData.access_token).toMatch(/^eyJ/);
   await expect(page.locator('.mesh-shell')).toBeVisible({ timeout: 30_000 });
+
+  // MES-158:真实 production shell 必须由 Appica 子路径组件渲染，同时仍由
+  // Mesh 的 data-theme 协商链掌权。惰性 script 证明组件库未引入第二条首帧链路。
+  await expect(page.locator('html')).toHaveAttribute('data-theme', /^(light|dark)$/);
+  await expect(page.locator('html')).toHaveClass(/\b(light|dark)\b/);
+  await expect(page.locator('.mesh-sidebar')).toHaveAttribute('data-slot', 'navigation');
+  await expect(page.getByTestId('topbar-search')).toHaveAttribute('data-slot', 'input');
+  await expect(page.locator('script[data-mesh-theme-bridge]')).toHaveAttribute(
+    'type',
+    'application/json',
+  );
   screenshots.push(await screenshot(page, testInfo, '01-login'));
+
+  // 通过真实设置页与 PATCH /users/me 切换暗色，再回到亮色。除 Mesh 权威
+  // data-theme 外，Appica dark variant 的兼容 class 必须同帧同步且互斥。
+  await page.goto('/settings/appearance');
+  const darkPreferenceResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PATCH' &&
+      new URL(response.url()).pathname === '/api/v1/users/me',
+    { timeout: RESPONSE_TIMEOUT },
+  );
+  await page.getByTestId('theme-select').selectOption('dark');
+  expect((await darkPreferenceResponse).status()).toBe(200);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+  await expect(page.locator('html')).not.toHaveClass(/\blight\b/);
+  screenshots.push(await screenshot(page, testInfo, '01b-dark-shell'));
+
+  const lightPreferenceResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PATCH' &&
+      new URL(response.url()).pathname === '/api/v1/users/me',
+    { timeout: RESPONSE_TIMEOUT },
+  );
+  await page.getByTestId('theme-select').selectOption('light');
+  expect((await lightPreferenceResponse).status()).toBe(200);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.locator('html')).toHaveClass(/\blight\b/);
+  await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+  await page.goto('/');
 
   const token = loginData.access_token;
   const firstWorkspace = await postData<WorkspaceData>(
@@ -443,13 +483,16 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   await page.getByTestId('topbar-brand').focus();
   await page.keyboard.press('g');
   await page.keyboard.press('b');
-  // 窄屏看板默认展示第一列(backlog)，先用键盘切到 issue 所在的 todo 列。
-  await expect(page.getByTestId('compact-chip-todo')).toBeVisible({ timeout: 30_000 });
-  const todoChip = page.getByTestId('compact-chip-todo');
-  await todoChip.focus();
-  await page.keyboard.press('Enter');
-  await expect(todoChip).toHaveAttribute('aria-selected', 'true');
   await expect(page).toHaveURL(/\/board$/);
+  const compactBoard = testInfo.project.name.startsWith('phone-');
+  if (compactBoard) {
+    // 窄屏看板默认展示第一列(backlog)，先用键盘切到 issue 所在的 todo 列。
+    const todoChip = page.getByTestId('compact-chip-todo');
+    await expect(todoChip).toBeVisible({ timeout: 30_000 });
+    await todoChip.focus();
+    await page.keyboard.press('Enter');
+    await expect(todoChip).toHaveAttribute('aria-selected', 'true');
+  }
   await expect(page.getByTestId(`board-card-${firstIssue.id}`)).toBeVisible({ timeout: 30_000 });
   const card = page.getByTestId(`board-card-${firstIssue.id}`);
   let pointerDownCount = 0;
@@ -487,8 +530,10 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
       (window as typeof window & { __mes128DragStart?: number }).__mes128DragStart ?? 0,
   })));
   expect({ pointerDownCount, dragStartCount }).toEqual({ pointerDownCount: 0, dragStartCount: 0 });
-  await page.getByTestId('compact-chip-in_progress').focus();
-  await page.keyboard.press('Enter');
+  if (compactBoard) {
+    await page.getByTestId('compact-chip-in_progress').focus();
+    await page.keyboard.press('Enter');
+  }
   await expect(
     page.getByTestId('board-column-in_progress').getByTestId(`board-card-${firstIssue.id}`),
   ).toBeVisible({ timeout: 20_000 });
@@ -602,7 +647,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   });
   // 注册前置会话在随后登录时被轮换；数据库应只保留一个未撤销会话。
   expect(database.session_count).toBe(1);
-  expect(screenshots).toHaveLength(6);
+  expect(screenshots).toHaveLength(7);
 
   const viewportSize = page.viewportSize();
   if (viewportSize === null) throw new Error('MES-128 evidence requires an explicit viewport');
@@ -610,6 +655,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
     viewport: viewportSize,
     journey: [
       'keyboard login',
+      'real settings light/dark bridge round-trip',
       'keyboard issue create',
       'arrow-key non-drag board move',
       'Ctrl+Enter comment',

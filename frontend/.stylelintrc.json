@@ -10,6 +10,7 @@
     "src/design/tokens.css",
     "src/design/tokens-dark.css",
     "src/design/tokens-print.css",
+    "src/design/appica-tokens.css",
     "src/design/skeleton.css"
   ],
   "rules": {
@@ -25,6 +26,12 @@
     "font-family-name-quotes": null,
     "alpha-value-notation": null,
     "import-notation": null,
+    "at-rule-no-unknown": [
+      true,
+      {
+        "ignoreAtRules": ["source"]
+      }
+    ],
     "mesh/zindex-token-only": true
   }
 }

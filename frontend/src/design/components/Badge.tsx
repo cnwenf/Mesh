@@ -4,6 +4,7 @@
  * 文案禁换行(§6.4)。tone 对应状态三元组语义,不挪用为优先级/成员/图表色。
  */
 import type { ReactNode } from 'react';
+import { Badge as AppicaBadge } from '@appica/ui-react/badge';
 import { Icon } from './Icon';
 import type { IconName } from './Icon';
 import './primitives.css';
@@ -30,20 +31,36 @@ export interface BadgeProps {
   className?: string;
 }
 
+const APPICA_BADGE_VARIANT: Readonly<
+  Record<BadgeTone, 'outline' | 'info' | 'success' | 'warning' | 'error' | 'primary'>
+> = {
+  neutral: 'outline',
+  info: 'info',
+  success: 'success',
+  warning: 'warning',
+  danger: 'error',
+  accent: 'primary',
+};
+
 export function Badge(props: BadgeProps): React.JSX.Element {
   const { tone = 'neutral', size = 'sm', icon, children, className } = props;
   const iconName = icon === null ? null : (icon ?? BADGE_TONE_ICONS[tone]);
-  const classes = ['mesh-badge', `mesh-badge--${tone}`, size === 'md' ? 'mesh-badge--md' : null, className]
+  const classes = [
+    'mesh-badge',
+    `mesh-badge--${tone}`,
+    size === 'md' ? 'mesh-badge--md' : null,
+    className,
+  ]
     .filter((part): part is string => Boolean(part))
     .join(' ');
   return (
-    <span className={classes}>
+    <AppicaBadge variant={APPICA_BADGE_VARIANT[tone]} size={size} className={classes}>
       {iconName !== null ? (
         <span className="mesh-badge__icon">
           <Icon name={iconName} size={16} />
         </span>
       ) : null}
       {children}
-    </span>
+    </AppicaBadge>
   );
 }

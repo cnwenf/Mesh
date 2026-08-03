@@ -1,4 +1,5 @@
 import { act, render } from '@testing-library/react';
+import { useTheme as useAppicaTheme } from '@appica/ui-react/hooks/use-theme';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultPreferences, useSettingsStore } from '../../state/settingsStore';
 import { useWorkspaceThemeBridge } from '../../state/workspaceThemeBridge';
@@ -56,6 +57,7 @@ beforeEach(() => {
   useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: true });
   delete document.documentElement.dataset.theme;
   document.documentElement.removeAttribute('data-theme-pending');
+  document.documentElement.classList.remove('light', 'dark');
   stubMatchMedia(false);
 });
 
@@ -79,6 +81,27 @@ describe('resolveTheme(纯函数兼容导出)', () => {
 });
 
 describe('ThemeProvider 协商链(theme.md §2.2)', () => {
+  function AppicaThemeProbe(): React.JSX.Element {
+    const theme = useAppicaTheme();
+    return (
+      <output data-testid="appica-theme">
+        {theme.forcedTheme ?? 'none'}:{theme.resolvedTheme ?? 'none'}
+      </output>
+    );
+  }
+
+  it('向 Appica provider 下发同一权威主题,不创建第二条协商链', () => {
+    useWorkspaceThemeBridge.setState({ defaultTheme: 'dark', loaded: true });
+    const { getByTestId } = render(
+      <ThemeProvider>
+        <AppicaThemeProbe />
+      </ThemeProvider>,
+    );
+    expect(getByTestId('appica-theme')).toHaveTextContent('dark:dark');
+    expect(document.documentElement).toHaveClass('dark');
+    expect(document.documentElement).not.toHaveClass('light');
+  });
+
   it('user=null + 工作区默认 dark → 应用暗色(第 2 级)', () => {
     useWorkspaceThemeBridge.setState({ defaultTheme: 'dark', loaded: true });
     render(
@@ -166,8 +189,12 @@ describe('ThemeProvider 协商链(theme.md §2.2)', () => {
       </ThemeProvider>,
     );
     expect(document.documentElement.dataset.theme).toBe('light');
+    expect(document.documentElement).toHaveClass('light');
+    expect(document.documentElement).not.toHaveClass('dark');
     act(() => useSettingsStore.getState().setTheme('dark'));
     expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement).toHaveClass('dark');
+    expect(document.documentElement).not.toHaveClass('light');
     act(() => useSettingsStore.getState().setTheme(null));
     expect(document.documentElement.dataset.theme).toBe('light');
   });

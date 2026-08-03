@@ -47,6 +47,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit dependency tree (high severity fails)
+        run: npm audit --audit-level=high
+
+      - name: Verify Appica version, MIT notice, and subpath imports
+        run: npm run check:appica
+
       - name: Lint
         run: npm run lint
 
@@ -81,11 +87,11 @@ jobs:
         run: npm run build
 
       - name: Token CSS generation is idempotent (theme.md §5.4)
-        # tokens.css/tokens-dark.css/tokens-print.css are generated from
+        # tokens.css/tokens-dark.css/tokens-print.css/appica-tokens.css are generated from
         # tokenValues.ts; a hand-edit would surface as a post-generation diff.
         run: |
           npm run gen:tokens
-          git diff --exit-code -- src/design/tokens.css src/design/tokens-dark.css src/design/tokens-print.css
+          git diff --exit-code -- src/design/tokens.css src/design/tokens-dark.css src/design/tokens-print.css src/design/appica-tokens.css
 
   contrast:
     # 对比度独立关卡(theme.md §5.4):tokenValues.ts 单一事实源逐对校验,
@@ -214,9 +220,10 @@ jobs:
           retention-days: 7
 
   mes128-real-stack-e2e:
-    # MES-128:production 鉴权隔离栈；320/390px 分别完成六段键盘旅程，
-    # 同时断言真实 HTTP 响应和容器内 PostgreSQL 真值。只有 loopback 前端端口
-    # 发布到宿主，所有中间件凭据均为本 job 即时生成的强随机值。
+    # MES-128/MES-158:production 鉴权隔离栈；1440/320/390px 分别完成真实键盘
+    # 旅程和 light→dark→light 主题往返，同时断言真实 HTTP 响应、容器内 PostgreSQL
+    # 真值及 Appica shell runtime。只有 loopback 前端端口发布到宿主，所有中间件
+    # 凭据均为本 job 即时生成的强随机值。
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: quality
@@ -238,7 +245,7 @@ jobs:
       - name: Generate isolated strong credentials
         run: ./e2e/mes128-real/gen-stack-env.sh --force
 
-      - name: Run 320/390 real-stack keyboard journeys
+      - name: Run desktop/mobile real-stack keyboard and theme journeys
         run: ./e2e/mes128-real/run-e2e.sh
 
       - name: Upload redacted journey evidence

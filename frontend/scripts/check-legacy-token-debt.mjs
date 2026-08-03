@@ -15,6 +15,7 @@ const EXCLUDED = new Set([
   'src/design/tokens.css',
   'src/design/tokens-dark.css',
   'src/design/tokens-print.css',
+  'src/design/appica-tokens.css',
 ]);
 const LEGACY_TOKENS = [
   '--color-primary',

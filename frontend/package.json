@@ -20,6 +20,7 @@
     "check:evidence:matrix": "node scripts/check-checklist-evidence.mjs",
     "generate:evidence:matrix": "node scripts/generate-checklist-evidence-manifest.mjs",
     "check:contrast": "node scripts/check-contrast.mjs",
+    "check:appica": "node scripts/check-appica-foundation.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc -b --noEmit",
@@ -36,6 +37,7 @@
     "test:e2e:mes129": "playwright test -c playwright.mes129.config.ts"
   },
   "dependencies": {
+    "@appica/ui-react": "1.0.0",
     "dompurify": "^3.4.12",
     "marked": "^18.0.7",
     "react": "19.2.8",
@@ -48,6 +50,7 @@
     "@axe-core/playwright": "^4.12.1",
     "@eslint/js": "^9.17.0",
     "@playwright/test": "^1.49.1",
+    "@tailwindcss/vite": "4.3.3",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.2.0",
@@ -67,6 +70,7 @@
     "prettier": "^3.4.2",
     "stylelint": "^16.26.1",
     "stylelint-config-standard": "^36.0.1",
+    "tailwindcss": "4.3.3",
     "typescript": "~5.7.3",
     "typescript-eslint": "^8.18.2",
     "vite": "^6.3.5",

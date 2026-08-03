@@ -41,12 +41,14 @@ function renderSidebar(route: string = '/') {
 describe('Sidebar(分组 + 图标 + 激活态)', () => {
   it('渲染全部导航项(目录文案 + testid + href + 图标)', () => {
     renderSidebar();
+    expect(screen.getByLabelText('Sidebar navigation')).toHaveAttribute('data-slot', 'navigation');
     for (const { testid, label, href } of EXPECTED) {
       const link = screen.getByTestId(testid);
       expect(link.textContent).toBe(label);
       expect(link.getAttribute('href')).toBe(href);
       // 每项携带统一 SVG 图标(§7.1:导航禁 emoji/字符图标)
       expect(link.querySelector('svg')).not.toBeNull();
+      expect(link).toHaveAttribute('data-slot', 'navigation-link');
     }
   });
 

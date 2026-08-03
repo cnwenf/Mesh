@@ -1,7 +1,12 @@
+@import '@appica/ui-react/styles.css';
 @import './tokens.css';
 @import './tokens-dark.css';
 @import './tokens-print.css';
+@import './appica-tokens.css';
 @import './typography.css';
+
+/* Tailwind 默认跳过 node_modules；显式启用 Appica 的发布包来源。 */
+@source '@appica/ui-react';
 
 /*
  * 基线样式入口(README §6.12):语义 token + 最小 reset + 焦点可见 +
@@ -67,6 +72,32 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/* Appica 的 Tailwind preflight 会把原生表单边框/内边距归零。迁移期间仍有
+   业务页直接使用原生文本控件；为这些存量控件保留可见边界，同时排除带
+   data-slot 的 Appica 控件，避免覆盖组件库自己的状态样式。 */
+:where(
+  input:not([type], [data-slot]),
+  input[type='text']:not([data-slot]),
+  input[type='search']:not([data-slot]),
+  input[type='email']:not([data-slot]),
+  input[type='password']:not([data-slot]),
+  input[type='url']:not([data-slot]),
+  input[type='tel']:not([data-slot]),
+  input[type='number']:not([data-slot]),
+  input[type='date']:not([data-slot]),
+  input[type='datetime-local']:not([data-slot]),
+  input[type='month']:not([data-slot]),
+  input[type='week']:not([data-slot]),
+  input[type='time']:not([data-slot]),
+  select:not([data-slot]),
+  textarea:not([data-slot])
+) {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
 }
 
 /* 粗指针命中区(design-quality §8.2):所有原生/ARIA 操作控件的实际命中矩形

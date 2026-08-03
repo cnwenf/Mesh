@@ -18,6 +18,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router';
 import type { ChangeEvent, KeyboardEvent } from 'react';
+import { Input as AppicaInput } from '@appica/ui-react/input';
+import { Kbd as AppicaKbd } from '@appica/ui-react/kbd';
 import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
 import { InboxBell } from '../features/inbox';
@@ -221,9 +223,10 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
       </NavLink>
       <WorkspaceSwitcher />
       <div className="mesh-topbar__search-wrap" ref={containerRef}>
-        <input
+        <AppicaInput
           data-testid="topbar-search"
           className="mesh-topbar__search"
+          inputSize="md"
           type="search"
           placeholder={t('common.search')}
           aria-label={t('common.search')}
@@ -289,10 +292,10 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
           label={t('a11y.openPalette')}
           onClick={onOpenPalette}
         >
-          ⌘
+          <AppicaKbd size="sm">⌘</AppicaKbd>
         </IconButton>
         <IconButton data-testid="open-help" label={t('a11y.openHelp')} onClick={onOpenHelp}>
-          ?
+          <AppicaKbd size="sm">?</AppicaKbd>
         </IconButton>
       </span>
     </header>

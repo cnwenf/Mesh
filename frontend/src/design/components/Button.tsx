@@ -8,6 +8,7 @@
  */
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { forwardRef } from 'react';
+import { Button as AppicaButton } from '@appica/ui-react/button';
 import './components.css';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -31,14 +32,34 @@ export function buttonClasses(
     .join(' ');
 }
 
+const APPICA_VARIANT: Readonly<
+  Record<ButtonVariant, 'primary' | 'outline' | 'ghost' | 'destructive'>
+> = {
+  primary: 'primary',
+  secondary: 'outline',
+  ghost: 'ghost',
+  danger: 'destructive',
+};
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = 'primary', size = 'md', isLoading = false, type = 'button', disabled, className, children, ...rest },
+  {
+    variant = 'primary',
+    size = 'md',
+    isLoading = false,
+    type = 'button',
+    disabled,
+    className,
+    children,
+    ...rest
+  },
   ref,
 ) {
   return (
-    <button
+    <AppicaButton
       ref={ref}
       type={type}
+      variant={APPICA_VARIANT[variant]}
+      size={size}
       className={buttonClasses(variant, size, className)}
       disabled={disabled || isLoading}
       aria-busy={isLoading ? true : undefined}
@@ -46,6 +67,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     >
       {isLoading ? <span className="mesh-button__spinner" aria-hidden="true" /> : null}
       <span className="mesh-button__label">{children}</span>
-    </button>
+    </AppicaButton>
   );
 });

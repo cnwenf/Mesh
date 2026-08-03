@@ -118,7 +118,7 @@ describe('TopBar', () => {
   it('渲染品牌链接(§4.2 返回首页)与全局搜索框(初始无弹层)', () => {
     renderTopBar();
     expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/');
-    expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
+    expect(screen.getByTestId('topbar-search')).toHaveAttribute('data-slot', 'input');
     expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
   });
 

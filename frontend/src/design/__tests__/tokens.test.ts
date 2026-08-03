@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WCAG_AA_LARGE_RATIO, WCAG_AA_RATIO, contrastRatio } from '../contrast';
-import { AA_CONTRAST_PAIRS, DARK_TOKENS, LIGHT_TOKENS } from '../tokenValues';
+import { AA_CONTRAST_PAIRS, APPICA_TOKEN_ALIASES, DARK_TOKENS, LIGHT_TOKENS } from '../tokenValues';
 
 // vitest 以项目根为 cwd 运行;直接读 CSS 原文断言与 tokenValues.ts 的镜像关系。
 const tokensCss = readFileSync(path.resolve(process.cwd(), 'src/design/tokens.css'), 'utf8');
@@ -14,6 +14,11 @@ const tokensPrintCss = readFileSync(
   path.resolve(process.cwd(), 'src/design/tokens-print.css'),
   'utf8',
 );
+const appicaTokensCss = readFileSync(
+  path.resolve(process.cwd(), 'src/design/appica-tokens.css'),
+  'utf8',
+);
+const baseCss = readFileSync(path.resolve(process.cwd(), 'src/design/base.css'), 'utf8');
 
 /** 生成产物的首行「禁止手改」标记(gen-tokens.mjs 契约)。 */
 const GENERATED_HEADER =
@@ -46,6 +51,24 @@ describe('设计 token(README §6.12 主题契约)', () => {
     ] as const) {
       expect(css.split('\n')[0], `${name} 首行应为生成标记`).toBe(GENERATED_HEADER);
     }
+  });
+
+  it('Appica token bridge 由同一事实源生成并逐项映射 Mesh 语义 token', () => {
+    expect(appicaTokensCss.split('\n')[0]).toBe(GENERATED_HEADER);
+    expect(appicaTokensCss).toContain(':root');
+    for (const [name, value] of Object.entries(APPICA_TOKEN_ALIASES)) {
+      expect(appicaTokensCss, `Appica bridge 缺少 ${name}: ${value}`).toContain(
+        `${name}: ${value};`,
+      );
+    }
+  });
+
+  it('Tailwind preflight 不抹除存量原生文本控件边界,且不覆盖 Appica data-slot 控件', () => {
+    expect(baseCss).toContain(':not([data-slot])');
+    expect(baseCss).toContain('select:not([data-slot])');
+    expect(baseCss).not.toContain('):not([data-slot]) {');
+    expect(baseCss).toContain('border: 1px solid var(--color-border);');
+    expect(baseCss).toContain('background-color: var(--color-surface);');
   });
 
   it('tokens-print.css 在 @media print 强制亮色:颜色 token 取 LIGHT_TOKENS 值,非颜色 token 不出现', () => {

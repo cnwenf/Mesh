@@ -9,6 +9,7 @@ describe('Input', () => {
     render(<Input label="Email" />);
     const input = screen.getByLabelText('Email');
     expect(input.tagName).toBe('INPUT');
+    expect(input).toHaveAttribute('data-slot', 'input');
   });
 
   it('受控:value + onChange', async () => {
