@@ -18,10 +18,10 @@ The concrete outbound adapter for ``kind='im_dingtalk'`` integrations:
   (:class:`DingTalkRateLimited` carries ``flowControlledStaffIdList``).
 
 Full-channel redaction (README §6.16): the decrypted ``app_secret`` joins the
-workspace ``redact_in_logs`` blacklist (runtime/credentials.py); the token
-value and secret-bearing request bodies are NEVER echoed — logged request
-bodies pass through :func:`redact_body_for_log` (structural ``***`` on the
-sensitive keys) and failures record ONLY ``method/url/status``.
+workspace ``redact_in_logs`` blacklist (runtime/credentials.py). Rotating
+``accessToken`` values cannot be maintained safely in that literal blacklist,
+so this transport never logs or persists request bodies, response bodies, or
+authorization-header values; failures record ONLY ``method/url/status``.
 
 Outbound targets are FIXED to the official platform domains; the base URLs
 are deployment-time environment (settings ``dingtalk_api_base`` /
@@ -168,31 +168,6 @@ class DingTalkRateLimited(DingTalkError):
 class DingTalkUpstreamError(DingTalkError):
     """Non-classified platform failure (5xx / unexpected body). Ledger
     records ONLY method/url/status — never the body (§6.16)."""
-
-
-# ---------------------------------------------------------------------------
-# Full-channel redaction (README §6.16)
-# ---------------------------------------------------------------------------
-
-# Request-body keys whose VALUES are secrets and may never reach logs /
-# error ledgers / delivery details.
-_SENSITIVE_BODY_KEYS: frozenset[str] = frozenset({"appSecret", "clientSecret", "accessToken"})
-
-# Request headers whose values are secrets (token bearer).
-REDACT_HEADERS: frozenset[str] = frozenset({"x-acs-dingtalk-access-token"})
-
-
-def redact_body_for_log(body: dict[str, Any] | None) -> dict[str, Any]:
-    """Structural ``***`` replacement for secret-bearing body keys.
-
-    Independent of the workspace blacklist (which covers the stored
-    app_secret): the ephemeral accessToken is never a stored credential, so
-    it is masked by key name here. Non-dict input yields an empty dict
-    (there is nothing structured to log).
-    """
-    if not isinstance(body, dict):
-        return {}
-    return {key: ("***" if key in _SENSITIVE_BODY_KEYS else value) for key, value in body.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +600,6 @@ __all__ = [
     "MSG_KEY_MARKDOWN",
     "MSG_KEY_TEXT",
     "RATE_LIMIT_CODES",
-    "REDACT_HEADERS",
     "STREAM_FRAME_MAX_BYTES",
     "STREAM_TOTAL_MAX_BYTES",
     "TOKEN_LIFETIME_SECONDS",
@@ -633,5 +607,4 @@ __all__ = [
     "TOKEN_TTL_BUFFER_SECONDS",
     "TOKEN_TTL_JITTER_SECONDS",
     "TokenRefreshBusy",
-    "redact_body_for_log",
 ]

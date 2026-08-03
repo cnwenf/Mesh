@@ -649,6 +649,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 规则 | 内容 |
 | --- | --- |
 | 全通道脱敏 | 凭证(secret)的脱敏不仅限日志通道:agent 写出的**评论、附件产出物、日志**等所有内容通道均做 secret 命中检测(复用 `runtime_credentials.redact_in_logs` 黑名单),命中即拦截该内容写出并触发安全告警;沙箱出站默认 deny(runtime.md)从网络层堵截凭证经任意外联外泄 |
+| 轮换临时令牌 | `accessToken` 等由第三方平台签发并持续轮换的临时值不进入字面值黑名单（无法在多副本刷新竞态下完整、及时登记且安全收益不可靠）；持有此类值的适配器必须采用**结构化零日志**：不得记录或持久化请求体、响应体及鉴权头值，错误诊断只保留 `method/url/status` 等非密元数据。长期存储凭据的解密值仍按上一行进入 `redact_in_logs`。 |
 | 用户可控 URL | `avatar_url`、`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,**仅允许 `https`**(R2:统一 https-only,明文 `http` 的用户可控头像/Logo URL 是混合内容弱攻击面,不再提供可选 http);members/users/agents/workspaces/squads 相关写入端点统一校验 |
 | SSRF 防护 | 一切服务端代为发起的外联(技能来源拉取、autopilot 出向 HTTP、平台托管 runtime 的 checkout)禁止私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254`),仅允许公网地址或显式白名单 |
 | WebSocket 鉴权 | **禁止在 URL query 参数中传递 token**(会落入访问日志与中间代理);使用**连接建立后首帧认证**单一机制(客户端连接成功后发送 `{op:'auth',token}` → 服务端回复 `auth_ok`;v0.1.0 起实现基线,前后端已收敛于首帧,不再保留子协议可选项) |

@@ -94,7 +94,6 @@ async def enqueue_item(
     sender_key: str = "014728255240768602",
     state: str = "pending",
     ack_template: str = DEFAULT_ACK_TEMPLATE,
-    conversation_type: str = "group",
     enqueued_at: datetime | None = None,
     integration_event_id: uuid.UUID | None = None,
 ) -> IntegrationMessageQueue:
@@ -125,8 +124,6 @@ async def enqueue_item(
             item=item,
             ack_template=ack_template,
             coalesce_window=WINDOW,
-            conversation_type=conversation_type,
-            target_user_key=sender_key if conversation_type == "direct" else "",
         )
     return item, is_leader
 
@@ -202,7 +199,7 @@ async def test_first_item_becomes_leader_and_writes_im_send_event(session_factor
     assert event.payload["kind"] == "ack"
     assert event.payload["queue_item_id"] == str(item.id)
     assert event.payload["template"] == DEFAULT_ACK_TEMPLATE
-    assert event.payload["workspace_id"] == str(world["ws"])
+    assert "workspace_id" not in event.payload
     import hashlib
 
     expected_key = hashlib.sha256(f"{item.id}|ack".encode()).hexdigest()
@@ -331,7 +328,9 @@ async def test_ack_success_sets_five_fields_and_sends_exactly_once(
         assert follower.ack_merged_into == leader.id
 
 
-async def test_ack_unattempted_event_reclaims_exactly_one_send(session_factory, redis_client):
+async def test_pending_unattempted_ack_recovery_contract_sends_once(
+    session_factory, redis_client
+):
     """An event never committed by T1 (pending ∧ attempted NULL — the state
     a pre-T1 crash leaves behind, guaranteed by T1's single transaction) is
     reclaimed on the next pass and sends exactly once. Two full relay passes

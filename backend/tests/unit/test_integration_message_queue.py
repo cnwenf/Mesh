@@ -27,10 +27,10 @@ from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.integrations import inbound as inbound_mod
+from mesh.integrations.ack import position_hint
 from mesh.integrations.connectors import NormalizedEvent
 from mesh.integrations.inbound_guards import InboundGuardRejected
 from mesh.integrations.message_queue import (
-    compute_position,
     enqueue_message,
     execution_idempotency_key,
 )
@@ -483,14 +483,14 @@ class TestGuardsAndDedupe:
 
 
 class TestHelpers:
-    async def test_position_counts_smaller_pending(self, session_factory):
+    async def test_position_hint_counts_smaller_pending(self, session_factory):
         world = await _seed(session_factory)
         for i in (1, 2, 3):
             await _enqueue(session_factory, world, msg_id=f"m-{i}")
         items = await _items(session_factory, world)
         async with session_factory() as session:
-            pos3 = await compute_position(session, item=items[2])
-            pos1 = await compute_position(session, item=items[0])
+            pos3 = await position_hint(session, item=items[2])
+            pos1 = await position_hint(session, item=items[0])
         assert pos1 == 1
         assert pos3 == 3
 

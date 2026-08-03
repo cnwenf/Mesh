@@ -204,13 +204,57 @@ def _prefix_within_bytes(text: str, max_bytes: int) -> int:
 
 def _boundary_cut(text: str, char_limit: int) -> int:
     half = char_limit // 2
-    paragraph = text.rfind("\n\n", 0, char_limit)
-    if paragraph > half:
-        return paragraph + 2
-    line = text.rfind("\n", 0, char_limit)
-    if line > half:
-        return line + 1
+    outside_fence = _outside_fence_line_cuts(text, char_limit)
+    for boundary in ("\n\n", "\n"):
+        position = text.rfind(boundary, half, char_limit)
+        while position > half:
+            cut = position + len(boundary)
+            if cut in outside_fence:
+                return cut
+            position = text.rfind(boundary, half, position)
+    # If the available span contains only fenced boundaries, preserve the
+    # original paragraph/line preference before the unavoidable fenced cut.
+    for boundary in ("\n\n", "\n"):
+        position = text.rfind(boundary, half, char_limit)
+        if position > half:
+            return position + len(boundary)
     return char_limit
+
+
+_FENCE_LINE_PATTERN = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _outside_fence_line_cuts(text: str, char_limit: int) -> set[int]:
+    """Line-end cut positions not enclosed by a Markdown code fence.
+
+    CommonMark permits up to three leading spaces and either backtick or
+    tilde fences. A closing fence uses the same marker and at least the
+    opening length, with no trailing content. With no outside-fence boundary,
+    the splitter retains its legacy line-boundary and hard-cut fallbacks.
+    """
+    cuts = {0}
+    fence_char = ""
+    fence_length = 0
+    offset = 0
+    for line in text[:char_limit].splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        match = _FENCE_LINE_PATTERN.match(content)
+        if match is not None:
+            marker, suffix = match.groups()
+            if not fence_char:
+                fence_char = marker[0]
+                fence_length = len(marker)
+            elif (
+                marker[0] == fence_char
+                and len(marker) >= fence_length
+                and not suffix.strip()
+            ):
+                fence_char = ""
+                fence_length = 0
+        offset += len(line)
+        if not fence_char:
+            cuts.add(offset)
+    return cuts
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +838,11 @@ class IMSendRelay:
             resolved = CONVERSATION_GROUP
             if item.integration_event_id is not None:
                 source = await session.get(IntegrationEvent, item.integration_event_id)
-                raw = str((source.payload or {}).get("conversationType") or "") if source else ""
+                raw = (
+                    str((source.payload or {}).get("conversationType") or "")
+                    if source is not None and source.workspace_id == item.workspace_id
+                    else ""
+                )
                 if raw == "1":
                     resolved = CONVERSATION_DIRECT
             payload["conversation_type"] = resolved
@@ -1150,7 +1198,12 @@ def _im_result_markdown(notification_type: str, payload: dict[str, Any]) -> str:
     return str(payload.get("body") or payload.get("text") or "")
 
 
-async def derive_im_deliveries_from_fanout(session: AsyncSession, event: OutboxEvent) -> None:
+async def derive_im_deliveries_from_fanout(
+    session: AsyncSession,
+    event: OutboxEvent,
+    *,
+    max_chunks: int = 5,
+) -> None:
     """Chain AFTER the base ``notification.fanout`` handler: for
     integration-triggered executions, materialize the
     ``notification_delivery(channel='im')`` ledger row + the ``im.send``
@@ -1227,7 +1280,7 @@ async def derive_im_deliveries_from_fanout(session: AsyncSession, event: OutboxE
         markdown = _im_result_markdown(notification_type, payload)
         if not markdown:
             return
-        text_chunks = plan_result_chunks(markdown, max_chunks=5)
+        text_chunks = plan_result_chunks(markdown, max_chunks=max_chunks)
         if not text_chunks:
             return
         chunks_total = len(text_chunks)
