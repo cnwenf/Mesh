@@ -686,6 +686,7 @@ features/
 - Mesh 主题协商链是唯一偏好事实源，组件库主题只能消费 Mesh 已解析的 `light|dark`；其 storage、首帧脚本与 system 解析均须禁用或惰性化，不得成为第二条主题权威链；
 - `APPICA_TOKEN_ALIASES` 由 `tokenValues.ts` 生成 `appica-tokens.css`，把组件库原始 token 映射到 Mesh 语义 token；亮暗模式不得另建色值真源；
 - `check:appica` 在 CI 校验精确版本、已安装包许可、THIRD_PARTY_NOTICES、样式入口、子路径导入和 token 桥接；`npm audit --audit-level=high` 必须同时通过。
+- 传递依赖同样受高危门禁约束，不得以审计例外绕过；MES-166 公告收口后，`@typescript-eslint/typescript-estree` 与 `test-exclude` 链路中的 `brace-expansion` 5.x 节点不得低于 `5.0.9`，`fast-uri` 3.x 节点不得低于 `3.1.5`，并由 lockfile 精确记录版本、来源与 integrity。
 
 ### 11.2 CSS 策略
 
