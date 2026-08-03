@@ -378,20 +378,3 @@ async def _emit_direct_dispatch(
         ),
         idempotency_key=key,
     )
-
-
-async def compute_position(
-    session: AsyncSession, *, item: IntegrationMessageQueue
-) -> int:
-    """Queue position: count of same-conversation pending items with a
-    smaller seq, plus one (§3.9 position contract)."""
-    ahead = await session.scalar(
-        select(func.count())
-        .select_from(IntegrationMessageQueue)
-        .where(
-            IntegrationMessageQueue.conversation_key == item.conversation_key,
-            IntegrationMessageQueue.state == "pending",
-            IntegrationMessageQueue.seq < item.seq,
-        )
-    )
-    return int(ahead or 0) + 1
