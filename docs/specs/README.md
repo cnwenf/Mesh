@@ -210,7 +210,7 @@ Mesh 由 **24 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 3 | [auth.md](features/auth.md) | 基础 | argon2id、JWT+refresh、API token 哈希存储(owner 统一为 member)、RBAC 矩阵 |
 | 4 | [project.md](features/project.md) | 项目管理 | 健康度留痕、里程碑 vs 周期、编号计数器、前缀永久保留 |
 | 5 | [issue.md](features/issue.md) | 项目管理 | 双层状态、工作区级编号唯一、父子树与依赖图(advisory lock 防并发成环)、批量操作 |
-| 6 | [kanban.md](features/kanban.md) | 项目管理 | 视图=JSONB 投影、`view_issue_positions` 每视图排序、原子 move + WIP、整体游标 |
+| 6 | [kanban.md](features/kanban.md) | 项目管理 | 视图=JSONB 投影、`view_issue_positions` 每视图/单元格排序、原子 move / quick-create + 主列 WIP、一维/二维泳道整体游标 |
 | 7 | [label-property.md](features/label-property.md) | 项目管理 | 标签多对多、自定义字段按类型分列+JSONB、`(field_def_id,value_*)` 复合索引 |
 | 8 | [comment-inbox.md](features/comment-inbox.md) | 协作 | 单层折叠线程、通知 payload 快照、@agent 触发矩阵与回环抑制、通知去噪规则 |
 | 9 | [attachment.md](features/attachment.md) | 协作 | 签名直传三阶段、隔离区→扫描→clean 状态机、blob 去重独立记录、私有签名下载 |
@@ -626,13 +626,14 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 基础 | 前缀 `/api/v1`;JSON;时间一律 RFC3339 UTC;id 一律 UUID |
 | 鉴权 | `Authorization: Bearer <token>`(会话 JWT / API token);中间件链:解析 → 工作区成员资格 → RBAC → 限流 |
 | 成功包络 | 单对象 `{"data": {...}}`;列表 `{"data": [...], "next_cursor": <opaque\|null>}`;`next_cursor=null` 表示末页 |
-| 分页 | 游标分页(keyset,base64 编码 `(sort_key, id)`);**分组查询统一为"整体游标"契约**:`{"groups": [{key,label,count,wip?,data}], "next_cursor": ...}`——`count` 为组内总数,`data` 为当前页切片;**不得**在响应中再给每组独立 cursor(issue.md 与 kanban.md 统一此契约) |
+| 分页 | 游标分页(keyset,base64 编码 `(sort_key, id)`);**分组查询统一为"整体游标"契约**:一维为 `{"groups":[{key,label,count,wip?,data}],"next_cursor":...}`;看板 `sub_group_by` 非空时为 `{"columns":[{key,label,count,wip}],"lanes":[{key,label,count,groups:[{key,count,data}]}],"next_cursor":...}`。二维 `limit` 是全网格投影卡片实例上限,总序为 lane → group → cell sort → issue_id;每页返回完整网格骨架,`count` 为首屏快照总数、`data` 为当前页切片,**不得**给组/单元格/泳道独立 cursor。opaque cursor 绑定视图/查询/授权指纹、limit 与数据水位;绑定变化按 kanban.md §3.4 返回 `409 cursor_invalidated` 并从首屏重启。`sub_group_by=NULL` 保持既有一维形状(issue.md 与 kanban.md 统一此契约) |
 | 乐观并发 | 写操作支持 `version` 字段或 `If-Match: <updated_at>`;冲突 `409 conflict` |
 | 错误信封 | `{"error": {"code": "<snake_case>", "message": "...", "details": {...}}}`;message 不泄漏堆栈/SQL/内部 ID |
 | HTTP 语义 | 400 validation_error(含 `filter_too_complex`)/ 401 unauthorized / 403 forbidden / 404 not_found / 409 conflict(唯一约束、乐观锁、状态冲突)/ 410 gone / 413 payload_too_large / 415 unsupported_media_type / 422 业务校验失败(具名 code)/ 423 locked / 429 rate_limited(带 `Retry-After`)/ 500 internal_error / 502 storage_error / 503 service_unavailable(模块具名码 `stream_channel_unavailable`:集成 Stream 长连接信道未就绪等上游信道态,integrations.md §3.5) |
 | 幂等写 | 创建/动作类端点支持 `Idempotency-Key` 请求头(§6.5);重复键返回首次结果 |
+| 看板视图写 | 拖拽统一走 `POST /views/{id}/moves`;一维/二维单元格快速创建统一走 `POST /views/{id}/issues`,不得以通用 issue 创建端点伪造 view context。quick-create 以 view read/execute 门和独立的 issue/目标项目/目标值域写门分层授权,在同一锁定 view 事务内完成 project-first status 解析、最终候选 filters/cell 命中、主列 WIP advisory lock/汇总计数、issue + label/自定义字段关联与最终快照 outbox;不命中返回 `422 quick_create_filter_mismatch`,任一步失败全回滚(详见 kanban.md §2.4/§3.2) |
 | 过滤限制 | 列表/视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底,超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded` 并建议收窄条件 |
-| 跨项目迁移(R2) | 跨项目移动 issue(看板 `group_by=project` 拖拽或显式 move 端点)为**两步式契约**:`POST /api/v1/issues/{id}/move-preview`(或 move 命令 `dry_run`)返回将被**映射/清除**的字段清单(项目私有 status → 目标项目同 category 默认 status;项目私有 milestone/cycle/label/自定义字段值清除;工作区级字段保留)→ 客户端展示并要求确认 → `POST /api/v1/issues/{id}/move`(或 `POST /views/{id}/moves`,`confirm=true`)在**单事务**完成迁移;未确认的 move 返回 `422 move_confirmation_required`(详见 issue.md §3.8 / kanban.md §3.2) |
+| 跨项目迁移(R2) | 跨项目移动 issue(显式 move 端点,或两轴均为单值时看板 `group_by=project` 的 `to_group_key` / `sub_group_by=project` 的 `to_sub_group_key`)为**两步式契约**:`POST /api/v1/issues/{id}/move-preview`(或 move 命令 `dry_run`)返回将被**映射/清除**的字段清单→客户端展示并要求确认→`POST /api/v1/issues/{id}/move`(或 `POST /views/{id}/moves`,`confirm=true`)先定目标项目、再在其状态域解析另一轴,并在**单事务**完成迁移;子分组参数不得裸改 `project_id` 或绕过源/目标权限。含 label / `multi_select` 轴的看板只投影并拒绝 move/reorder;未确认的合法 move 返回 `422 move_confirmation_required`(详见 issue.md §3.8 / kanban.md §2.4/§3.2) |
 
 ### 6.15 不可信内容处理(权威,MES-4 安全约束)
 
@@ -791,7 +792,7 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 | T19 | **不可变编号与跨项目迁移(R2)** | `WEB-1` 迁入已有 `APP-1` 的项目:`identifier_namespace_key/number/identifier` 不变、`project_id` 变更、`UNIQUE(workspace_id, identifier_namespace_key, number)` 不违约;迁入/迁出/删除项目后历史 identifier 指向不变;前缀注册表排他:项目 key 与收件箱前缀(含 `retired` 历史前缀)冲突被拒,变更收件箱前缀后旧前缀永久保留、历史 issue 不重编号 |
 | T20 | **claim 容量回滚与能力匹配(R2)** | ① runtime 有容量但队列中**无匹配任务** → claim 返回 204 且 `current_load` **保持不变**(事务整体回滚,无泄漏);② `required_capabilities=["ffmpeg"]` 的执行仅被 `capabilities` 含 `ffmpeg` 的 runtime 领取(能力不匹配的 runtime 跳过该任务,标签条件并行生效);③ 并发 5 抢 2 容量恰成功 2,终态后 `current_load` 幂等归零 |
 | T21 | **审批续跑唯一协议(R2)** | running 执行命中 `confirm_required` → 创建 approval(同 subject 仅一个 pending,部分唯一索引兜底)+ 当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、`current_load` 释放;批准后执行回 `queued`,新 attempt #N+1 凭 `resume_context` 从审批点续跑(已完成步骤不重做);拒绝/过期 → `cancelled(approval_rejected/approval_expired)`;审批挂起期间 runtime 失联不产生卡死(无在途租约) |
-| T22 | **跨项目迁移事务(R2)** | 看板 `group_by=project` 拖拽:无确认的 move 返回 422 要求确认;确认后单事务完成 `project_id` 变更 + 项目私有 status 映射(→ 目标项目同 category 默认 status)/ 项目私有 milestone/cycle/label/自定义字段值清除,工作区级字段保留;迁移后不存在"当前项目 + 旧项目私有字段"脏状态;`issue.project_changed` 事件携带映射/清除清单 |
+| T22 | **跨项目迁移事务(R2)** | 两轴均单值时,看板 `group_by=project` 列拖拽与 `sub_group_by=project` 泳道拖拽均先定目标项目、再解析目标域 status/category:无确认的 move 返回 422 要求确认;确认后单事务完成 `project_id` 变更 + status 映射/项目私有字段清除 + 两轴排序 upsert,工作区级字段保留;迁移后无脏状态或鉴权旁路。含 label / `multi_select` 轴时 move/reorder 必须以 `multi_value_axis_move_unsupported` 拒绝;合法迁移的 `issue.project_changed` 携映射/清除清单 |
 | T23 | **小队 active assignment 唯一身份(R2)** | 同一 leader 领导 S1/S2 两小队:issue 先派给 S1 再派给 S2(assignee 值不变)→ S1 根任务级联取消、S2 根任务建立(**不是 no-op**);重复派给 S1 = no-op 返回既有分派;`issue_squad_assignments` 部分唯一索引保证每 issue 至多一条 active;leader 更换 → active 分派与 `issues.assignee_id` 同事务更新;leader 离队且无替补 → 根任务 blocked 并通知 |
 | T24 | **blob 真源与秒传 possession(R2)** | ① 调用者对某 `content_hash` 无任何可读 attachment 时,"秒传"短路被拒(必须完整上传,上传本身即持有证明);② 对已可读 blob 秒传成功(新建独立 attachments 行指向同一 `attachment_blobs` 行);③ `ref_count` 原子维护:删除共享 blob 的其中一条附件,另一条不受影响;`ref_count=0` 后对象才被 GC;④ 并发秒传/上传同一 hash 由 `UNIQUE(workspace_id, content_hash)` 串行化,不产生重复 blob 行 |
 | T25 | **通知优先级矩阵(R2;R3 扩至 data job)** | 执行成功默认**不进收件箱**(留运行页),失败/超时进收件箱且**穿透 quiet hours** 并重置同组未读;执行成功订阅后才进箱且不重置已读组;审批请求/安全隔离为 critical;cancelled 不通知发起者;**data job 成功默认不进收件箱、`completed_with_errors` 进箱(normal)、`failed` 为 critical(穿透 + 重置)**(R3);runtime.md/comment-inbox.md/import-export.md 的分发与本矩阵逐事件一致,各模块 Spec 无自定义分级 |

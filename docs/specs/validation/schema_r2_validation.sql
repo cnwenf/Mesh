@@ -646,18 +646,21 @@ CREATE TABLE board_wip_limits (
 );
 
 CREATE TABLE view_issue_positions (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  view_id      UUID NOT NULL,
-  issue_id     UUID NOT NULL,
-  group_key    TEXT NOT NULL DEFAULT '',
-  position     REAL NOT NULL DEFAULT 0,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  view_id       UUID NOT NULL,
+  issue_id      UUID NOT NULL,
+  group_key     TEXT NOT NULL DEFAULT '',
+  sub_group_key TEXT NOT NULL DEFAULT '',
+  position      REAL NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (view_id, issue_id),
   FOREIGN KEY (workspace_id, view_id) REFERENCES views(workspace_id, id) ON DELETE CASCADE,
   FOREIGN KEY (workspace_id, issue_id) REFERENCES issues(workspace_id, id) ON DELETE CASCADE
 );
+CREATE INDEX idx_vip_view_group_pos
+  ON view_issue_positions(view_id, group_key, sub_group_key, position);
 
 -- R2:每频道游标(取代已删除的 view_subscriptions.last_seen_seq;kanban.md §2.6)
 CREATE TABLE realtime_channel_cursors (

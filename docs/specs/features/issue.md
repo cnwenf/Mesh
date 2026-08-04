@@ -550,6 +550,8 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 }
 ```
 
+> `POST /workspaces/{ws}/issues` 是视图外通用创建入口,不接收 `view_id` 或目标 cell key,因此不执行视图级 WIP/filters/cell 命中校验。看板一维/二维单元格快速创建必须使用 kanban.md §3.2 的 `POST /views/{id}/issues`,由该命令在同一事务内先以本模块编号/默认值服务的无写入模式构造最终候选,再校验锁定 view 的 filters/cell,通过后才递增编号并写目标轴关联值与 outbox。
+
 **状态流转** `PATCH /api/v1/issues/{id}`
 ```json
 // Request(携带乐观并发版本)
@@ -722,7 +724,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 
 - **未携带 `confirm: true`** → 422 `move_confirmation_required`,`details.preview` 返回第一步的预览清单(客户端必须展示并要求确认,README §6.14)。
 - 版本不符 → 409 `conflict`;目标项目不存在/不可见 → 404 `not_found` / 403 `forbidden`。
-- 看板 `group_by=project` 拖拽经 `POST /views/{id}/moves`(`confirm=true`)调用同一事务契约(与 kanban.md §3.2 统一,README §6.14)。
+- 看板两轴均为单值时,`group_by=project` 列拖拽(`to_group_key`)或 `sub_group_by=project` 泳道拖拽(`to_sub_group_key`)均经 `POST /views/{id}/moves`(`confirm=true`)调用同一事务契约;先确定目标项目,再在其状态域解析另一轴的 status/category,子分组参数不得成为裸改 `project_id` 或鉴权旁路。任一轴为 label / `multi_select` 时按 kanban.md §2.4 只投影并拒绝 move/reorder,不进入迁移事务。
 
 ---
 
