@@ -210,7 +210,7 @@ Mesh 由 **24 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 3 | [auth.md](features/auth.md) | 基础 | argon2id、JWT+refresh、API token 哈希存储(owner 统一为 member)、RBAC 矩阵 |
 | 4 | [project.md](features/project.md) | 项目管理 | 健康度留痕、里程碑 vs 周期、编号计数器、前缀永久保留 |
 | 5 | [issue.md](features/issue.md) | 项目管理 | 双层状态、工作区级编号唯一、父子树与依赖图(advisory lock 防并发成环)、批量操作 |
-| 6 | [kanban.md](features/kanban.md) | 项目管理 | 视图=JSONB 投影、`view_issue_positions` 每视图/单元格排序、原子 move + 主列 WIP、一维/二维泳道整体游标 |
+| 6 | [kanban.md](features/kanban.md) | 项目管理 | 视图=JSONB 投影、`view_issue_positions` 每视图/单元格排序、原子 move / quick-create + 主列 WIP、一维/二维泳道整体游标 |
 | 7 | [label-property.md](features/label-property.md) | 项目管理 | 标签多对多、自定义字段按类型分列+JSONB、`(field_def_id,value_*)` 复合索引 |
 | 8 | [comment-inbox.md](features/comment-inbox.md) | 协作 | 单层折叠线程、通知 payload 快照、@agent 触发矩阵与回环抑制、通知去噪规则 |
 | 9 | [attachment.md](features/attachment.md) | 协作 | 签名直传三阶段、隔离区→扫描→clean 状态机、blob 去重独立记录、私有签名下载 |
@@ -631,6 +631,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 错误信封 | `{"error": {"code": "<snake_case>", "message": "...", "details": {...}}}`;message 不泄漏堆栈/SQL/内部 ID |
 | HTTP 语义 | 400 validation_error(含 `filter_too_complex`)/ 401 unauthorized / 403 forbidden / 404 not_found / 409 conflict(唯一约束、乐观锁、状态冲突)/ 410 gone / 413 payload_too_large / 415 unsupported_media_type / 422 业务校验失败(具名 code)/ 423 locked / 429 rate_limited(带 `Retry-After`)/ 500 internal_error / 502 storage_error / 503 service_unavailable(模块具名码 `stream_channel_unavailable`:集成 Stream 长连接信道未就绪等上游信道态,integrations.md §3.5) |
 | 幂等写 | 创建/动作类端点支持 `Idempotency-Key` 请求头(§6.5);重复键返回首次结果 |
+| 看板视图写 | 拖拽统一走 `POST /views/{id}/moves`;一维/二维单元格快速创建统一走 `POST /views/{id}/issues`,不得以通用 issue 创建端点伪造 view context。quick-create 在单事务内完成 view/目标值域鉴权、project-first status 解析、主列 WIP advisory lock/汇总计数、issue + label/自定义字段关联与最终快照 outbox;任一步失败全回滚(详见 kanban.md §2.4/§3.2) |
 | 过滤限制 | 列表/视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底,超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded` 并建议收窄条件 |
 | 跨项目迁移(R2) | 跨项目移动 issue(显式 move 端点,或两轴均为单值时看板 `group_by=project` 的 `to_group_key` / `sub_group_by=project` 的 `to_sub_group_key`)为**两步式契约**:`POST /api/v1/issues/{id}/move-preview`(或 move 命令 `dry_run`)返回将被**映射/清除**的字段清单→客户端展示并要求确认→`POST /api/v1/issues/{id}/move`(或 `POST /views/{id}/moves`,`confirm=true`)先定目标项目、再在其状态域解析另一轴,并在**单事务**完成迁移;子分组参数不得裸改 `project_id` 或绕过源/目标权限。含 label / `multi_select` 轴的看板只投影并拒绝 move/reorder;未确认的合法 move 返回 `422 move_confirmation_required`(详见 issue.md §3.8 / kanban.md §2.4/§3.2) |
 

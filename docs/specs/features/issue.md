@@ -550,6 +550,8 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 }
 ```
 
+> `POST /workspaces/{ws}/issues` 是视图外通用创建入口,不接收 `view_id` 或目标 cell key,因此不执行视图级 WIP。看板一维/二维单元格快速创建必须使用 kanban.md §3.2 的 `POST /views/{id}/issues`,由该命令在同一事务内复用本模块的编号/默认值创建服务并写入目标轴关联值与 outbox。
+
 **状态流转** `PATCH /api/v1/issues/{id}`
 ```json
 // Request(携带乐观并发版本)
