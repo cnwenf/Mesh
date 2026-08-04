@@ -70,7 +70,22 @@ describe('App 路由', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        const body = url.includes('/users/me') ? { data: me } : { data: [], next_cursor: null };
+        const workspace = {
+          id: 'ws-1',
+          name: 'WS',
+          slug: 'ws',
+          logo_url: null,
+          timezone: 'UTC',
+          settings: { default_locale: 'en', default_theme: 'light' },
+          my_role: 'owner',
+          created_at: '2026-07-25T00:00:00Z',
+          updated_at: '2026-07-25T00:00:00Z',
+        };
+        const body = url.includes('/users/me')
+          ? { data: me }
+          : url.includes('/workspaces/by-slug/ws')
+            ? { data: workspace }
+            : { data: [], next_cursor: null };
         return new Response(JSON.stringify(body), { status: 200 });
       }),
     );

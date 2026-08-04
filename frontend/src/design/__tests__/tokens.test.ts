@@ -19,6 +19,14 @@ const appicaTokensCss = readFileSync(
   'utf8',
 );
 const baseCss = readFileSync(path.resolve(process.cwd(), 'src/design/base.css'), 'utf8');
+const componentsCss = readFileSync(
+  path.resolve(process.cwd(), 'src/design/components/components.css'),
+  'utf8',
+);
+const styleguideCss = readFileSync(
+  path.resolve(process.cwd(), 'src/design/components/styleguide.css'),
+  'utf8',
+);
 
 /** 生成产物的首行「禁止手改」标记(gen-tokens.mjs 契约)。 */
 const GENERATED_HEADER =
@@ -69,6 +77,14 @@ describe('设计 token(README §6.12 主题契约)', () => {
     expect(baseCss).not.toContain('):not([data-slot]) {');
     expect(baseCss).toContain('border: 1px solid var(--color-border);');
     expect(baseCss).toContain('background-color: var(--color-surface);');
+  });
+
+  it('设计组件只引用已登记的 type-scale token,不使用废弃的 --text-*-size/lh/weight 形状', () => {
+    const obsoleteTypeToken = /var\(--text-[\w-]+-(?:size|lh|weight)\)/g;
+    expect(componentsCss.match(obsoleteTypeToken) ?? []).toEqual([]);
+    expect(styleguideCss.match(obsoleteTypeToken) ?? []).toEqual([]);
+    expect(componentsCss).toContain('font-size: var(--font-size-title-1);');
+    expect(componentsCss).toContain('line-height: var(--line-height-title-1);');
   });
 
   it('tokens-print.css 在 @media print 强制亮色:颜色 token 取 LIGHT_TOKENS 值,非颜色 token 不出现', () => {

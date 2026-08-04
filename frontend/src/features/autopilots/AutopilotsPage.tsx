@@ -4,11 +4,12 @@
  * kill switch(§3.1,二次确认 + 理由)。行级实时:workspace:{ws}:autopilots
  * 频道的 autopilot.updated / autopilot.rate_limited 帧触发整列重拉(§3.5)。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
 import {
   Button,
+  DataView,
   Dialog,
   EmptyState,
   ErrorState,
@@ -23,8 +24,7 @@ import type { IconName } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import { EmptyAutomation } from '../onboarding/illustrations';
 import {
   getKillSwitchState,
@@ -74,10 +74,11 @@ interface AutopilotRowProps {
   readonly onOpen: (rule: AutopilotRule) => void;
   readonly onPause: (rule: AutopilotRule) => void;
   readonly onResume: (rule: AutopilotRule) => void;
+  readonly canManage: boolean;
 }
 
 function AutopilotRow(props: AutopilotRowProps): React.JSX.Element {
-  const { rule, nowMs, locale, onOpen, onPause, onResume } = props;
+  const { rule, nowMs, locale, onOpen, onPause, onResume, canManage } = props;
   const t = useT();
   const summary =
     rule.trigger_type === 'schedule'
@@ -91,66 +92,92 @@ function AutopilotRow(props: AutopilotRowProps): React.JSX.Element {
       data-testid={`autopilot-row-${rule.id}`}
       onClick={() => onOpen(rule)}
     >
-      <td className="mesh-autopilots__cell-name" data-testid={`autopilot-name-${rule.id}`}>
-        {rule.name}
+      <td
+        className="mesh-autopilots__cell-name"
+        data-label={t('autopilots.columns.name')}
+        data-testid={`autopilot-name-${rule.id}`}
+      >
+        <span className="mesh-autopilots__cell-value">{rule.name}</span>
       </td>
-      <td data-testid={`autopilot-trigger-${rule.id}`}>
-        <span className="mesh-autopilots__trigger-icon" aria-hidden="true">
-          <Icon name={TRIGGER_ICONS[rule.trigger_type] ?? 'settings'} size={16} />
+      <td data-label={t('autopilots.columns.trigger')} data-testid={`autopilot-trigger-${rule.id}`}>
+        <span className="mesh-autopilots__cell-value">
+          <span className="mesh-autopilots__trigger-icon" aria-hidden="true">
+            <Icon name={TRIGGER_ICONS[rule.trigger_type] ?? 'settings'} size={16} />
+          </span>
+          {t(`autopilots.trigger.${rule.trigger_type}`)}
+          {summary && rule.trigger_type === 'schedule' ? ` · ${summary}` : ''}
         </span>
-        {t(`autopilots.trigger.${rule.trigger_type}`)}
-        {summary && rule.trigger_type === 'schedule' ? ` · ${summary}` : ''}
       </td>
-      <td>
-        <StatusDot
-          tone={RULE_STATUS_TONE[rule.status]}
-          label={t(`autopilots.status.${rule.status}`)}
-        />
-      </td>
-      <td data-testid={`autopilot-last-run-${rule.id}`}>
-        {rule.last_run_status !== null && rule.last_run_status !== undefined ? (
+      <td data-label={t('autopilots.columns.status')}>
+        <span className="mesh-autopilots__cell-value">
           <StatusDot
-            tone={RUN_STATUS_TONE[rule.last_run_status]}
-            label={t(`autopilots.runStatus.${rule.last_run_status}`)}
+            tone={RULE_STATUS_TONE[rule.status]}
+            label={t(`autopilots.status.${rule.status}`)}
           />
-        ) : null}{' '}
-        {formatRelativeTime(rule.last_run_at, nowMs, locale) ?? t('autopilots.runs.never')}
+        </span>
       </td>
-      <td data-testid={`autopilot-success-${rule.id}`}>
-        {successRate ?? t('autopilots.stats.none')}
-        {rule.stats ? ` (${rule.stats.runs_30d})` : ''}
+      <td
+        data-label={t('autopilots.columns.lastRun')}
+        data-testid={`autopilot-last-run-${rule.id}`}
+      >
+        <span className="mesh-autopilots__cell-value">
+          {rule.last_run_status !== null && rule.last_run_status !== undefined ? (
+            <StatusDot
+              tone={RUN_STATUS_TONE[rule.last_run_status]}
+              label={t(`autopilots.runStatus.${rule.last_run_status}`)}
+            />
+          ) : null}{' '}
+          {formatRelativeTime(rule.last_run_at, nowMs, locale) ?? t('autopilots.runs.never')}
+        </span>
       </td>
-      <td>
-        {rule.trigger_type === 'schedule'
-          ? (formatRelativeTime(rule.next_run_at, nowMs, locale) ?? t('autopilots.schedule.none'))
-          : '—'}
+      <td
+        data-label={t('autopilots.columns.successRate')}
+        data-testid={`autopilot-success-${rule.id}`}
+      >
+        <span className="mesh-autopilots__cell-value">
+          {successRate ?? t('autopilots.stats.none')}
+          {rule.stats ? ` (${rule.stats.runs_30d})` : ''}
+        </span>
       </td>
-      <td className="mesh-autopilots__actions" onClick={(event) => event.stopPropagation()}>
-        {rule.status === 'active' && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onPause(rule)}
-            aria-label={t('autopilots.actions.pause')}
-            data-testid={`autopilot-pause-${rule.id}`}
-          >
-            {t('autopilots.actions.pause')}
+      <td data-label={t('autopilots.columns.nextRun')}>
+        <span className="mesh-autopilots__cell-value">
+          {rule.trigger_type === 'schedule'
+            ? (formatRelativeTime(rule.next_run_at, nowMs, locale) ?? t('autopilots.schedule.none'))
+            : '—'}
+        </span>
+      </td>
+      <td
+        className="mesh-autopilots__actions"
+        data-label={t('autopilots.columns.actions')}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <span className="mesh-autopilots__action-buttons">
+          {canManage && rule.status === 'active' && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onPause(rule)}
+              aria-label={t('autopilots.actions.pause')}
+              data-testid={`autopilot-pause-${rule.id}`}
+            >
+              {t('autopilots.actions.pause')}
+            </Button>
+          )}
+          {canManage && rule.status === 'paused' && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onResume(rule)}
+              aria-label={t('autopilots.actions.resume')}
+              data-testid={`autopilot-resume-${rule.id}`}
+            >
+              {t('autopilots.actions.resume')}
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => onOpen(rule)}>
+            {t('autopilots.actions.detail')}
           </Button>
-        )}
-        {rule.status === 'paused' && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onResume(rule)}
-            aria-label={t('autopilots.actions.resume')}
-            data-testid={`autopilot-resume-${rule.id}`}
-          >
-            {t('autopilots.actions.resume')}
-          </Button>
-        )}
-        <Button variant="ghost" size="sm" onClick={() => onOpen(rule)}>
-          {t('autopilots.actions.detail')}
-        </Button>
+        </span>
       </td>
     </tr>
   );
@@ -162,7 +189,10 @@ export function AutopilotsPage(): React.JSX.Element {
   const navigate = useNavigate();
   const realtime = useRealtimeContext();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [membership, setMembership] = useState<Membership | null>(null);
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = membership?.role === 'owner' || membership?.role === 'admin';
   const [rules, setRules] = useState<AutopilotRule[] | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -191,26 +221,27 @@ export function AutopilotsPage(): React.JSX.Element {
   );
 
   useEffect(() => {
+    if (membershipState.kind === 'loading') return;
+    if (membershipState.kind === 'no_workspace') {
+      setRules([]);
+      setKillSwitchOn(null);
+      return;
+    }
+    if (membershipState.kind === 'error' || membership === null) {
+      setErrorKey('error.unknown');
+      setRules(null);
+      return;
+    }
     let cancelled = false;
-    const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
     void (async () => {
       try {
-        const me = await fetchMe(client);
-        const workspace = activeWorkspace(me.memberships);
-        if (cancelled) return;
-        if (workspace === null) {
-          setMembership(null);
-          setRules([]);
-          return;
-        }
-        setMembership(workspace);
-        const listing = await listAutopilots(client, workspace.workspace_id, {
+        const listing = await listAutopilots(client, membership.workspace_id, {
           status: statusFilter === STATUS_ALL ? undefined : statusFilter,
           trigger_type: typeFilter === TYPE_ALL ? undefined : typeFilter,
           search: search || undefined,
           limit: PAGE_LIMIT,
         });
-        const state = await getKillSwitchState(client, workspace.workspace_id);
+        const state = await getKillSwitchState(client, membership.workspace_id);
         if (cancelled) return;
         setRules(listing.data);
         setKillSwitchOn(state.kill_switch);
@@ -224,7 +255,7 @@ export function AutopilotsPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [statusFilter, typeFilter, search, reloadKey]);
+  }, [client, membership, membershipState.kind, statusFilter, typeFilter, search, reloadKey]);
 
   useEffect(() => {
     if (realtime === null || membership === null) return;
@@ -258,31 +289,28 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const handlePause = useCallback(
     (rule: AutopilotRule) => {
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       void runAction(
         () => pauseAutopilot(client, membership!.workspace_id, rule.id),
         t('autopilots.toast.paused'),
       );
     },
-    [membership, runAction, t],
+    [client, membership, runAction, t],
   );
 
   const handleResume = useCallback(
     (rule: AutopilotRule) => {
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       void runAction(
         () => resumeAutopilot(client, membership!.workspace_id, rule.id),
         t('autopilots.toast.resumed'),
       );
     },
-    [membership, runAction, t],
+    [client, membership, runAction, t],
   );
 
   const applyKillSwitch = useCallback(
     async (enabled: boolean) => {
       setKillBusy(true);
       try {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const result = await setKillSwitch(client, membership!.workspace_id, {
           enabled,
           reason: killReason || undefined,
@@ -306,7 +334,7 @@ export function AutopilotsPage(): React.JSX.Element {
         setKillBusy(false);
       }
     },
-    [membership, killReason, toast, t],
+    [client, membership, killReason, toast, t],
   );
 
   const nowMs = Date.now();
@@ -324,166 +352,214 @@ export function AutopilotsPage(): React.JSX.Element {
   }
 
   return (
-    <div className="mesh-autopilots__page" data-testid="autopilots-page">
-      <div className="mesh-autopilots__header">
-        <h1 className="mesh-autopilots__title">{t('autopilots.title')}</h1>
-        <div className="mesh-autopilots__toolbar">
-          <div className="mesh-autopilots__kill-switch" data-testid="autopilot-kill-switch">
-            <StatusDot
-              tone={killSwitchOn === true ? 'warn' : 'success'}
-              label={
-                killSwitchOn === true
-                  ? t('autopilots.killSwitch.paused')
-                  : t('autopilots.killSwitch.on')
-              }
-            />
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => setKillDialogOpen(true)}
-              data-testid="autopilot-kill-switch-button"
-            >
-              {killSwitchOn === true
-                ? t('autopilots.killSwitch.restore')
-                : t('autopilots.killSwitch.trigger')}
-            </Button>
-          </div>
-          <Button
-            variant="primary"
-            onClick={() => navigate('/autopilots/new')}
-            data-testid="autopilot-create"
-          >
-            {t('autopilots.actions.create')}
-          </Button>
-        </div>
-      </div>
-
-      <div className="mesh-autopilots__toolbar">
-        <Select
-          label={t('autopilots.filters.status')}
-          value={statusFilter}
-          onChange={(event) => updateParam('status', event.target.value)}
-          data-testid="autopilot-filter-status"
-        >
-          <option value={STATUS_ALL}>{t('autopilots.filters.all')}</option>
-          <option value="active">{t('autopilots.status.active')}</option>
-          <option value="paused">{t('autopilots.status.paused')}</option>
-          <option value="archived">{t('autopilots.status.archived')}</option>
-        </Select>
-        <Select
-          label={t('autopilots.filters.triggerType')}
-          value={typeFilter}
-          onChange={(event) => updateParam('trigger_type', event.target.value)}
-          data-testid="autopilot-filter-type"
-        >
-          <option value={TYPE_ALL}>{t('autopilots.filters.all')}</option>
-          {TRIGGER_TYPES.map((triggerType) => (
-            <option key={triggerType} value={triggerType}>
-              {t(`autopilots.trigger.${triggerType}`)}
-            </option>
-          ))}
-        </Select>
-        <Input
-          label={t('autopilots.filters.search')}
-          value={search}
-          onChange={(event) => updateParam('q', event.target.value)}
-          placeholder={t('autopilots.filters.searchPlaceholder')}
-          data-testid="autopilot-search"
-        />
-        <Button variant="ghost" size="sm" onClick={() => navigate('/webhooks')}>
-          {t('autopilots.webhook.nav')}
-        </Button>
-      </div>
-
-      {errorKey !== null && (
-        <ErrorState
-          title={t(errorKey)}
-          retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
-        />
-      )}
-      {rules === null && errorKey === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
-      {rules !== null && rules.length === 0 && errorKey === null && (
-        <EmptyState
-          illustration={<EmptyAutomation />}
-          title={t('onboarding.empty.automation.title')}
-          description={t('onboarding.empty.automation.description')}
-          action={
+    <DataView
+      className="mesh-autopilots__page"
+      title={t('autopilots.title')}
+      actions={
+        canManage ? (
+          <div className="mesh-autopilots__toolbar">
+            <div className="mesh-autopilots__kill-switch" data-testid="autopilot-kill-switch">
+              <StatusDot
+                tone={killSwitchOn === true ? 'warn' : 'success'}
+                label={
+                  killSwitchOn === true
+                    ? t('autopilots.killSwitch.paused')
+                    : t('autopilots.killSwitch.on')
+                }
+              />
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setKillDialogOpen(true)}
+                data-testid="autopilot-kill-switch-button"
+              >
+                {killSwitchOn === true
+                  ? t('autopilots.killSwitch.restore')
+                  : t('autopilots.killSwitch.trigger')}
+              </Button>
+            </div>
             <Button
               variant="primary"
-              data-testid="autopilot-empty-create"
-              onClick={() => navigate('/autopilots/new')}
+              onClick={() =>
+                navigate(
+                  membership === null
+                    ? '/autopilots/new'
+                    : workspaceRoute(membership.workspace_slug, '/automations/autopilots/new'),
+                )
+              }
+              data-testid="autopilot-create"
             >
-              {t('onboarding.empty.automation.action')}
+              {t('autopilots.actions.create')}
             </Button>
-          }
-        />
-      )}
-      {rules !== null && rules.length > 0 && (
-        <table className="mesh-autopilots__table" data-testid="autopilots-table">
-          <caption className="sr-only">{t('autopilots.title')}</caption>
-          <thead>
-            <tr>
-              <th scope="col">{t('autopilots.columns.name')}</th>
-              <th scope="col">{t('autopilots.columns.trigger')}</th>
-              <th scope="col">{t('autopilots.columns.status')}</th>
-              <th scope="col">{t('autopilots.columns.lastRun')}</th>
-              <th scope="col">{t('autopilots.columns.successRate')}</th>
-              <th scope="col">{t('autopilots.columns.nextRun')}</th>
-              <th scope="col">{t('autopilots.columns.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rules.map((rule) => (
-              <AutopilotRow
-                key={rule.id}
-                rule={rule}
-                nowMs={nowMs}
-                locale={locale}
-                onOpen={(opened) => navigate(`/autopilots/${opened.id}`)}
-                onPause={handlePause}
-                onResume={handleResume}
-              />
+          </div>
+        ) : undefined
+      }
+      toolbar={
+        <div className="mesh-autopilots__toolbar">
+          <Select
+            label={t('autopilots.filters.status')}
+            value={statusFilter}
+            onChange={(event) => updateParam('status', event.target.value)}
+            data-testid="autopilot-filter-status"
+          >
+            <option value={STATUS_ALL}>{t('autopilots.filters.all')}</option>
+            <option value="active">{t('autopilots.status.active')}</option>
+            <option value="paused">{t('autopilots.status.paused')}</option>
+            <option value="archived">{t('autopilots.status.archived')}</option>
+          </Select>
+          <Select
+            label={t('autopilots.filters.triggerType')}
+            value={typeFilter}
+            onChange={(event) => updateParam('trigger_type', event.target.value)}
+            data-testid="autopilot-filter-type"
+          >
+            <option value={TYPE_ALL}>{t('autopilots.filters.all')}</option>
+            {TRIGGER_TYPES.map((triggerType) => (
+              <option key={triggerType} value={triggerType}>
+                {t(`autopilots.trigger.${triggerType}`)}
+              </option>
             ))}
-          </tbody>
-        </table>
-      )}
-
-      <Dialog
-        open={killDialogOpen}
-        onClose={() => setKillDialogOpen(false)}
-        title={t('autopilots.killSwitch.dialogTitle')}
-        closeLabel={t('common.close')}
-      >
-        <p data-testid="autopilot-kill-dialog-text">
-          {killSwitchOn === true
-            ? t('autopilots.killSwitch.restoreConfirm')
-            : t('autopilots.killSwitch.triggerConfirm')}
-        </p>
-        {killSwitchOn !== true && (
+          </Select>
           <Input
-            label={t('autopilots.killSwitch.reasonLabel')}
-            value={killReason}
-            onChange={(event) => setKillReason(event.target.value)}
-            hint={t('autopilots.killSwitch.reasonHint')}
-            data-testid="autopilot-kill-reason"
+            label={t('autopilots.filters.search')}
+            value={search}
+            onChange={(event) => updateParam('q', event.target.value)}
+            placeholder={t('autopilots.filters.searchPlaceholder')}
+            data-testid="autopilot-search"
+          />
+          {canManage ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                navigate(
+                  membership === null
+                    ? '/webhooks'
+                    : workspaceRoute(membership.workspace_slug, '/automations/webhooks'),
+                )
+              }
+            >
+              {t('autopilots.webhook.nav')}
+            </Button>
+          ) : null}
+        </div>
+      }
+    >
+      <div className="mesh-autopilots__content" data-testid="autopilots-page">
+        {errorKey !== null && (
+          <ErrorState
+            title={t(errorKey)}
+            retryLabel={t('common.retry')}
+            onRetry={
+              membershipState.kind === 'error'
+                ? membershipState.retry
+                : () => setReloadKey((key) => key + 1)
+            }
           />
         )}
-        <div className="mesh-autopilots__footer">
-          <Button variant="ghost" onClick={() => setKillDialogOpen(false)}>
-            {t('common.cancel')}
-          </Button>
-          <Button
-            variant="danger"
-            isLoading={killBusy}
-            disabled={killSwitchOn !== true && killReason.trim().length === 0}
-            onClick={() => void applyKillSwitch(killSwitchOn !== true)}
-            data-testid="autopilot-kill-confirm"
-          >
-            {t('common.confirm')}
-          </Button>
-        </div>
-      </Dialog>
-    </div>
+        {rules === null && errorKey === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
+        {rules !== null && rules.length === 0 && errorKey === null && (
+          <EmptyState
+            illustration={<EmptyAutomation />}
+            title={t('onboarding.empty.automation.title')}
+            description={t('onboarding.empty.automation.description')}
+            action={
+              canManage ? (
+                <Button
+                  variant="primary"
+                  data-testid="autopilot-empty-create"
+                  onClick={() =>
+                    navigate(
+                      membership === null
+                        ? '/autopilots/new'
+                        : workspaceRoute(membership.workspace_slug, '/automations/autopilots/new'),
+                    )
+                  }
+                >
+                  {t('onboarding.empty.automation.action')}
+                </Button>
+              ) : undefined
+            }
+          />
+        )}
+        {rules !== null && rules.length > 0 && (
+          <table className="mesh-autopilots__table" data-testid="autopilots-table">
+            <caption className="sr-only">{t('autopilots.title')}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{t('autopilots.columns.name')}</th>
+                <th scope="col">{t('autopilots.columns.trigger')}</th>
+                <th scope="col">{t('autopilots.columns.status')}</th>
+                <th scope="col">{t('autopilots.columns.lastRun')}</th>
+                <th scope="col">{t('autopilots.columns.successRate')}</th>
+                <th scope="col">{t('autopilots.columns.nextRun')}</th>
+                <th scope="col">{t('autopilots.columns.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((rule) => (
+                <AutopilotRow
+                  key={rule.id}
+                  rule={rule}
+                  nowMs={nowMs}
+                  locale={locale}
+                  canManage={canManage}
+                  onOpen={(opened) =>
+                    navigate(
+                      membership === null
+                        ? `/autopilots/${opened.id}`
+                        : workspaceRoute(
+                            membership.workspace_slug,
+                            `/automations/autopilots/${opened.id}`,
+                          ),
+                    )
+                  }
+                  onPause={handlePause}
+                  onResume={handleResume}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {canManage ? (
+        <Dialog
+          open={killDialogOpen}
+          onClose={() => setKillDialogOpen(false)}
+          title={t('autopilots.killSwitch.dialogTitle')}
+          closeLabel={t('common.close')}
+        >
+          <p data-testid="autopilot-kill-dialog-text">
+            {killSwitchOn === true
+              ? t('autopilots.killSwitch.restoreConfirm')
+              : t('autopilots.killSwitch.triggerConfirm')}
+          </p>
+          {killSwitchOn !== true && (
+            <Input
+              label={t('autopilots.killSwitch.reasonLabel')}
+              value={killReason}
+              onChange={(event) => setKillReason(event.target.value)}
+              hint={t('autopilots.killSwitch.reasonHint')}
+              data-testid="autopilot-kill-reason"
+            />
+          )}
+          <div className="mesh-autopilots__footer">
+            <Button variant="ghost" onClick={() => setKillDialogOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="danger"
+              isLoading={killBusy}
+              disabled={killSwitchOn !== true && killReason.trim().length === 0}
+              onClick={() => void applyKillSwitch(killSwitchOn !== true)}
+              data-testid="autopilot-kill-confirm"
+            >
+              {t('common.confirm')}
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
+    </DataView>
   );
 }

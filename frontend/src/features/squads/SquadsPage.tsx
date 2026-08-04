@@ -9,6 +9,7 @@ import { Link, useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import {
   Button,
+  DataView,
   EmptyState,
   ErrorState,
   Select,
@@ -18,8 +19,7 @@ import {
 } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import { listSquads } from './api';
 import { CreateSquadDialog } from './CreateSquadDialog';
 import { MemberAvatarWall } from './MemberAvatarWall';
@@ -35,6 +35,9 @@ export function SquadsPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = workspace?.role === 'owner' || workspace?.role === 'admin';
 
   const [searchParams, setSearchParams] = useSearchParams();
   const qFilter = searchParams.get('q') ?? '';
@@ -66,7 +69,6 @@ export function SquadsPage(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [qInput, qFilter]);
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [squads, setSquads] = useState<Squad[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,19 +80,6 @@ export function SquadsPage(): React.JSX.Element {
   tRef.current = t;
   // 请求序号闸:乱序到达的旧响应不得覆盖新结果(过滤切换竞态防护)。
   const loadSeqRef = useRef(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const me = await fetchMe(client);
-      const active = activeWorkspace(me.memberships);
-      if (cancelled) return;
-      setWorkspace(active);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   const load = useCallback(async (): Promise<void> => {
     if (workspace === null) {
@@ -125,8 +114,11 @@ export function SquadsPage(): React.JSX.Element {
     void load();
   }, [load, reloadKey]);
 
-  if (workspace === null && !isLoading && error === null) {
+  if (membershipState.kind === 'no_workspace' && !isLoading && error === null) {
     return <EmptyState title={t('state.emptyTitle')} description={t('squads.noWorkspace')} />;
+  }
+  if (membershipState.kind === 'error') {
+    return <ErrorState title={t('state.errorTitle')} description={t('state.errorDescription')} />;
   }
   if (error !== null) {
     return (
@@ -138,69 +130,84 @@ export function SquadsPage(): React.JSX.Element {
       />
     );
   }
-  if (isLoading && !hasLoaded) {
+  if ((membershipState.kind === 'loading' || isLoading) && !hasLoaded) {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 
   return (
-    <div className="mesh-squads">
-      <header className="mesh-squads__head">
-        <h1>{t('squads.pageTitle')}</h1>
-        <Button onClick={() => setCreateOpen(true)} data-testid="squad-open-create">
-          {t('squads.new')}
-        </Button>
-      </header>
-
-      <div className="mesh-squads__filters" role="search">
-        <input
-          type="search"
-          value={qInput}
-          onChange={(event) => setQInput(event.target.value)}
-          placeholder={t('squads.filters.search')}
-          aria-label={t('squads.filters.search')}
-          data-testid="squad-filter-q"
-        />
-        <Select
-          label={t('squads.filters.kind')}
-          value={kindFilter}
-          onChange={(event) =>
-            setParam('kind', event.target.value === ALL ? null : event.target.value)
-          }
-        >
-          <option value={ALL}>{t('squads.filters.all')}</option>
-          {SQUAD_KIND_ORDER.map((value) => (
-            <option key={value} value={value}>
-              {t(`squads.kind.${value}`)}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label={t('squads.filters.status')}
-          value={statusFilter}
-          onChange={(event) =>
-            setParam('status', event.target.value === ALL ? null : event.target.value)
-          }
-        >
-          <option value={ALL}>{t('squads.filters.all')}</option>
-          {SQUAD_STATUS_ORDER.map((value) => (
-            <option key={value} value={value}>
-              {t(`squads.status.${value}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-
+    <DataView
+      className="mesh-squads"
+      title={t('squads.pageTitle')}
+      actions={
+        canManage ? (
+          <Button onClick={() => setCreateOpen(true)} data-testid="squad-open-create">
+            {t('squads.new')}
+          </Button>
+        ) : undefined
+      }
+      toolbar={
+        <div className="mesh-squads__filters" role="search">
+          <input
+            type="search"
+            value={qInput}
+            onChange={(event) => setQInput(event.target.value)}
+            placeholder={t('squads.filters.search')}
+            aria-label={t('squads.filters.search')}
+            data-testid="squad-filter-q"
+          />
+          <Select
+            label={t('squads.filters.kind')}
+            value={kindFilter}
+            onChange={(event) =>
+              setParam('kind', event.target.value === ALL ? null : event.target.value)
+            }
+          >
+            <option value={ALL}>{t('squads.filters.all')}</option>
+            {SQUAD_KIND_ORDER.map((value) => (
+              <option key={value} value={value}>
+                {t(`squads.kind.${value}`)}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label={t('squads.filters.status')}
+            value={statusFilter}
+            onChange={(event) =>
+              setParam('status', event.target.value === ALL ? null : event.target.value)
+            }
+          >
+            <option value={ALL}>{t('squads.filters.all')}</option>
+            {SQUAD_STATUS_ORDER.map((value) => (
+              <option key={value} value={value}>
+                {t(`squads.status.${value}`)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      }
+    >
       {squads.length === 0 ? (
         <EmptyState
           title={t('squads.empty.title')}
           description={t('squads.empty.description')}
-          action={<Button onClick={() => setCreateOpen(true)}>{t('squads.new')}</Button>}
+          action={
+            canManage ? (
+              <Button onClick={() => setCreateOpen(true)}>{t('squads.new')}</Button>
+            ) : undefined
+          }
         />
       ) : (
         <ul className="mesh-squads__grid" data-testid="squad-grid">
           {squads.map((squad) => (
             <li key={squad.id} className="mesh-squads__card" data-testid={`squad-card-${squad.id}`}>
-              <Link to={`/squads/${squad.id}`} className="mesh-squads__card-link">
+              <Link
+                to={
+                  workspace === null
+                    ? `/squads/${squad.id}`
+                    : workspaceRoute(workspace.workspace_slug, `/squads/${squad.id}`)
+                }
+                className="mesh-squads__card-link"
+              >
                 <span className="mesh-squads__card-name">{squad.name}</span>
               </Link>
               <span className="mesh-squads__kind-badge" data-testid={`squad-kind-${squad.id}`}>
@@ -224,7 +231,7 @@ export function SquadsPage(): React.JSX.Element {
         </ul>
       )}
 
-      {createOpen && workspace !== null ? (
+      {createOpen && workspace !== null && canManage ? (
         <CreateSquadDialog
           workspace={workspace}
           onCreated={(created) => {
@@ -237,6 +244,6 @@ export function SquadsPage(): React.JSX.Element {
           onClose={() => setCreateOpen(false)}
         />
       ) : null}
-    </div>
+    </DataView>
   );
 }

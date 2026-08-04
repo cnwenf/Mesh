@@ -11,6 +11,10 @@ import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import { ThemeProvider, ToastProvider } from '../../../design';
 import { I18nProvider, useT } from '../../../i18n';
 import type { MissingReporter } from '../../../i18n';
+import type { RealtimeClient } from '../../../realtime';
+import { RealtimeContext } from '../../../shell/AppShell';
+import type { RealtimeContextValue } from '../../../shell/AppShell';
+import type { RealtimeEventFrame } from '../../../types/realtime';
 import { SquadTaskDetailPage } from '../SquadTaskDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
@@ -85,15 +89,47 @@ function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
   return <ToastProvider regionLabel={t('a11y.notifications')}>{props.children}</ToastProvider>;
 }
 
-function renderPage(): void {
-  render(
+function makeFakeRealtime(): {
+  value: RealtimeContextValue;
+  subscribe: ReturnType<typeof vi.fn>;
+  unsubscribe: ReturnType<typeof vi.fn>;
+  emit: (frame: RealtimeEventFrame) => void;
+} {
+  const listeners: Array<(frame: RealtimeEventFrame) => void> = [];
+  const subscribe = vi.fn();
+  const unsubscribe = vi.fn();
+  const client = {
+    subscribe,
+    unsubscribe,
+    onFrame: vi.fn((listener: (frame: RealtimeEventFrame) => void) => {
+      listeners.push(listener);
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+      };
+    }),
+  };
+  return {
+    value: { state: 'connected', client: client as unknown as RealtimeClient },
+    subscribe,
+    unsubscribe,
+    emit: (frame) => {
+      for (const listener of listeners) listener(frame);
+    },
+  };
+}
+
+function renderPage(realtime: RealtimeContextValue | null = null): ReturnType<typeof render> {
+  return render(
     <MemoryRouter initialEntries={['/squads/sq-1/tasks/tk-1']}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
-            <Routes>
-              <Route path="/squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
-            </Routes>
+            <RealtimeContext.Provider value={realtime}>
+              <Routes>
+                <Route path="/squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
+              </Routes>
+            </RealtimeContext.Provider>
           </ToastLayer>
         </I18nProvider>
       </ThemeProvider>
@@ -121,7 +157,9 @@ describe('SquadTaskDetailPage', () => {
     await screen.findByTestId('squad-task-page');
     expect(screen.getByTestId('squad-task-title').textContent).toBe('Fix login');
     // 进度:1/2 完成 → 50%
-    expect(screen.getByTestId('squad-task-progress-label').textContent).toBe('1 of 2 subtasks done');
+    expect(screen.getByTestId('squad-task-progress-label').textContent).toBe(
+      '1 of 2 subtasks done',
+    );
     expect(screen.getByTestId('squad-task-progress').getAttribute('aria-valuenow')).toBe('50');
     // 子任务节点
     expect(screen.getByTestId('squad-tree-node-tk-2')).toBeTruthy();
@@ -240,6 +278,39 @@ describe('SquadTaskDetailPage', () => {
     expect(screen.queryByTestId('squad-task-cancel')).toBeNull();
   });
 
+  it('keeps a task cancellable and reports the API error when cancellation fails', async () => {
+    let cancelCalls = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), 'http://mesh.test').pathname;
+      const method = init?.method ?? 'GET';
+      if (path === '/api/v1/users/me' && method === 'GET') {
+        return fakeResponse({ body: { data: ME } });
+      }
+      if (path.endsWith('/tasks/tk-1/tree') && method === 'GET') {
+        return fakeResponse({ body: { data: treeFixture() } });
+      }
+      if (path.endsWith('/tasks/tk-1/stream') && method === 'GET') {
+        return fakeResponse({});
+      }
+      if (path.endsWith('/tasks/tk-1/cancel') && method === 'POST') {
+        cancelCalls += 1;
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'cancel failed' } },
+        });
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderPage();
+    await screen.findByTestId('squad-task-page');
+
+    fireEvent.click(screen.getByTestId('squad-task-cancel'));
+    await screen.findByText('An internal error occurred. Please try again.');
+    expect(cancelCalls).toBe(1);
+    expect(screen.getByTestId('squad-task-cancel')).toBeTruthy();
+  });
+
   it('polls status every 3s while non-terminal and reloads the tree on change', async () => {
     vi.useFakeTimers();
     const stub = stubFetch(
@@ -248,9 +319,13 @@ describe('SquadTaskDetailPage', () => {
       // 编排流尝试:无主体 → 不可用,静默退出,由轮询兜底(§3.5)。不消耗后续队列语义。
       fakeResponse({}),
       // poll #1: no change
-      fakeResponse({ body: { data: { task_id: 'tk-1', status: 'in_progress', result_summary: null } } }),
+      fakeResponse({
+        body: { data: { task_id: 'tk-1', status: 'in_progress', result_summary: null } },
+      }),
       // poll #2: changed → reload tree
-      fakeResponse({ body: { data: { task_id: 'tk-1', status: 'done', result_summary: 'All good' } } }),
+      fakeResponse({
+        body: { data: { task_id: 'tk-1', status: 'done', result_summary: 'All good' } },
+      }),
       fakeResponse({ body: { data: treeFixture({ status: 'done', result_summary: 'All good' }) } }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
@@ -272,6 +347,33 @@ describe('SquadTaskDetailPage', () => {
     expect(screen.queryByTestId('squad-task-cancel')).toBeNull();
     const statusCalls = stub.calls.filter((c) => String(c.url).includes('/status'));
     expect(statusCalls.length).toBe(2);
+  });
+
+  it('keeps the task visible when a status poll fails transiently', async () => {
+    vi.useFakeTimers();
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: treeFixture() } }),
+      fakeResponse({}),
+      fakeResponse({
+        status: 503,
+        body: { error: { code: 'unavailable', message: 'retry later' } },
+      }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('squad-task-title').textContent).toBe('Fix login');
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(screen.getByTestId('squad-task-page')).toBeTruthy();
+    expect(screen.queryByText('We could not load this content. Please try again.')).toBeNull();
+    const statusCalls = stub.calls.filter((call) => String(call.url).includes('/status'));
+    expect(statusCalls).toHaveLength(1);
   });
 
   it('toggles to the kanban view and buckets subtasks into status columns', async () => {
@@ -310,7 +412,9 @@ describe('SquadTaskDetailPage', () => {
       fakeResponse({}),
       fakeResponse({ body: { data: moved } }),
       fakeResponse({
-        body: { data: treeFixture({ children: [taskNode('tk-3', 'Ship it', { status: 'in_progress' })] }) },
+        body: {
+          data: treeFixture({ children: [taskNode('tk-3', 'Ship it', { status: 'in_progress' })] }),
+        },
       }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
@@ -348,5 +452,120 @@ describe('SquadTaskDetailPage', () => {
     await screen.findByText('That move is not allowed.');
     const patches = stub.calls.filter((c) => c.init?.method === 'PATCH');
     expect(patches.length).toBe(0);
+  });
+
+  it('renders membership failures and no-workspace responses as terminal states', async () => {
+    const failed = stubFetch(
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'membership failed' } },
+      }),
+    );
+    vi.stubGlobal('fetch', failed.fetchImpl);
+    const first = renderPage();
+    await screen.findByText('We could not load this content. Please try again.');
+    expect(screen.queryByTestId('squad-task-page')).toBeNull();
+    first.unmount();
+
+    const missing = stubFetch(fakeResponse({ body: { data: { ...ME, memberships: [] } } }));
+    vi.stubGlobal('fetch', missing.fetchImpl);
+    renderPage();
+    await screen.findByText('Select a workspace to view its squads.');
+    expect(screen.queryByTestId('squad-task-page')).toBeNull();
+  });
+
+  it('renders an approval task with omitted progress, plan, and children safely', async () => {
+    const sparseTree = treeFixture({
+      title_snapshot: null,
+      status: 'awaiting_plan_approval',
+      plan_markdown: '',
+      children: undefined,
+      progress: undefined,
+    });
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: sparseTree } }),
+      fakeResponse({}),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage();
+    await screen.findByTestId('squad-task-page');
+
+    expect(screen.getByTestId('squad-task-title')).toHaveTextContent('tk-1');
+    expect(screen.getByTestId('squad-task-progress-label')).toHaveTextContent(
+      '0 of 0 subtasks done',
+    );
+    expect(screen.getByTestId('squad-task-progress')).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByTestId('squad-task-approval')).toBeTruthy();
+    expect(screen.queryByTestId('squad-task-plan')).toBeNull();
+    expect(screen.getByText('No subtasks yet')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('squad-view-kanban'));
+    expect(await screen.findByText('No subtasks yet')).toBeTruthy();
+  });
+
+  it('falls back to task ids for missing titles and unknown blockers', async () => {
+    const fallbackChild = taskNode('tk-2', 'ignored', {
+      title_snapshot: null,
+      blocked_by: ['missing-task'],
+      children: [taskNode('tk-3', 'Nested task')],
+    });
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({
+        body: {
+          data: treeFixture({
+            children: [fallbackChild],
+            progress: { total: 2, done: 0, in_progress: 0, pending: 2, failed: 0 },
+          }),
+        },
+      }),
+      fakeResponse({}),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage();
+    await screen.findByTestId('squad-task-page');
+
+    expect(screen.getByTestId('squad-tree-node-tk-2')).toHaveTextContent('tk-2');
+    expect(screen.getByTestId('squad-tree-blocked-tk-2')).toHaveTextContent('missing-task');
+    expect(screen.getByTestId('squad-tree-node-tk-3')).toHaveTextContent('Nested task');
+  });
+
+  it('subscribes to realtime, ignores other channels, and reloads on the squad channel', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: treeFixture({ title_snapshot: 'Before realtime' }) } }),
+      fakeResponse({}),
+      fakeResponse({ body: { data: treeFixture({ title_snapshot: 'After realtime' }) } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const realtime = makeFakeRealtime();
+    const page = renderPage(realtime.value);
+    await screen.findByText('Before realtime');
+    expect(realtime.subscribe).toHaveBeenCalledWith('squad:sq-1');
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'squad:another-squad',
+        seq: 1,
+        event: 'squad_task.updated',
+        payload: { task_id: 'tk-other' },
+      } as RealtimeEventFrame);
+    });
+    expect(screen.getByText('Before realtime')).toBeTruthy();
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'squad:sq-1',
+        seq: 2,
+        event: 'squad_task.updated',
+        payload: { task_id: 'tk-1' },
+      } as RealtimeEventFrame);
+    });
+    await screen.findByText('After realtime');
+    page.unmount();
+    expect(realtime.unsubscribe).toHaveBeenCalledWith('squad:sq-1');
   });
 });

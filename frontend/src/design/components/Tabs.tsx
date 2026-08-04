@@ -7,6 +7,12 @@
  */
 import { useId, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
+import {
+  Tabs as AppicaTabs,
+  TabsContent as AppicaTabsContent,
+  TabsList as AppicaTabsList,
+  TabsTrigger as AppicaTabsTrigger,
+} from '@appica/ui-react/tabs';
 import './overlays.css';
 
 export interface TabItem {
@@ -14,6 +20,8 @@ export interface TabItem {
   label: string;
   content: ReactNode;
   disabled?: boolean;
+  /** Stable feature/e2e locator forwarded to the actual tab trigger. */
+  testId?: string;
 }
 
 export interface TabsProps {
@@ -77,39 +85,48 @@ export function Tabs(props: TabsProps): React.JSX.Element {
     .join(' ');
 
   return (
-    <div className={rootClasses}>
-      <div role="tablist" aria-label={label} className="mesh-tabs__list" onKeyDown={handleKeyDown}>
+    <AppicaTabs
+      className={rootClasses}
+      variant="line"
+      size="sm"
+      value={effective}
+      onValueChange={(next) => select(String(next))}
+    >
+      <AppicaTabsList
+        aria-label={label}
+        className="mesh-tabs__list"
+        onKeyDown={handleKeyDown}
+      >
         {items.map((item) => {
           const selected = item.value === effective;
           return (
-            <button
+            <AppicaTabsTrigger
               key={item.value}
-              type="button"
-              role="tab"
+              value={item.value}
               id={`${baseId}-tab-${item.value}`}
               aria-selected={selected}
               aria-controls={`${baseId}-panel-${item.value}`}
               tabIndex={selected ? 0 : -1}
               disabled={item.disabled === true}
               className="mesh-tabs__tab"
-              onClick={() => select(item.value)}
+              data-testid={item.testId}
             >
               {item.label}
-            </button>
+            </AppicaTabsTrigger>
           );
         })}
-      </div>
+      </AppicaTabsList>
       {activeItem !== undefined ? (
-        <div
-          role="tabpanel"
+        <AppicaTabsContent
+          value={activeItem.value}
           id={`${baseId}-panel-${activeItem.value}`}
           aria-labelledby={`${baseId}-tab-${activeItem.value}`}
           className="mesh-tabs__panel"
           tabIndex={0}
         >
           {activeItem.content}
-        </div>
+        </AppicaTabsContent>
       ) : null}
-    </div>
+    </AppicaTabs>
   );
 }

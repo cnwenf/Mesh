@@ -131,6 +131,30 @@ afterEach(() => {
 });
 
 describe('SkillDetailPage', () => {
+  it('无工作区与成员查询失败时显示对应状态', async () => {
+    const noWorkspaceFetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes('/users/me')) {
+        return fakeResponse({ body: { data: { ...ME, memberships: [] } } });
+      }
+      return fakeResponse({ body: { data: [] } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', noWorkspaceFetch);
+    const noWorkspace = renderPage();
+    expect(
+      await screen.findByText(/not a member of any workspace|还不是任何工作区的成员/i),
+    ).toBeTruthy();
+    noWorkspace.unmount();
+
+    const failedMembershipFetch = (async () =>
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      })) as typeof fetch;
+    vi.stubGlobal('fetch', failedMembershipFetch);
+    renderPage();
+    expect(await screen.findByText(/Could not load skills|技能加载失败/i)).toBeTruthy();
+  });
+
   it('渲染概览 + 含脚本标记 + 右侧详情', async () => {
     setup();
     renderPage();

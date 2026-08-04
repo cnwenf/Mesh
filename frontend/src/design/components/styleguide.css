@@ -22,9 +22,9 @@
 .styleguide__heading {
   margin: 0 0 var(--space-4);
   font-family: var(--font-family-display);
-  font-size: var(--text-title-3-size);
-  line-height: var(--text-title-3-lh);
-  font-weight: var(--text-title-3-weight);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text-strong);
 }
 
@@ -71,8 +71,8 @@
 
 .styleguide__icon-name {
   font-family: var(--font-family-mono);
-  font-size: var(--text-micro-size);
-  line-height: var(--text-micro-lh);
+  font-size: var(--font-size-micro);
+  line-height: var(--line-height-micro);
   color: var(--color-text-muted);
   overflow-wrap: anywhere;
   text-align: center;
@@ -80,8 +80,8 @@
 
 .styleguide__note {
   margin: 0;
-  font-size: var(--text-body-sm-size);
-  line-height: var(--text-body-sm-lh);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
 }
 
 .styleguide__mono {

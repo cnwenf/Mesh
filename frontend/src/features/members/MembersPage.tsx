@@ -19,6 +19,7 @@ import {
   Avatar,
   Badge,
   Button,
+  DataView,
   Dialog,
   Drawer,
   EmptyState,
@@ -27,27 +28,39 @@ import {
   Menu,
   RunStateBadge,
   Skeleton,
+  Tabs,
   useToast,
 } from '../../design';
 import type { MenuEntry } from '../../design';
 import type { RunState } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import { useRealtimeContext } from '../../shell/AppShell';
+import { workspaceChannel } from '../../workspace/WorkspaceProvider';
 import { AgentWizard } from '../agents/AgentWizard';
+import { deleteAgent, transitionAgentLifecycle } from '../agents/api';
 import { useAgentPresenceMap } from '../agents/presence';
 import { presenceToRunState } from '../agents/runState';
 import { resetOnboardingMember } from '../onboarding/api';
 import { requestOptimisticStepComplete } from '../onboarding/notify';
 import { EmptyRoster } from '../onboarding/illustrations';
-import { activeWorkspace, fetchMe, getMember, listMembers, updateMember } from './api';
+import { getMember, listMembers, updateMember } from './api';
 import { AddMemberDialog } from './AddMemberDialog';
 import { RemoveMemberDialog } from './RemoveMemberDialog';
 import type { RemoveMode } from './RemoveMemberDialog';
-import type { MemberDetail, MemberRole, MemberSummary, MemberType, Membership } from './types';
+import type { MemberDetail, MemberRole, MemberSummary, MemberType } from './types';
 import { ROLE_ORDER } from './types';
+import { useWorkspaceMembership, workspaceRoute } from './useWorkspaceMembership';
 import './members.css';
 
 const SEARCH_DEBOUNCE_MS = 300;
+const MEMBER_EVENTS = new Set([
+  'member.added',
+  'member.updated',
+  'member.removed',
+  // The current backend keeps role changes explicit on the workspace channel.
+  'member.role_changed',
+]);
 
 type TabKey = 'all' | 'human' | 'agent' | 'disabled';
 type StatusFilter = 'default' | 'all' | 'active' | 'disabled' | 'removed';
@@ -110,19 +123,39 @@ function agentIdOf(member: MemberSummary): string | null {
   return null;
 }
 
+function agentLifecycleOf(member: MemberSummary): string | null {
+  const profile = member.profile;
+  if (member.member_type === 'agent' && profile !== null && 'lifecycle_status' in profile) {
+    return profile.lifecycle_status ?? null;
+  }
+  return null;
+}
+
+function isCurrentHumanMember(member: MemberSummary, userId: string | null): boolean {
+  return (
+    userId !== null &&
+    member.member_type === 'human' &&
+    member.profile !== null &&
+    'id' in member.profile &&
+    member.profile.id === userId
+  );
+}
+
 export function MembersPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
   const navigate = useNavigate();
+  const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const currentUserId = membershipState.kind === 'ready' ? membershipState.user.id : null;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const memberTypeParam = searchParams.get('member_type');
   const statusParam = searchParams.get('status');
   const activeTab = tabFromParams(memberTypeParam, statusParam);
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
-  const [meId, setMeId] = useState<string | null>(null);
   const [members, setMembers] = useState<MemberSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -134,6 +167,8 @@ export function MembersPage(): React.JSX.Element {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [confirm, setConfirm] = useState<{ mode: RemoveMode; member: MemberSummary } | null>(null);
+  const [agentActionPending, setAgentActionPending] = useState(false);
+  const [agentActionError, setAgentActionError] = useState<string | null>(null);
   /** 管理员重置上手进度的二次确认目标(onboarding.md §4.2;仅人类成员行) */
   const [resetTarget, setResetTarget] = useState<MemberSummary | null>(null);
 
@@ -151,24 +186,6 @@ export function MembersPage(): React.JSX.Element {
     return presenceToRunState(presenceMap.get(id) ?? null);
   };
 
-  // Resolve the current workspace from the caller's memberships (single source
-  // until the workspace picker lands with MES-24).
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (cancelled) return;
-        setMeId(me.user.id);
-        setWorkspace(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        if (!cancelled) setError(t('state.errorDescription'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, t]);
-
   // Debounce the search box into the query term.
   useEffect(() => {
     const handle = setTimeout(() => setQ(searchInput.trim()), SEARCH_DEBOUNCE_MS);
@@ -176,8 +193,11 @@ export function MembersPage(): React.JSX.Element {
   }, [searchInput]);
 
   const loadRoster = useCallback(() => {
-    if (workspace === null) {
-      setIsLoading(false);
+    if (membershipState.kind !== 'ready' || workspace === null) {
+      setIsLoading(membershipState.kind === 'loading');
+      if (membershipState.kind === 'error') setError(t('state.errorDescription'));
+      else setError(null);
+      if (membershipState.kind === 'no_workspace') setMembers([]);
       return;
     }
     const { memberType, status } = TAB_PARAMS[activeTab];
@@ -192,11 +212,27 @@ export function MembersPage(): React.JSX.Element {
       .then((result) => setMembers(result.data))
       .catch((err) => setError(err instanceof Error ? err.message : t('state.errorDescription')))
       .finally(() => setIsLoading(false));
-  }, [client, workspace, activeTab, q, t]);
+  }, [client, workspace, membershipState.kind, activeTab, q, t]);
 
   useEffect(() => {
     loadRoster();
   }, [loadRoster, reloadKey]);
+
+  // Member mutations are projected onto the workspace channel by the current
+  // backend. Reload the active projection only for this workspace/channel.
+  useEffect(() => {
+    if (realtime === null || workspace === null) return;
+    const channel = workspaceChannel(workspace.workspace_id);
+    realtime.client.subscribe(channel);
+    const unsubscribe = realtime.client.onFrame((frame) => {
+      if (frame.channel !== channel || !MEMBER_EVENTS.has(frame.event)) return;
+      setReloadKey((key) => key + 1);
+    });
+    return () => {
+      unsubscribe();
+      realtime.client.unsubscribe(channel);
+    };
+  }, [realtime, workspace]);
 
   const selectTab = (tab: TabKey): void => {
     const params = new URLSearchParams();
@@ -236,7 +272,12 @@ export function MembersPage(): React.JSX.Element {
     if (workspace === null) return;
     patchMemberStatus(member.id, 'active');
     try {
-      await updateMember(client, workspace.workspace_id, member.id, { status: 'active' });
+      const agentId = agentIdOf(member);
+      if (agentId !== null) {
+        await transitionAgentLifecycle(client, workspace.workspace_id, agentId, 'enable');
+      } else {
+        await updateMember(client, workspace.workspace_id, member.id, { status: 'active' });
+      }
       setReloadKey((key) => key + 1);
     } catch (err) {
       patchMemberStatus(member.id, member.status);
@@ -244,6 +285,29 @@ export function MembersPage(): React.JSX.Element {
         tone: 'danger',
         closeLabel: t('common.close'),
       });
+    }
+  };
+
+  const confirmAgentAction = async (): Promise<void> => {
+    if (workspace === null || confirm === null) return;
+    const agentId = agentIdOf(confirm.member);
+    if (agentId === null) return;
+    setAgentActionPending(true);
+    setAgentActionError(null);
+    try {
+      if (confirm.mode === 'disable') {
+        await transitionAgentLifecycle(client, workspace.workspace_id, agentId, 'disable');
+        patchMemberStatus(confirm.member.id, 'disabled');
+      } else {
+        await deleteAgent(client, workspace.workspace_id, agentId);
+        patchMemberStatus(confirm.member.id, 'removed');
+      }
+      setConfirm(null);
+      setReloadKey((key) => key + 1);
+    } catch (err) {
+      setAgentActionError(err instanceof Error ? err.message : t('common.unknownError'));
+    } finally {
+      setAgentActionPending(false);
     }
   };
 
@@ -267,8 +331,13 @@ export function MembersPage(): React.JSX.Element {
 
   const openDetail = async (member: MemberSummary): Promise<void> => {
     // Agent 行深链到 agent 详情页(README §6.12 名册详情深链);人类行开抽屉。
-    if (member.member_type === 'agent' && member.profile !== null && 'id' in member.profile) {
-      navigate(`/agents/${member.profile.id}`);
+    if (
+      workspace !== null &&
+      member.member_type === 'agent' &&
+      member.profile !== null &&
+      'id' in member.profile
+    ) {
+      navigate(workspaceRoute(workspace.workspace_slug, `/agents/${member.profile.id}`));
       return;
     }
     if (workspace === null) return;
@@ -293,26 +362,44 @@ export function MembersPage(): React.JSX.Element {
   // disable/enable 按 status;remove(破坏性,非 removed 且非本人);reset 仅人类行。
   const buildRowActions = (member: MemberSummary): MenuEntry[] => {
     const entries: MenuEntry[] = [];
-    if (member.status === 'active') {
+    const lifecycle = agentLifecycleOf(member);
+    const canDisable =
+      member.member_type === 'agent'
+        ? lifecycle === 'active' || lifecycle === 'paused'
+        : member.status === 'active';
+    const canEnable =
+      member.member_type === 'agent' ? lifecycle === 'disabled' : member.status === 'disabled';
+    if (canDisable) {
       entries.push({
         key: `disable-${member.id}`,
         label: t('members.disable.action'),
-        onSelect: () => setConfirm({ mode: 'disable', member }),
+        onSelect: () => {
+          setAgentActionError(null);
+          setConfirm({ mode: 'disable', member });
+        },
       });
     }
-    if (member.status === 'disabled') {
+    if (canEnable) {
       entries.push({
         key: `enable-${member.id}`,
         label: t('members.enable.action'),
         onSelect: () => void handleEnable(member),
       });
     }
-    if (member.status !== 'removed' && member.id !== meId) {
+    const canRemove = member.member_type === 'human' || agentIdOf(member) !== null;
+    if (
+      canRemove &&
+      member.status !== 'removed' &&
+      !isCurrentHumanMember(member, currentUserId)
+    ) {
       entries.push({
         key: `remove-${member.id}`,
         label: t('members.remove.action'),
         danger: true,
-        onSelect: () => setConfirm({ mode: 'remove', member }),
+        onSelect: () => {
+          setAgentActionError(null);
+          setConfirm({ mode: 'remove', member });
+        },
       });
     }
     if (member.member_type === 'human') {
@@ -340,19 +427,9 @@ export function MembersPage(): React.JSX.Element {
     );
   };
 
-  /** 角色控件:agent 行 role_tag 文本(§4.2),人类行角色下拉。testid 桌面/卡片分流。 */
+  /** 角色控件:人类与 agent 共用 workspace role;agent 永远不能成为 owner。 */
   const renderRoleControl = (member: MemberSummary, isCard: boolean): React.JSX.Element => {
-    if (member.member_type === 'agent') {
-      return (
-        <span
-          className="mesh-text-caption"
-          data-testid={isCard ? `card-role-tag-${member.id}` : `member-role-tag-${member.id}`}
-        >
-          {roleTagOf(member)}
-        </span>
-      );
-    }
-    return (
+    const select = (
       <select
         className="mesh-members__role-select"
         aria-label={t('members.col.role')}
@@ -362,22 +439,36 @@ export function MembersPage(): React.JSX.Element {
         onChange={(event) => handleRoleChange(member, event.target.value as MemberRole)}
       >
         {ROLE_ORDER.map((role) => (
-          <option key={role} value={role}>
+          <option
+            key={role}
+            value={role}
+            disabled={member.member_type === 'agent' && role === 'owner'}
+          >
             {t(`members.role.${role}`)}
           </option>
         ))}
       </select>
     );
+    if (member.member_type === 'agent') {
+      return (
+        <span className="mesh-members__role-control">
+          {select}
+          <span
+            className="mesh-text-caption"
+            data-testid={isCard ? `card-role-tag-${member.id}` : `member-role-tag-${member.id}`}
+          >
+            {roleTagOf(member)}
+          </span>
+        </span>
+      );
+    }
+    return select;
   };
 
   /** 生命周期文案:agent 优先 lifecycle_status,否则成员状态。 */
   const lifecycleLabel = (member: MemberSummary): string => {
-    if (member.member_type === 'agent') {
-      const profile = member.profile;
-      const lifecycle =
-        profile !== null && 'lifecycle_status' in profile ? profile.lifecycle_status : null;
-      if (lifecycle) return t(`agents.lifecycle.${lifecycle}`);
-    }
+    const lifecycle = agentLifecycleOf(member);
+    if (lifecycle) return t(`agents.lifecycle.${lifecycle}`);
     return t(`members.status.${member.status}`);
   };
 
@@ -432,12 +523,13 @@ export function MembersPage(): React.JSX.Element {
   };
 
   return (
-    <div className="mesh-members">
-      <div className="mesh-members__header">
-        <h1 className="mesh-members__title mesh-text-title-1">{t('members.title')}</h1>
-        <div className="mesh-members__actions">
-          {canManage ? (
-            <>
+    <>
+      <DataView
+        className="mesh-members"
+        title={t('members.title')}
+        actions={
+          canManage ? (
+            <div className="mesh-members__actions">
               <Button
                 variant="secondary"
                 data-testid="invite-human-button"
@@ -452,164 +544,166 @@ export function MembersPage(): React.JSX.Element {
               >
                 {t('members.newAgent')}
               </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="mesh-members__toolbar">
-        <div className="mesh-members__tabs" role="tablist" aria-label={t('members.filterLabel')}>
-          {(['all', 'human', 'agent', 'disabled'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              className="mesh-members__tab mesh-text-body"
-              data-testid={`tab-${tab}`}
-              onClick={() => selectTab(tab)}
-            >
-              {t(`members.tab.${tab}`)}
-            </button>
-          ))}
-        </div>
-        <input
-          type="search"
-          className="mesh-members__search"
-          placeholder={t('common.search')}
-          aria-label={t('common.search')}
-          data-testid="member-search"
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
-        />
-      </div>
-
-      {workspace === null && !isLoading && error === null ? (
-        <EmptyState title={t('state.emptyTitle')} description={t('members.noWorkspace')} />
-      ) : error !== null ? (
-        <ErrorState
-          title={t('state.errorTitle')}
-          description={error}
-          retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
-        />
-      ) : isLoading ? (
-        <Skeleton loadingLabel={t('common.loading')} />
-      ) : members.length === 0 ? (
-        <EmptyState
-          illustration={<EmptyRoster />}
-          title={t('onboarding.empty.members.title')}
-          description={t('onboarding.empty.members.description')}
-          action={
-            canManage ? (
-              <div className="mesh-members__empty-actions">
-                <Button
-                  variant="secondary"
-                  data-testid="members-empty-invite"
-                  onClick={() => setAddOpen(true)}
-                >
-                  {t('onboarding.empty.members.action')}
-                </Button>
-                <Button
-                  variant="primary"
-                  data-testid="members-empty-agent"
-                  onClick={() => setWizardOpen(true)}
-                >
-                  {t('onboarding.empty.members.actionAgent')}
-                </Button>
-              </div>
-            ) : undefined
-          }
-        />
-      ) : (
-        <>
-          {/* 桌面表格(0–599px 隐藏,改卡片):受控横向滚动容器,首列粘住(A-05/§7.6)。 */}
-          <div className="mesh-members__table-wrap">
-            <table className="mesh-members__table">
-              <caption className="sr-only">{t('members.title')}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">{t('members.col.name')}</th>
-                  <th scope="col">{t('agents.roster.type')}</th>
-                  <th scope="col">{t('members.col.role')}</th>
-                  <th scope="col">{t('agents.roster.lifecycle')}</th>
-                  <th scope="col">{t('agents.roster.presence')}</th>
-                  <th scope="col">{t('members.col.actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((member) => (
-                  <tr
-                    key={member.id}
-                    data-testid={`member-row-${member.id}`}
-                    className={
-                      member.status === 'removed'
-                        ? 'mesh-members__row mesh-members__row--removed'
-                        : 'mesh-members__row'
-                    }
+            </div>
+          ) : undefined
+        }
+        toolbar={
+          <div className="mesh-members__toolbar">
+            <Tabs
+              className="mesh-members__filter-tabs"
+              label={t('members.filterLabel')}
+              value={activeTab}
+              onChange={(value) => selectTab(value as TabKey)}
+              items={(['all', 'human', 'agent', 'disabled'] as const).map((tab) => ({
+                value: tab,
+                label: t(`members.tab.${tab}`),
+                content: null,
+                testId: `tab-${tab}`,
+              }))}
+            />
+            <input
+              type="search"
+              className="mesh-members__search"
+              placeholder={t('common.search')}
+              aria-label={t('common.search')}
+              data-testid="member-search"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+            />
+          </div>
+        }
+      >
+        {workspace === null && !isLoading && error === null ? (
+          <EmptyState title={t('state.emptyTitle')} description={t('members.noWorkspace')} />
+        ) : error !== null ? (
+          <ErrorState
+            title={t('state.errorTitle')}
+            description={error}
+            retryLabel={t('common.retry')}
+            onRetry={
+              membershipState.kind === 'error'
+                ? membershipState.retry
+                : () => setReloadKey((key) => key + 1)
+            }
+          />
+        ) : isLoading ? (
+          <Skeleton loadingLabel={t('common.loading')} />
+        ) : members.length === 0 ? (
+          <EmptyState
+            illustration={<EmptyRoster />}
+            title={t('onboarding.empty.members.title')}
+            description={t('onboarding.empty.members.description')}
+            action={
+              canManage ? (
+                <div className="mesh-members__empty-actions">
+                  <Button
+                    variant="secondary"
+                    data-testid="members-empty-invite"
+                    onClick={() => setAddOpen(true)}
                   >
-                    <td>{renderIdentity(member, false)}</td>
-                    <td
-                      className="mesh-members__sub mesh-text-body-sm"
-                      data-testid={`member-type-${member.id}`}
+                    {t('onboarding.empty.members.action')}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    data-testid="members-empty-agent"
+                    onClick={() => setWizardOpen(true)}
+                  >
+                    {t('onboarding.empty.members.actionAgent')}
+                  </Button>
+                </div>
+              ) : undefined
+            }
+          />
+        ) : (
+          <>
+            {/* 桌面表格(0–599px 隐藏,改卡片):受控横向滚动容器,首列粘住(A-05/§7.6)。 */}
+            <div className="mesh-members__table-wrap">
+              <table className="mesh-members__table">
+                <caption className="sr-only">{t('members.title')}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t('members.col.name')}</th>
+                    <th scope="col">{t('agents.roster.type')}</th>
+                    <th scope="col">{t('members.col.role')}</th>
+                    <th scope="col">{t('agents.roster.lifecycle')}</th>
+                    <th scope="col">{t('agents.roster.presence')}</th>
+                    <th scope="col">{t('members.col.actions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((member) => (
+                    <tr
+                      key={member.id}
+                      data-testid={`member-row-${member.id}`}
+                      className={
+                        member.status === 'removed'
+                          ? 'mesh-members__row mesh-members__row--removed'
+                          : 'mesh-members__row'
+                      }
                     >
+                      <td>{renderIdentity(member, false)}</td>
+                      <td
+                        className="mesh-members__sub mesh-text-body-sm"
+                        data-testid={`member-type-${member.id}`}
+                      >
+                        {member.member_type === 'agent'
+                          ? t('agents.roster.typeAgent')
+                          : t('agents.roster.typeHuman')}
+                      </td>
+                      <td>{renderRoleControl(member, false)}</td>
+                      <td
+                        className="mesh-members__sub mesh-text-caption"
+                        data-testid={`member-lifecycle-${member.id}`}
+                      >
+                        {lifecycleLabel(member)}
+                      </td>
+                      <td className="mesh-members__sub">{renderRunState(member, false)}</td>
+                      <td>{renderRowMenu(member)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* A-05 手机卡片(默认隐藏,0–599px 显示):主次行,行操作进菜单,无横向溢出。 */}
+            <ul className="mesh-members__cards">
+              {members.map((member) => (
+                <li
+                  key={member.id}
+                  className={
+                    member.status === 'removed'
+                      ? 'mesh-members__card mesh-members__card--removed'
+                      : 'mesh-members__card'
+                  }
+                  data-testid={`member-card-${member.id}`}
+                >
+                  <div className="mesh-members__card-primary">
+                    {renderIdentity(member, true)}
+                    {renderRowMenu(member)}
+                  </div>
+                  <div className="mesh-members__card-secondary">
+                    <span className="mesh-text-caption" data-testid={`card-type-${member.id}`}>
                       {member.member_type === 'agent'
                         ? t('agents.roster.typeAgent')
                         : t('agents.roster.typeHuman')}
-                    </td>
-                    <td>{renderRoleControl(member, false)}</td>
-                    <td
-                      className="mesh-members__sub mesh-text-caption"
-                      data-testid={`member-lifecycle-${member.id}`}
-                    >
+                    </span>
+                    {renderRoleControl(member, true)}
+                    <span className="mesh-text-caption" data-testid={`card-lifecycle-${member.id}`}>
                       {lifecycleLabel(member)}
-                    </td>
-                    <td className="mesh-members__sub">{renderRunState(member, false)}</td>
-                    <td>{renderRowMenu(member)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* A-05 手机卡片(默认隐藏,0–599px 显示):主次行,行操作进菜单,无横向溢出。 */}
-          <ul className="mesh-members__cards">
-            {members.map((member) => (
-              <li
-                key={member.id}
-                className={
-                  member.status === 'removed'
-                    ? 'mesh-members__card mesh-members__card--removed'
-                    : 'mesh-members__card'
-                }
-                data-testid={`member-card-${member.id}`}
-              >
-                <div className="mesh-members__card-primary">
-                  {renderIdentity(member, true)}
-                  {renderRowMenu(member)}
-                </div>
-                <div className="mesh-members__card-secondary">
-                  <span className="mesh-text-caption" data-testid={`card-type-${member.id}`}>
-                    {member.member_type === 'agent'
-                      ? t('agents.roster.typeAgent')
-                      : t('agents.roster.typeHuman')}
-                  </span>
-                  {renderRoleControl(member, true)}
-                  <span className="mesh-text-caption" data-testid={`card-lifecycle-${member.id}`}>
-                    {lifecycleLabel(member)}
-                  </span>
-                  {renderRunState(member, true)}
-                </div>
-                {member.joined_at !== null ? (
-                  <span className="mesh-members__card-joined mesh-text-caption mesh-tnum">
-                    {t('members.joined', { date: new Date(member.joined_at) })}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+                    </span>
+                    {renderRunState(member, true)}
+                  </div>
+                  {member.joined_at !== null ? (
+                    <span className="mesh-members__card-joined mesh-text-caption mesh-tnum">
+                      {t('members.joined', { date: new Date(member.joined_at) })}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </DataView>
 
       {detail !== null ? (
         <Drawer
@@ -651,7 +745,42 @@ export function MembersPage(): React.JSX.Element {
               requestOptimisticStepComplete('invite_member_or_add_agent'); // §1.2.2 O9:加 agent 完成 → 步骤 2
             }}
           />
-          {confirm !== null ? (
+          {confirm !== null && confirm.member.member_type === 'agent' ? (
+            <Dialog
+              open
+              onClose={() => setConfirm(null)}
+              title={
+                confirm.mode === 'remove' ? t('members.remove.title') : t('members.disable.title')
+              }
+              closeLabel={t('common.close')}
+            >
+              <div className="mesh-members__dialog-body">
+                <p>
+                  {confirm.mode === 'remove'
+                    ? t('members.remove.confirm', { name: confirm.member.display_name })
+                    : t('members.disable.confirm', { name: confirm.member.display_name })}
+                </p>
+                {agentActionError !== null ? (
+                  <p className="mesh-members__error">{agentActionError}</p>
+                ) : null}
+                <div className="mesh-members__dialog-footer">
+                  <Button variant="secondary" onClick={() => setConfirm(null)}>
+                    {t('common.cancel')}
+                  </Button>
+                  <Button
+                    variant={confirm.mode === 'remove' ? 'danger' : 'primary'}
+                    onClick={() => void confirmAgentAction()}
+                    isLoading={agentActionPending}
+                    data-testid="remove-confirm"
+                  >
+                    {confirm.mode === 'remove'
+                      ? t('members.remove.submit')
+                      : t('members.disable.submit')}
+                  </Button>
+                </div>
+              </div>
+            </Dialog>
+          ) : confirm !== null ? (
             <RemoveMemberDialog
               open
               mode={confirm.mode}
@@ -694,6 +823,6 @@ export function MembersPage(): React.JSX.Element {
           </Dialog>
         </>
       ) : null}
-    </div>
+    </>
   );
 }

@@ -42,6 +42,24 @@ describe('applyInboxFrame', () => {
     expect(same).toBe(next);
   });
 
+  it('keeps realtime creates inside the active server-equivalent filter', () => {
+    const assigned = { ...N1, id: 'n-assigned', type: 'assigned' as const };
+    const fromAgent = {
+      ...N1,
+      id: 'n-agent',
+      actor: { id: 'agent-1', member_type: 'agent' as const, name: 'Agent' },
+    };
+
+    expect(
+      applyInboxFrame([N1], frame('notification.created', assigned), 'mentions'),
+    ).toEqual([N1]);
+    expect(
+      applyInboxFrame([N1], frame('notification.created', fromAgent), 'agent').map(
+        (item) => item.id,
+      ),
+    ).toEqual(['n-agent', 'n-1']);
+  });
+
   it('rejects malformed created payloads', () => {
     const list = [N1];
     expect(applyInboxFrame(list, frame('notification.created', { nope: 1 }))).toBe(list);
@@ -50,6 +68,16 @@ describe('applyInboxFrame', () => {
   it('marks a notification read', () => {
     const next = applyInboxFrame([N1], frame('notification.read', { id: 'n-1', read_at: '2026-07-02T00:00:00Z' }));
     expect(next[0].read_at).toBe('2026-07-02T00:00:00Z');
+  });
+
+  it('removes a remotely-read notification from the unread filter', () => {
+    expect(
+      applyInboxFrame(
+        [N1],
+        frame('notification.read', { id: 'n-1', read_at: '2026-07-02T00:00:00Z' }),
+        'unread',
+      ),
+    ).toEqual([]);
   });
 
   it('returns same reference for read of unknown id', () => {

@@ -4,27 +4,34 @@
  * 批准 / 拒绝(README §6.10 统一审批的 autopilot 薄封装);在途运行可取消
  * (两段式语义由后端收口)。run 状态经 autopilot:{id} 频道实时刷新(§3.5)。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
 import { Button, ErrorState, Skeleton, StatusDot, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import { approveRun, autopilotChannel, cancelRun, getAutopilotRun, rejectRun } from './api';
 import { RUN_STATUS_TONE, errorSummary, formatDurationMs } from './format';
 import type { AutopilotRun, RunArtifact } from './types';
 
 /** §4.2 产物列表「带跳转」:按 ref_table 映射到应用内路由。 */
-function artifactLink(run: AutopilotRun, artifact: RunArtifact): string | null {
-  if (artifact.ref_table === 'issues') return `/issues/${artifact.ref_id}`;
-  if (artifact.ref_table === 'task_executions') return `/executions/${artifact.ref_id}`;
-  if (artifact.ref_table === 'notifications') return '/inbox';
+function artifactLink(
+  run: AutopilotRun,
+  artifact: RunArtifact,
+  workspaceSlug: string | null,
+): string | null {
+  const scoped = (path: string): string =>
+    workspaceSlug === null ? path : workspaceRoute(workspaceSlug, path);
+  if (artifact.ref_table === 'issues') return scoped(`/issues/${artifact.ref_id}`);
+  if (artifact.ref_table === 'task_executions') return scoped(`/executions/${artifact.ref_id}`);
+  if (artifact.ref_table === 'notifications') return scoped('/inbox');
   if (artifact.ref_table === 'comments') {
     const issue = run.trigger_snapshot.issue as { id?: string } | undefined;
-    return issue !== undefined && typeof issue.id === 'string' ? `/issues/${issue.id}` : null;
+    return issue !== undefined && typeof issue.id === 'string'
+      ? scoped(`/issues/${issue.id}`)
+      : null;
   }
   return null;
 }
@@ -45,8 +52,11 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
   const navigate = useNavigate();
   const realtime = useRealtimeContext();
   const { runId } = useParams<{ runId: string }>();
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = membership?.role === 'owner' || membership?.role === 'admin';
 
-  const [membership, setMembership] = useState<Membership | null>(null);
   const [run, setRun] = useState<AutopilotRun | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -54,26 +64,12 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
   const loadRun = useCallback(async () => {
     if (membership === null || runId === undefined) return;
     try {
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       setRun(await getAutopilotRun(client, membership!.workspace_id, runId));
       setErrorKey(null);
     } catch (error) {
       setErrorKey(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown');
     }
-  }, [membership, runId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
-    void (async () => {
-      const me = await fetchMe(client);
-      const workspace = activeWorkspace(me.memberships);
-      if (!cancelled) setMembership(workspace);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [client, membership, runId]);
 
   useEffect(() => {
     void loadRun();
@@ -98,7 +94,6 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
     async (approve: boolean) => {
       if (membership === null || runId === undefined) return;
       try {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         if (approve) await approveRun(client, membership!.workspace_id, runId);
         else await rejectRun(client, membership!.workspace_id, runId);
         toast.addToast(
@@ -113,13 +108,12 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
         });
       }
     },
-    [membership, runId, toast, t],
+    [client, membership, runId, toast, t],
   );
 
   const cancel = useCallback(async () => {
     if (membership === null || runId === undefined) return;
     try {
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       await cancelRun(client, membership!.workspace_id, runId);
       toast.addToast(t('autopilots.runDetail.cancelled'), {
         tone: 'success',
@@ -132,8 +126,25 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
         closeLabel: t('common.close'),
       });
     }
-  }, [membership, runId, toast, t]);
+  }, [client, membership, runId, toast, t]);
 
+  if (membershipState.kind === 'error') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState title={t('error.unknown')} />
+      </div>
+    );
+  }
+  if (membershipState.kind === 'no_workspace') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState
+          title={t('autopilots.noWorkspace.title')}
+          description={t('autopilots.noWorkspace.description')}
+        />
+      </div>
+    );
+  }
   if (errorKey !== null) {
     return (
       <div className="mesh-autopilots__page">
@@ -145,7 +156,7 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
       </div>
     );
   }
-  if (run === null) {
+  if (membershipState.kind === 'loading' || run === null) {
     return (
       <div className="mesh-autopilots__page">
         <Skeleton loadingLabel={t('autopilots.loading')} />
@@ -167,7 +178,16 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => navigate(`/autopilots/${run.autopilot_id}`)}
+            onClick={() =>
+              navigate(
+                membership === null
+                  ? `/autopilots/${run.autopilot_id}`
+                  : workspaceRoute(
+                      membership.workspace_slug,
+                      `/automations/autopilots/${run.autopilot_id}`,
+                    ),
+              )
+            }
           >
             {t('autopilots.runDetail.backToRule')}
           </Button>
@@ -191,7 +211,7 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
               </Button>
             </>
           )}
-          {CANCELLABLE_STATUSES.has(run.status) && (
+          {canManage && CANCELLABLE_STATUSES.has(run.status) && (
             <Button
               variant="secondary"
               size="sm"
@@ -237,7 +257,16 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => navigate(`/executions/${run.execution_id}`)}
+                  onClick={() =>
+                    navigate(
+                      membership === null
+                        ? `/executions/${run.execution_id}`
+                        : workspaceRoute(
+                            membership.workspace_slug,
+                            `/executions/${run.execution_id}`,
+                          ),
+                    )
+                  }
                 >
                   {run.execution_id}
                 </Button>
@@ -315,7 +344,7 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
             </thead>
             <tbody>
               {run.artifacts.map((artifact) => {
-                const link = artifactLink(run, artifact);
+                const link = artifactLink(run, artifact, membership?.workspace_slug ?? null);
                 return (
                   <tr key={artifact.id}>
                     <td>{t(`autopilots.artifact.${artifact.artifact_type}`)}</td>

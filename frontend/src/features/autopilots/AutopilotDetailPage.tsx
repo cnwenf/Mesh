@@ -4,7 +4,7 @@
  * 订阅 autopilot:{id} 频道:autopilot.updated 重拉配置,
  * autopilot_runs.status_changed 重拉时间线(§3.5)。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
 import {
@@ -20,8 +20,7 @@ import {
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   autopilotChannel,
   deleteAutopilot,
@@ -52,8 +51,11 @@ export function AutopilotDetailPage(): React.JSX.Element {
   const navigate = useNavigate();
   const realtime = useRealtimeContext();
   const { autopilotId } = useParams<{ autopilotId: string }>();
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = membership?.role === 'owner' || membership?.role === 'admin';
 
-  const [membership, setMembership] = useState<Membership | null>(null);
   const [rule, setRule] = useState<AutopilotRule | null>(null);
   const [runs, setRuns] = useState<AutopilotRun[] | null>(null);
   const [preview, setPreview] = useState<string[] | null>(null);
@@ -67,21 +69,22 @@ export function AutopilotDetailPage(): React.JSX.Element {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   useEffect(() => {
+    if (membershipState.kind === 'loading') return;
+    if (membershipState.kind !== 'ready' || membership === null) {
+      setErrorKey('error.unknown');
+      return;
+    }
     let cancelled = false;
-    const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
     void (async () => {
       try {
-        const me = await fetchMe(client);
-        const workspace = activeWorkspace(me.memberships);
-        if (cancelled || workspace === null || autopilotId === undefined) return;
-        setMembership(workspace);
-        const loaded = await getAutopilot(client, workspace.workspace_id, autopilotId);
+        if (autopilotId === undefined) return;
+        const loaded = await getAutopilot(client, membership.workspace_id, autopilotId);
         if (cancelled) return;
         setRule(loaded);
         setErrorKey(null);
         if (loaded.trigger_type === 'schedule') {
           try {
-            const schedule = await previewSchedule(client, workspace.workspace_id, loaded.id, 5);
+            const schedule = await previewSchedule(client, membership.workspace_id, loaded.id, 5);
             if (!cancelled) setPreview([...schedule.next_runs]);
           } catch {
             setPreview(null);
@@ -95,12 +98,11 @@ export function AutopilotDetailPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [autopilotId]);
+  }, [client, membership, membershipState.kind, autopilotId]);
 
   useEffect(() => {
     if (membership === null || autopilotId === undefined) return;
     let cancelled = false;
-    const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
     void (async () => {
       try {
         const listing = await listAutopilotRuns(client, membership!.workspace_id, autopilotId, {
@@ -116,7 +118,7 @@ export function AutopilotDetailPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [membership, autopilotId, statusFilter, reloadRunsKey]);
+  }, [client, membership, autopilotId, statusFilter, reloadRunsKey]);
 
   useEffect(() => {
     if (realtime === null || autopilotId === undefined) return;
@@ -125,7 +127,6 @@ export function AutopilotDetailPage(): React.JSX.Element {
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (frame.channel !== channel) return;
       if (frame.event === 'autopilot.updated') {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         if (membership !== null) {
           void getAutopilot(client, membership!.workspace_id, autopilotId)
             .then(setRule)
@@ -138,14 +139,13 @@ export function AutopilotDetailPage(): React.JSX.Element {
       unsubscribe();
       realtime.client.unsubscribe(channel);
     };
-  }, [realtime, autopilotId, membership]);
+  }, [client, realtime, autopilotId, membership]);
 
   const runAction = useCallback(
     async (action: () => Promise<unknown>, successMessage: string) => {
       try {
         await action();
         toast.addToast(successMessage, { tone: 'success', closeLabel: t('common.close') });
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         if (membership !== null && autopilotId !== undefined) {
           setRule(await getAutopilot(client, membership!.workspace_id, autopilotId));
         }
@@ -157,7 +157,7 @@ export function AutopilotDetailPage(): React.JSX.Element {
         });
       }
     },
-    [membership, autopilotId, toast, t],
+    [client, membership, autopilotId, toast, t],
   );
 
   const submitTestRun = useCallback(async () => {
@@ -166,7 +166,6 @@ export function AutopilotDetailPage(): React.JSX.Element {
     try {
       let payload: Record<string, unknown> = {};
       if (testPayload.trim()) payload = JSON.parse(testPayload) as Record<string, unknown>;
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       const result = await testRunAutopilot(client, membership!.workspace_id, autopilotId, {
         simulate_trigger_payload: payload,
         dry_run: testDryRun,
@@ -181,7 +180,16 @@ export function AutopilotDetailPage(): React.JSX.Element {
           tone: 'success',
           closeLabel: t('common.close'),
         });
-        if (result.run_id) navigate(`/autopilots/runs/${result.run_id}`);
+        if (result.run_id) {
+          navigate(
+            membership === null
+              ? `/autopilots/runs/${result.run_id}`
+              : workspaceRoute(
+                  membership.workspace_slug,
+                  `/automations/autopilots/runs/${result.run_id}`,
+                ),
+          );
+        }
       }
       setTestDialogOpen(false);
       setReloadRunsKey((key) => key + 1);
@@ -193,7 +201,23 @@ export function AutopilotDetailPage(): React.JSX.Element {
     } finally {
       setTestBusy(false);
     }
-  }, [membership, autopilotId, testPayload, testDryRun, toast, t, navigate]);
+  }, [client, membership, autopilotId, testPayload, testDryRun, toast, t, navigate]);
+
+  const listPath =
+    membership === null
+      ? '/autopilots'
+      : workspaceRoute(membership.workspace_slug, '/automations/autopilots');
+
+  if (membershipState.kind === 'no_workspace') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState
+          title={t('autopilots.noWorkspace.title')}
+          description={t('autopilots.noWorkspace.description')}
+        />
+      </div>
+    );
+  }
 
   if (errorKey !== null) {
     return (
@@ -201,7 +225,9 @@ export function AutopilotDetailPage(): React.JSX.Element {
         <ErrorState
           title={t(errorKey)}
           retryLabel={t('common.retry')}
-          onRetry={() => navigate('/autopilots')}
+          onRetry={
+            membershipState.kind === 'error' ? membershipState.retry : () => navigate(listPath)
+          }
         />
       </div>
     );
@@ -223,68 +249,79 @@ export function AutopilotDetailPage(): React.JSX.Element {
         <h1 className="mesh-autopilots__title" data-testid="autopilot-detail-name">
           {rule.name}
         </h1>
-        <div className="mesh-autopilots__toolbar">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => navigate(`/autopilots/${rule.id}/edit`)}
-          >
-            {t('autopilots.actions.edit')}
-          </Button>
-          {rule.status === 'active' && (
+        {canManage ? (
+          <div className="mesh-autopilots__toolbar">
             <Button
               variant="secondary"
               size="sm"
               onClick={() =>
-                membership !== null &&
-                runAction(
-                  () =>
-                    pauseAutopilot(
-                      new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
-                      membership!.workspace_id,
-                      rule.id,
-                    ),
-                  t('autopilots.toast.paused'),
+                navigate(
+                  membership === null
+                    ? `/autopilots/${rule.id}/edit`
+                    : workspaceRoute(
+                        membership.workspace_slug,
+                        `/automations/autopilots/${rule.id}/edit`,
+                      ),
                 )
               }
-              data-testid="autopilot-detail-pause"
             >
-              {t('autopilots.actions.pause')}
+              {t('autopilots.actions.edit')}
             </Button>
-          )}
-          {rule.status === 'paused' && (
+            {rule.status === 'active' && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  membership !== null &&
+                  runAction(
+                    () =>
+                      pauseAutopilot(
+                        new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
+                        membership!.workspace_id,
+                        rule.id,
+                      ),
+                    t('autopilots.toast.paused'),
+                  )
+                }
+                data-testid="autopilot-detail-pause"
+              >
+                {t('autopilots.actions.pause')}
+              </Button>
+            )}
+            {rule.status === 'paused' && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  membership !== null &&
+                  runAction(
+                    () =>
+                      resumeAutopilot(
+                        new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
+                        membership!.workspace_id,
+                        rule.id,
+                      ),
+                    t('autopilots.toast.resumed'),
+                  )
+                }
+                data-testid="autopilot-detail-resume"
+              >
+                {t('autopilots.actions.resume')}
+              </Button>
+            )}
             <Button
-              variant="secondary"
+              variant="primary"
               size="sm"
-              onClick={() =>
-                membership !== null &&
-                runAction(
-                  () =>
-                    resumeAutopilot(
-                      new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
-                      membership!.workspace_id,
-                      rule.id,
-                    ),
-                  t('autopilots.toast.resumed'),
-                )
-              }
-              data-testid="autopilot-detail-resume"
+              onClick={() => setTestDialogOpen(true)}
+              data-testid="autopilot-detail-test-run"
             >
-              {t('autopilots.actions.resume')}
+              {t('autopilots.actions.testRun')}
             </Button>
-          )}
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setTestDialogOpen(true)}
-            data-testid="autopilot-detail-test-run"
-          >
-            {t('autopilots.actions.testRun')}
-          </Button>
-          <Button variant="danger" size="sm" onClick={() => setConfirmDeleteOpen(true)}>
-            {t('autopilots.actions.delete')}
-          </Button>
-        </div>
+            <Button variant="danger" size="sm" onClick={() => setConfirmDeleteOpen(true)}>
+              {t('autopilots.actions.delete')}
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <div className="mesh-autopilots__card">
@@ -405,7 +442,16 @@ export function AutopilotDetailPage(): React.JSX.Element {
                   key={run.id}
                   className="mesh-autopilots__row"
                   data-testid={`autopilot-run-row-${run.id}`}
-                  onClick={() => navigate(`/autopilots/runs/${run.id}`)}
+                  onClick={() =>
+                    navigate(
+                      membership === null
+                        ? `/autopilots/runs/${run.id}`
+                        : workspaceRoute(
+                            membership.workspace_slug,
+                            `/automations/autopilots/runs/${run.id}`,
+                          ),
+                    )
+                  }
                 >
                   <td>
                     <StatusDot
@@ -426,76 +472,79 @@ export function AutopilotDetailPage(): React.JSX.Element {
         )}
       </div>
 
-      <Dialog
-        open={testDialogOpen}
-        onClose={() => setTestDialogOpen(false)}
-        title={t('autopilots.testRun.dialogTitle')}
-        closeLabel={t('common.close')}
-      >
-        <div className="mesh-autopilots__field">
-          <label htmlFor="autopilot-test-payload">{t('autopilots.testRun.payloadLabel')}</label>
-          <textarea
-            id="autopilot-test-payload"
-            rows={5}
-            value={testPayload}
-            onChange={(event) => setTestPayload(event.target.value)}
-            data-testid="autopilot-test-payload"
-          />
-        </div>
-        <label>
-          <input
-            type="checkbox"
-            checked={testDryRun}
-            onChange={(event) => setTestDryRun(event.target.checked)}
-            data-testid="autopilot-test-dry-run"
-          />{' '}
-          {t('autopilots.testRun.dryRunLabel')}
-        </label>
-        <div className="mesh-autopilots__footer">
-          <Button variant="ghost" onClick={() => setTestDialogOpen(false)}>
-            {t('common.cancel')}
-          </Button>
-          <Button
-            variant="primary"
-            isLoading={testBusy}
-            onClick={() => void submitTestRun()}
-            data-testid="autopilot-test-submit"
-          >
-            {t('autopilots.testRun.submit')}
-          </Button>
-        </div>
-      </Dialog>
+      {canManage ? (
+        <Dialog
+          open={testDialogOpen}
+          onClose={() => setTestDialogOpen(false)}
+          title={t('autopilots.testRun.dialogTitle')}
+          closeLabel={t('common.close')}
+        >
+          <div className="mesh-autopilots__field">
+            <label htmlFor="autopilot-test-payload">{t('autopilots.testRun.payloadLabel')}</label>
+            <textarea
+              id="autopilot-test-payload"
+              rows={5}
+              value={testPayload}
+              onChange={(event) => setTestPayload(event.target.value)}
+              data-testid="autopilot-test-payload"
+            />
+          </div>
+          <label>
+            <input
+              type="checkbox"
+              checked={testDryRun}
+              onChange={(event) => setTestDryRun(event.target.checked)}
+              data-testid="autopilot-test-dry-run"
+            />{' '}
+            {t('autopilots.testRun.dryRunLabel')}
+          </label>
+          <div className="mesh-autopilots__footer">
+            <Button variant="ghost" onClick={() => setTestDialogOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              isLoading={testBusy}
+              onClick={() => void submitTestRun()}
+              data-testid="autopilot-test-submit"
+            >
+              {t('autopilots.testRun.submit')}
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
 
-      <Dialog
-        open={confirmDeleteOpen}
-        onClose={() => setConfirmDeleteOpen(false)}
-        title={t('autopilots.delete.dialogTitle')}
-        closeLabel={t('common.close')}
-      >
-        <p>{t('autopilots.delete.confirmText')}</p>
-        <div className="mesh-autopilots__footer">
-          <Button variant="ghost" onClick={() => setConfirmDeleteOpen(false)}>
-            {t('common.cancel')}
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => {
-              const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
-              void deleteAutopilot(client, membership!.workspace_id, rule.id)
-                .then(() => navigate('/autopilots'))
-                .catch((error: unknown) =>
-                  toast.addToast(
-                    t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-                    { tone: 'danger', closeLabel: t('common.close') },
-                  ),
-                );
-            }}
-            data-testid="autopilot-delete-confirm"
-          >
-            {t('common.confirm')}
-          </Button>
-        </div>
-      </Dialog>
+      {canManage ? (
+        <Dialog
+          open={confirmDeleteOpen}
+          onClose={() => setConfirmDeleteOpen(false)}
+          title={t('autopilots.delete.dialogTitle')}
+          closeLabel={t('common.close')}
+        >
+          <p>{t('autopilots.delete.confirmText')}</p>
+          <div className="mesh-autopilots__footer">
+            <Button variant="ghost" onClick={() => setConfirmDeleteOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                void deleteAutopilot(client, membership!.workspace_id, rule.id)
+                  .then(() => navigate(listPath))
+                  .catch((error: unknown) =>
+                    toast.addToast(
+                      t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
+                      { tone: 'danger', closeLabel: t('common.close') },
+                    ),
+                  );
+              }}
+              data-testid="autopilot-delete-confirm"
+            >
+              {t('common.confirm')}
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

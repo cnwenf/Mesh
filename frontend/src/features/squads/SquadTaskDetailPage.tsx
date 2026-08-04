@@ -12,8 +12,7 @@ import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import { renderMarkdownPreview } from '../comments/markdown';
 import {
   approvePlan,
@@ -54,9 +53,7 @@ interface TreeNodeProps {
 function TaskTreeNode(props: TreeNodeProps): React.JSX.Element {
   const t = useT();
   const { task, depth, index } = props;
-  const blockers = task.blocked_by
-    .map((id) => index.get(id)?.title_snapshot ?? id)
-    .join(', ');
+  const blockers = task.blocked_by.map((id) => index.get(id)?.title_snapshot ?? id).join(', ');
   return (
     <>
       <li
@@ -64,7 +61,10 @@ function TaskTreeNode(props: TreeNodeProps): React.JSX.Element {
         style={{ paddingInlineStart: `calc(var(--space-3) * ${depth})` }}
         data-testid={`squad-tree-node-${task.id}`}
       >
-        <StatusDot tone={TASK_STATUS_TONE[task.status]} label={t(`squads.task.status.${task.status}`)} />
+        <StatusDot
+          tone={TASK_STATUS_TONE[task.status]}
+          label={t(`squads.task.status.${task.status}`)}
+        />
         <span className="mesh-squads__tree-title">{task.title_snapshot ?? task.id}</span>
         <span className="mesh-squads__tree-assignee">
           {task.assignee !== null ? task.assignee.name : t('squads.task.unassigned')}
@@ -96,8 +96,9 @@ export function SquadTaskDetailPage(): React.JSX.Element {
   const { squadId, taskId } = useParams<{ squadId: string; taskId: string }>();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [task, setTask] = useState<SquadTask | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,19 +109,6 @@ export function SquadTaskDetailPage(): React.JSX.Element {
   tRef.current = t;
   const taskRef = useRef<SquadTask | null>(null);
   taskRef.current = task;
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const me = await fetchMe(client);
-      const active = activeWorkspace(me.memberships);
-      if (cancelled) return;
-      setWorkspace(active);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   const load = useCallback(async (): Promise<void> => {
     if (workspace === null || squadId === undefined || taskId === undefined) {
@@ -203,7 +191,10 @@ export function SquadTaskDetailPage(): React.JSX.Element {
       if (workspace === null || squadId === undefined) return;
       try {
         await moveTaskStatus(client, workspace.workspace_id, squadId, movedTaskId, { status });
-        toast.addToast(t('squads.kanban.moved'), { tone: 'success', closeLabel: t('common.close') });
+        toast.addToast(t('squads.kanban.moved'), {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        });
         setReloadKey((k) => k + 1);
       } catch (err: unknown) {
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -240,7 +231,10 @@ export function SquadTaskDetailPage(): React.JSX.Element {
     if (workspace === null || squadId === undefined || taskId === undefined) return;
     try {
       await cancelTask(client, workspace.workspace_id, squadId, taskId);
-      toast.addToast(t('squads.toast.cancelled'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('squads.toast.cancelled'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
       setReloadKey((k) => k + 1);
     } catch (err: unknown) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -248,6 +242,12 @@ export function SquadTaskDetailPage(): React.JSX.Element {
     }
   }, [client, workspace, squadId, taskId, toast, t]);
 
+  if (membershipState.kind === 'error') {
+    return <ErrorState title={t('state.errorTitle')} description={t('state.errorDescription')} />;
+  }
+  if (membershipState.kind === 'no_workspace') {
+    return <ErrorState title={t('state.emptyTitle')} description={t('squads.noWorkspace')} />;
+  }
   if (error !== null) {
     return (
       <ErrorState
@@ -258,7 +258,7 @@ export function SquadTaskDetailPage(): React.JSX.Element {
       />
     );
   }
-  if (isLoading || task === null) {
+  if (membershipState.kind === 'loading' || isLoading || task === null) {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 
@@ -266,7 +266,9 @@ export function SquadTaskDetailPage(): React.JSX.Element {
   const doneCount = progress?.done ?? 0;
   const totalCount = progress?.total ?? 0;
   const progressPct =
-    totalCount > 0 ? Math.min(PROGRESS_FULL, Math.round((doneCount / totalCount) * PROGRESS_FULL)) : 0;
+    totalCount > 0
+      ? Math.min(PROGRESS_FULL, Math.round((doneCount / totalCount) * PROGRESS_FULL))
+      : 0;
   const index = flattenTree(task);
   /** 看板用子任务(不含根):整树节点剔除根本身。 */
   const subtasks = [...index.values()].filter((node) => node.id !== task.id);
@@ -278,15 +280,30 @@ export function SquadTaskDetailPage(): React.JSX.Element {
   return (
     <div className="mesh-squads" data-testid="squad-task-page">
       <header className="mesh-squads__head">
-        <Link to={`/squads/${task.squad_id}`} className="mesh-squads__back">
+        <Link
+          to={
+            workspace === null
+              ? `/squads/${task.squad_id}`
+              : workspaceRoute(workspace.workspace_slug, `/squads/${task.squad_id}`)
+          }
+          className="mesh-squads__back"
+        >
           {t('squads.back')}
         </Link>
         <h1 data-testid="squad-task-title">{task.title_snapshot ?? task.id}</h1>
         <span data-testid="squad-task-status">
-          <StatusDot tone={TASK_STATUS_TONE[task.status]} label={t(`squads.task.status.${task.status}`)} />
+          <StatusDot
+            tone={TASK_STATUS_TONE[task.status]}
+            label={t(`squads.task.status.${task.status}`)}
+          />
         </span>
         {!isTerminal ? (
-          <Button variant="danger" size="sm" onClick={() => void onCancel()} data-testid="squad-task-cancel">
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => void onCancel()}
+            data-testid="squad-task-cancel"
+          >
             {t('squads.task.cancel')}
           </Button>
         ) : null}
@@ -324,7 +341,11 @@ export function SquadTaskDetailPage(): React.JSX.Element {
               <Button onClick={() => void decide(true)} data-testid="squad-task-approve">
                 {t('squads.task.approve')}
               </Button>
-              <Button variant="danger" onClick={() => void decide(false)} data-testid="squad-task-reject">
+              <Button
+                variant="danger"
+                onClick={() => void decide(false)}
+                data-testid="squad-task-reject"
+              >
                 {t('squads.task.reject')}
               </Button>
             </div>

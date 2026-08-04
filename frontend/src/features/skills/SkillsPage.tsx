@@ -8,6 +8,7 @@ import { Link, useNavigate } from 'react-router';
 import { MeshApiClient, getToken, useCursorPagination } from '../../api';
 import {
   Button,
+  DataView,
   Dialog,
   EmptyState,
   ErrorState,
@@ -21,8 +22,7 @@ import type { IconName } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import { createSkill, listSkills, workspaceSkillsChannel } from './api';
 import { ImportWizard } from './ImportWizard';
 import type { SkillSourceType } from './types';
@@ -42,29 +42,15 @@ export function SkillsPage(): React.JSX.Element {
   const navigate = useNavigate();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
 
-  const [membership, setMembership] = useState<Membership | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
   const [sourceType, setSourceType] = useState('all');
   const [reloadKey, setReloadKey] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setMembership(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError(t('skills.loadError'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, t]);
 
   const workspaceId = membership?.workspace_id ?? null;
   const canManage = membership?.role === 'admin' || membership?.role === 'owner';
@@ -94,10 +80,16 @@ export function SkillsPage(): React.JSX.Element {
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (String(frame.channel) !== channel) return;
       if (frame.event === 'skill.approval_required') {
-        toast.addToast(t('skills.approvalRequiredToast'), { tone: 'info', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.approvalRequiredToast'), {
+          tone: 'info',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
       if (frame.event === 'skill.update_available') {
-        toast.addToast(t('skills.updateAvailableToast'), { tone: 'info', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.updateAvailableToast'), {
+          tone: 'info',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
       setReloadKey((k) => k + 1);
     });
@@ -119,25 +111,49 @@ export function SkillsPage(): React.JSX.Element {
         });
         setCreateOpen(false);
         setReloadKey((k) => k + 1);
-        navigate(`/skills/${created.id}`);
+        navigate(
+          membership === null
+            ? `/skills/${created.id}`
+            : workspaceRoute(membership.workspace_slug, `/automations/skills/${created.id}`),
+        );
       } catch (error) {
         toast.addToast(t('error.conflict'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
         throw error;
       }
     },
-    [client, workspaceId, navigate, t, toast],
+    [client, workspaceId, membership, navigate, t, toast],
   );
 
-  if (loadError !== null) {
-    return <ErrorState title={t('state.errorTitle')} description={loadError} />;
-  }
+  const marketplacePath =
+    membership === null
+      ? '/skills/marketplace'
+      : workspaceRoute(membership.workspace_slug, '/automations/skills/marketplace');
+  const skillPath = (skillId: string): string =>
+    membership === null
+      ? `/skills/${skillId}`
+      : workspaceRoute(membership.workspace_slug, `/automations/skills/${skillId}`);
 
   return (
-    <div className="mesh-skills">
-      <header className="mesh-skills__header">
-        <h1 className="mesh-skills__title" data-testid="skills-page-title">
-          {t('skills.pageTitle')}
-        </h1>
+    <DataView
+      className="mesh-skills"
+      title={t('skills.pageTitle')}
+      actions={
+        canManage ? (
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setImportOpen(true)}
+              data-testid="skills-import-open"
+            >
+              {t('skills.importButton')}
+            </Button>
+            <Button onClick={() => setCreateOpen(true)} data-testid="skills-create-open">
+              {t('skills.createButton')}
+            </Button>
+          </>
+        ) : undefined
+      }
+      toolbar={
         <div className="mesh-skills__toolbar">
           <Input
             label={t('skills.searchPlaceholder')}
@@ -170,24 +186,40 @@ export function SkillsPage(): React.JSX.Element {
             <option value="deprecated">{t('skills.status.deprecated')}</option>
             <option value="disabled">{t('skills.status.disabled')}</option>
           </Select>
-          {canManage ? (
-            <>
-              <Button variant="secondary" onClick={() => setImportOpen(true)} data-testid="skills-import-open">
-                {t('skills.importButton')}
-              </Button>
-              <Button onClick={() => setCreateOpen(true)} data-testid="skills-create-open">
-                {t('skills.createButton')}
-              </Button>
-            </>
-          ) : null}
-          <Link className="mesh-skills__market-link" to="/skills/marketplace" data-testid="skills-market-link">
+          <Link
+            className="mesh-skills__market-link"
+            to={marketplacePath}
+            data-testid="skills-market-link"
+          >
             {t('skills.marketplaceLink')}
           </Link>
         </div>
-      </header>
+      }
+      footer={
+        skills.hasMore ? (
+          <div className="mesh-skills__more">
+            <Button
+              variant="secondary"
+              onClick={() => void skills.fetchNext()}
+              disabled={skills.isFetchingNext}
+              data-testid="skills-load-more"
+            >
+              {t('skills.loadMore')}
+            </Button>
+          </div>
+        ) : undefined
+      }
+    >
+      <span className="sr-only" data-testid="skills-page-title">
+        {t('skills.pageTitle')}
+      </span>
 
-      {skills.isLoading ? (
+      {membershipState.kind === 'no_workspace' ? (
+        <EmptyState title={t('state.emptyTitle')} description={t('members.noWorkspace')} />
+      ) : membershipState.kind === 'loading' || skills.isLoading ? (
         <Skeleton loadingLabel={t('state.loading')} />
+      ) : membershipState.kind === 'error' ? (
+        <ErrorState title={t('state.errorTitle')} description={t('skills.loadError')} />
       ) : skills.error !== null ? (
         <ErrorState title={t('state.errorTitle')} description={skills.error.message} />
       ) : skills.items.length === 0 ? (
@@ -196,7 +228,7 @@ export function SkillsPage(): React.JSX.Element {
         <ul className="mesh-skills__grid" data-testid="skills-grid">
           {skills.items.map((skill) => (
             <li key={skill.id} className="mesh-skills__card" data-testid={`skill-card-${skill.id}`}>
-              <Link className="mesh-skills__card-link" to={`/skills/${skill.id}`}>
+              <Link className="mesh-skills__card-link" to={skillPath(skill.id)}>
                 <span className="mesh-skills__card-name">
                   <span className="mesh-skills__card-badge" title={t('skills.trustBadge')}>
                     <Icon name={TRUST_BADGES[skill.source_type ?? 'user'] ?? 'user'} size={16} />
@@ -227,7 +259,9 @@ export function SkillsPage(): React.JSX.Element {
                     </span>
                   ) : null}
                   <span className="mesh-skills__card-source">
-                    {skill.source_type === null ? '' : t(`skills.source.${skill.source_type as SkillSourceType}`)}
+                    {skill.source_type === null
+                      ? ''
+                      : t(`skills.source.${skill.source_type as SkillSourceType}`)}
                   </span>
                 </span>
               </Link>
@@ -235,19 +269,6 @@ export function SkillsPage(): React.JSX.Element {
           ))}
         </ul>
       )}
-
-      {skills.hasMore ? (
-        <div className="mesh-skills__more">
-          <Button
-            variant="secondary"
-            onClick={() => void skills.fetchNext()}
-            disabled={skills.isFetchingNext}
-            data-testid="skills-load-more"
-          >
-            {t('skills.loadMore')}
-          </Button>
-        </div>
-      ) : null}
 
       {createOpen && workspaceId !== null ? (
         <CreateSkillDialog onClose={() => setCreateOpen(false)} onCreate={onCreate} />
@@ -262,7 +283,7 @@ export function SkillsPage(): React.JSX.Element {
           }}
         />
       ) : null}
-    </div>
+    </DataView>
   );
 }
 
@@ -293,7 +314,10 @@ function CreateSkillDialog({
         name.trim(),
         slug,
         summary.trim(),
-        tags.split(',').map((tag) => tag.trim()).filter((tag) => tag !== ''),
+        tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter((tag) => tag !== ''),
       );
     } catch {
       setError(t('skills.createFailed'));
@@ -303,18 +327,47 @@ function CreateSkillDialog({
   };
 
   return (
-    <Dialog open title={t('skills.createTitle')} onClose={onClose} closeLabel={t('a11y.closeDialog')}>
+    <Dialog
+      open
+      title={t('skills.createTitle')}
+      onClose={onClose}
+      closeLabel={t('a11y.closeDialog')}
+    >
       <div className="mesh-skills__form">
-        <Input label={t('skills.fieldName')} value={name} onChange={(e) => setName(e.target.value)} data-testid="skill-create-name" />
-        <Input label={t('skills.fieldSlug')} value={slug} onChange={(e) => setSlug(e.target.value)} data-testid="skill-create-slug" />
-        <Input label={t('skills.fieldSummary')} value={summary} onChange={(e) => setSummary(e.target.value)} data-testid="skill-create-summary" />
-        <Input label={t('skills.fieldTags')} value={tags} onChange={(e) => setTags(e.target.value)} data-testid="skill-create-tags" />
+        <Input
+          label={t('skills.fieldName')}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          data-testid="skill-create-name"
+        />
+        <Input
+          label={t('skills.fieldSlug')}
+          value={slug}
+          onChange={(e) => setSlug(e.target.value)}
+          data-testid="skill-create-slug"
+        />
+        <Input
+          label={t('skills.fieldSummary')}
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+          data-testid="skill-create-summary"
+        />
+        <Input
+          label={t('skills.fieldTags')}
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          data-testid="skill-create-tags"
+        />
         {error !== null ? <p className="mesh-skills__form-error">{error}</p> : null}
         <div className="mesh-skills__form-actions">
           <Button variant="secondary" onClick={onClose}>
             {t('skills.cancel')}
           </Button>
-          <Button onClick={() => void submit()} disabled={submitting} data-testid="skill-create-submit">
+          <Button
+            onClick={() => void submit()}
+            disabled={submitting}
+            data-testid="skill-create-submit"
+          >
             {t('skills.createSubmit')}
           </Button>
         </div>

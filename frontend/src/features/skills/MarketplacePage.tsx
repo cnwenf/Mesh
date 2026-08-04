@@ -17,8 +17,7 @@ import {
 } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
 import { listMarketplace } from './api';
 import { ImportWizard } from './ImportWizard';
 import type { MarketplaceEntry } from './types';
@@ -28,27 +27,14 @@ export function MarketplacePage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
-  const [membership, setMembership] = useState<Membership | null>(null);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
   const [entries, setEntries] = useState<MarketplaceEntry[]>([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [importEntry, setImportEntry] = useState<MarketplaceEntry | null>(null);
   const [previewEntry, setPreviewEntry] = useState<MarketplaceEntry | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setMembership(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        /* keep empty state when there is no membership */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   const workspaceId = membership?.workspace_id ?? null;
   const canManage = membership?.role === 'admin' || membership?.role === 'owner';
@@ -89,16 +75,27 @@ export function MarketplacePage(): React.JSX.Element {
         </div>
       </header>
 
-      {loading ? (
+      {membershipState.kind === 'no_workspace' ? (
+        <EmptyState title={t('state.emptyTitle')} description={t('members.noWorkspace')} />
+      ) : membershipState.kind === 'error' ? (
+        <ErrorState title={t('state.errorTitle')} description={t('skills.marketplaceLoadError')} />
+      ) : membershipState.kind === 'loading' || loading ? (
         <Skeleton loadingLabel={t('state.loading')} />
       ) : error !== null ? (
         <ErrorState title={t('state.errorTitle')} description={error} />
       ) : entries.length === 0 ? (
-        <EmptyState title={t('skills.marketplaceEmptyTitle')} description={t('skills.marketplaceEmptyDescription')} />
+        <EmptyState
+          title={t('skills.marketplaceEmptyTitle')}
+          description={t('skills.marketplaceEmptyDescription')}
+        />
       ) : (
         <ul className="mesh-skills__grid" data-testid="marketplace-grid">
           {entries.map((entry) => (
-            <li key={entry.id} className="mesh-skills__card" data-testid={`market-entry-${entry.id}`}>
+            <li
+              key={entry.id}
+              className="mesh-skills__card"
+              data-testid={`market-entry-${entry.id}`}
+            >
               <span className="mesh-skills__card-name">
                 {entry.certified ? (
                   <span className="mesh-skills__cert-flag" title={t('skills.certified')}>
@@ -127,7 +124,9 @@ export function MarketplacePage(): React.JSX.Element {
               </span>
               <div className="mesh-skills__card-actions">
                 {entry.has_scripts ? (
-                  <span className="mesh-skills__needs-review">{t('skills.marketplaceNeedsReview')}</span>
+                  <span className="mesh-skills__needs-review">
+                    {t('skills.marketplaceNeedsReview')}
+                  </span>
                 ) : null}
                 <Button
                   variant="secondary"
@@ -141,7 +140,10 @@ export function MarketplacePage(): React.JSX.Element {
                     variant="secondary"
                     onClick={() => {
                       if (entry.manifest_url === '') {
-                        toast.addToast(t('skills.marketplaceNoManifest'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                        toast.addToast(t('skills.marketplaceNoManifest'), {
+                          tone: 'danger',
+                          closeLabel: t('a11y.closeDialog'),
+                        });
                         return;
                       }
                       setImportEntry(entry);
@@ -187,7 +189,9 @@ export function MarketplacePage(): React.JSX.Element {
                 {previewEntry.rating.toFixed(1)}
               </dd>
               <dt>{t('skills.marketplaceCertified')}</dt>
-              <dd>{previewEntry.certified ? t('skills.marketplaceYes') : t('skills.marketplaceNo')}</dd>
+              <dd>
+                {previewEntry.certified ? t('skills.marketplaceYes') : t('skills.marketplaceNo')}
+              </dd>
               <dt>{t('skills.marketplaceScripts')}</dt>
               <dd>
                 {previewEntry.has_scripts ? (
@@ -206,7 +210,10 @@ export function MarketplacePage(): React.JSX.Element {
                   const e = previewEntry;
                   setPreviewEntry(null);
                   if (e.manifest_url === '') {
-                    toast.addToast(t('skills.marketplaceNoManifest'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                    toast.addToast(t('skills.marketplaceNoManifest'), {
+                      tone: 'danger',
+                      closeLabel: t('a11y.closeDialog'),
+                    });
                     return;
                   }
                   setImportEntry(e);

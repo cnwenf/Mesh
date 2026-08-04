@@ -99,13 +99,13 @@ interface Recorded {
   method: string;
 }
 
-function setup(runtime: Record<string, unknown> = RUNTIME): Recorded[] {
+function setup(runtime: Record<string, unknown> = RUNTIME, me = ME): Recorded[] {
   const calls: Recorded[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
-    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
     if (url.includes('/tokens:rotate')) {
       return fakeResponse({ body: { data: { runtime_token: 'rt_live_NEW' } } });
     }
@@ -154,11 +154,15 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
       <Route
         path="/runtimes/:runtimeId"
         element={
-          realtime === null ? page : (
+          realtime === null ? (
+            page
+          ) : (
             <RealtimeContext.Provider value={realtime.value}>{page}</RealtimeContext.Provider>
           )
         }
       />
+      <Route path="/w/:workspaceSlug/executions/:executionId" element={<div>execution-page</div>} />
+      <Route path="/w/:workspaceSlug/automations/runtimes" element={<div>runtimes-page</div>} />
     </Routes>,
     { route: '/runtimes/r-1' },
   );
@@ -283,7 +287,9 @@ describe('RuntimeDetailPage', () => {
     await screen.findByTestId('runtime-detail-name');
     expect(realtime.subscribed).toContain('workspace:ws-1:runtimes');
     expect(realtime.subscribed).toContain('workspace:ws-1:executions');
-    const before = calls.filter((c) => c.url.includes('/runtimes/r-1') && c.method === 'GET').length;
+    const before = calls.filter(
+      (c) => c.url.includes('/runtimes/r-1') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -398,7 +404,9 @@ describe('RuntimeDetailPage', () => {
     const realtime = makeRealtime();
     renderPage(realtime);
     await screen.findByTestId('runtime-detail-name');
-    const before = calls.filter((c) => c.url.includes('/runtimes/r-1') && c.method === 'GET').length;
+    const before = calls.filter(
+      (c) => c.url.includes('/runtimes/r-1') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -429,7 +437,9 @@ describe('RuntimeDetailPage', () => {
     const realtime = makeRealtime();
     renderPage(realtime);
     await screen.findByTestId('runtime-detail-name');
-    const before = calls.filter((c) => c.url.includes('/runtimes/r-1') && c.method === 'GET').length;
+    const before = calls.filter(
+      (c) => c.url.includes('/runtimes/r-1') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -551,5 +561,41 @@ describe('RuntimeDetailPage', () => {
     vi.stubGlobal('fetch', impl);
     renderPage();
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+  });
+
+  it('members can cancel executions but cannot manage the runtime', async () => {
+    setup(RUNTIME, {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    });
+    renderPage();
+
+    await screen.findByTestId('runtime-detail-name');
+    expect(screen.getByTestId('runtime-cancel-e-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('runtime-detail-pause')).toBeNull();
+    expect(screen.queryByTestId('runtime-detail-rotate')).toBeNull();
+  });
+
+  it('guests cannot cancel executions or manage the runtime', async () => {
+    setup(RUNTIME, {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'guest' }],
+    });
+    renderPage();
+
+    await screen.findByTestId('runtime-detail-name');
+    expect(screen.queryByTestId('runtime-cancel-e-1')).toBeNull();
+    expect(screen.queryByTestId('runtime-detail-pause')).toBeNull();
+    expect(screen.queryByTestId('runtime-detail-rotate')).toBeNull();
+  });
+
+  it('shows the no-workspace state without loading runtime data', async () => {
+    const calls = setup(RUNTIME, { ...ME, memberships: [] });
+    renderPage();
+
+    expect(
+      await screen.findByText('No workspace available. Join or create a workspace first.'),
+    ).toBeInTheDocument();
+    expect(calls.some((call) => call.url.includes('/runtimes/r-1'))).toBe(false);
   });
 });

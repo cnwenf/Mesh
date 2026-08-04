@@ -15,6 +15,16 @@
   min-block-size: 0;
 }
 
+.mesh-inbox__data-view {
+  flex: 1;
+  min-block-size: 0;
+}
+
+.mesh-inbox__data-view > .mesh-data-view__body {
+  display: flex;
+  min-block-size: 0;
+}
+
 /* ConversationLayout 根节点(底座为双栏 grid):撑满剩余高度,两栏各自滚动。 */
 .mesh-inbox {
   flex: 1;
@@ -55,6 +65,26 @@
 }
 
 /* ── 筛选 tabs ────────────────────────────────────────── */
+
+.mesh-inbox__filter-tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.mesh-inbox__filter-tabs .mesh-tabs__list {
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.mesh-inbox__filter-tabs .mesh-tabs__panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-block-size: 0;
+}
 
 .mesh-inbox__tabs {
   display: flex;

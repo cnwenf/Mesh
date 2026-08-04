@@ -9,20 +9,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useIntl } from 'react-intl';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import {
-  Button,
-  Dialog,
-  ErrorState,
-  Select,
-  Skeleton,
-  StatusDot,
-  useToast,
-} from '../../design';
+import { Button, Dialog, ErrorState, Select, Skeleton, StatusDot, useToast } from '../../design';
 import { env } from '../../env';
 import { formatDateTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe, listMembers as listWorkspaceMembers } from '../members/api';
+import { listMembers as listWorkspaceMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   addMembers,
   archiveSquad,
@@ -73,6 +66,7 @@ interface MembersPaneProps {
   readonly onRemoved: (memberId: string) => void;
   /** 加成员成功:父级重拉成员名册。 */
   readonly onAdded: () => void;
+  readonly canManage: boolean;
 }
 
 function MembersPane(props: MembersPaneProps): React.JSX.Element {
@@ -83,7 +77,7 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
   const [roster, setRoster] = useState<MemberSummary[]>([]);
   const [pickMemberId, setPickMemberId] = useState('');
   const [pickRole, setPickRole] = useState<SquadRole>('member');
-  const { workspace, squad, members, onRoleChanged, onRemoved, onAdded } = props;
+  const { workspace, squad, members, onRoleChanged, onRemoved, onAdded, canManage } = props;
 
   useEffect(() => {
     if (!addOpen) return;
@@ -160,16 +154,27 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
     <section className="mesh-squads__pane" data-testid="squad-members-pane">
       <div className="mesh-squads__pane-head">
         <h2>{t('squads.members')}</h2>
-        <Button size="sm" variant="secondary" onClick={() => setAddOpen(true)} data-testid="squad-add-member">
-          {t('squads.detail.addMember')}
-        </Button>
+        {canManage ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setAddOpen(true)}
+            data-testid="squad-add-member"
+          >
+            {t('squads.detail.addMember')}
+          </Button>
+        ) : null}
       </div>
       {members.length === 0 ? (
         <p className="mesh-squads__pane-empty">{t('squads.detail.noMembers')}</p>
       ) : (
         <ul className="mesh-squads__members">
           {members.map((member) => (
-            <li key={member.id} className="mesh-squads__member" data-testid={`squad-member-${member.member_id}`}>
+            <li
+              key={member.id}
+              className="mesh-squads__member"
+              data-testid={`squad-member-${member.member_id}`}
+            >
               <span className="mesh-squads__member-name">{member.name}</span>
               <span className="mesh-squads__member-type">
                 {member.member_type === 'agent' ? t('squads.agentBadge') : t('squads.humanBadge')}
@@ -177,8 +182,11 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
               <Select
                 label={t('squads.detail.role')}
                 value={member.role}
+                disabled={!canManage}
                 data-testid={`squad-member-role-${member.member_id}`}
-                onChange={(event) => onChangeRole(member.member_id, event.target.value as SquadRole)}
+                onChange={(event) =>
+                  onChangeRole(member.member_id, event.target.value as SquadRole)
+                }
               >
                 {SQUAD_ROLE_ORDER.map((role) => (
                   <option key={role} value={role}>
@@ -186,21 +194,32 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
                   </option>
                 ))}
               </Select>
-              <Button
-                size="sm"
-                variant="danger"
-                data-testid={`squad-member-remove-${member.member_id}`}
-                onClick={() => void onRemove(member.member_id)}
-              >
-                {t('squads.detail.remove')}
-              </Button>
+              {canManage ? (
+                <Button
+                  size="sm"
+                  variant="danger"
+                  data-testid={`squad-member-remove-${member.member_id}`}
+                  onClick={() => void onRemove(member.member_id)}
+                >
+                  {t('squads.detail.remove')}
+                </Button>
+              ) : null}
             </li>
           ))}
         </ul>
       )}
       {addOpen ? (
-        <Dialog open onClose={() => setAddOpen(false)} title={t('squads.detail.addMember')} closeLabel={t('common.close')}>
-          <form className="mesh-squads__form" data-testid="squad-add-member-form" onSubmit={(event) => void onAdd(event)}>
+        <Dialog
+          open
+          onClose={() => setAddOpen(false)}
+          title={t('squads.detail.addMember')}
+          closeLabel={t('common.close')}
+        >
+          <form
+            className="mesh-squads__form"
+            data-testid="squad-add-member-form"
+            onSubmit={(event) => void onAdd(event)}
+          >
             <Select
               label={t('squads.detail.selectMember')}
               value={pickMemberId}
@@ -322,11 +341,17 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
       ) : (
         <ul className="mesh-squads__messages">
           {visible.map((message) => (
-            <li key={message.id} className="mesh-squads__message" data-testid={`squad-message-${message.id}`}>
+            <li
+              key={message.id}
+              className="mesh-squads__message"
+              data-testid={`squad-message-${message.id}`}
+            >
               <span className="mesh-squads__message-sender">
                 {message.sender !== null ? message.sender.name : t('squads.messageKind.system')}
               </span>
-              <span className="mesh-squads__message-kind">{t(`squads.messageKind.${message.kind}`)}</span>
+              <span className="mesh-squads__message-kind">
+                {t(`squads.messageKind.${message.kind}`)}
+              </span>
               <span className="mesh-squads__message-time">
                 {timestamp(message.created_at, intl.locale)}
               </span>
@@ -335,7 +360,11 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
           ))}
         </ul>
       )}
-      <form className="mesh-squads__composer" data-testid="squad-composer" onSubmit={(event) => void submit(event)}>
+      <form
+        className="mesh-squads__composer"
+        data-testid="squad-composer"
+        onSubmit={(event) => void submit(event)}
+      >
         <Select
           label={t('squads.kind')}
           value={draftKind}
@@ -375,8 +404,10 @@ export function SquadDetailPage(): React.JSX.Element {
   const { squadId } = useParams<{ squadId: string }>();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = workspace?.role === 'owner' || workspace?.role === 'admin';
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [squad, setSquad] = useState<Squad | null>(null);
   const [members, setMembers] = useState<SquadMember[]>([]);
   const [tasks, setTasks] = useState<SquadTask[]>([]);
@@ -390,19 +421,6 @@ export function SquadDetailPage(): React.JSX.Element {
 
   const tRef = useRef(t);
   tRef.current = t;
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const me = await fetchMe(client);
-      const active = activeWorkspace(me.memberships);
-      if (cancelled) return;
-      setWorkspace(active);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   const load = useCallback(async (): Promise<void> => {
     if (workspace === null || squadId === undefined) {
@@ -491,6 +509,12 @@ export function SquadDetailPage(): React.JSX.Element {
     setMessages((prev) => [...prev, message]);
   }, []);
 
+  if (membershipState.kind === 'error') {
+    return <ErrorState title={t('state.errorTitle')} description={t('state.errorDescription')} />;
+  }
+  if (membershipState.kind === 'no_workspace') {
+    return <ErrorState title={t('state.emptyTitle')} description={t('squads.noWorkspace')} />;
+  }
   if (error !== null) {
     return (
       <ErrorState
@@ -501,7 +525,7 @@ export function SquadDetailPage(): React.JSX.Element {
       />
     );
   }
-  if (isLoading || squad === null || workspace === null) {
+  if (membershipState.kind === 'loading' || isLoading || squad === null || workspace === null) {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 
@@ -517,20 +541,24 @@ export function SquadDetailPage(): React.JSX.Element {
           tone={squad.status === 'active' ? 'success' : 'neutral'}
           label={t(`squads.status.${squad.status}`)}
         />
-        <Button
-          variant="secondary"
-          onClick={() => setEditOpen(true)}
-          data-testid="squad-edit-toggle"
-        >
-          {t('squads.edit')}
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => void toggleArchive()}
-          data-testid="squad-archive-toggle"
-        >
-          {squad.status === 'active' ? t('squads.archive') : t('squads.restore')}
-        </Button>
+        {canManage ? (
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setEditOpen(true)}
+              data-testid="squad-edit-toggle"
+            >
+              {t('squads.edit')}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void toggleArchive()}
+              data-testid="squad-archive-toggle"
+            >
+              {squad.status === 'active' ? t('squads.archive') : t('squads.restore')}
+            </Button>
+          </>
+        ) : null}
       </header>
 
       <MembersPane
@@ -540,6 +568,7 @@ export function SquadDetailPage(): React.JSX.Element {
         onRoleChanged={handleRoleChanged}
         onRemoved={handleRemoved}
         onAdded={refreshMembers}
+        canManage={canManage}
       />
 
       <section className="mesh-squads__pane" data-testid="squad-tasks-pane">
@@ -550,7 +579,13 @@ export function SquadDetailPage(): React.JSX.Element {
           <ul className="mesh-squads__tasks">
             {tasks.map((task) => (
               <li key={task.id} className="mesh-squads__task" data-testid={`squad-task-${task.id}`}>
-                <Link to={`/squads/${squad.id}/tasks/${task.id}`} className="mesh-squads__task-link">
+                <Link
+                  to={workspaceRoute(
+                    workspace.workspace_slug,
+                    `/squads/${squad.id}/tasks/${task.id}`,
+                  )}
+                  className="mesh-squads__task-link"
+                >
                   {task.title_snapshot ?? task.id}
                 </Link>
                 <StatusDot
@@ -585,7 +620,11 @@ export function SquadDetailPage(): React.JSX.Element {
         ) : (
           <ul className="mesh-squads__activity">
             {visibleActivity.map((entry) => (
-              <li key={entry.id} className="mesh-squads__activity-item" data-testid={`squad-activity-${entry.id}`}>
+              <li
+                key={entry.id}
+                className="mesh-squads__activity-item"
+                data-testid={`squad-activity-${entry.id}`}
+              >
                 <span className="mesh-squads__activity-action">
                   {t(`squads.activity.action.${entry.action}`)}
                 </span>
@@ -608,7 +647,7 @@ export function SquadDetailPage(): React.JSX.Element {
         onSent={handleMessageSent}
       />
 
-      {editOpen ? (
+      {editOpen && canManage ? (
         <EditSquadDialog
           workspace={workspace}
           squad={squad}

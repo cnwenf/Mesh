@@ -238,8 +238,8 @@ function makeFakeRealtime(): {
   };
 }
 
-function renderPage(realtime: RealtimeContextValue): void {
-  render(
+function renderPage(realtime: RealtimeContextValue): ReturnType<typeof render> {
+  return render(
     <MemoryRouter initialEntries={['/squads/sq-1']}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
@@ -557,6 +557,16 @@ describe('SquadDetailPage', () => {
     await act(async () => {
       rt.emit({
         op: 'event',
+        channel: 'squad:another-squad',
+        seq: 1,
+        event: 'squad_task.updated',
+        payload: { task_id: 'tk-other' },
+      } as RealtimeEventFrame);
+    });
+    expect(screen.getByText('Fix login')).toBeTruthy();
+    await act(async () => {
+      rt.emit({
+        op: 'event',
         channel: 'squad:sq-1',
         seq: 2,
         event: 'squad_task.updated',
@@ -564,5 +574,101 @@ describe('SquadDetailPage', () => {
       } as RealtimeEventFrame);
     });
     await screen.findByText('Fix login v2');
+  });
+
+  it('renders membership failures and no-workspace responses as terminal states', async () => {
+    const failed = stubFetch(
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'membership failed' } },
+      }),
+    );
+    vi.stubGlobal('fetch', failed.fetchImpl);
+    const first = renderPage(makeFakeRealtime().value);
+    await screen.findByText('We could not load this content. Please try again.');
+    expect(screen.queryByTestId('squad-detail-page')).toBeNull();
+    first.unmount();
+
+    const missing = stubFetch(fakeResponse({ body: { data: { ...ME, memberships: [] } } }));
+    vi.stubGlobal('fetch', missing.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('Select a workspace to view its squads.');
+    expect(screen.queryByTestId('squad-detail-page')).toBeNull();
+  });
+
+  it('keeps a regular member read-only and renders all empty panes', async () => {
+    const memberMe = {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    const emptyPage = { data: [], next_cursor: null };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: memberMe } }),
+      fakeResponse({ body: { data: squadFixture() } }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    expect(screen.queryByTestId('squad-edit-toggle')).toBeNull();
+    expect(screen.queryByTestId('squad-archive-toggle')).toBeNull();
+    expect(screen.queryByTestId('squad-add-member')).toBeNull();
+    expect(
+      screen.getByTestId('squad-members-pane').querySelector('.mesh-squads__pane-empty'),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId('squad-tasks-pane').querySelector('.mesh-squads__pane-empty'),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId('squad-activity-pane').querySelector('.mesh-squads__pane-empty'),
+    ).toBeTruthy();
+    expect(screen.getByTestId('squad-messages-empty')).toBeTruthy();
+  });
+
+  it('renders null snapshot fallbacks and restores an archived squad', async () => {
+    const fallbackActivity = {
+      ...ACTIVITY.data[0],
+      actor: null,
+      created_at: 'invalid-date',
+    };
+    const fallbackMessage = {
+      ...MESSAGES.data[0],
+      sender: null,
+      created_at: 'invalid-date',
+    };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: squadFixture({ status: 'archived' }) } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({
+        body: { data: [taskFixture({ title_snapshot: null })], next_cursor: null },
+      }),
+      fakeResponse({ body: { data: [fallbackActivity], next_cursor: null } }),
+      fakeResponse({ body: { data: [fallbackMessage], next_cursor: null } }),
+      fakeResponse({ body: { data: squadFixture() } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    expect(screen.getByRole('link', { name: 'tk-1' })).toHaveAttribute(
+      'href',
+      '/w/team/squads/sq-1/tasks/tk-1',
+    );
+    expect(screen.getByTestId('squad-activity-act-1')).toHaveTextContent('System');
+    expect(screen.getByTestId('squad-message-msg-1')).toHaveTextContent('System');
+    expect(screen.getAllByText('invalid-date')).toHaveLength(2);
+    expect(screen.getByTestId('squad-archive-toggle')).toHaveTextContent('Restore');
+
+    fireEvent.click(screen.getByTestId('squad-archive-toggle'));
+    await waitFor(() => {
+      expect(screen.getByTestId('squad-archive-toggle')).toHaveTextContent('Archive');
+    });
+    const posts = stub.calls.filter((call) => call.init?.method === 'POST');
+    expect(String(posts[0].url)).toContain('/squads/sq-1/restore');
   });
 });

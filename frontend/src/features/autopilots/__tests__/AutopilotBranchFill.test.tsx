@@ -22,7 +22,14 @@ afterEach(() => {
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -101,6 +108,10 @@ describe('editor branch fill', () => {
       <Routes>
         <Route path="/autopilots/new" element={<AutopilotEditorPage />} />
         <Route path="/autopilots/:autopilotId" element={<div>detail-page</div>} />
+        <Route
+          path="/w/:workspaceSlug/automations/autopilots/:autopilotId"
+          element={<div>detail-page</div>}
+        />
       </Routes>,
       { route: '/autopilots/new' },
     );
@@ -109,9 +120,21 @@ describe('editor branch fill', () => {
   function editorStubs() {
     stub((url, method) => {
       if (method === 'GET' && url.includes('/agents'))
-        return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET' && url.includes('/webhook-secrets'))
-        return fakeResponse({ body: { data: [{ id: 'sec-1', label: 'prod', status: 'active', created_at: 'x', revoked_at: null }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [
+              { id: 'sec-1', label: 'prod', status: 'active', created_at: 'x', revoked_at: null },
+            ],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET') return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: { ...RICH_RULE, id: 'ap-new' } } });
     });
@@ -122,11 +145,17 @@ describe('editor branch fill', () => {
     renderNew();
     await waitFor(() => expect(screen.getByTestId('autopilot-editor-name')).toBeInTheDocument());
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'n');
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_status_changed');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'issue_status_changed',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-from-status'), 'todo');
     await userEvent.type(screen.getByTestId('autopilot-editor-to-status'), 'in_progress');
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByText('detail-page')).toBeInTheDocument());
   });
@@ -136,12 +165,21 @@ describe('editor branch fill', () => {
     renderNew();
     await waitFor(() => expect(screen.getByTestId('autopilot-editor-name')).toBeInTheDocument());
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'n');
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_field_changed');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'issue_field_changed',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-watch-fields'), 'priority');
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'agent_mentioned');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'agent_mentioned',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-target-agents'), 'ag-1');
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByText('detail-page')).toBeInTheDocument());
   });
@@ -162,11 +200,25 @@ describe('editor branch fill', () => {
   it('prefills every rich trigger/filter/guardrail branch in edit mode', async () => {
     stub((url, method) => {
       if (method === 'GET' && url.includes('/agents'))
-        return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET' && url.includes('/webhook-secrets'))
-        return fakeResponse({ body: { data: [{ id: 'sec-1', label: 'prod', status: 'active', created_at: 'x', revoked_at: null }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [
+              { id: 'sec-1', label: 'prod', status: 'active', created_at: 'x', revoked_at: null },
+            ],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { status: 400, body: { error: { code: 'invalid_trigger_config', message: 'x' } } } });
+        return fakeResponse({
+          body: { status: 400, body: { error: { code: 'invalid_trigger_config', message: 'x' } } },
+        });
       if (method === 'GET') return fakeResponse({ body: { data: RICH_RULE } });
       return fakeResponse({ body: { data: RICH_RULE } });
     });
@@ -178,25 +230,38 @@ describe('editor branch fill', () => {
       { route: '/autopilots/ap-rich/edit' },
     );
     await waitFor(() =>
-      expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe('富配置'),
+      expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe(
+        '富配置',
+      ),
     );
     // rich trigger → status fields prefilled; switch to schedule to see cron/one-time
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'schedule');
-    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe('0 7 * * *');
+    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe(
+      '0 7 * * *',
+    );
     expect((screen.getByTestId('autopilot-editor-one-time') as HTMLInputElement).value).toBe(
       '2026-08-01T00:00:00Z',
     );
     // rich filter prefilled
     await userEvent.click(screen.getByTestId('autopilot-section-filter-toggle'));
-    expect((screen.getByTestId('autopilot-editor-filter-labels') as HTMLInputElement).value).toBe('bug');
+    expect((screen.getByTestId('autopilot-editor-filter-labels') as HTMLInputElement).value).toBe(
+      'bug',
+    );
     expect(screen.getByTestId('autopilot-editor-payload-match')).toBeInTheDocument();
     // guardrails prefilled (require_approval true)
     await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
-    expect((screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked).toBe(true);
+    expect(
+      (screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked,
+    ).toBe(true);
     // switch to webhook: secret prefilled (reopen the trigger accordion first)
     await userEvent.click(screen.getByTestId('autopilot-section-trigger-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'webhook_received');
-    expect((screen.getByTestId('autopilot-editor-secret') as HTMLSelectElement).value).toBe('sec-1');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'webhook_received',
+    );
+    expect((screen.getByTestId('autopilot-editor-secret') as HTMLSelectElement).value).toBe(
+      'sec-1',
+    );
   });
 });
 
@@ -209,7 +274,10 @@ describe('detail/list/run/webhook branch fill', () => {
         return fakeResponse({ status: 409, body: { error: { code: 'conflict', message: 'x' } } });
       if (method === 'GET')
         return fakeResponse({
-          body: { data: [{ ...RICH_RULE, id: 'ap-x', trigger_type: 'schedule', trigger_config: {} }], next_cursor: null },
+          body: {
+            data: [{ ...RICH_RULE, id: 'ap-x', trigger_type: 'schedule', trigger_config: {} }],
+            next_cursor: null,
+          },
         });
       return fakeResponse({ body: { data: {} } });
     });
@@ -256,15 +324,38 @@ describe('detail/list/run/webhook branch fill', () => {
       is_test: false,
       created_at: '2026-07-27T00:00:00Z',
       updated_at: '2026-07-27T00:00:00Z',
-      attempts: [{ attempt_number: 1, status: 'succeeded', execution_id: null, started_at: null, finished_at: null, error: null, prompt_tokens: null, completion_tokens: null }],
-      artifacts: [{ id: 'a-2', artifact_type: 'issue', ref_table: 'issues', ref_id: 'i-1', summary: null, created_at: '2026-07-27T00:00:00Z' }],
+      attempts: [
+        {
+          attempt_number: 1,
+          status: 'succeeded',
+          execution_id: null,
+          started_at: null,
+          finished_at: null,
+          error: null,
+          prompt_tokens: null,
+          completion_tokens: null,
+        },
+      ],
+      artifacts: [
+        {
+          id: 'a-2',
+          artifact_type: 'issue',
+          ref_table: 'issues',
+          ref_id: 'i-1',
+          summary: null,
+          created_at: '2026-07-27T00:00:00Z',
+        },
+      ],
     };
     stub((url, method) => {
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } } });
+        return fakeResponse({
+          body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } },
+        });
       if (method === 'GET' && url.includes('/runs'))
         return fakeResponse({ body: { data: [NULLY_RUN], next_cursor: null } });
-      if (method === 'GET') return fakeResponse({ body: { data: { ...RICH_RULE, trigger_type: 'schedule' } } });
+      if (method === 'GET')
+        return fakeResponse({ body: { data: { ...RICH_RULE, trigger_type: 'schedule' } } });
       return fakeResponse({ body: { data: {} } });
     });
     renderWithProviders(
@@ -333,7 +424,16 @@ describe('detail/list/run/webhook branch fill', () => {
     stub((_url, method) => {
       if (method === 'POST')
         return fakeResponse({
-          body: { data: { id: 'sec-2', label: 'default', status: 'active', token: 'whk_x', secret: 'whs_x', created_at: 'x' } },
+          body: {
+            data: {
+              id: 'sec-2',
+              label: 'default',
+              status: 'active',
+              token: 'whk_x',
+              secret: 'whs_x',
+              created_at: 'x',
+            },
+          },
         });
       if (method === 'GET') return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: {} } });

@@ -17,15 +17,18 @@ import {
   Banner,
   Button,
   ConversationLayout,
+  DataView,
   EmptyState,
   ErrorState,
   Skeleton,
+  Tabs,
   useToast,
 } from '../../design';
 import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { BOARD_PATH } from '../onboarding/deeplinks';
 import { EmptyInboxTray } from '../onboarding/illustrations';
 import {
@@ -59,7 +62,7 @@ export function InboxPage(): React.JSX.Element {
   const { notificationId } = useParams();
   const selectedId = notificationId ?? null;
   const realtime = useRealtimeContext();
-  const { status, workspaceId, memberId } = useInboxContext();
+  const { status, workspaceId, workspaceSlug, memberId } = useInboxContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
 
@@ -74,6 +77,8 @@ export function InboxPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [quietHours, setQuietHours] = useState<QuietHours | null>(null);
+  const inboxPath = workspaceSlug === null ? '/inbox' : workspaceRoute(workspaceSlug, 'inbox');
+  const boardPath = workspaceSlug === null ? BOARD_PATH : workspaceRoute(workspaceSlug, 'board');
 
   useEffect(() => {
     if (workspaceId === null) return;
@@ -123,13 +128,13 @@ export function InboxPage(): React.JSX.Element {
     realtime.client.subscribe(channel);
     const off = realtime.client.onFrame((frame) => {
       if (frame.channel !== channel) return;
-      setNotifications((prev) => applyInboxFrame(prev, frame));
+      setNotifications((prev) => applyInboxFrame(prev, frame, filter));
     });
     return () => {
       off();
       realtime.client.unsubscribe(channel);
     };
-  }, [realtime, memberId]);
+  }, [realtime, memberId, filter]);
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
@@ -168,10 +173,10 @@ export function InboxPage(): React.JSX.Element {
       handleMarkRead(notification);
       // L8:已选中行重复点击不再 push,避免重复历史项。
       if (notification.id !== selectedId) {
-        navigate(`/inbox/${notification.id}`);
+        navigate(`${inboxPath}/${notification.id}`);
       }
     },
-    [handleMarkRead, navigate, selectedId],
+    [handleMarkRead, inboxPath, navigate, selectedId],
   );
 
   const handleArchive = useCallback(
@@ -183,7 +188,7 @@ export function InboxPage(): React.JSX.Element {
           setNotifications((prev) => prev.filter((item) => item.id !== notification.id));
           // H5:归档当前选中通知后清选中,避免预览窗悬空(桌面双栏不再突变为缺失态)。
           if (notification.id === selectedId) {
-            navigate('/inbox', { replace: true });
+            navigate(inboxPath, { replace: true });
           }
         })
         .catch(() => {
@@ -191,7 +196,7 @@ export function InboxPage(): React.JSX.Element {
           notifyFailure();
         });
     },
-    [client, workspaceId, selectedId, navigate, notifications, notifyFailure],
+    [client, workspaceId, selectedId, navigate, notifications, notifyFailure, inboxPath],
   );
 
   const handleMute = useCallback(
@@ -253,6 +258,10 @@ export function InboxPage(): React.JSX.Element {
     );
   }
 
+  if (status === 'error') {
+    return <ErrorState title={t('state.errorTitle')} description={t('state.errorDescription')} />;
+  }
+
   if (status === 'loading' || workspaceId === null) {
     return <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox__skeleton" />;
   }
@@ -265,24 +274,8 @@ export function InboxPage(): React.JSX.Element {
   const unknownId =
     selectedId !== null && !isLoading && selectedNotification === null ? selectedId : null;
 
-  const listPane = (
+  const listContent = (
     <>
-      <div className="mesh-inbox__tabs" role="tablist" aria-label={t('inbox.filterLabel')}>
-        {FILTERS.map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={filter === value}
-            className={filter === value ? 'mesh-inbox__tab mesh-inbox__tab--active' : 'mesh-inbox__tab'}
-            data-testid={`inbox-tab-${value}`}
-            onClick={() => setFilter(value)}
-          >
-            {t(`inbox.filter.${value}`)}
-          </button>
-        ))}
-      </div>
-
       {quietHoursActive ? (
         <div className="mesh-inbox__quiet" data-testid="inbox-quiet-hours">
           <Banner tone="info">{t('inbox.quietHours.active')}</Banner>
@@ -300,7 +293,7 @@ export function InboxPage(): React.JSX.Element {
             <Button
               size="sm"
               data-testid="inbox-empty-action"
-              onClick={() => navigate(BOARD_PATH)}
+              onClick={() => navigate(boardPath)}
             >
               {t('onboarding.empty.inbox.action')}
             </Button>
@@ -346,37 +339,55 @@ export function InboxPage(): React.JSX.Element {
       )}
     </>
   );
+  const listPane = (
+    <Tabs
+      className="mesh-inbox__filter-tabs"
+      label={t('inbox.filterLabel')}
+      value={filter}
+      onChange={(value) => setFilter(value as InboxFilter)}
+      items={FILTERS.map((value) => ({
+        value,
+        label: t(`inbox.filter.${value}`),
+        content: listContent,
+        testId: `inbox-tab-${value}`,
+      }))}
+    />
+  );
 
   return (
     <div className="mesh-inbox-page" data-testid="inbox-page">
-      <header className="mesh-inbox__head">
-        <h1 className="mesh-text-title-2">{t('inbox.title')}</h1>
-        <div className="mesh-inbox__toolbar">
-          <Button size="sm" variant="secondary" data-testid="inbox-read-all" onClick={handleReadAll}>
-            {t('inbox.readAll')}
-          </Button>
-          <Button size="sm" variant="secondary" data-testid="inbox-archive-read" onClick={handleArchiveRead}>
-            {t('inbox.archiveRead')}
-          </Button>
-        </div>
-      </header>
-
-      <ConversationLayout
-        className="mesh-inbox"
-        listLabel={t('inbox.list.label')}
-        detailLabel={t('inbox.preview.label')}
-        activePane={selectedId !== null ? 'detail' : 'list'}
-        list={listPane}
+      <DataView
+        className="mesh-inbox__data-view"
+        title={t('inbox.title')}
+        actions={
+          <div className="mesh-inbox__toolbar">
+            <Button size="sm" variant="secondary" data-testid="inbox-read-all" onClick={handleReadAll}>
+              {t('inbox.readAll')}
+            </Button>
+            <Button size="sm" variant="secondary" data-testid="inbox-archive-read" onClick={handleArchiveRead}>
+              {t('inbox.archiveRead')}
+            </Button>
+          </div>
+        }
       >
-        <InboxPreviewPane
-          notification={selectedNotification}
-          isLoading={isLoading}
-          unknownId={unknownId}
-          locale={locale}
-          onMarkRead={handleMarkRead}
-          onArchive={handleArchive}
-        />
-      </ConversationLayout>
+        <ConversationLayout
+          className="mesh-inbox"
+          listLabel={t('inbox.list.label')}
+          detailLabel={t('inbox.preview.label')}
+          activePane={selectedId !== null ? 'detail' : 'list'}
+          list={listPane}
+        >
+          <InboxPreviewPane
+            notification={selectedNotification}
+            isLoading={isLoading}
+            unknownId={unknownId}
+            locale={locale}
+            workspaceSlug={workspaceSlug}
+            onMarkRead={handleMarkRead}
+            onArchive={handleArchive}
+          />
+        </ConversationLayout>
+      </DataView>
     </div>
   );
 }

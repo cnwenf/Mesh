@@ -6,7 +6,7 @@
  * 动作区可增删排序;run_agent_prompt 强制选执行者 agent + prompt(§5.1
  * executor_required)。新建时护栏以推荐默认值预填,体现「护栏默认开启」。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
 import { Button, ErrorState, Icon, Input, Select, Skeleton, useToast } from '../../design';
@@ -14,8 +14,7 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import { listAgents } from '../agents/api';
 import type { AgentSummary } from '../agents/types';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   createAutopilot,
   getAutopilot,
@@ -167,9 +166,13 @@ function stateFromRule(rule: AutopilotRule): EditorState {
     timezone: typeof trigger.timezone === 'string' ? trigger.timezone : 'UTC',
     misfirePolicy: typeof trigger.misfire_policy === 'string' ? trigger.misfire_policy : 'run_once',
     oneTimeAt: typeof trigger.one_time_at === 'string' ? trigger.one_time_at : '',
-    fromStatus: Array.isArray(trigger.from_status) ? (trigger.from_status as string[]).join(', ') : '',
+    fromStatus: Array.isArray(trigger.from_status)
+      ? (trigger.from_status as string[]).join(', ')
+      : '',
     toStatus: Array.isArray(trigger.to_status) ? (trigger.to_status as string[]).join(', ') : '',
-    watchFields: Array.isArray(trigger.watch_fields) ? (trigger.watch_fields as string[]).join(', ') : '',
+    watchFields: Array.isArray(trigger.watch_fields)
+      ? (trigger.watch_fields as string[]).join(', ')
+      : '',
     targetAgentIds: Array.isArray(trigger.target_agent_ids)
       ? (trigger.target_agent_ids as string[]).join(', ')
       : '',
@@ -177,7 +180,9 @@ function stateFromRule(rule: AutopilotRule): EditorState {
       ? (trigger.scope_project_ids as string[]).join(', ')
       : '',
     secretId: typeof trigger.secret_id === 'string' ? trigger.secret_id : '',
-    eventTypes: Array.isArray(trigger.event_types) ? (trigger.event_types as string[]).join(', ') : '',
+    eventTypes: Array.isArray(trigger.event_types)
+      ? (trigger.event_types as string[]).join(', ')
+      : '',
     filterProjectIds: Array.isArray(filter.project_ids)
       ? (filter.project_ids as string[]).join(', ')
       : '',
@@ -185,7 +190,9 @@ function stateFromRule(rule: AutopilotRule): EditorState {
       ? (filter.actor_ids as string[]).join(', ')
       : '',
     filterLabels: Array.isArray(filter.labels) ? (filter.labels as string[]).join(', ') : '',
-    filterPriorities: Array.isArray(filter.priorities) ? (filter.priorities as string[]).join(', ') : '',
+    filterPriorities: Array.isArray(filter.priorities)
+      ? (filter.priorities as string[]).join(', ')
+      : '',
     filterKeywordInclude: Array.isArray(filter.keyword_include)
       ? (filter.keyword_include as string[]).join(', ')
       : '',
@@ -196,7 +203,10 @@ function stateFromRule(rule: AutopilotRule): EditorState {
       ? JSON.stringify(filter.payload_match, null, 2)
       : '',
     executorAgentId: rule.executor_agent_id ?? '',
-    actions: rule.action_config.length > 0 ? [...rule.action_config] : [{ type: 'run_agent_prompt', prompt: '' }],
+    actions:
+      rule.action_config.length > 0
+        ? [...rule.action_config]
+        : [{ type: 'run_agent_prompt', prompt: '' }],
     maxRetries: rule.max_retries,
     retryBackoff: rule.retry_backoff,
     retryBaseSeconds: rule.retry_base_seconds,
@@ -233,16 +243,19 @@ function buildPayload(state: EditorState): Record<string, unknown> {
     triggerConfig.misfire_policy = state.misfirePolicy;
     if (state.oneTimeAt) triggerConfig.one_time_at = state.oneTimeAt;
   } else if (state.triggerType === 'issue_status_changed') {
-    if (splitCsv(state.fromStatus).length > 0) triggerConfig.from_status = splitCsv(state.fromStatus);
+    if (splitCsv(state.fromStatus).length > 0)
+      triggerConfig.from_status = splitCsv(state.fromStatus);
     if (splitCsv(state.toStatus).length > 0) triggerConfig.to_status = splitCsv(state.toStatus);
   } else if (state.triggerType === 'issue_field_changed') {
-    if (splitCsv(state.watchFields).length > 0) triggerConfig.watch_fields = splitCsv(state.watchFields);
+    if (splitCsv(state.watchFields).length > 0)
+      triggerConfig.watch_fields = splitCsv(state.watchFields);
   } else if (state.triggerType === 'agent_mentioned') {
     if (splitCsv(state.targetAgentIds).length > 0)
       triggerConfig.target_agent_ids = splitCsv(state.targetAgentIds);
   } else if (state.triggerType === 'webhook_received') {
     triggerConfig.secret_id = state.secretId;
-    if (splitCsv(state.eventTypes).length > 0) triggerConfig.event_types = splitCsv(state.eventTypes);
+    if (splitCsv(state.eventTypes).length > 0)
+      triggerConfig.event_types = splitCsv(state.eventTypes);
   }
   // §2.6 event triggers: optional project scope
   if (state.triggerType !== 'schedule' && state.triggerType !== 'webhook_received') {
@@ -368,8 +381,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
   const navigate = useNavigate();
   const { autopilotId } = useParams<{ autopilotId: string }>();
   const isEdit = autopilotId !== undefined && autopilotId !== 'new';
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = membership?.role === 'owner' || membership?.role === 'admin';
 
-  const [membership, setMembership] = useState<Membership | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [secrets, setSecrets] = useState<WebhookSecretPublic[]>([]);
   const [state, setState] = useState<EditorState>(DEFAULT_STATE);
@@ -384,23 +400,23 @@ export function AutopilotEditorPage(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (membershipState.kind === 'loading') return;
+    if (membershipState.kind !== 'ready' || membership === null || !canManage) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
-    const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
     void (async () => {
       try {
-        const me = await fetchMe(client);
-        const workspace = activeWorkspace(me.memberships);
-        if (cancelled || workspace === null) return;
-        setMembership(workspace);
         const [agentListing, secretListing] = await Promise.all([
-          listAgents(client, workspace.workspace_id, { limit: 100 }),
-          listWebhookSecrets(client, workspace.workspace_id),
+          listAgents(client, membership.workspace_id, { limit: 100 }),
+          listWebhookSecrets(client, membership.workspace_id),
         ]);
         if (cancelled) return;
         setAgents(agentListing.data);
         setSecrets(secretListing);
         if (isEdit && autopilotId) {
-          const rule = await getAutopilot(client, workspace.workspace_id, autopilotId);
+          const rule = await getAutopilot(client, membership.workspace_id, autopilotId);
           if (cancelled) return;
           setState(stateFromRule(rule));
           setLoading(false);
@@ -414,7 +430,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [isEdit, autopilotId]);
+  }, [client, membership, membershipState.kind, canManage, isEdit, autopilotId]);
 
   // §4.2 live cron preview: recompute on cron/timezone change (debounced),
   // available in CREATE mode too (stateless preview endpoint, no rule id).
@@ -432,7 +448,6 @@ export function AutopilotEditorPage(): React.JSX.Element {
     }
     let cancelled = false;
     const handle = setTimeout(() => {
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       previewScheduleParams(client, membership.workspace_id, {
         cron: state.cron,
         timezone: state.timezone,
@@ -453,19 +468,16 @@ export function AutopilotEditorPage(): React.JSX.Element {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [membership, state.triggerType, state.cron, state.timezone]);
+  }, [client, membership, state.triggerType, state.cron, state.timezone]);
 
-  const updateAction = useCallback(
-    (index: number, partial: Partial<ActionConfigItem>) => {
-      setState((prev) => ({
-        ...prev,
-        actions: prev.actions.map((action, actionIndex) =>
-          actionIndex === index ? { ...action, ...partial } : action,
-        ),
-      }));
-    },
-    [],
-  );
+  const updateAction = useCallback((index: number, partial: Partial<ActionConfigItem>) => {
+    setState((prev) => ({
+      ...prev,
+      actions: prev.actions.map((action, actionIndex) =>
+        actionIndex === index ? { ...action, ...partial } : action,
+      ),
+    }));
+  }, []);
 
   const moveAction = useCallback((index: number, direction: -1 | 1) => {
     setState((prev) => {
@@ -480,15 +492,16 @@ export function AutopilotEditorPage(): React.JSX.Element {
 
   const save = useCallback(
     async (activate: boolean) => {
-        setSaving(true);
+      setSaving(true);
       try {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const payload = buildPayload(state);
         if (isEdit && autopilotId) {
           await patchAutopilot(client, membership!.workspace_id, autopilotId, payload);
           if (!activate) {
             // 保存草稿语义:暂停规则
-            await patchAutopilot(client, membership!.workspace_id, autopilotId, { status: 'paused' });
+            await patchAutopilot(client, membership!.workspace_id, autopilotId, {
+              status: 'paused',
+            });
           }
         } else {
           const created = await createAutopilot(client, membership!.workspace_id, {
@@ -499,14 +512,22 @@ export function AutopilotEditorPage(): React.JSX.Element {
             tone: 'success',
             closeLabel: t('common.close'),
           });
-          navigate(`/autopilots/${created.id}`);
+          navigate(
+            membership === null
+              ? `/autopilots/${created.id}`
+              : workspaceRoute(membership.workspace_slug, `/automations/autopilots/${created.id}`),
+          );
           return;
         }
         toast.addToast(t('autopilots.toast.saved'), {
           tone: 'success',
           closeLabel: t('common.close'),
         });
-        navigate(`/autopilots/${autopilotId}`);
+        navigate(
+          membership === null
+            ? `/autopilots/${autopilotId}`
+            : workspaceRoute(membership.workspace_slug, `/automations/autopilots/${autopilotId}`),
+        );
       } catch (error) {
         const messageKey =
           error instanceof PayloadMatchInvalidError
@@ -519,10 +540,15 @@ export function AutopilotEditorPage(): React.JSX.Element {
         setSaving(false);
       }
     },
-    [membership, state, isEdit, autopilotId, toast, t, navigate],
+    [client, membership, state, isEdit, autopilotId, toast, t, navigate],
   );
 
-  if (loading) {
+  const listPath =
+    membership === null
+      ? '/autopilots'
+      : workspaceRoute(membership.workspace_slug, '/automations/autopilots');
+
+  if (membershipState.kind === 'loading' || loading) {
     return (
       <div className="mesh-autopilots__page">
         <Skeleton loadingLabel={t('autopilots.loading')} />
@@ -530,23 +556,57 @@ export function AutopilotEditorPage(): React.JSX.Element {
     );
   }
 
+  if (membershipState.kind === 'no_workspace') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState
+          title={t('autopilots.noWorkspace.title')}
+          description={t('autopilots.noWorkspace.description')}
+        />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'error') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState title={t('error.unknown')} />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'ready' && !canManage) {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState
+          title={t('state.permissionTitle')}
+          description={t('state.permissionDescription')}
+        />
+      </div>
+    );
+  }
+
   if (errorKey !== null) {
     return (
       <div className="mesh-autopilots__page">
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => navigate('/autopilots')} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => navigate(listPath)}
+        />
       </div>
     );
   }
 
   const nameValid = state.name.trim().length > 0 && state.name.trim().length <= 200;
   const scheduleValid =
-    state.triggerType !== 'schedule' || (state.cron.trim().length > 0 && state.timezone.trim().length > 0);
+    state.triggerType !== 'schedule' ||
+    (state.cron.trim().length > 0 && state.timezone.trim().length > 0);
   const webhookValid = state.triggerType !== 'webhook_received' || state.secretId.length > 0;
   const promptActionsValid = state.actions.every(
     (action) =>
       action.type !== 'run_agent_prompt' ||
-      ((action.executor_agent_id ?? state.executorAgentId) ?? '').length > 0,
+      (action.executor_agent_id ?? state.executorAgentId ?? '').length > 0,
   );
   const canSave = nameValid && scheduleValid && webhookValid && promptActionsValid;
 
@@ -569,7 +629,9 @@ export function AutopilotEditorPage(): React.JSX.Element {
             label={t('autopilots.editor.nameLabel')}
             value={state.name}
             onChange={(event) => patch({ name: event.target.value })}
-            error={state.name.length > 0 && !nameValid ? t('autopilots.editor.nameInvalid') : undefined}
+            error={
+              state.name.length > 0 && !nameValid ? t('autopilots.editor.nameInvalid') : undefined
+            }
             data-testid="autopilot-editor-name"
           />
         </div>
@@ -676,14 +738,14 @@ export function AutopilotEditorPage(): React.JSX.Element {
             <div className="mesh-autopilots__field-grid">
               <Input
                 label={t('autopilots.editor.fromStatusLabel')}
-                  data-testid="autopilot-editor-from-status"
+                data-testid="autopilot-editor-from-status"
                 value={state.fromStatus}
                 onChange={(event) => patch({ fromStatus: event.target.value })}
                 hint={t('autopilots.editor.csvHint')}
               />
               <Input
                 label={t('autopilots.editor.toStatusLabel')}
-                  data-testid="autopilot-editor-to-status"
+                data-testid="autopilot-editor-to-status"
                 value={state.toStatus}
                 onChange={(event) => patch({ toStatus: event.target.value })}
                 hint={t('autopilots.editor.csvHint')}
@@ -694,7 +756,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
           {state.triggerType === 'issue_field_changed' && (
             <Input
               label={t('autopilots.editor.watchFieldsLabel')}
-                  data-testid="autopilot-editor-watch-fields"
+              data-testid="autopilot-editor-watch-fields"
               value={state.watchFields}
               onChange={(event) => patch({ watchFields: event.target.value })}
               hint={t('autopilots.editor.csvHint')}
@@ -704,7 +766,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
           {state.triggerType === 'agent_mentioned' && (
             <Input
               label={t('autopilots.editor.targetAgentsLabel')}
-                  data-testid="autopilot-editor-target-agents"
+              data-testid="autopilot-editor-target-agents"
               value={state.targetAgentIds}
               onChange={(event) => patch({ targetAgentIds: event.target.value })}
               hint={t('autopilots.editor.targetAgentsHint')}
@@ -738,7 +800,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
               </Select>
               <Input
                 label={t('autopilots.editor.eventTypesLabel')}
-                  data-testid="autopilot-editor-event-types"
+                data-testid="autopilot-editor-event-types"
                 value={state.eventTypes}
                 onChange={(event) => patch({ eventTypes: event.target.value })}
                 hint={t('autopilots.editor.csvHint')}
@@ -771,28 +833,28 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Input
               label={t('autopilots.editor.filterLabels')}
-                  data-testid="autopilot-editor-filter-labels"
+              data-testid="autopilot-editor-filter-labels"
               value={state.filterLabels}
               onChange={(event) => patch({ filterLabels: event.target.value })}
               hint={t('autopilots.editor.csvHint')}
             />
             <Input
               label={t('autopilots.editor.filterPriorities')}
-                  data-testid="autopilot-editor-filter-priorities"
+              data-testid="autopilot-editor-filter-priorities"
               value={state.filterPriorities}
               onChange={(event) => patch({ filterPriorities: event.target.value })}
               hint={t('autopilots.editor.csvHint')}
             />
             <Input
               label={t('autopilots.editor.keywordInclude')}
-                  data-testid="autopilot-editor-keyword-include"
+              data-testid="autopilot-editor-keyword-include"
               value={state.filterKeywordInclude}
               onChange={(event) => patch({ filterKeywordInclude: event.target.value })}
               hint={t('autopilots.editor.csvHint')}
             />
             <Input
               label={t('autopilots.editor.keywordExclude')}
-                  data-testid="autopilot-editor-keyword-exclude"
+              data-testid="autopilot-editor-keyword-exclude"
               value={state.filterKeywordExclude}
               onChange={(event) => patch({ filterKeywordExclude: event.target.value })}
               hint={t('autopilots.editor.csvHint')}
@@ -832,7 +894,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
             ))}
           </Select>
           {state.actions.map((action, index) => (
-            <div className="mesh-autopilots__action-item" key={index} data-testid={`autopilot-action-${index}`}>
+            <div
+              className="mesh-autopilots__action-item"
+              key={index}
+              data-testid={`autopilot-action-${index}`}
+            >
               <div className="mesh-autopilots__action-head">
                 <Select
                   label={t('autopilots.editor.actionTypeLabel')}
@@ -885,9 +951,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
                 <>
                   <Select
                     label={t('autopilots.editor.actionExecutorLabel')}
-                  data-testid="autopilot-editor-action-executor"
+                    data-testid="autopilot-editor-action-executor"
                     value={action.executor_agent_id ?? state.executorAgentId}
-                    onChange={(event) => updateAction(index, { executor_agent_id: event.target.value })}
+                    onChange={(event) =>
+                      updateAction(index, { executor_agent_id: event.target.value })
+                    }
                   >
                     <option value="">{t('autopilots.editor.executorPlaceholder')}</option>
                     {agents.map((agent) => (
@@ -897,7 +965,9 @@ export function AutopilotEditorPage(): React.JSX.Element {
                     ))}
                   </Select>
                   <div className="mesh-autopilots__field">
-                    <label htmlFor={`autopilot-prompt-${index}`}>{t('autopilots.editor.promptLabel')}</label>
+                    <label htmlFor={`autopilot-prompt-${index}`}>
+                      {t('autopilots.editor.promptLabel')}
+                    </label>
                     <div
                       className="mesh-autopilots__template-vars"
                       data-testid={`autopilot-template-vars-${index}`}
@@ -948,13 +1018,13 @@ export function AutopilotEditorPage(): React.JSX.Element {
                 <div className="mesh-autopilots__field-grid">
                   <Input
                     label={t('autopilots.editor.issueTitleLabel')}
-                  data-testid="autopilot-editor-action-issue-title"
+                    data-testid="autopilot-editor-action-issue-title"
                     value={action.title ?? ''}
                     onChange={(event) => updateAction(index, { title: event.target.value })}
                   />
                   <Input
                     label={t('autopilots.editor.issueDescriptionLabel')}
-                  data-testid="autopilot-editor-action-issue-description"
+                    data-testid="autopilot-editor-action-issue-description"
                     value={action.description ?? ''}
                     onChange={(event) => updateAction(index, { description: event.target.value })}
                   />
@@ -964,14 +1034,14 @@ export function AutopilotEditorPage(): React.JSX.Element {
                 <div className="mesh-autopilots__field-grid">
                   <Input
                     label={t('autopilots.editor.urlLabel')}
-                  data-testid="autopilot-editor-action-url"
+                    data-testid="autopilot-editor-action-url"
                     value={action.url ?? ''}
                     onChange={(event) => updateAction(index, { url: event.target.value })}
                     hint={t('autopilots.editor.urlHint')}
                   />
                   <Select
                     label={t('autopilots.editor.methodLabel')}
-                  data-testid="autopilot-editor-action-method"
+                    data-testid="autopilot-editor-action-method"
                     value={action.method ?? 'POST'}
                     onChange={(event) => updateAction(index, { method: event.target.value })}
                   >
@@ -1008,7 +1078,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
           <div className="mesh-autopilots__field-grid">
             <Input
               label={t('autopilots.editor.rateLimitLabel')}
-                  data-testid="autopilot-editor-rate-max"
+              data-testid="autopilot-editor-rate-max"
               type="number"
               min={0}
               value={state.rateLimitMax}
@@ -1016,7 +1086,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Input
               label={t('autopilots.editor.rateWindowLabel')}
-                  data-testid="autopilot-editor-rate-window"
+              data-testid="autopilot-editor-rate-window"
               type="number"
               min={1}
               value={state.rateLimitWindowSeconds}
@@ -1036,7 +1106,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             </Select>
             <Input
               label={t('autopilots.editor.concurrencyLabel')}
-                  data-testid="autopilot-editor-concurrency"
+              data-testid="autopilot-editor-concurrency"
               type="number"
               min={1}
               value={state.concurrencyLimit}
@@ -1044,7 +1114,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Input
               label={t('autopilots.editor.dedupWindowLabel')}
-                  data-testid="autopilot-editor-dedup-window"
+              data-testid="autopilot-editor-dedup-window"
               type="number"
               min={0}
               value={state.dedupWindowSeconds}
@@ -1052,7 +1122,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Input
               label={t('autopilots.editor.maxRetriesLabel')}
-                  data-testid="autopilot-editor-max-retries"
+              data-testid="autopilot-editor-max-retries"
               type="number"
               min={0}
               value={state.maxRetries}
@@ -1060,7 +1130,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Select
               label={t('autopilots.editor.backoffLabel')}
-                  data-testid="autopilot-editor-backoff"
+              data-testid="autopilot-editor-backoff"
               value={state.retryBackoff}
               onChange={(event) => patch({ retryBackoff: event.target.value as RetryBackoff })}
             >
@@ -1070,7 +1140,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             </Select>
             <Input
               label={t('autopilots.editor.dailyRunBudgetLabel')}
-                  data-testid="autopilot-editor-daily-runs"
+              data-testid="autopilot-editor-daily-runs"
               type="number"
               min={0}
               value={state.dailyRunBudget}
@@ -1078,7 +1148,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Input
               label={t('autopilots.editor.dailyTokenBudgetLabel')}
-                  data-testid="autopilot-editor-daily-tokens"
+              data-testid="autopilot-editor-daily-tokens"
               type="number"
               min={0}
               value={state.dailyTokenBudget}
@@ -1086,7 +1156,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
             <Input
               label={t('autopilots.editor.cascadeDepthLabel')}
-                  data-testid="autopilot-editor-cascade"
+              data-testid="autopilot-editor-cascade"
               type="number"
               min={0}
               value={state.cascadeMaxDepth}
@@ -1132,10 +1202,15 @@ export function AutopilotEditorPage(): React.JSX.Element {
         </EditorSection>
 
         <div className="mesh-autopilots__footer">
-          <Button variant="ghost" onClick={() => navigate('/autopilots')}>
+          <Button variant="ghost" onClick={() => navigate(listPath)}>
             {t('common.cancel')}
           </Button>
-          <Button variant="secondary" isLoading={saving} disabled={!canSave} onClick={() => void save(false)}>
+          <Button
+            variant="secondary"
+            isLoading={saving}
+            disabled={!canSave}
+            onClick={() => void save(false)}
+          >
             {t('autopilots.editor.saveDraft')}
           </Button>
           <Button

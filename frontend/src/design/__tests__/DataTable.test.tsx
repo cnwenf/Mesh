@@ -26,7 +26,7 @@ const COLUMNS: ReadonlyArray<DataTableColumn<Row>> = [
 describe('DataTable(语义表格)', () => {
   it('caption + scope=col 表头 + 行单元格渲染', () => {
     render(<DataTable caption="成员名册" columns={COLUMNS} rows={ROWS} rowKey={(row) => row.id} />);
-    expect(screen.getByRole('table', { name: '成员名册' })).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: '成员名册' })).toHaveAttribute('data-slot', 'table');
     const headers = screen.getAllByRole('columnheader');
     expect(headers).toHaveLength(2);
     expect(headers[0]).toHaveTextContent('名称');

@@ -36,6 +36,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  inline-size: 100%;
+}
+
+.mesh-members__filter-tabs .mesh-tabs__panel {
+  display: none;
 }
 
 .mesh-members__tabs {
@@ -53,7 +58,8 @@
   color: var(--color-text-muted);
   cursor: pointer;
   border-block-end: 2px solid transparent;
-  transition: color var(--motion-fast) var(--ease-move),
+  transition:
+    color var(--motion-fast) var(--ease-move),
     border-block-end-color var(--motion-fast) var(--ease-move);
 }
 
@@ -75,6 +81,13 @@
 
 .mesh-members__search {
   min-inline-size: 220px;
+}
+
+.mesh-members__role-control {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
 }
 
 /* --- 桌面表格(卡片化表面;0–599px 隐藏,改主次行卡片)---------------------- */

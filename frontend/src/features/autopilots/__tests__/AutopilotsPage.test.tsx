@@ -2,7 +2,7 @@
  * AutopilotsPage 组件测试(autopilot.md §4.1):行渲染、筛选、kill switch
  * 二次确认流程、暂停/启用、空态与错误态、行级实时重拉。
  */
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -60,7 +60,13 @@ const RULE_ACTIVE = {
   stats: { runs_30d: 20, success_rate: 0.95 },
 };
 
-const RULE_PAUSED = { ...RULE_ACTIVE, id: 'ap-2', name: '值班介入', status: 'paused', trigger_type: 'agent_mentioned' };
+const RULE_PAUSED = {
+  ...RULE_ACTIVE,
+  id: 'ap-2',
+  name: '值班介入',
+  status: 'paused',
+  trigger_type: 'agent_mentioned',
+};
 
 interface Recorded {
   url: string;
@@ -77,7 +83,11 @@ function setup(rules: unknown[] = [RULE_ACTIVE, RULE_PAUSED], killSwitch = false
     if (url.endsWith('/autopilots/kill-switch') && method === 'GET')
       return fakeResponse({ body: { data: { kill_switch: killSwitch } } });
     if (url.endsWith('/autopilots/kill-switch') && method === 'POST')
-      return fakeResponse({ body: { data: { kill_switch: true, paused_autopilots: 2, updated_at: '2026-07-27T00:00:00Z' } } });
+      return fakeResponse({
+        body: {
+          data: { kill_switch: true, paused_autopilots: 2, updated_at: '2026-07-27T00:00:00Z' },
+        },
+      });
     if (method !== 'GET') return fakeResponse({ body: { data: RULE_PAUSED } });
     return fakeResponse({ body: { data: rules, next_cursor: null } });
   }) as typeof fetch;
@@ -120,6 +130,9 @@ function renderPage(realtime?: ReturnType<typeof makeRealtime>) {
         <Route path="/autopilots/new" element={<div>editor</div>} />
         <Route path="/autopilots/:id" element={<div>detail</div>} />
         <Route path="/webhooks" element={<div>webhooks</div>} />
+        <Route path="/w/:workspaceSlug/automations/autopilots/new" element={<div>editor</div>} />
+        <Route path="/w/:workspaceSlug/automations/autopilots/:id" element={<div>detail</div>} />
+        <Route path="/w/:workspaceSlug/automations/webhooks" element={<div>webhooks</div>} />
       </Routes>
     </RealtimeContext.Provider>
   );
@@ -131,6 +144,15 @@ describe('AutopilotsPage', () => {
     setup();
     renderPage();
     await waitFor(() => expect(screen.getByTestId('autopilot-name-ap-1')).toBeInTheDocument());
+    expect(screen.getByTestId('data-view')).toHaveClass('mesh-autopilots__page');
+    const page = screen.getByTestId('autopilots-page');
+    const table = screen.getByTestId('autopilots-table');
+    expect(page).toContainElement(table);
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((header) => header.textContent);
+    const cells = within(screen.getByTestId('autopilot-row-ap-1')).getAllByRole('cell');
+    expect(cells.map((cell) => cell.getAttribute('data-label'))).toEqual(headers);
     expect(screen.getByTestId('autopilot-name-ap-2')).toBeInTheDocument();
     expect(screen.getByTestId('autopilot-success-ap-1').textContent).toContain('95%');
     expect(screen.getByTestId('autopilot-trigger-ap-1').textContent).toContain('Asia/Shanghai');
@@ -160,7 +182,9 @@ describe('AutopilotsPage', () => {
   it('runs the kill switch confirmation flow', async () => {
     const calls = setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
     await userEvent.type(screen.getByTestId('autopilot-kill-reason'), '紧急止血');
     await userEvent.click(screen.getByTestId('autopilot-kill-confirm'));
@@ -205,9 +229,33 @@ describe('AutopilotsPage', () => {
   });
 
   it('shows the error state on fetch failure', async () => {
-    const impl = (async () => fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } })) as typeof fetch;
+    const impl = (async () =>
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      })) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
     await waitFor(() => expect(screen.getByText(/error|unexpected/i)).toBeInTheDocument());
+  });
+
+  it('member sees rules without autopilot management controls', async () => {
+    const memberMe = {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: memberMe } });
+      if (url.endsWith('/autopilots/kill-switch')) {
+        return fakeResponse({ body: { data: { kill_switch: false } } });
+      }
+      return fakeResponse({ body: { data: [RULE_ACTIVE], next_cursor: null } });
+    }) as typeof fetch);
+    renderPage();
+    await screen.findByTestId('autopilot-name-ap-1');
+    expect(screen.queryByTestId('autopilot-create')).toBeNull();
+    expect(screen.queryByTestId('autopilot-kill-switch-button')).toBeNull();
+    expect(screen.queryByTestId('autopilot-pause-ap-1')).toBeNull();
   });
 });

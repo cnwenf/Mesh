@@ -407,7 +407,12 @@ export function AppShell(): React.JSX.Element {
     <RealtimeContext.Provider value={realtimeValue}>
       <WorkspaceFeatureFlagsProvider value={featureFlags}>
         {workspaceSlug !== undefined ? (
-          <WorkspaceProvider slug={workspaceSlug}>{layout}</WorkspaceProvider>
+          // The slug is the tenant identity boundary. Remount the complete
+          // workspace subtree synchronously so local page state and late
+          // requests owned by the previous workspace cannot cross tenants.
+          <WorkspaceProvider key={workspaceSlug} slug={workspaceSlug}>
+            {layout}
+          </WorkspaceProvider>
         ) : (
           layout
         )}

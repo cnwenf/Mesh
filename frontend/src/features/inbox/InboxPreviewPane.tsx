@@ -7,6 +7,7 @@
 import { useNavigate } from 'react-router';
 import { Avatar, Badge, Button, EmptyState, Skeleton } from '../../design';
 import { formatDateTime, useT } from '../../i18n';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { notificationTargetPath } from './links';
 import type { Notification } from './types';
 import { isUnread } from './types';
@@ -19,6 +20,8 @@ export interface InboxPreviewPaneProps {
   /** 加载完成后选中 id 仍不在列表(源已删除或不存在) */
   readonly unknownId: string | null;
   readonly locale: string;
+  /** 规范工作区路由 slug;独立/旧测试入口为空时保留兼容扁平路径。 */
+  readonly workspaceSlug?: string | null;
   readonly onMarkRead: (notification: Notification) => void;
   readonly onArchive: (notification: Notification) => void;
 }
@@ -27,6 +30,10 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
   const { notification, isLoading, unknownId, locale, onMarkRead, onArchive } = props;
   const t = useT();
   const navigate = useNavigate();
+  const inboxPath =
+    props.workspaceSlug === undefined || props.workspaceSlug === null
+      ? '/inbox'
+      : workspaceRoute(props.workspaceSlug, 'inbox');
 
   if (unknownId !== null) {
     // H5:unknownId 仅表示「不在已加载窗口」(深链旧通知 / 桌面选中后归档出列 /
@@ -39,7 +46,7 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
           size="sm"
           className="mesh-inbox-preview__back"
           data-testid="inbox-preview-back"
-          onClick={() => navigate('/inbox')}
+          onClick={() => navigate(inboxPath)}
         >
           {t('inbox.back')}
         </Button>
@@ -65,7 +72,7 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
     );
   }
 
-  const targetPath = notificationTargetPath(notification);
+  const targetPath = notificationTargetPath(notification, props.workspaceSlug ?? null);
   const sourceDeleted = notification.issue === undefined && notification.issue_id !== null;
   const actor = notification.actor;
 
@@ -76,7 +83,7 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
         size="sm"
         className="mesh-inbox-preview__back"
         data-testid="inbox-preview-back"
-        onClick={() => navigate('/inbox')}
+        onClick={() => navigate(inboxPath)}
       >
         {t('inbox.back')}
       </Button>
@@ -134,7 +141,7 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
           data-testid="inbox-preview-archive"
           onClick={() => {
             onArchive(notification);
-            navigate('/inbox');
+            navigate(inboxPath);
           }}
         >
           {t('inbox.preview.archive')}
