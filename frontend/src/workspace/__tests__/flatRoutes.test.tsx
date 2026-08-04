@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../api/__tests__/fetchStub';
 import { resetApiClient } from '../../api/instance';
 import { I18nProvider } from '../../i18n';
+import { renderWithProviders } from '../../test-utils/render';
 import { FlatRouteMigration, matchFlatRoute } from '../flatRoutes';
+import { WorkspaceProvider } from '../WorkspaceProvider';
 
 function LandingProbe(): React.JSX.Element {
   const location = useLocation();
@@ -45,6 +47,16 @@ function renderAt(initial: string): void {
         </Routes>
       </MemoryRouter>
     </I18nProvider>,
+  );
+}
+
+function WorkspaceNotFoundHarness(): React.JSX.Element {
+  const { slug } = useParams<{ slug: string }>();
+  if (slug === undefined) throw new Error('workspace slug is required');
+  return (
+    <WorkspaceProvider slug={slug}>
+      <FlatRouteMigration />
+    </WorkspaceProvider>
   );
 }
 
@@ -156,11 +168,15 @@ describe('FlatRouteMigration(路由器 replace navigation,§3.4 执行层)', () 
   it('单一归属:旧书签 /board 刷新 → /w/{slug}/board,query 与 hash 保留', async () => {
     stubMe({ memberships: [{ workspace_id: 'ws-a', workspace_slug: 'alpha' }] });
     renderAt('/board?view=x#card-1');
-    await waitFor(() => expect(screen.getByTestId('landed-pathname').textContent).toBe('/w/alpha/board'));
+    await waitFor(() =>
+      expect(screen.getByTestId('landed-pathname').textContent).toBe('/w/alpha/board'),
+    );
     expect(screen.getByTestId('landed-search').textContent).toBe('?view=x');
     expect(screen.getByTestId('landed-hash').textContent).toBe('#card-1');
     // active workspace 记忆写入(解析成功后记录)。
-    expect(window.localStorage.getItem(`mesh.last_workspace:${window.location.host}:u1`)).toBe('alpha');
+    expect(window.localStorage.getItem(`mesh.last_workspace:${window.location.host}:u1`)).toBe(
+      'alpha',
+    );
   });
 
   it('多工作区 + 本地记忆 → 记忆工作区的规范路由(解析序 ②)', async () => {
@@ -173,7 +189,9 @@ describe('FlatRouteMigration(路由器 replace navigation,§3.4 执行层)', () 
       lastActiveWorkspaceId: 'ws-a',
     });
     renderAt('/inbox');
-    await waitFor(() => expect(screen.getByTestId('landed-pathname').textContent).toBe('/w/beta/inbox'));
+    await waitFor(() =>
+      expect(screen.getByTestId('landed-pathname').textContent).toBe('/w/beta/inbox'),
+    );
   });
 
   it('多工作区 + 服务端提示 → 解析序 ③', async () => {
@@ -185,7 +203,9 @@ describe('FlatRouteMigration(路由器 replace navigation,§3.4 执行层)', () 
       lastActiveWorkspaceId: 'ws-b',
     });
     renderAt('/members');
-    await waitFor(() => expect(screen.getByTestId('landed-pathname').textContent).toBe('/w/beta/members'));
+    await waitFor(() =>
+      expect(screen.getByTestId('landed-pathname').textContent).toBe('/w/beta/members'),
+    );
   });
 
   it('多工作区无上下文 → 工作区选择页,?next= 保留意图路径', async () => {
@@ -196,8 +216,12 @@ describe('FlatRouteMigration(路由器 replace navigation,§3.4 执行层)', () 
       ],
     });
     renderAt('/chat/s-9?tab=x');
-    await waitFor(() => expect(screen.getByTestId('picker-pathname').textContent).toBe('/workspace-picker'));
-    const next = new URLSearchParams(screen.getByTestId('picker-search').textContent ?? '').get('next');
+    await waitFor(() =>
+      expect(screen.getByTestId('picker-pathname').textContent).toBe('/workspace-picker'),
+    );
+    const next = new URLSearchParams(screen.getByTestId('picker-search').textContent ?? '').get(
+      'next',
+    );
     expect(next).toBe('/chat/s-9?tab=x');
   });
 
@@ -205,5 +229,44 @@ describe('FlatRouteMigration(路由器 replace navigation,§3.4 执行层)', () 
     stubMe({ memberships: [{ workspace_id: 'ws-a', workspace_slug: 'alpha' }] });
     renderAt('/definitely-unknown');
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument());
+    expect(screen.getByTestId('notfound-page').tagName).toBe('SECTION');
+  });
+
+  it('工作区未知路径 → 嵌入 shell 的 not-found 提供当前工作区恢复出口', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('/workspaces/by-slug/alpha')) {
+          return fakeResponse({
+            body: {
+              data: {
+                id: 'ws-a',
+                name: 'Alpha',
+                slug: 'alpha',
+                logo_url: null,
+                timezone: 'UTC',
+                settings: {},
+                my_role: 'member',
+                created_at: '2026-08-04T00:00:00Z',
+                updated_at: '2026-08-04T00:00:00Z',
+              },
+            },
+          });
+        }
+        return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
+      }) as unknown as typeof fetch,
+    );
+    resetApiClient();
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:slug/*" element={<WorkspaceNotFoundHarness />} />
+      </Routes>,
+      { route: '/w/alpha/definitely-unknown' },
+    );
+
+    const workspaceLink = await screen.findByTestId('notfound-workspace');
+    expect(workspaceLink).toHaveAttribute('href', '/w/alpha');
+    expect(screen.getByTestId('notfound-page').tagName).toBe('SECTION');
   });
 });

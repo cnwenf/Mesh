@@ -7,7 +7,9 @@
  * - 长列表键盘选择始终滚入可视区。
  */
 import { expect, test } from '@playwright/test';
-import { gotoHomeReady, login } from './helpers';
+import { gotoHomeReady, login, MOCK_BASE } from './helpers';
+
+const RECENTS_KEY = `mesh.recents:${MOCK_BASE}:user-1:ws-1`;
 
 test('URL 工作区优先于 memberships 顺序,搜索请求落当前 workspace id', async ({ page }) => {
   await login(page);
@@ -92,9 +94,9 @@ test('403 recent 打开即从界面与持久化同步剪枝', async ({ page }) =
       body: JSON.stringify({ error: { code: 'forbidden', message: 'forbidden' } }),
     });
   });
-  await page.evaluate(() => {
+  await page.evaluate((key) => {
     window.localStorage.setItem(
-      'mesh.recents:http://127.0.0.1:8901:user-1:ws-1',
+      key,
       JSON.stringify([
         {
           kind: 'object',
@@ -106,7 +108,7 @@ test('403 recent 打开即从界面与持久化同步剪枝', async ({ page }) =
         },
       ]),
     );
-  });
+  }, RECENTS_KEY);
   await page.goto('/w/acme/board');
   const detailRequest = page.waitForRequest((request) =>
     request.url().includes('/api/v1/issues/private-1'),
@@ -117,11 +119,7 @@ test('403 recent 打开即从界面与持久化同步剪枝', async ({ page }) =
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   await expect(palette.getByText('Revoked private issue', { exact: true })).toHaveCount(0);
   await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.localStorage.getItem('mesh.recents:http://127.0.0.1:8901:user-1:ws-1'),
-      ),
-    )
+    .poll(() => page.evaluate((key) => window.localStorage.getItem(key), RECENTS_KEY))
     .toBe('[]');
 });
 
@@ -143,9 +141,9 @@ test('agent recent 以 member id 核验并直达名册深链', async ({ page }) 
       }),
     });
   });
-  await page.evaluate(() => {
+  await page.evaluate((key) => {
     window.localStorage.setItem(
-      'mesh.recents:http://127.0.0.1:8901:user-1:ws-1',
+      key,
       JSON.stringify([
         {
           kind: 'object',
@@ -157,7 +155,7 @@ test('agent recent 以 member id 核验并直达名册深链', async ({ page }) 
         },
       ]),
     );
-  });
+  }, RECENTS_KEY);
   await page.goto('/w/acme/board');
   const detailRequest = page.waitForRequest((request) =>
     request.url().includes('/api/v1/workspaces/ws-1/members/member-agent-1'),
@@ -183,9 +181,9 @@ test('recent 核验期间新增项不会被旧快照误删', async ({ page }) =>
       body: JSON.stringify({ error: { code: 'forbidden', message: 'forbidden' } }),
     });
   });
-  await page.evaluate(() => {
+  await page.evaluate((key) => {
     window.localStorage.setItem(
-      'mesh.recents:http://127.0.0.1:8901:user-1:ws-1',
+      key,
       JSON.stringify([
         {
           kind: 'object',
@@ -197,15 +195,14 @@ test('recent 核验期间新增项不会被旧快照误删', async ({ page }) =>
         },
       ]),
     );
-  });
+  }, RECENTS_KEY);
   await page.goto('/w/acme/board');
   const detailRequest = page.waitForRequest((request) =>
     request.url().includes('/api/v1/issues/private-1'),
   );
   await page.keyboard.press('Control+K');
   await detailRequest;
-  await page.evaluate(() => {
-    const key = 'mesh.recents:http://127.0.0.1:8901:user-1:ws-1';
+  await page.evaluate((key) => {
     const existing = JSON.parse(window.localStorage.getItem(key) ?? '[]') as unknown[];
     window.localStorage.setItem(
       key,
@@ -221,18 +218,14 @@ test('recent 核验期间新增项不会被旧快照误删', async ({ page }) =>
         ...existing,
       ]),
     );
-  });
+  }, RECENTS_KEY);
   releaseDetail?.();
 
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   await expect(palette.getByText('Revoked issue', { exact: true })).toHaveCount(0);
   await expect(palette.getByText('Concurrent recent', { exact: true })).toBeVisible();
   await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.localStorage.getItem('mesh.recents:http://127.0.0.1:8901:user-1:ws-1'),
-      ),
-    )
+    .poll(() => page.evaluate((key) => window.localStorage.getItem(key), RECENTS_KEY))
     .toContain('concurrent-2');
 });
 
@@ -240,7 +233,7 @@ test('旧 window.host recent 形状读取后迁移到 API origin 键', async ({ 
   await login(page);
   await page.evaluate(() => {
     window.localStorage.setItem(
-      'mesh.recents:127.0.0.1:5173:user-1:ws-1',
+      `mesh.recents:${window.location.host}:user-1:ws-1`,
       JSON.stringify([
         {
           type: 'issue',
@@ -257,13 +250,11 @@ test('旧 window.host recent 形状读取后迁移到 API origin 键', async ({ 
   const palette = page.getByRole('dialog', { name: 'Command palette' });
 
   await expect(palette.getByRole('option', { name: /Login rate limiting/ })).toBeVisible();
-  const migrated = await page.evaluate(() =>
-    window.localStorage.getItem('mesh.recents:http://127.0.0.1:8901:user-1:ws-1'),
-  );
+  const migrated = await page.evaluate((key) => window.localStorage.getItem(key), RECENTS_KEY);
   expect(migrated).toContain('"kind":"object"');
   expect(
     await page.evaluate(() =>
-      window.localStorage.getItem('mesh.recents:127.0.0.1:5173:user-1:ws-1'),
+      window.localStorage.getItem(`mesh.recents:${window.location.host}:user-1:ws-1`),
     ),
   ).toBeNull();
 });
@@ -295,4 +286,164 @@ test('键盘选择长命令列表时选中项始终滚入可视区', async ({ pa
   expect(geometry).not.toBeNull();
   expect(geometry?.selectedTop).toBeGreaterThanOrEqual((geometry?.listTop ?? 0) - 1);
   expect(geometry?.selectedBottom).toBeLessThanOrEqual((geometry?.listBottom ?? 0) + 1);
+});
+
+test('320×568 与动态矮视口下命令面板/帮助层保持内部滚动且操作可达', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page);
+  await gotoHomeReady(page);
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.keyboard.press('Control+K');
+
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const assertPaletteFits = async (): Promise<void> => {
+    await expect
+      .poll(() =>
+        palette.evaluate((root) => {
+          const rootBox = root.getBoundingClientRect();
+          const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+          return rootBox.top >= -1 && rootBox.bottom <= viewportHeight + 1;
+        }),
+      )
+      .toBe(true);
+
+    const metrics = await palette.evaluate((root) => {
+      const input = root.querySelector('[role="combobox"]');
+      const list = root.querySelector('[role="listbox"]');
+      const footer = root.querySelector('.mesh-palette__footer');
+      if (
+        !(input instanceof HTMLElement) ||
+        !(list instanceof HTMLElement) ||
+        !(footer instanceof HTMLElement)
+      ) {
+        return null;
+      }
+      const rootBox = root.getBoundingClientRect();
+      const inputBox = input.getBoundingClientRect();
+      const listBox = list.getBoundingClientRect();
+      const footerBox = footer.getBoundingClientRect();
+      return {
+        viewportHeight: window.visualViewport?.height ?? window.innerHeight,
+        rootTop: rootBox.top,
+        rootBottom: rootBox.bottom,
+        inputTop: inputBox.top,
+        listHeight: listBox.height,
+        footerBottom: footerBox.bottom,
+        listClientHeight: list.clientHeight,
+        listScrollHeight: list.scrollHeight,
+      };
+    });
+
+    expect(metrics).not.toBeNull();
+    expect(metrics?.rootTop).toBeGreaterThanOrEqual(-1);
+    expect(metrics?.rootBottom).toBeLessThanOrEqual((metrics?.viewportHeight ?? 0) + 1);
+    expect(metrics?.inputTop).toBeGreaterThanOrEqual((metrics?.rootTop ?? 0) - 1);
+    expect(metrics?.listHeight).toBeGreaterThan(0);
+    expect(metrics?.footerBottom).toBeLessThanOrEqual((metrics?.rootBottom ?? 0) + 1);
+    expect(metrics?.listScrollHeight).toBeGreaterThanOrEqual(metrics?.listClientHeight ?? 0);
+  };
+
+  await assertPaletteFits();
+  await page.setViewportSize({ width: 320, height: 360 });
+  await expect.poll(() => page.evaluate(() => window.visualViewport?.height)).toBe(360);
+  await assertPaletteFits();
+
+  // 输入框获焦时第一下 Esc 仅失焦，第二下关闭父 Dialog。
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(palette).toHaveCount(0);
+
+  await page.getByTestId('open-help').click();
+  const help = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect
+    .poll(() =>
+      help.evaluate((root) => {
+        const rootBox = root.getBoundingClientRect();
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        return rootBox.top >= -1 && rootBox.bottom <= viewportHeight + 1;
+      }),
+    )
+    .toBe(true);
+
+  const helpMetrics = await help.evaluate((root) => {
+    const scroller = root.querySelector('.mesh-shortcut-help');
+    const restore = root.querySelector('.mesh-shortcut-help__restore');
+    if (!(scroller instanceof HTMLElement) || !(restore instanceof HTMLElement)) return null;
+    scroller.scrollTop = scroller.scrollHeight;
+    const rootBox = root.getBoundingClientRect();
+    const restoreBox = restore.getBoundingClientRect();
+    const scrollerBox = scroller.getBoundingClientRect();
+    return {
+      viewportHeight: window.visualViewport?.height ?? window.innerHeight,
+      rootTop: rootBox.top,
+      rootBottom: rootBox.bottom,
+      scrollerClientHeight: scroller.clientHeight,
+      scrollerScrollHeight: scroller.scrollHeight,
+      restoreTop: restoreBox.top,
+      restoreBottom: restoreBox.bottom,
+      scrollerTop: scrollerBox.top,
+      scrollerBottom: scrollerBox.bottom,
+    };
+  });
+
+  expect(helpMetrics).not.toBeNull();
+  expect(helpMetrics?.rootTop).toBeGreaterThanOrEqual(-1);
+  expect(helpMetrics?.rootBottom).toBeLessThanOrEqual((helpMetrics?.viewportHeight ?? 0) + 1);
+  expect(helpMetrics?.scrollerScrollHeight).toBeGreaterThan(helpMetrics?.scrollerClientHeight ?? 0);
+  expect(helpMetrics?.restoreTop).toBeGreaterThanOrEqual((helpMetrics?.scrollerTop ?? 0) - 1);
+  expect(helpMetrics?.restoreBottom).toBeLessThanOrEqual((helpMetrics?.scrollerBottom ?? 0) + 1);
+});
+
+test('forced-colors 下选中结果的图标继承 HighlightText', async ({ page }) => {
+  await page.emulateMedia({ forcedColors: 'active' });
+  await login(page);
+  await gotoHomeReady(page);
+  await page.keyboard.press('Control+K');
+
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const selectedOption = palette.getByRole('option', { name: 'Issues', exact: true });
+  await expect(selectedOption).toBeVisible();
+  await selectedOption.hover();
+  await expect(selectedOption).toHaveAttribute('aria-selected', 'true');
+
+  // 空查询打开时 favorites/recents 会异步完成核验并重建分区；必须在同一个浏览器
+  // 任务中重新确认当前行仍为 active 后再读取样式，避免 locator 解析与 evaluate 之间
+  // 选中项已切换而误测到普通行。probe 让断言不依赖宿主系统的具体高对比色板。
+  await expect
+    .poll(() =>
+      selectedOption.evaluate((row) => {
+        const icon = row.querySelector(':scope > .mesh-palette__option-icon');
+        const glyph = icon?.querySelector('.mesh-icon');
+        if (!(icon instanceof HTMLElement) || !(glyph instanceof SVGElement)) {
+          return null;
+        }
+
+        const probe = document.createElement('span');
+        probe.style.color = 'HighlightText';
+        probe.style.forcedColorAdjust = 'none';
+        document.body.append(probe);
+        const highlightText = getComputedStyle(probe).color;
+        probe.remove();
+
+        const rowStyle = getComputedStyle(row);
+        const iconStyle = getComputedStyle(icon);
+        const glyphStyle = getComputedStyle(glyph);
+        return {
+          activeSelectorMatches: row.matches('.mesh-palette__option.mesh-palette__option--active'),
+          rowAdjust: rowStyle.forcedColorAdjust,
+          iconAdjust: iconStyle.forcedColorAdjust,
+          rowUsesHighlightText: rowStyle.color === highlightText,
+          iconUsesHighlightText: iconStyle.color === highlightText,
+          glyphUsesHighlightText: glyphStyle.color === highlightText,
+        };
+      }),
+    )
+    .toEqual({
+      activeSelectorMatches: true,
+      rowAdjust: 'none',
+      iconAdjust: 'none',
+      rowUsesHighlightText: true,
+      iconUsesHighlightText: true,
+      glyphUsesHighlightText: true,
+    });
 });

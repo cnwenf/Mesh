@@ -17,7 +17,7 @@ import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } fro
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { errorToI18nKey } from '../api/errors';
-import { Dialog, Kbd } from '../design';
+import { Button, Dialog, InputControl, Kbd } from '../design';
 import { useT } from '../i18n';
 import { PaletteResults } from './PaletteResults';
 import {
@@ -29,7 +29,7 @@ import {
 import type { PaletteOption } from './paletteModel';
 import { pushRecent, trackCommandUse } from './recents';
 import type { RecentEntry } from './recents';
-import { detectMac } from './ShortcutProvider';
+import { detectMac, isComposingEvent } from './ShortcutProvider';
 import { usePaletteContext } from './usePaletteContext';
 import { isOfflineCondition, usePaletteData } from './usePaletteData';
 import type { FavoritesProvider } from './usePaletteData';
@@ -154,9 +154,6 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   // 使实体插入不移动用户即将 Enter 的条目(§4.3.1.4 选中不移位)
   const lastStableIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // PaletteResults keeps presentation-only callbacks; capture the pointer modifier at
-  // the palette boundary so mod+click can preserve the current page (§4.1).
-  const modifiedPointerActivationRef = useRef(false);
   const listId = useId();
   const isOnline = useSyncExternalStore(subscribeOnline, getIsOnline, () => true);
 
@@ -221,8 +218,6 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
     selection.stableId !== null ? `palette-opt-${selection.stableId}` : undefined;
 
   const handleActivate = (option: PaletteOption, opts: { newTab: boolean }): void => {
-    const newTab = opts.newTab || modifiedPointerActivationRef.current;
-    modifiedPointerActivationRef.current = false;
     activatePaletteOption(
       option,
       {
@@ -242,7 +237,7 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
           onClose();
         },
       },
-      { newTab },
+      opts,
     );
   };
 
@@ -256,6 +251,14 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   };
 
   const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (isComposingEvent(event.nativeEvent)) {
+      // Escape 在输入法候选期只交给 IME；不冒泡到 Dialog 的失焦/关闭栈。
+      // Tab 仍交给 Dialog 做焦点圈养，避免组合输入时焦点逃出 modal。
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+      }
+      return;
+    }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setSelectedId(moveSelection(flat, selection.stableId, 1));
@@ -307,21 +310,18 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
       closeLabel={closeLabel}
       initialFocusRef={inputRef}
     >
-      <div
-        className="mesh-palette"
-        onClickCapture={(event) => {
-          modifiedPointerActivationRef.current = event.metaKey || event.ctrlKey;
-        }}
-      >
+      <div className="mesh-palette">
         {data.isSearching && trimmed !== '' ? (
           <div className="mesh-palette__progress" aria-hidden="true" />
         ) : null}
-        <input
+        <InputControl
           ref={inputRef}
           type="text"
+          size="lg"
           role="combobox"
           className="mesh-palette__input"
           placeholder={searchPlaceholder}
+          aria-label={searchPlaceholder}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleInputKeyDown}
@@ -341,9 +341,15 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
         {trimmed !== '' && !offline && data.error !== null ? (
           <div className="mesh-palette__error" role="alert" data-testid="palette-error">
             <span>{t(errorToI18nKey(data.error))}</span>
-            <button type="button" className="mesh-palette__retry" onClick={data.retry}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="mesh-palette__retry"
+              onClick={data.retry}
+            >
               {t('search.retry')}
-            </button>
+            </Button>
           </div>
         ) : null}
         {data.flatCount > 0 ? (
@@ -366,14 +372,16 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
             </p>
             <p className="mesh-palette__no-results-hints">{t('search.noResultsHints')}</p>
             {canCreateIssue ? (
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 className="mesh-palette__create"
                 data-testid="palette-create-issue"
                 onClick={handleCreateIssue}
               >
                 {t('search.createIssue', { q: trimmed })}
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : null}

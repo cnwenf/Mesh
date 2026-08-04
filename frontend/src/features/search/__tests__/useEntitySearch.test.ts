@@ -1,5 +1,5 @@
 /**
- * useEntitySearch 单测(§4.7:防抖 150ms / identifier 跳过防抖 / 过期请求取消 / 重试)。
+ * useEntitySearch 单测(§4.7:防抖 120ms / identifier 跳过防抖 / 过期请求取消 / 重试)。
  * 以受控 fetch 桩(注入 MeshApiClient.fetchImpl)+ 假时钟驱动。
  */
 import { act, renderHook } from '@testing-library/react';
@@ -20,7 +20,11 @@ const ISSUE_ITEM: SearchResultItem = {
   type: 'issue',
   id: 'i1',
   title: 'Login page',
-  context: { identifier: 'WEB-1', project: null, status: { id: 's', name: 'Todo', category: 'todo' } },
+  context: {
+    identifier: 'WEB-1',
+    project: null,
+    status: { id: 's', name: 'Todo', category: 'todo' },
+  },
   icon: 'issue',
   url: '/w/acme/issues/i1',
 };
@@ -68,7 +72,8 @@ describe('useEntitySearch(防抖 + 过期取消,§4.7)', () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it('普通查询防抖 150ms:窗口内不发,到点即发', () => {
+  it('普通查询防抖 120ms:窗口内不发,到点即发', () => {
+    expect(SEARCH_DEBOUNCE_MS).toBe(120);
     const { rerender } = setup('');
     rerender({ q: 'abc', enabled: true });
     expect(fetchImpl).not.toHaveBeenCalled();

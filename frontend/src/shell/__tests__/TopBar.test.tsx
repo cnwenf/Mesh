@@ -120,6 +120,7 @@ describe('TopBar', () => {
     expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/');
     expect(screen.getByTestId('topbar-search')).toHaveAttribute('data-slot', 'input');
     expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+    expect(screen.getByTestId('open-palette')).toHaveTextContent('Ctrl+K');
   });
 
   it.each(['connecting', 'reconnecting', 'resyncing', 'offline'])(
@@ -197,6 +198,21 @@ describe('TopBar', () => {
     expect(onOpenSearch).toHaveBeenCalledWith('看板');
     expect(input).toHaveValue('');
     expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+  });
+
+  it('IME 组合输入期间 Enter 不提交搜索或执行弹层选项', async () => {
+    const onOpenSearch = vi.fn();
+    renderTopBar({ state: 'connected', onOpenSearch });
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    await screen.findByTestId('topbar-search-popover');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 });
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(screen.getByTestId('topbar-search-popover')).toBeInTheDocument();
   });
 
   it('ArrowDown 进入弹层选择;Enter 激活选中项(命令执行)并收起', async () => {

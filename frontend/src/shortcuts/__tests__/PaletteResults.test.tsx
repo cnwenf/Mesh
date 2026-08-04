@@ -219,6 +219,17 @@ describe('PaletteResults', () => {
     // React 的 onMouseEnter 由冒泡的 mouseover 合成(jsdom 下以 mouseOver 驱动)
     fireEvent.mouseOver(option);
     expect(onOptionHover).toHaveBeenCalledWith('issue:i-1');
+
+    fireEvent.click(option);
+    expect(onOptionActivate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ stableId: 'issue:i-1' }),
+      { newTab: false },
+    );
+    fireEvent.click(option, { ctrlKey: true });
+    expect(onOptionActivate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ stableId: 'issue:i-1' }),
+      { newTab: true },
+    );
   });
 
   it('auxClick 中键(button=1)以 newTab:true 上报;左键与其余键不上报', () => {

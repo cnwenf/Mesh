@@ -52,6 +52,16 @@ export const APP_ROUTE_MANIFEST: readonly AppRouteManifestEntry[] = [
     browser: CORE,
   },
   {
+    id: 'register',
+    pattern: '/register',
+    samplePath: '/register',
+    element: 'RegisterPage',
+    access: 'public',
+    permission: 'anonymous',
+    kind: 'page',
+    browser: { level: 'extended', readySelector: '[data-testid="login-display-name"]' },
+  },
+  {
     id: 'styleguide',
     pattern: '/styleguide',
     samplePath: '/styleguide',
@@ -124,6 +134,16 @@ export const APP_ROUTE_MANIFEST: readonly AppRouteManifestEntry[] = [
     permission: 'authenticated',
     kind: 'page',
     browser: CORE,
+  },
+  {
+    id: 'forbidden',
+    pattern: '/forbidden',
+    samplePath: '/forbidden',
+    element: 'ForbiddenPage',
+    access: 'protected',
+    permission: 'authenticated',
+    kind: 'page',
+    browser: { level: 'extended', readySelector: '[data-testid="forbidden-page"]' },
   },
   {
     id: 'settings-index',

@@ -4,7 +4,9 @@
  * (影响/重试/诊断 ID)、布局类存在(KPI 条 + 图表网格)、骨架同形。
  * 新增 i18n 键在测试环境呈回退标记,一律按 testid/class/文本标记断言。
  */
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiError } from '../../../api';
 import { renderWithProviders } from '../../../test-utils/render';
@@ -16,27 +18,45 @@ const state = vi.hoisted(() => ({
   failWith: null as Error | null,
   /** 设置后仪表盘请求挂起等待(观测 loading 骨架;React 19 act 会冲刷即刻 Promise) */
   holdDashboard: null as Promise<unknown> | null,
+  workspaceStatus: 'ready' as 'loading' | 'ready',
+  dashboardSignals: [] as Array<AbortSignal | undefined>,
+}));
+
+const WORKSPACE = {
+  id: 'ws1',
+  name: 'WS',
+  slug: 'ws',
+  logo_url: null,
+  timezone: 'UTC',
+  settings: {},
+  my_role: 'member' as const,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+};
+
+vi.mock('../../../workspace/WorkspaceProvider', () => ({
+  useWorkspace: () => ({
+    status: state.workspaceStatus,
+    workspace: state.workspaceStatus === 'ready' ? WORKSPACE : null,
+    error: null,
+    isAdmin: false,
+    isOwner: false,
+    refresh: async () => undefined,
+    patch: async () => WORKSPACE,
+  }),
+  WorkspaceGate: ({ children }: { children: ReactNode }) =>
+    state.workspaceStatus === 'ready' ? (
+      <>{children}</>
+    ) : (
+      <div data-testid="ws-loading">Loading</div>
+    ),
 }));
 
 vi.mock('../../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api')>();
   class StubMeshApiClient {
-    async request(_method: string, path: string) {
-      if (path === '/api/v1/users/me') {
-        return {
-          user: { id: 'u1', email: 'u1@x.io', display_name: 'U1' },
-          memberships: [
-            {
-              workspace_id: 'ws1',
-              workspace_name: 'WS',
-              workspace_slug: 'ws',
-              role: 'member',
-              status: 'active',
-              joined_at: null,
-            },
-          ],
-        };
-      }
+    async request(_method: string, _path: string, opts?: { readonly signal?: AbortSignal }) {
+      state.dashboardSignals.push(opts?.signal);
       if (state.holdDashboard !== null) {
         await state.holdDashboard;
       }
@@ -117,7 +137,15 @@ function makeDashboard(seriesCount: number): WorkspaceDashboardData {
 beforeEach(() => {
   state.dashboard = makeDashboard(2);
   state.failWith = null;
+  state.holdDashboard = null;
+  state.workspaceStatus = 'ready';
+  state.dashboardSignals.length = 0;
 });
+
+function LocationProbe(): React.JSX.Element {
+  const location = useLocation();
+  return <span data-testid="location-probe">{location.pathname + location.search}</span>;
+}
 
 describe('deriveWindowKpis / isWindowEmpty', () => {
   it('derives window aggregates client-side from the dashboard payload', () => {
@@ -211,6 +239,26 @@ describe('InsightsPage error states', () => {
     expect(screen.getByText('diag-123')).toBeInTheDocument();
   });
 
+  it('routes a forbidden aggregate to the isolated permission recovery page', async () => {
+    state.failWith = new MeshApiError({
+      status: 403,
+      code: 'project_not_visible',
+      message: 'hidden',
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/insights" element={<InsightsPage />} />
+        <Route path="/forbidden" element={<LocationProbe />} />
+      </Routes>,
+      { route: '/insights' },
+    );
+
+    expect(await screen.findByTestId('location-probe')).toHaveTextContent(
+      '/forbidden?workspace=%2Fw%2Fws',
+    );
+    expect(screen.queryByText('Analytics unavailable')).toBeNull();
+  });
+
   it('recovers via retry after a transient failure', async () => {
     state.failWith = new MeshApiError({ status: 500, code: 'internal_error', message: 'boom' });
     renderWithProviders(<InsightsPage />, { route: '/insights' });
@@ -218,7 +266,7 @@ describe('InsightsPage error states', () => {
       expect(screen.getByText('Analytics unavailable')).toBeInTheDocument();
     });
     state.failWith = null;
-    screen.getByText('Retry').click();
+    fireEvent.click(screen.getByText('Retry'));
     await waitFor(() => {
       expect(screen.getByTestId('insights-throughput')).toBeInTheDocument();
     });
@@ -238,7 +286,7 @@ describe('InsightsPage layout and skeleton', () => {
   });
 
   it('shows a layout-shaped skeleton before data lands', async () => {
-    // 挂起仪表盘请求:冲刷身份解析微任务后,页面停在「工作区已定、数据在途」的加载态
+    // WorkspaceGate 已 ready，挂起 analytics 请求后页面停在数据骨架态。
     let release: () => void = () => undefined;
     state.holdDashboard = new Promise((resolve) => {
       release = () => resolve(undefined);
@@ -246,14 +294,124 @@ describe('InsightsPage layout and skeleton', () => {
     try {
       const { container } = renderWithProviders(<InsightsPage />, { route: '/insights' });
       await act(async () => {
-        // 令 fetchMe 链路落定(setWorkspace),仪表盘请求仍挂起 → 骨架在场
+        // 冲刷 analytics effect；请求仍挂起，骨架应在场。
       });
       const loading = screen.getByTestId('insights-loading');
       expect(loading).toBeInTheDocument();
       expect(container.querySelectorAll('.mesh-skeleton__shape').length).toBeGreaterThanOrEqual(8);
     } finally {
-      release();
       state.holdDashboard = null;
+      await act(async () => release());
     }
+  });
+
+  it('defers analytics reads while WorkspaceGate is loading', () => {
+    state.workspaceStatus = 'loading';
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+
+    expect(screen.getByTestId('ws-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('insights-content')).toBeNull();
+    expect(state.dashboardSignals).toHaveLength(0);
+  });
+
+  it('preserves the current dashboard during a range refresh', async () => {
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await screen.findByTestId('insights-throughput');
+
+    let release: () => void = () => undefined;
+    state.holdDashboard = new Promise((resolve) => {
+      release = () => resolve(undefined);
+    });
+    fireEvent.change(screen.getByTestId('insights-range'), { target: { value: '90' } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('insights-content')).toHaveAttribute('aria-busy', 'true');
+    });
+    expect(screen.getByTestId('insights-throughput')).toBeInTheDocument();
+    expect(screen.getByTestId('insights-refreshing')).toBeInTheDocument();
+
+    state.holdDashboard = null;
+    await act(async () => release());
+    await waitFor(() => {
+      expect(screen.getByTestId('insights-content')).not.toHaveAttribute('aria-busy', 'true');
+    });
+  });
+
+  it('keeps stale data visible when a refresh fails and offers retry', async () => {
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await screen.findByTestId('insights-throughput');
+
+    state.failWith = new MeshApiError({ status: 500, code: 'internal_error', message: 'boom' });
+    fireEvent.change(screen.getByTestId('insights-granularity'), {
+      target: { value: 'week' },
+    });
+
+    expect(await screen.findByTestId('insights-refresh-error')).toBeInTheDocument();
+    expect(screen.getByTestId('insights-throughput')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('stops rendering stale figures when a refresh reports lost permission', async () => {
+    renderWithProviders(
+      <Routes>
+        <Route path="/insights" element={<InsightsPage />} />
+        <Route path="/forbidden" element={<LocationProbe />} />
+      </Routes>,
+      { route: '/insights' },
+    );
+    await screen.findByTestId('insights-throughput');
+
+    state.failWith = new MeshApiError({
+      status: 403,
+      code: 'forbidden',
+      message: 'permission revoked',
+    });
+    fireEvent.change(screen.getByTestId('insights-granularity'), {
+      target: { value: 'week' },
+    });
+
+    expect(await screen.findByTestId('location-probe')).toHaveTextContent(
+      '/forbidden?workspace=%2Fw%2Fws',
+    );
+    expect(screen.queryByTestId('insights-throughput')).toBeNull();
+  });
+
+  it('aborts the previous in-flight dashboard read when filters change', async () => {
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await screen.findByTestId('insights-throughput');
+
+    let release: () => void = () => undefined;
+    state.holdDashboard = new Promise((resolve) => {
+      release = () => resolve(undefined);
+    });
+    try {
+      fireEvent.change(screen.getByTestId('insights-range'), { target: { value: '90' } });
+      await waitFor(() => expect(state.dashboardSignals).toHaveLength(2));
+
+      const staleSignal = state.dashboardSignals[1];
+      expect(staleSignal?.aborted).toBe(false);
+
+      fireEvent.change(screen.getByTestId('insights-granularity'), {
+        target: { value: 'week' },
+      });
+      await waitFor(() => expect(state.dashboardSignals).toHaveLength(3));
+
+      expect(staleSignal?.aborted).toBe(true);
+      expect(state.dashboardSignals[2]?.aborted).toBe(false);
+    } finally {
+      state.holdDashboard = null;
+      await act(async () => release());
+    }
+  });
+
+  it('aborts an in-flight dashboard read on unmount', async () => {
+    state.holdDashboard = new Promise(() => undefined);
+    const { unmount } = renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await waitFor(() => expect(state.dashboardSignals).toHaveLength(1));
+
+    const signal = state.dashboardSignals[0];
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
   });
 });

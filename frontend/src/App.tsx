@@ -14,12 +14,11 @@
  * /workspace-picker 选择页)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router';
 import { getApiClient } from './api/instance';
 import { useAuthStore } from './state/authStore';
 import { restoreActiveOnboarding } from './features/onboarding';
 import { getIssueByIdentifier } from './features/issues/api';
-import { usePaletteIdentity } from './features/search/usePaletteIdentity';
 import { ThemeProvider, ToastProvider } from './design';
 import { StyleguidePage } from './design/StyleguidePage';
 import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';
@@ -61,9 +60,11 @@ import { ErrorBoundary } from './shell/pages/ErrorPage';
 import { RequireAuth } from './shell/RequireAuth';
 import { DeviceAuthorizationPage } from './features/device/DeviceAuthorizationPage';
 import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
+import { ForbiddenPage } from './shell/pages/ForbiddenPage';
 import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
 import { OAuthCallbackPage } from './shell/pages/OAuthCallbackPage';
+import { RegisterPage } from './shell/pages/RegisterPage';
 import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
 import { AppearanceSettingsSection } from './shell/pages/settings/AppearanceSettingsSection';
@@ -160,33 +161,40 @@ function WorkspaceIssueByIdentifierRedirect(): React.JSX.Element {
 
 function ShellProviders(): React.JSX.Element {
   const t = useT();
+  const location = useLocation();
+  // 403 独立页不暴露工作区级浮层、favorites/recents 或恢复操作。
+  const globalOverlaysEnabled = location.pathname !== '/forbidden';
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
-  // no-results「新建 issue」门控(§4.2):当前工作区成员角色 owner/admin/member 可创建,
-  // guest/失权(role null)不可。面板渲染于 Provider 树顶层(工作区路由之外),故经
-  // usePaletteIdentity 的成员身份角色解析(§3.4 解析序)取角色,而非 useOptionalWorkspace。
-  const paletteIdentity = usePaletteIdentity({ client: getApiClient() });
-  const canCreateIssue = paletteIdentity.role !== null && paletteIdentity.role !== 'guest';
-
   const controls = useMemo<OverlayControls>(
     () => ({
       openPalette: () => {
+        if (!globalOverlaysEnabled) return;
         setPaletteQuery('');
         setPaletteOpen(true);
       },
-      openHelp: () => setHelpOpen(true),
+      openHelp: () => {
+        if (globalOverlaysEnabled) setHelpOpen(true);
+      },
       // 统一搜索入口(design-quality A-02):顶栏搜索键入/回车携带查询展开同一面板
       openSearch: (query: string) => {
+        if (!globalOverlaysEnabled) return;
         setPaletteQuery(query);
         setPaletteOpen(true);
       },
     }),
-    [],
+    [globalOverlaysEnabled],
   );
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  useEffect(() => {
+    if (globalOverlaysEnabled) return;
+    setPaletteOpen(false);
+    setHelpOpen(false);
+    setRestoreError(null);
+  }, [globalOverlaysEnabled]);
   // 帮助菜单恢复上手清单(onboarding.md §4.2 流程 3):恢复成功后收起帮助层,清单按库内进度重现;
   // 失败不再静默吞掉——帮助层内显式提示(§错误处理:用户可见失败反馈)。
   const handleRestoreOnboarding = useCallback(() => {
@@ -209,6 +217,7 @@ function ShellProviders(): React.JSX.Element {
           <ErrorBoundary>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
               {/* 设计系统 fixture 页(MES-115 视觉回归基础):公开、无业务数据,
                   组件状态矩阵走查与 1440/1024/768/390 × 亮暗拍摄对象 */}
               <Route path="/styleguide" element={<StyleguidePage />} />
@@ -218,6 +227,10 @@ function ShellProviders(): React.JSX.Element {
               <Route path="/reset" element={<ResetPasswordPage />} />
               {/* OAuth 登录回调(§4.1/§4.5):提供商回跳 code+state,交换会话凭证后回跳 */}
               <Route path="/auth/oauth/callback/:provider" element={<OAuthCallbackPage />} />
+              {/* 授权失败页不套 AppShell，避免泄漏不可见工作区上下文；仍要求已有会话。 */}
+              <Route element={<RequireAuth />}>
+                <Route path="/forbidden" element={<ForbiddenPage />} />
+              </Route>
               <Route path="/" element={<AppShell />}>
                 {/* 邀请接受页(公开;preview → accept,四 reason UI 态):
                     未登录可见预览、accept 时才跳登录,故置于登录守卫之外。 */}
@@ -387,31 +400,34 @@ function ShellProviders(): React.JSX.Element {
               </Route>
             </Routes>
           </ErrorBoundary>
-          <CommandPalette
-            open={paletteOpen}
-            onClose={closePalette}
-            title={t('shortcuts.paletteTitle')}
-            closeLabel={t('a11y.closeDialog')}
-            searchPlaceholder={t('shortcuts.palettePlaceholder')}
-            emptyText={t('shortcuts.paletteEmpty')}
-            canCreateIssue={canCreateIssue}
-            initialQuery={paletteQuery}
-          />
-          <ShortcutHelp
-            open={helpOpen}
-            onClose={closeHelp}
-            title={t('shortcuts.helpTitle')}
-            closeLabel={t('a11y.closeDialog')}
-            groupLabels={{
-              global: t('shortcuts.groupGlobal'),
-              board: t('shortcuts.groupBoard'),
-              issue: t('shortcuts.groupIssue'),
-              chat: t('shortcuts.groupChat'),
-            }}
-            restoreLabel={t('onboarding.restoreHelp')}
-            onRestore={handleRestoreOnboarding}
-            restoreError={restoreError ?? undefined}
-          />
+          {globalOverlaysEnabled ? (
+            <>
+              <CommandPalette
+                open={paletteOpen}
+                onClose={closePalette}
+                title={t('shortcuts.paletteTitle')}
+                closeLabel={t('a11y.closeDialog')}
+                searchPlaceholder={t('shortcuts.palettePlaceholder')}
+                emptyText={t('shortcuts.paletteEmpty')}
+                initialQuery={paletteQuery}
+              />
+              <ShortcutHelp
+                open={helpOpen}
+                onClose={closeHelp}
+                title={t('shortcuts.helpTitle')}
+                closeLabel={t('a11y.closeDialog')}
+                groupLabels={{
+                  global: t('shortcuts.groupGlobal'),
+                  board: t('shortcuts.groupBoard'),
+                  issue: t('shortcuts.groupIssue'),
+                  chat: t('shortcuts.groupChat'),
+                }}
+                restoreLabel={t('onboarding.restoreHelp')}
+                onRestore={handleRestoreOnboarding}
+                restoreError={restoreError ?? undefined}
+              />
+            </>
+          ) : null}
         </OverlayControlsProvider>
       </ShortcutProvider>
     </ToastProvider>

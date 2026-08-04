@@ -1,27 +1,28 @@
-/**
- * InsightsPage 边界分支补测(per-file 门禁 B2):覆盖 fetchMe 解析工作区失败时的
- * `.catch` 回调(渲染 error 态)。该路径需 members/api 的 fetchMe 抛错,故单独成文件
- * 以隔离 vi.mock(主 InsightsPage.test 走真实 catalog + 模块级 api mock 的成功路径)。
- */
-import { screen, waitFor } from '@testing-library/react';
+/** Insights 复用 WorkspaceGate：工作区解析失败时不启动 analytics 请求。 */
+import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { MeshApiError, type MeshApiClient } from '../../../api';
 import { renderWithProviders } from '../../../test-utils/render';
+import { WorkspaceProvider } from '../../../workspace/WorkspaceProvider';
 import { InsightsPage } from '../InsightsPage';
 
-vi.mock('../../members/api', () => ({
-  // fetchMe 失败 → 命中 useEffect 的 .catch 回调(setError)
-  fetchMe: vi.fn(async () => {
-    throw new Error('me down');
-  }),
-  activeWorkspace: vi.fn(() => null),
-}));
+describe('InsightsPage workspace gate error', () => {
+  it('renders the workspace error state without mounting the dashboard reader', async () => {
+    const workspaceClient = {
+      request: vi.fn(async () => {
+        throw new MeshApiError({ status: 503, code: 'internal_error', message: 'workspace down' });
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
 
-describe('InsightsPage fetchMe error path', () => {
-  it('renders the error state when the workspace lookup fails', async () => {
-    renderWithProviders(<InsightsPage />, { route: '/insights' });
-    await waitFor(() => {
-      expect(screen.getByText('Analytics unavailable')).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId('insights-throughput')).toBeNull();
+    renderWithProviders(
+      <WorkspaceProvider slug="ws" client={workspaceClient}>
+        <InsightsPage />
+      </WorkspaceProvider>,
+      { route: '/w/ws/insights' },
+    );
+
+    expect(await screen.findByTestId('ws-error')).toBeInTheDocument();
+    expect(screen.queryByTestId('insights-content')).toBeNull();
   });
 });

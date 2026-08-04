@@ -22,7 +22,13 @@ beforeEach(() => {
   useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
   act(() => {
     useShortcutRegistry.getState().registerShortcuts([
-      { id: 'palette', combo: 'mod+k', label: 'Open command palette', group: 'global', run: vi.fn() },
+      {
+        id: 'palette',
+        combo: 'mod+k',
+        label: 'Open command palette',
+        group: 'global',
+        run: vi.fn(),
+      },
       { id: 'help', combo: '?', label: 'Show shortcuts', group: 'global', run: vi.fn() },
       { id: 'new', combo: 'c', label: 'New issue', group: 'global', run: vi.fn() },
       { id: 'inbox', combo: 'g i', label: 'Go to inbox', group: 'global', run: vi.fn() },
@@ -57,13 +63,15 @@ describe('ShortcutHelp(? 帮助层,随上下文分组实时反映)', () => {
     expect(screen.getByRole('heading', { name: 'Global' })).toBeInTheDocument();
   });
 
-  it('组合键经 Kbd 渲染:mod+k → Ctrl+K(非 mac)/ Cmd+K(mac)', () => {
-    const { rerender } = render(<ShortcutHelp open onClose={() => undefined} isMac={false} {...HELP_PROPS} />);
+  it('组合键经 Kbd 渲染:mod+k → Ctrl+K(非 mac)/ ⌘+K(mac)', () => {
+    const { rerender } = render(
+      <ShortcutHelp open onClose={() => undefined} isMac={false} {...HELP_PROPS} />,
+    );
     const kbd = screen.getByText('Ctrl+K');
     expect(kbd.tagName).toBe('KBD');
 
     rerender(<ShortcutHelp open onClose={() => undefined} isMac {...HELP_PROPS} />);
-    expect(screen.getByText('Cmd+K').tagName).toBe('KBD');
+    expect(screen.getByText('⌘+K').tagName).toBe('KBD');
   });
 
   it('序列键 g i 渲染为多个按键帽', () => {

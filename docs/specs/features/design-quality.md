@@ -127,7 +127,7 @@
 
 | 页面域     | 当前路由/入口                                                                                               | 本 Spec 覆盖                                                      |
 | ---------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| 认证       | `/login`（登录/注册）、`/forgot`、`/reset`、`/auth/oauth/callback/:provider`                                | PublicFlow、表单、MFA、错误与手机键盘                             |
+| 认证       | `/login`、`/register`、`/forgot`、`/reset`、`/auth/oauth/callback/:provider`                                | PublicFlow、表单、MFA、直接深链、错误与手机键盘                   |
 | 公开协作   | `/device`、`/invite/:token`                                                                                 | 授权/邀请状态、安全提示、恢复路径                                 |
 | 应用外壳   | `/` + `AppShell`                                                                                            | 工作台、桌面/手机导航、顶栏、全局状态                             |
 | 账号设置   | `/settings`                                                                                                 | Appearance、Notifications、Security、Tokens、Audit 的二级设置结构 |
@@ -147,7 +147,7 @@
 | 集成       | `/integrations`、`/integrations/:integrationId`、`/webhook-subscriptions`                                   | 目录、连接详情、绑定、事件、健康和订阅                            |
 | 洞察       | `/insights` + 项目/Agent 内嵌面板                                                                           | KPI、图表、口径、无数据和响应式                                   |
 | 全局浮层   | 命令面板、快捷键帮助、工作区切换器、收件箱弹层、Toast                                                       | 焦点、键盘、触控、层级和统一搜索入口                              |
-| 兜底       | `*`、ErrorBoundary                                                                                          | 404、全局错误、重试、返回与诊断信息                               |
+| 兜底       | `/forbidden`、`*`、ErrorBoundary                                                                            | 403/404、全局错误、重试、安全返回与联系管理员入口                 |
 
 ---
 

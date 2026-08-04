@@ -226,6 +226,52 @@ describe('App 路由', () => {
     expect(screen.getByTestId('login-email')).toBeInTheDocument();
   });
 
+  it('/register 为独立公开入口并直接呈现注册表单', () => {
+    navigateTo('/register');
+    render(<App />);
+    expect(screen.getByTestId('login-display-name')).toBeInTheDocument();
+    expect(screen.getByTestId('login-mode-register')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('/forbidden 隔离工作区浮层，并写入认证页 SEO 保护', async () => {
+    signIn();
+    navigateTo('/forbidden?workspace=%2Fw%2Fws');
+    render(<App />);
+    expect(screen.getByTestId('forbidden-page')).toBeInTheDocument();
+    expect(screen.getByTestId('forbidden-contact')).toBeInTheDocument();
+    expect(screen.getByTestId('forbidden-contact-action')).toHaveAttribute('href', '/w/ws/members');
+    expect(screen.getByTestId('forbidden-home')).toHaveAttribute('href', '/');
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+    fireEvent.keyDown(window, { key: '?', shiftKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+
+    await waitFor(() => {
+      expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', 'noindex');
+      expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute(
+        'href',
+        `${window.location.origin}/forbidden?workspace=%2Fw%2Fws`,
+      );
+    });
+  });
+
+  it('离开 /forbidden 后恢复工作区级浮层快捷键', async () => {
+    signIn();
+    navigateTo('/forbidden?workspace=%2Fw%2Fws');
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+
+    fireEvent.click(screen.getByTestId('forbidden-home'));
+    await waitFor(() => expect(window.location.pathname).toBe('/'));
+    await waitFor(() => expect(screen.getByTestId('home-greeting')).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+  });
+
   it('TopBar 命令面板/帮助按钮开启对应对话框', () => {
     signIn();
     navigateTo('/');

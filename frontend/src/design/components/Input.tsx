@@ -10,6 +10,21 @@ import './components.css';
 
 export type InputSize = 'md' | 'lg';
 
+/**
+ * 无字段 wrapper 的输入原语适配层。业务组件只依赖 Mesh 的 `size` 与原生 input
+ * 属性；Appica 的组件名和 `inputSize` 等 API 留在 design 边界内。
+ */
+export interface InputControlProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
+  size?: InputSize;
+}
+
+export const InputControl = forwardRef<HTMLInputElement, InputControlProps>(function InputControl(
+  { size = 'md', ...rest },
+  ref,
+) {
+  return <AppicaInput ref={ref} inputSize={size} {...rest} />;
+});
+
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
   /** 可见标签(必填):渲染 <label htmlFor> */
   label: string;
@@ -48,11 +63,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       <label className="mesh-field__label" htmlFor={inputId}>
         {label}
       </label>
-      <AppicaInput
+      <InputControl
         ref={ref}
         id={inputId}
         className={controlClasses}
-        inputSize={size === 'lg' ? 'lg' : 'md'}
+        size={size}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
         {...rest}

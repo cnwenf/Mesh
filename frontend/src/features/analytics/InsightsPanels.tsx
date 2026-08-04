@@ -3,7 +3,7 @@
  * 自 InsightsPage 拆出以控文件尺度;数字一律 tabular-nums(.mesh-tnum,§6.3),
  * 成员类型/成功率语义色均带文本兜底(颜色非唯一信号)。
  */
-import { EmptyState } from '../../design';
+import { EmptyState, Icon } from '../../design';
 import { useT } from '../../i18n';
 import { ChartFrame } from './ChartFrame';
 import { formatDurationSeconds, formatRate, rateTone } from './format';
@@ -20,44 +20,60 @@ export function InsightsWorkloadPanel(props: {
       {workload.data.length === 0 ? (
         <EmptyState title={t('analytics.state.noData')} />
       ) : (
-        <table className="mesh-analytics__table">
-          <caption className="sr-only">{t('analytics.workload.title')}</caption>
-          <thead>
-            <tr>
-              <th scope="col">{t('analytics.workload.member')}</th>
-              <th scope="col">{t('analytics.workload.openIssues')}</th>
-              <th scope="col">{t('analytics.workload.running')}</th>
-              <th scope="col">{t('analytics.workload.queued')}</th>
-              <th scope="col">{t('analytics.workload.awaitingApproval')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {workload.data.map((row) => (
-              <tr key={row.member_id}>
-                <td>
-                  {row.display_name}{' '}
-                  {t(
-                    row.member_type === 'agent'
-                      ? 'analytics.workload.typeAgent'
-                      : 'analytics.workload.typeHuman',
-                  )}
-                </td>
-                <td>
-                  <span className="mesh-tnum">{row.open_issues}</span>
-                </td>
-                <td>
-                  <span className="mesh-tnum">{row.running ?? '—'}</span>
-                </td>
-                <td>
-                  <span className="mesh-tnum">{row.queued ?? '—'}</span>
-                </td>
-                <td>
-                  <span className="mesh-tnum">{row.awaiting_approval ?? '—'}</span>
-                </td>
+        <div
+          className="mesh-analytics__table-scroll"
+          role="region"
+          aria-label={t('analytics.workload.title')}
+          tabIndex={0}
+        >
+          <table className="mesh-analytics__table">
+            <caption className="sr-only">{t('analytics.workload.title')}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{t('analytics.workload.member')}</th>
+                <th scope="col">{t('analytics.workload.openIssues')}</th>
+                <th scope="col">{t('analytics.workload.running')}</th>
+                <th scope="col">{t('analytics.workload.queued')}</th>
+                <th scope="col">{t('analytics.workload.awaitingApproval')}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {workload.data.map((row) => (
+                <tr key={row.member_id}>
+                  <td>
+                    <span className="mesh-analytics__member-label">
+                      <Icon
+                        name={row.member_type === 'agent' ? 'agent' : 'user'}
+                        size={16}
+                        className="mesh-analytics__member-type-icon"
+                      />
+                      <span>
+                        {row.display_name}{' '}
+                        {t(
+                          row.member_type === 'agent'
+                            ? 'analytics.workload.typeAgent'
+                            : 'analytics.workload.typeHuman',
+                        )}
+                      </span>
+                    </span>
+                  </td>
+                  <td>
+                    <span className="mesh-tnum">{row.open_issues}</span>
+                  </td>
+                  <td>
+                    <span className="mesh-tnum">{row.running ?? '—'}</span>
+                  </td>
+                  <td>
+                    <span className="mesh-tnum">{row.queued ?? '—'}</span>
+                  </td>
+                  <td>
+                    <span className="mesh-tnum">{row.awaiting_approval ?? '—'}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </ChartFrame>
   );

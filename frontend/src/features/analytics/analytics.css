@@ -4,6 +4,29 @@
   display: grid;
   gap: var(--space-4);
   grid-template-columns: 1fr;
+  container-type: inline-size;
+}
+
+.mesh-analytics__workbench {
+  container-type: inline-size;
+}
+
+.mesh-analytics__refreshing {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-analytics__inline-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mesh-analytics__inline-error p {
+  margin: var(--space-1) 0 0;
 }
 
 .mesh-analytics__card {
@@ -54,6 +77,10 @@
   margin-block-end: var(--space-4);
 }
 
+.mesh-analytics__toolbar .mesh-field {
+  min-inline-size: min(100%, 180px);
+}
+
 /* ===== KPI 条(§3.2:KPI 条 + 图表网格 + 口径说明;§8.3 窄屏两列/单列) ===== */
 
 .mesh-analytics__kpi-strip {
@@ -65,7 +92,7 @@
 
 @media (max-width: 599px) {
   .mesh-analytics__kpi-strip {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -161,8 +188,82 @@
   color: var(--color-warn);
 }
 
+.mesh-analytics__subheading {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mesh-analytics__outcomes,
+.mesh-analytics__token-summary {
+  margin-block-start: var(--space-4);
+}
+
+.mesh-analytics__outcome-track {
+  display: flex;
+  overflow: hidden;
+  min-block-size: var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-sunken);
+}
+
+.mesh-analytics__outcome-segment {
+  min-inline-size: 0;
+}
+
+.mesh-analytics__outcome-segment--success {
+  background: var(--success);
+}
+
+.mesh-analytics__outcome-segment--failure {
+  background: var(--error);
+}
+
+.mesh-analytics__outcome-segment--timeout {
+  background: var(--warning);
+}
+
+.mesh-analytics__outcome-legend,
+.mesh-analytics__token-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0 0;
+}
+
+.mesh-analytics__outcome-legend > div,
+.mesh-analytics__token-metrics > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.mesh-analytics__outcome-legend dt,
+.mesh-analytics__token-metrics dt {
+  color: var(--color-text-muted);
+}
+
+.mesh-analytics__outcome-legend dd,
+.mesh-analytics__token-metrics dd {
+  margin: 0;
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.mesh-analytics__table-scroll {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.mesh-analytics__table-scroll:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
 .mesh-analytics__table {
   inline-size: 100%;
+  min-inline-size: 620px;
   border-collapse: collapse;
   font-size: var(--font-size-sm);
 }
@@ -178,6 +279,17 @@
 .mesh-analytics__table th {
   color: var(--color-text-muted);
   font-weight: 500;
+}
+
+.mesh-analytics__member-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-analytics__member-type-icon {
+  flex: none;
+  color: var(--color-text-muted);
 }
 
 .mesh-analytics__visibility-note {
@@ -278,6 +390,46 @@
 
 .mesh-analytics__metric--danger {
   color: var(--color-danger);
+}
+
+.mesh-analytics__bar-group--emphasized .mesh-analytics__tick {
+  fill: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mesh-analytics__quantiles {
+  display: grid;
+  gap: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+
+.mesh-analytics__quantile {
+  display: grid;
+  grid-template-columns: minmax(32px, auto) minmax(80px, 1fr) minmax(64px, auto);
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-analytics__quantile-track {
+  overflow: hidden;
+  block-size: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-sunken);
+}
+
+.mesh-analytics__quantile-fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--info);
+}
+
+.mesh-analytics__quantile-value {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
 }
 
 /* 图表卡骨架占位高度(与真实卡片量级一致) */

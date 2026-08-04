@@ -2,7 +2,21 @@ import { createRef, useState } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { Input } from '../components/Input';
+import { Input, InputControl } from '../components/Input';
+
+describe('InputControl', () => {
+  it('以 Mesh size API 适配无字段 wrapper 的可访问输入控件', () => {
+    const ref = createRef<HTMLInputElement>();
+    render(
+      <InputControl ref={ref} size="lg" aria-label="Search commands" className="palette-control" />,
+    );
+
+    const input = screen.getByRole('textbox', { name: 'Search commands' });
+    expect(input).toHaveAttribute('data-slot', 'input');
+    expect(input).toHaveClass('palette-control');
+    expect(ref.current).toBe(input);
+  });
+});
 
 describe('Input', () => {
   it('label 经 <label htmlFor> 与输入框关联', () => {

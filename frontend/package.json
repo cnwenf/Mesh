@@ -35,7 +35,8 @@
     "test:e2e:runtimes": "playwright test -c playwright.runtimes.config.ts",
     "test:e2e:autopilots": "playwright test -c playwright.autopilots.config.ts",
     "test:e2e:mes160": "./e2e/mes160-real/run-e2e.sh",
-    "test:e2e:mes129": "playwright test -c playwright.mes129.config.ts"
+    "test:e2e:mes129": "playwright test -c playwright.mes129.config.ts",
+    "test:e2e:mes161": "playwright test -c playwright.mes161.config.ts"
   },
   "dependencies": {
     "@appica/ui-react": "1.0.0",

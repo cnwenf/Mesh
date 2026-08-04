@@ -18,7 +18,10 @@ import {
 interface Call {
   method?: string;
   path: string;
-  opts?: { query?: Record<string, string | number | boolean | undefined> };
+  opts?: {
+    query?: Record<string, string | number | boolean | undefined>;
+    signal?: AbortSignal;
+  };
 }
 
 function makeClient(): { client: MeshApiClient; calls: Call[] } {
@@ -120,5 +123,17 @@ describe('analytics api paths and params', () => {
     await fetchWorkspaceDashboard(client, 'ws1', { granularity: 'month' });
     expect(calls[0].path).toBe('/api/v1/workspaces/ws1/dashboards/workspace');
     expect(calls[0].opts?.query?.granularity).toBe('month');
+  });
+
+  it('forwards abort signals for cancellable dashboard reads', async () => {
+    const { client, calls } = makeClient();
+    const controller = new AbortController();
+
+    await fetchWorkspaceDashboard(client, 'ws1', { signal: controller.signal });
+    await fetchProjectDashboard(client, 'ws1', 'p1', { signal: controller.signal });
+    await fetchAgentStats(client, 'ws1', { agentId: 'a1', signal: controller.signal });
+
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call.opts?.signal === controller.signal)).toBe(true);
   });
 });

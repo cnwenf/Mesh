@@ -67,13 +67,15 @@ export function detectMac(): boolean {
 function formatKeyToken(token: string, isMac: boolean): string {
   const lower = token.toLowerCase();
   if (lower === 'mod') {
-    return isMac ? 'Cmd' : 'Ctrl';
+    // mesh-emoji-ok: ⌘ 是 macOS 修饰键的标准键帽排版符号,不是 UI 表意图标
+    return isMac ? '⌘' : 'Ctrl';
   }
   if (lower === 'shift') {
     return 'Shift';
   }
   if (lower === 'alt') {
-    return isMac ? 'Option' : 'Alt';
+    // mesh-emoji-ok: ⌥ 是 macOS 修饰键的标准键帽排版符号,不是 UI 表意图标
+    return isMac ? '⌥' : 'Alt';
   }
   const named = KEY_DISPLAY_NAMES[lower];
   if (named !== undefined) {
@@ -82,7 +84,7 @@ function formatKeyToken(token: string, isMac: boolean): string {
   return token.length === 1 ? token.toUpperCase() : token;
 }
 
-/** 'mod+k' → 'Cmd+K'(mac)/ 'Ctrl+K'(其他);按键名归一展示(键名非 UI 文案)。 */
+/** 'mod+k' → '⌘+K'(mac)/ 'Ctrl+K'(其他);按键名归一展示(键名非 UI 文案)。 */
 export function formatCombo(combo: string, isMac: boolean = detectMac()): string {
   return combo
     .split('+')
@@ -128,7 +130,7 @@ function comboFromEvent(event: KeyboardEvent): string {
 }
 
 /** 组合输入判定(评审 P1):isComposing 或keyCode 229 均视为 IME 组合中。 */
-function isComposingEvent(event: KeyboardEvent): boolean {
+export function isComposingEvent(event: Pick<KeyboardEvent, 'isComposing' | 'keyCode'>): boolean {
   return event.isComposing === true || event.keyCode === 229;
 }
 

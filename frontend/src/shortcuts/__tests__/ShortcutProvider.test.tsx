@@ -24,8 +24,8 @@ function registerShortcuts(defs: ShortcutDef[]): void {
 }
 
 describe('formatCombo(展示用组合键格式化)', () => {
-  it('mod 在 macOS 展示为 Cmd,其他平台为 Ctrl', () => {
-    expect(formatCombo('mod+k', true)).toBe('Cmd+K');
+  it('mod 在 macOS 展示为 ⌘,其他平台为 Ctrl', () => {
+    expect(formatCombo('mod+k', true)).toBe('⌘+K');
     expect(formatCombo('mod+k', false)).toBe('Ctrl+K');
   });
 
@@ -49,8 +49,8 @@ describe('formatCombo(展示用组合键格式化)', () => {
     expect(formatCombo('pageup', false)).toBe('pageup');
   });
 
-  it('alt 在 macOS 展示为 Option', () => {
-    expect(formatCombo('alt+k', true)).toBe('Option+K');
+  it('alt 在 macOS 展示为 ⌥', () => {
+    expect(formatCombo('alt+k', true)).toBe('⌥+K');
     expect(formatCombo('alt+k', false)).toBe('Alt+K');
   });
 

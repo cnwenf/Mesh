@@ -677,6 +677,20 @@ async function runDataScenario(
   }
   await installFailure(page, fixture.primaryPath, 403);
   await gotoPath(page, pageName);
+  if (pageName === '洞察') {
+    // Analytics deliberately leaves the workspace shell on a 403 so the
+    // denied workspace cannot leak through its navigation or global overlays.
+    // Validate that isolated recovery contract instead of waiting for the
+    // in-shell ErrorState used by the remaining data pages.
+    await expect(page.getByTestId('forbidden-page')).toBeVisible();
+    await expect(page).toHaveURL(/\/forbidden\?workspace=%2Fw%2Facme$/);
+    await expect(page.getByTestId('forbidden-contact-action')).toHaveAttribute(
+      'href',
+      '/w/acme/members',
+    );
+    await expect(page.getByTestId('forbidden-workspace')).toHaveAttribute('href', '/w/acme');
+    return async () => {};
+  }
   await waitForError(page);
   return async () => {};
 }

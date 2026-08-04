@@ -22,6 +22,7 @@ const MAIN_OWNERS = new Set([
   'src/features/approvals/ApprovalsPage.tsx',
   'src/shell/AppShell.tsx',
   'src/shell/pages/ErrorPage.tsx',
+  'src/shell/pages/ForbiddenPage.tsx',
   'src/shell/pages/NotFoundPage.tsx',
 ]);
 

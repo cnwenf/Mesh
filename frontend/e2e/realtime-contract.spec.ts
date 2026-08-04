@@ -5,7 +5,7 @@
  * REST 对账 → 无感恢复、离线横幅。
  */
 import { expect, test } from '@playwright/test';
-import { emit, gotoHomeReady, login, resetMockServer } from './helpers';
+import { emit, gotoHomeReady, login, MOCK_BASE, resetMockServer } from './helpers';
 
 const CHANNEL = 'workspace:ws-1:issues';
 
@@ -28,9 +28,7 @@ test.beforeEach(async () => {
 });
 
 test.describe('增量合并(README §6.7:完整变更字段 + 归属,禁止整板刷新)', () => {
-  test('issue.created 插入行 / issue.updated 就地更新 / issue.deleted 移除', async ({
-    page,
-  }) => {
+  test('issue.created 插入行 / issue.updated 就地更新 / issue.deleted 移除', async ({ page }) => {
     await login(page);
     await gotoHomeReady(page);
     const list = page.getByTestId('home-issue-list');
@@ -163,7 +161,7 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
     }
     // 模拟保留窗口清理(后端 retention purge,§6.7):删除旧事件,
     // 使客户端游标(6)早于最小可重放 seq → resume_from 过旧
-    const purge = await fetch('http://127.0.0.1:8901/api/v1/mock/purge', {
+    const purge = await fetch(`${MOCK_BASE}/api/v1/mock/purge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: CHANNEL, before_seq: 100 }),

@@ -13,6 +13,9 @@ const PERMISSION_ROUTES = APP_ROUTE_MANIFEST.filter((route) =>
   ['human', 'workspace_admin', 'workspace_owner'].includes(route.permission),
 );
 const REDIRECT_ROUTES = APP_ROUTE_MANIFEST.filter((route) => route.browser.level === 'redirect');
+const ANONYMOUS_ONLY_PATHS = APP_ROUTE_MANIFEST.filter((route) =>
+  ['LoginPage', 'RegisterPage'].includes(route.element),
+).map((route) => pathname(route.samplePath));
 
 function pathname(path: string): string {
   return new URL(path, 'http://route-manifest.local').pathname;
@@ -25,8 +28,11 @@ function pathAndSearch(path: string): string {
 
 async function injectSession(page: Page, authenticated: boolean): Promise<void> {
   await page.addInitScript(
-    ({ token, signedIn }) => {
-      if (signedIn) {
+    ({ token, signedIn, anonymousOnlyPaths }) => {
+      // Authentication entry pages intentionally redirect an existing session. The exhaustive
+      // reflow crawl reaches them anonymously while retaining one deterministic bootstrap script
+      // for every other route in the same page.
+      if (signedIn && !anonymousOnlyPaths.includes(window.location.pathname)) {
         window.localStorage.setItem(
           'mesh.auth.v1',
           JSON.stringify({ state: { token, refreshToken: null }, version: 0 }),
@@ -42,7 +48,7 @@ async function injectSession(page: Page, authenticated: boolean): Promise<void> 
         }),
       );
     },
-    { token: VISUAL_TOKEN, signedIn: authenticated },
+    { token: VISUAL_TOKEN, signedIn: authenticated, anonymousOnlyPaths: ANONYMOUS_ONLY_PATHS },
   );
 }
 
@@ -238,8 +244,8 @@ for (const route of EXTENDED_ROUTES) {
 test('all extended non-core routes reflow at every §13 viewport', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'phone-touch', 'phone-touch project owns the reflow crawl');
   test.setTimeout(420_000);
-  // Every extended public route remains public while signed in; one stable session avoids stacking
-  // conflicting init scripts as the crawl switches between public and protected URLs.
+  // One route-aware bootstrap script keeps protected routes signed in and authentication entry
+  // pages anonymous, avoiding stacked init scripts while the crawl switches route classes.
   await injectSession(page, true);
   for (const width of [320, 390, 640, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: width <= 390 ? (width === 320 ? 640 : 844) : 900 });

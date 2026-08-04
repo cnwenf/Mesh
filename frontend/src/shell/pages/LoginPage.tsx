@@ -34,7 +34,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { useAuthStore } from '../../state/authStore';
 
-type AuthMode = 'login' | 'register';
+export type AuthMode = 'login' | 'register';
 
 /** 目录内置本地名的提供商键(其余 ID vendor 中立地原样展示,不绑定厂商) */
 const PROVIDER_LABEL_KEYS: Readonly<Record<string, string>> = {
@@ -59,6 +59,8 @@ function fallbackProviderLabel(provider: string): string {
 
 export interface LoginPageProps {
   client?: MeshApiClient;
+  /** 首屏账号模式；独立注册路由复用同一套表单与安全处理。 */
+  initialMode?: AuthMode;
   /** 第三方登录按钮组渲染的提供商 ID(默认 env.oauthProviders) */
   oauthProviders?: readonly string[];
   /** OAuth start 端点所在 API 基址(默认 env.apiBaseUrl) */
@@ -93,7 +95,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   const token = useAuthStore((state) => state.token);
   const setSession = useAuthStore((state) => state.setSession);
 
-  const [mode, setMode] = useState<AuthMode>('login');
+  const [mode, setMode] = useState<AuthMode>(props.initialMode ?? 'login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -284,7 +286,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
       brandLabel={brandLabel}
       brandHref="/"
       skipLabel={t('a11y.skipLink')}
-      title={t('login.title')}
+      title={mode === 'register' ? t('title.register') : t('login.title')}
       description={t('login.description')}
       footer={footer}
     >

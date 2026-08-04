@@ -32,6 +32,7 @@ import { pushRecent, trackCommandUse } from '../shortcuts/recents';
 import { usePaletteContext } from '../shortcuts/usePaletteContext';
 import { usePaletteData } from '../shortcuts/usePaletteData';
 import type { FavoritesProvider } from '../shortcuts/usePaletteData';
+import { formatCombo, isComposingEvent } from '../shortcuts/ShortcutProvider';
 import { WorkspaceSwitcher } from '../workspace/WorkspaceSwitcher';
 
 export interface TopBarProps {
@@ -183,6 +184,9 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
   };
 
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (isComposingEvent(event.nativeEvent)) {
+      return;
+    }
     if (event.key === 'ArrowDown' && popoverOpen) {
       event.preventDefault();
       setSelectedId(moveSelection(flat, selectedId, 1));
@@ -292,7 +296,7 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
           label={t('a11y.openPalette')}
           onClick={onOpenPalette}
         >
-          <AppicaKbd size="sm">⌘</AppicaKbd>
+          <AppicaKbd size="sm">{formatCombo('mod+k')}</AppicaKbd>
         </IconButton>
         <IconButton data-testid="open-help" label={t('a11y.openHelp')} onClick={onOpenHelp}>
           <AppicaKbd size="sm">?</AppicaKbd>

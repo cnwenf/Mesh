@@ -2,9 +2,11 @@
  * ProjectDashboardPanel / AgentStatsCard 组件测试(analytics.md §4.2/§4.4)。
  * client 以 prop 注入最小桩(无模块级 mock)。
  */
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
+import { Route, Routes, useLocation } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
-import type { MeshApiClient } from '../../../api';
+import { MeshApiError, type MeshApiClient } from '../../../api';
 import { renderWithProviders } from '../../../test-utils/render';
 import { AgentStatsCard } from '../AgentStatsCard';
 import { ProjectDashboardPanel } from '../ProjectDashboardPanel';
@@ -22,6 +24,16 @@ const PROJECT_DASHBOARD = {
         completed_issues: 2,
         completed_points: 5,
         completed_points_by_unit: { points: 3, hours: 2 },
+      },
+      {
+        cycle_id: 'c0',
+        name: 'Sprint 0',
+        starts_at: '2026-06-29',
+        ends_at: '2026-07-05',
+        state: 'completed',
+        completed_issues: 1,
+        completed_points: 2,
+        completed_points_by_unit: { points: 2, hours: 0 },
       },
     ],
     meta: { display_timezone: 'UTC', scope_caliber: 'current_attribution' },
@@ -52,6 +64,17 @@ const PROJECT_DASHBOARD = {
   },
 };
 
+const PROJECT_DASHBOARD_WITHOUT_QUANTILES = {
+  ...PROJECT_DASHBOARD,
+  cycle_time: {
+    ...PROJECT_DASHBOARD.cycle_time,
+    p50_seconds: null,
+    p90_seconds: null,
+    sample_size: 0,
+    meta: { insufficient_data: 0, display_timezone: 'UTC' },
+  },
+};
+
 function makeStubClient(handler: (path: string) => unknown): MeshApiClient {
   return {
     request: vi.fn(async (_method: string, path: string) => handler(path)),
@@ -59,12 +82,27 @@ function makeStubClient(handler: (path: string) => unknown): MeshApiClient {
   } as unknown as MeshApiClient;
 }
 
+function ProjectScopeHarness(props: { readonly client: MeshApiClient }): React.JSX.Element {
+  const [projectId, setProjectId] = useState('p1');
+  return (
+    <>
+      <button data-testid="switch-project" onClick={() => setProjectId('p2')}>
+        switch
+      </button>
+      <ProjectDashboardPanel client={props.client} workspaceId="ws1" projectId={projectId} />
+    </>
+  );
+}
+
+function LocationProbe(): React.JSX.Element {
+  const location = useLocation();
+  return <span data-testid="location-probe">{location.pathname + location.search}</span>;
+}
+
 describe('ProjectDashboardPanel', () => {
   it('renders velocity bars, burndown lines and cycle time KPIs', async () => {
     const client = makeStubClient(() => PROJECT_DASHBOARD);
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard')).toBeInTheDocument();
     });
@@ -72,9 +110,13 @@ describe('ProjectDashboardPanel', () => {
     expect(screen.getByTestId('analytics-line-chart')).toBeInTheDocument();
     // cycle time KPI:2 天 / 5.6 天 / 样本 3
     const cycleCard = within(screen.getByTestId('project-dashboard-cycletime'));
-    expect(cycleCard.getByText('2d 0h')).toBeInTheDocument();
-    expect(cycleCard.getByText('5d 14h')).toBeInTheDocument();
+    expect(cycleCard.getAllByText('2d 0h')).toHaveLength(2);
+    expect(cycleCard.getAllByText('5d 14h')).toHaveLength(2);
     expect(cycleCard.getByText('3')).toBeInTheDocument();
+    expect(screen.getByTestId('project-dashboard-cycle-distribution')).toHaveAttribute(
+      'role',
+      'img',
+    );
     // insufficient 标注
     expect(screen.getByTestId('project-dashboard-insufficient')).toBeInTheDocument();
   });
@@ -91,9 +133,7 @@ describe('ProjectDashboardPanel', () => {
       }),
       list: vi.fn(async () => ({ data: [], next_cursor: null })),
     } as unknown as MeshApiClient;
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard-metric')).toBeInTheDocument();
     });
@@ -110,9 +150,7 @@ describe('ProjectDashboardPanel', () => {
       request: vi.fn(async () => PROJECT_DASHBOARD),
       list: vi.fn(async () => ({ data: [], next_cursor: null })),
     } as unknown as MeshApiClient;
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard-range')).toBeInTheDocument();
     });
@@ -120,8 +158,109 @@ describe('ProjectDashboardPanel', () => {
     const before = (client.request as ReturnType<typeof vi.fn>).mock.calls.length;
     fireEvent.change(screen.getByTestId('project-dashboard-range'), { target: { value: '90' } });
     await waitFor(() => {
-      expect((client.request as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
+      expect((client.request as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+        before,
+      );
     });
+  });
+
+  it('preserves rendered cards while the selected range refreshes', async () => {
+    let dashboardCalls = 0;
+    let release: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = {
+      request: vi.fn(async (_method: string, path: string) => {
+        if (path.includes('/dashboards/project/')) {
+          dashboardCalls += 1;
+          if (dashboardCalls > 1) await pending;
+        }
+        return PROJECT_DASHBOARD;
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
+    await screen.findByTestId('project-dashboard');
+
+    fireEvent.change(screen.getByTestId('project-dashboard-range'), { target: { value: '90' } });
+    await waitFor(() => expect(dashboardCalls).toBe(2));
+    expect(screen.getByTestId('project-dashboard')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByTestId('project-dashboard-velocity')).toBeInTheDocument();
+
+    release();
+    await waitFor(() => {
+      expect(screen.getByTestId('project-dashboard')).not.toHaveAttribute('aria-busy', 'true');
+    });
+  });
+
+  it('keeps successful project figures after a refresh error and retries inline', async () => {
+    let dashboardCalls = 0;
+    let failRefresh = false;
+    const client = {
+      request: vi.fn(async (_method: string, path: string) => {
+        if (path.includes('/dashboards/project/')) {
+          dashboardCalls += 1;
+          if (failRefresh) throw new Error('refresh failed');
+        }
+        return PROJECT_DASHBOARD;
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
+    await screen.findByTestId('project-dashboard');
+
+    failRefresh = true;
+    fireEvent.change(screen.getByTestId('project-dashboard-range'), { target: { value: '90' } });
+
+    expect(await screen.findByTestId('project-dashboard-refresh-error')).toBeInTheDocument();
+    expect(screen.getByTestId('project-dashboard-velocity')).toBeInTheDocument();
+
+    failRefresh = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(dashboardCalls).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect(screen.queryByTestId('project-dashboard-refresh-error')).toBeNull());
+  });
+
+  it('does not expose the previous project while a new project scope loads', async () => {
+    let releaseSecond: () => void = () => undefined;
+    const secondPending = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const secondDashboard = {
+      ...PROJECT_DASHBOARD,
+      project_id: 'p2',
+      velocity: {
+        ...PROJECT_DASHBOARD.velocity,
+        cycles: [{ ...PROJECT_DASHBOARD.velocity.cycles[0], cycle_id: 'c2', name: 'Sprint 2' }],
+      },
+    };
+    const client = {
+      request: vi.fn(async (_method: string, path: string) => {
+        if (path.endsWith('/p2')) {
+          await secondPending;
+          return secondDashboard;
+        }
+        return PROJECT_DASHBOARD;
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(<ProjectScopeHarness client={client} />);
+    expect(await screen.findByText('Sprint 1 · Active')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('switch-project'));
+    await waitFor(() => {
+      expect(
+        (client.request as ReturnType<typeof vi.fn>).mock.calls.some((call) =>
+          String(call[1]).endsWith('/p2'),
+        ),
+      ).toBe(true);
+    });
+    expect(screen.getByText('Loading analytics')).toBeInTheDocument();
+    expect(screen.queryByText('Sprint 1 · Active')).toBeNull();
+
+    await act(async () => releaseSecond());
+    expect(await screen.findByText('Sprint 2 · Active')).toBeInTheDocument();
   });
 
   it('renders the velocity empty state when there are no cycles', async () => {
@@ -129,25 +268,19 @@ describe('ProjectDashboardPanel', () => {
       ...PROJECT_DASHBOARD,
       velocity: { ...PROJECT_DASHBOARD.velocity, cycles: [] },
     }));
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard-velocity')).toBeInTheDocument();
     });
     // velocity 卡内空态(非整页空态)
     expect(
-      within(screen.getByTestId('project-dashboard-velocity')).getByText(
-        'No data in this window.',
-      ),
+      within(screen.getByTestId('project-dashboard-velocity')).getByText('No data in this window.'),
     ).toBeInTheDocument();
   });
 
   it('renders the no-scope empty state when burndown is null', async () => {
     const client = makeStubClient(() => ({ ...PROJECT_DASHBOARD, burndown: null }));
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByText('No cycle or milestone to burn down.')).toBeInTheDocument();
     });
@@ -162,9 +295,7 @@ describe('ProjectDashboardPanel', () => {
       }),
       list: vi.fn(async () => ({ data: [], next_cursor: null })),
     } as unknown as MeshApiClient;
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByText('Analytics unavailable')).toBeInTheDocument();
     });
@@ -173,6 +304,86 @@ describe('ProjectDashboardPanel', () => {
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard')).toBeInTheDocument();
     });
+  });
+
+  it('routes project_not_visible to the isolated permission recovery page', async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw new MeshApiError({
+          status: 403,
+          code: 'project_not_visible',
+          message: 'hidden',
+        });
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/project"
+          element={
+            <ProjectDashboardPanel
+              client={client}
+              workspaceId="ws1"
+              workspaceSlug="acme"
+              projectId="p1"
+            />
+          }
+        />
+        <Route path="/forbidden" element={<LocationProbe />} />
+      </Routes>,
+      { route: '/project' },
+    );
+
+    expect(await screen.findByTestId('location-probe')).toHaveTextContent(
+      '/forbidden?workspace=%2Fw%2Facme',
+    );
+    expect(screen.queryByText('Analytics unavailable')).toBeNull();
+  });
+
+  it('removes stale project figures when a refresh reports lost permission', async () => {
+    let dashboardCalls = 0;
+    const client = {
+      request: vi.fn(async (_method: string, path: string) => {
+        if (path.includes('/dashboards/project/')) {
+          dashboardCalls += 1;
+          if (dashboardCalls > 1) {
+            throw new MeshApiError({
+              status: 403,
+              code: 'project_not_visible',
+              message: 'permission revoked',
+            });
+          }
+        }
+        return PROJECT_DASHBOARD;
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/project"
+          element={
+            <ProjectDashboardPanel
+              client={client}
+              workspaceId="ws1"
+              workspaceSlug="acme"
+              projectId="p1"
+            />
+          }
+        />
+        <Route path="/forbidden" element={<LocationProbe />} />
+      </Routes>,
+      { route: '/project' },
+    );
+    await screen.findByTestId('project-dashboard');
+
+    fireEvent.change(screen.getByTestId('project-dashboard-range'), { target: { value: '90' } });
+
+    expect(await screen.findByTestId('location-probe')).toHaveTextContent(
+      '/forbidden?workspace=%2Fw%2Facme',
+    );
+    expect(screen.queryByTestId('project-dashboard')).toBeNull();
   });
 
   it('milestone-scoped burndown refetches with milestoneId (not cycleId)', async () => {
@@ -191,9 +402,7 @@ describe('ProjectDashboardPanel', () => {
       }),
       list: vi.fn(async () => ({ data: [], next_cursor: null })),
     } as unknown as MeshApiClient;
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard-metric')).toBeInTheDocument();
     });
@@ -214,9 +423,7 @@ describe('ProjectDashboardPanel', () => {
 
   it('null dashboard payload renders the error state (data===null, no error)', async () => {
     const client = makeStubClient(() => null);
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByText('Analytics unavailable')).toBeInTheDocument();
     });
@@ -230,13 +437,41 @@ describe('ProjectDashboardPanel', () => {
         meta: { insufficient_data: 0, display_timezone: 'UTC' },
       },
     }));
-    renderWithProviders(
-      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
-    );
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
     await waitFor(() => {
       expect(screen.getByTestId('project-dashboard')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('project-dashboard-insufficient')).toBeNull();
+  });
+
+  it('renders unavailable KPIs and omits the distribution when both quantiles are null', async () => {
+    const client = makeStubClient(() => PROJECT_DASHBOARD_WITHOUT_QUANTILES);
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
+
+    const cycleCard = within(await screen.findByTestId('project-dashboard-cycletime'));
+    expect(cycleCard.getAllByText('—')).toHaveLength(2);
+    expect(cycleCard.getByText('0')).toBeInTheDocument();
+    expect(screen.queryByTestId('project-dashboard-cycle-distribution')).toBeNull();
+  });
+
+  it.each([
+    { p50: null, p90: 483840, expectedWidths: ['0%', '100%'] },
+    { p50: 172800, p90: null, expectedWidths: ['100%', '0%'] },
+  ])('keeps the available quantile visible when the other is null', async (fixture) => {
+    const client = makeStubClient(() => ({
+      ...PROJECT_DASHBOARD,
+      cycle_time: {
+        ...PROJECT_DASHBOARD.cycle_time,
+        p50_seconds: fixture.p50,
+        p90_seconds: fixture.p90,
+      },
+    }));
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
+
+    const distribution = await screen.findByTestId('project-dashboard-cycle-distribution');
+    const fills = distribution.querySelectorAll<HTMLElement>('.mesh-analytics__quantile-fill');
+    expect([...fills].map((fill) => fill.style.inlineSize)).toEqual(fixture.expectedWidths);
+    expect(within(distribution).getByText('—')).toBeInTheDocument();
   });
 });
 
@@ -263,12 +498,16 @@ describe('AgentStatsCard', () => {
     await waitFor(() => {
       expect(screen.getByTestId('agent-stats-card')).toBeInTheDocument();
     });
-    expect(screen.getByText('90.0%')).toBeInTheDocument(); // success
+    expect(screen.getAllByText('90.0%')).toHaveLength(2); // KPI + outcome legend
     expect(screen.getByText('20.0%')).toBeInTheDocument(); // retry
-    expect(screen.getByText('10.0%')).toBeInTheDocument(); // timeout
+    expect(screen.getAllByText('10.0%')).toHaveLength(2); // KPI + outcome legend
     expect(screen.getByText('1h 1m')).toBeInTheDocument(); // avg duration
     expect(screen.getByTestId('agent-stats-token-note')).toBeInTheDocument();
     expect(screen.getByTestId('agent-stats-executions')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-stats-outcomes')).toHaveAttribute('role', 'img');
+    expect(screen.getByTestId('agent-token-prompt')).toHaveTextContent('1,000');
+    expect(screen.getByTestId('agent-token-completion')).toHaveTextContent('500');
+    expect(screen.getByTestId('agent-token-coverage')).toHaveTextContent('40.0%');
   });
 
   it('omits the token note at full coverage', async () => {
@@ -292,9 +531,7 @@ describe('AgentStatsCard', () => {
     } as unknown as MeshApiClient;
     renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
     await waitFor(() => {
-      expect(
-        screen.getByText('Statistics are not available for this agent.'),
-      ).toBeInTheDocument();
+      expect(screen.getByText('Statistics are not available for this agent.')).toBeInTheDocument();
     });
   });
 
@@ -328,13 +565,41 @@ describe('AgentStatsCard', () => {
     expect(container.querySelector('.mesh-analytics__kpi-big--danger')).not.toBeNull();
   });
 
+  it('renders unavailable rates without inventing outcome percentages', async () => {
+    const client = makeStubClient(() => ({
+      ...AGENT_STATS,
+      success_rate: Number.NaN,
+      timeout_rate: null,
+    }));
+    renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
+
+    const outcomes = await screen.findByTestId('agent-stats-outcomes');
+    expect(outcomes).toHaveAccessibleName(/success —, failed —, timeout —/i);
+    expect(outcomes.querySelectorAll('[style="inline-size: 0%;"]')).toHaveLength(3);
+  });
+
+  it('clamps out-of-range outcome rates to the valid percentage interval', async () => {
+    const client = makeStubClient(() => ({
+      ...AGENT_STATS,
+      success_rate: 1.2,
+      timeout_rate: -0.1,
+    }));
+    renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
+
+    const outcomes = await screen.findByTestId('agent-stats-outcomes');
+    expect(outcomes).toHaveAccessibleName(/success 100\.0%, failed 0\.0%, timeout 0\.0%/i);
+    const segments = outcomes.querySelectorAll<HTMLElement>('.mesh-analytics__outcome-segment');
+    expect([...segments].map((segment) => segment.style.inlineSize)).toEqual(['100%', '0%', '0%']);
+  });
+
   it('unmount in flight is a no-op (cancelled guard; no post-unmount state)', async () => {
     let resolveStats: (value: unknown) => void = () => undefined;
     const client = {
       request: vi.fn(
-        () =>
+        (_method: string, _path: string, opts?: { readonly signal?: AbortSignal }) =>
           new Promise((resolve) => {
             resolveStats = resolve;
+            expect(opts?.signal?.aborted).toBe(false);
           }),
       ),
       list: vi.fn(async () => ({ data: [], next_cursor: null })),
@@ -343,7 +608,10 @@ describe('AgentStatsCard', () => {
       <AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />,
     );
     await waitFor(() => expect(client.request).toHaveBeenCalled());
+    const signal = (client.request as ReturnType<typeof vi.fn>).mock.calls[0][2]?.signal as
+      AbortSignal | undefined;
     unmount();
+    expect(signal?.aborted).toBe(true);
     // 卸载后落定:cancelled 分支吞掉结果,不抛错
     resolveStats(AGENT_STATS);
     await Promise.resolve();
@@ -358,9 +626,7 @@ describe('AgentStatsCard', () => {
     } as unknown as MeshApiClient;
     renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
     await waitFor(() => {
-      expect(
-        screen.getByText('Statistics are not available for this agent.'),
-      ).toBeInTheDocument();
+      expect(screen.getByText('Statistics are not available for this agent.')).toBeInTheDocument();
     });
   });
 });

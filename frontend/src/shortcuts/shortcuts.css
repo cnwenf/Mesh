@@ -24,15 +24,35 @@
 /* ===== CommandPalette ===== */
 .mesh-palette {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-3);
+  min-block-size: 0;
+}
+
+/* 搜索面板使用可滚动内容区固定住输入与提示条；宽度遵循可读表单令牌。 */
+.mesh-dialog:has(.mesh-palette),
+.mesh-dialog:has(.mesh-shortcut-help) {
+  display: flex;
+  flex-direction: column;
+  max-inline-size: var(--content-form);
+  overflow: hidden;
+}
+
+.mesh-dialog:has(.mesh-palette) > .mesh-dialog__body,
+.mesh-dialog:has(.mesh-shortcut-help) > .mesh-dialog__body {
+  display: flex;
+  flex: 1;
+  min-block-size: 0;
+  overflow: hidden;
 }
 
 .mesh-palette__input {
   inline-size: 100%;
-  background-color: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
+  min-block-size: 2.75rem;
+  background-color: var(--color-surface-subtle);
+  color: var(--color-text-strong);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   padding-block: var(--space-3);
   padding-inline: var(--space-4);
@@ -47,23 +67,29 @@
   margin: 0;
   padding: 0;
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-1);
+  min-block-size: 0;
   max-block-size: 20rem;
   overflow: auto;
 }
 
 .mesh-palette__option {
+  min-block-size: 2.75rem;
   padding-block: var(--space-2);
   padding-inline: var(--space-3);
+  border-inline-start: 3px solid transparent;
   border-radius: var(--radius-md);
   color: var(--color-text);
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .mesh-palette__option--active {
-  background-color: var(--color-primary);
-  color: var(--color-primary-contrast);
+  border-inline-start-color: var(--color-accent);
+  background-color: var(--color-surface-selected);
+  color: var(--color-text-strong);
 }
 
 .mesh-palette__empty {
@@ -77,7 +103,7 @@
   padding-block: var(--space-1);
   padding-inline: var(--space-3);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--color-text-muted);
@@ -105,7 +131,7 @@
 }
 
 .mesh-palette__option--active .mesh-palette__option-icon {
-  color: var(--color-primary-contrast);
+  color: var(--color-accent);
 }
 
 .mesh-palette__option-main {
@@ -146,7 +172,7 @@
 }
 
 .mesh-palette__option--active .mesh-palette__subtitle {
-  color: var(--color-primary-contrast);
+  color: var(--color-text-muted);
 }
 
 .mesh-palette__combo {
@@ -219,19 +245,6 @@
 
 .mesh-palette__retry {
   flex: none;
-  border: 1px solid var(--color-danger-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: var(--space-1) var(--space-3);
-  cursor: pointer;
-}
-
-.mesh-palette__retry:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
 }
 
 .mesh-palette__offline {
@@ -261,23 +274,6 @@
 
 .mesh-palette__create {
   align-self: center;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-primary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: var(--space-2) var(--space-4);
-  cursor: pointer;
-}
-
-.mesh-palette__create:hover {
-  background: var(--color-surface-hover);
-}
-
-.mesh-palette__create:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
 }
 
 /* ===== 底部提示条(§4.1) ===== */
@@ -344,12 +340,26 @@
     color: HighlightText;
   }
 
+  .mesh-palette__option.mesh-palette__option--active .mesh-palette__option-icon,
+  .mesh-palette__option.mesh-palette__option--active .mesh-palette__subtitle,
+  .mesh-palette__option.mesh-palette__option--active .mesh-palette__combo {
+    forced-color-adjust: none;
+    color: HighlightText;
+  }
+
   .mesh-topbar__search-popover {
     outline: 1px solid CanvasText;
   }
 }
 
 /* ===== ShortcutHelp ===== */
+.mesh-shortcut-help {
+  flex: 1;
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
 .mesh-shortcut-help__group {
   margin-block-end: var(--space-5);
 }
@@ -361,7 +371,7 @@
 .mesh-shortcut-help__group-title {
   margin-block-end: var(--space-2);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text-muted);
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -394,28 +404,6 @@
   margin-block-start: var(--space-5);
   padding-block-start: var(--space-4);
   border-top: 1px solid var(--color-border);
-}
-
-.mesh-shortcut-help__restore {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  transition: border-color var(--duration-fast) ease-out;
-}
-
-.mesh-shortcut-help__restore:hover {
-  border-color: var(--color-info);
-  color: var(--color-info);
-}
-
-.mesh-shortcut-help__restore:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
 }
 
 .mesh-shortcut-help__restore-error {
@@ -481,7 +469,7 @@
   display: block;
   padding-block-end: var(--space-1);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--color-text-muted);
@@ -615,31 +603,6 @@
   font-size: var(--font-size-sm);
 }
 
-.mesh-palette__retry,
-.mesh-palette__create {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: var(--space-1) var(--space-3);
-  cursor: pointer;
-  transition: border-color var(--duration-fast) ease-out;
-}
-
-.mesh-palette__retry:hover,
-.mesh-palette__create:hover {
-  border-color: var(--color-info-border);
-  color: var(--color-info-fg);
-}
-
-.mesh-palette__retry:focus-visible,
-.mesh-palette__create:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
-}
-
 .mesh-palette__noresults {
   padding: var(--space-4);
   text-align: center;
@@ -667,10 +630,54 @@
     inline-size: 100%;
     transform: none;
   }
+}
+
+/* 手机端命令面板/帮助层转为底部 sheet，并为软键盘与安全区保留空间。 */
+@media (max-width: 599px) {
+  .mesh-dialog__backdrop:has(.mesh-palette),
+  .mesh-dialog__backdrop:has(.mesh-shortcut-help) {
+    align-items: flex-end;
+  }
+
+  .mesh-dialog:has(.mesh-palette),
+  .mesh-dialog:has(.mesh-shortcut-help) {
+    inline-size: 100%;
+    max-inline-size: none;
+    min-block-size: 0;
+    max-block-size: 88dvh;
+    padding-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+    border-end-start-radius: 0;
+    border-end-end-radius: 0;
+  }
+
+  .mesh-palette__list {
+    max-block-size: 52dvh;
+  }
+
+  .mesh-palette__option,
+  .mesh-shortcut-help__item {
+    min-block-size: 2.75rem;
+  }
 
   .mesh-palette__retry,
-  .mesh-palette__create {
-    transition: none;
+  .mesh-palette__create,
+  .mesh-shortcut-help__restore {
+    min-block-size: 2.75rem;
+  }
+
+  .mesh-palette__footer {
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .mesh-shortcut-help {
+    max-block-size: 100%;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .mesh-palette__option--active {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: -2px;
   }
 }
 

@@ -16,6 +16,7 @@ import {
   flattenSections,
   iconForSemanticKey,
   moveSelection,
+  normalizeSameOriginPaletteUrl,
   optionDomId,
   reconcileSelection,
   subtitleForItem,
@@ -100,7 +101,12 @@ describe('buildQuerySections(有 query)', () => {
       issue('i2', 'B'),
     ];
     const sections = buildQuerySections(items, [command('cmd1', 'Create issue')], 'iss');
-    expect(sections.map((section) => section.key)).toEqual(['issues', 'members', 'chats', 'commands']);
+    expect(sections.map((section) => section.key)).toEqual([
+      'issues',
+      'members',
+      'chats',
+      'commands',
+    ]);
     expect(sections[0].options.map((option) => option.stableId)).toEqual(['issue:i1', 'issue:i2']);
     expect(sections[0].labelKey).toBe('search.group.issues');
   });
@@ -162,8 +168,18 @@ describe('subtitleForItem(结构化 context → 目录键 + 参数)', () => {
 
 describe('buildEmptySections(§4.2.1 唯一数据流)', () => {
   const favorites: PaletteFavorite[] = [
-    { target_type: 'issue', target_id: 'i-fav', title: 'Fav old', created_at: '2026-01-01T00:00:00Z' },
-    { target_type: 'project', target_id: 'p-fav', title: 'Fav new', created_at: '2026-02-01T00:00:00Z' },
+    {
+      target_type: 'issue',
+      target_id: 'i-fav',
+      title: 'Fav old',
+      created_at: '2026-01-01T00:00:00Z',
+    },
+    {
+      target_type: 'project',
+      target_id: 'p-fav',
+      title: 'Fav new',
+      created_at: '2026-02-01T00:00:00Z',
+    },
   ];
   const recents: RecentEntry[] = [
     { kind: 'object', type: 'issue', id: 'i-fav', title: 'Dup with favorite', at: 9 },
@@ -171,7 +187,11 @@ describe('buildEmptySections(§4.2.1 唯一数据流)', () => {
     { kind: 'command', id: 'nav.board', commandId: 'nav.board', title: 'Board', at: 7 },
     { kind: 'command', id: 'gone.command', commandId: 'gone.command', title: 'Gone', at: 6 },
   ];
-  const commands = [command('nav.board', 'Board'), command('nav.home', 'Home'), command('theme.dark', 'Dark')];
+  const commands = [
+    command('nav.board', 'Board'),
+    command('nav.home', 'Home'),
+    command('theme.dark', 'Dark'),
+  ];
 
   it('favorites(时间倒序)→ recents(去重同 target + 失效命令)→ 常用命令(频次倒序)', () => {
     const sections = buildEmptySections({
@@ -184,7 +204,10 @@ describe('buildEmptySections(§4.2.1 唯一数据流)', () => {
     // favorites 按 created_at 倒序
     expect(sections[0].options.map((option) => option.title)).toEqual(['Fav new', 'Fav old']);
     // recents:i-fav 与 favorites 同 target 去重;失效命令剔除;按 at 倒序
-    expect(sections[1].options.map((option) => option.stableId)).toEqual(['view:v-1', 'cmd:nav.board']);
+    expect(sections[1].options.map((option) => option.stableId)).toEqual([
+      'view:v-1',
+      'cmd:nav.board',
+    ]);
     // 常用命令:频次倒序(同频按注册序:nav.home 注册先于 theme.dark),且与 recents 命令去重(nav.board 已在 recents)
     expect(sections[2].options.map((option) => option.stableId)).toEqual([
       'cmd:nav.home',
@@ -194,10 +217,17 @@ describe('buildEmptySections(§4.2.1 唯一数据流)', () => {
 
   it('常用命令上限 TOP_COMMANDS_LIMIT;空输入无分组', () => {
     const many = Array.from({ length: TOP_COMMANDS_LIMIT + 4 }, (_, index) => command(`c${index}`));
-    const sections = buildEmptySections({ favorites: [], recents: [], commands: many, usageCounts: {} });
+    const sections = buildEmptySections({
+      favorites: [],
+      recents: [],
+      commands: many,
+      usageCounts: {},
+    });
     expect(sections).toHaveLength(1);
     expect(sections[0].options).toHaveLength(TOP_COMMANDS_LIMIT);
-    expect(buildEmptySections({ favorites: [], recents: [], commands: [], usageCounts: {} })).toEqual([]);
+    expect(
+      buildEmptySections({ favorites: [], recents: [], commands: [], usageCounts: {} }),
+    ).toEqual([]);
   });
 
   it('favorites 缺失 created_at 时保持服务端序;缺失 title 以 target_id 兜底', () => {
@@ -290,11 +320,7 @@ describe('activatePaletteOption', () => {
       url: '/issues/i',
       item: issue('i', 'T'),
     };
-    activatePaletteOption(
-      option,
-      { navigate, openExternal, recordRecent },
-      { newTab: false },
-    );
+    activatePaletteOption(option, { navigate, openExternal, recordRecent }, { newTab: false });
     expect(navigate).toHaveBeenCalledWith('/issues/i');
     expect(recordRecent).toHaveBeenCalled();
     expect(openExternal).not.toHaveBeenCalled();
@@ -318,4 +344,63 @@ describe('activatePaletteOption', () => {
     activatePaletteOption(noUrl, { navigate, openExternal }, { newTab: false });
     expect(navigate).not.toHaveBeenCalled();
   });
+
+  it.each(['javascript:alert(1)', '//outside.example/path', '/\\outside.example/path'])(
+    '拒绝非同源规范路径 %s,且不记录 recent/关闭面板',
+    (url) => {
+      const navigate = vi.fn();
+      const openExternal = vi.fn();
+      const recordRecent = vi.fn();
+      const onAfter = vi.fn();
+      const option: PaletteOption = {
+        stableId: 'issue:unsafe',
+        group: 'issues',
+        title: 'Unsafe',
+        icon: 'info',
+        url,
+      };
+
+      activatePaletteOption(
+        option,
+        { navigate, openExternal, recordRecent, onAfter },
+        { newTab: true },
+      );
+
+      expect(navigate).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(recordRecent).not.toHaveBeenCalled();
+      expect(onAfter).not.toHaveBeenCalled();
+    },
+  );
+
+  it('导航前使用 WHATWG URL 规则归一化同源路径并保留 query/hash', () => {
+    const navigate = vi.fn();
+    const option: PaletteOption = {
+      stableId: 'project:p',
+      group: 'projects',
+      title: 'Project',
+      icon: 'project',
+      url: '/w/acme/issues/../projects/p?tab=activity#latest',
+    };
+
+    activatePaletteOption(option, { navigate, openExternal: vi.fn() }, { newTab: false });
+
+    expect(navigate).toHaveBeenCalledWith('/w/acme/projects/p?tab=activity#latest');
+  });
+});
+
+describe('normalizeSameOriginPaletteUrl', () => {
+  it('职责仅为同源相对 URL 校验与路径归一化,不冒充业务规范路由校验', () => {
+    expect(normalizeSameOriginPaletteUrl('/w/acme/issues/../projects/p?q=1#summary')).toBe(
+      '/w/acme/projects/p?q=1#summary',
+    );
+    expect(normalizeSameOriginPaletteUrl('/settings/danger')).toBe('/settings/danger');
+  });
+
+  it.each([null, 42, {}, [], 'javascript:alert(1)', '//outside.example/x', '/\\outside.example/x'])(
+    '拒绝非字符串或站外输入 %#',
+    (value) => {
+      expect(normalizeSameOriginPaletteUrl(value)).toBeNull();
+    },
+  );
 });

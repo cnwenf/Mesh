@@ -9,6 +9,7 @@
  */
 import { Kbd } from '../design/components/Kbd';
 import { Dialog } from '../design/components/Dialog';
+import { Button } from '../design/components/Button';
 import { arbitrateShortcut, isContextActive, useShortcutRegistry } from './registry';
 import type { ShortcutContext, ShortcutDef } from './registry';
 import { detectMac, formatCombo } from './ShortcutProvider';
@@ -25,7 +26,7 @@ export interface ShortcutHelpProps {
   closeLabel: string;
   /** 分组标题文案(来自调用方,无硬编码) */
   groupLabels: Record<ShortcutContext, string>;
-  /** 平台展示注入(Cmd/Ctrl),缺省 detectMac() */
+  /** 平台展示注入(⌘/Ctrl),缺省 detectMac() */
   isMac?: boolean;
   /** 附加操作:恢复上手清单(onboarding.md §4.2 帮助菜单入口);两项同提供时才渲染 */
   restoreLabel?: string;
@@ -95,16 +96,22 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.JSX.Element | null
         ))}
         {restoreLabel !== undefined && onRestore !== undefined ? (
           <section className="mesh-shortcut-help__actions">
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
               className="mesh-shortcut-help__restore"
               data-testid="help-restore-onboarding"
               onClick={onRestore}
             >
               {restoreLabel}
-            </button>
+            </Button>
             {restoreError !== undefined ? (
-              <p className="mesh-shortcut-help__restore-error" role="alert" data-testid="restore-onboarding-error">
+              <p
+                className="mesh-shortcut-help__restore-error"
+                role="alert"
+                data-testid="restore-onboarding-error"
+              >
                 {restoreError}
               </p>
             ) : null}
