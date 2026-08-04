@@ -396,7 +396,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | DELETE | `/views/{id}` | 删除视图 |
 | POST | `/views/{id}/duplicate` | 复制视图(新 owner = 当前成员) |
 | GET | `/views/{id}/issues` | 执行视图配置,返回分组/排序后的 issue |
-| POST | `/views/{id}/issues` | **看板单元格原子 quick-create 命令**(视图/目标 cell 鉴权 + 目标项目/status 解析 + 主列 WIP 锁/计数 + issue/label/自定义字段关联 + outbox,单事务,见 §3.2/§4.5) |
+| POST | `/views/{id}/issues` | **看板单元格原子 quick-create 命令**(视图 read/execute 门 + issue/目标项目/目标值域写门 + 当前 filters/cell 命中校验 + 目标项目/status 解析 + 主列 WIP 锁/计数 + issue/label/自定义字段关联 + outbox,单事务,见 §3.2/§4.5) |
 | PATCH | `/views/{id}/wip` | 设置某列 WIP 限制 |
 | POST | `/views/{id}/moves` | **看板拖拽的原子 move 命令**(乐观锁 + advisory lock + 主列 WIP 校验 + 分组/子分组字段变更 + 每视图排序 upsert,单事务,见 §3.2/§4.3);新增可选 `to_sub_group_key`;任一轴为 project 且发生跨项目移动时触发**跨项目迁移协议**:预览→确认→单事务映射/清除 |
 | POST | `/views/{id}/reorder` | 仅调整某视图同一单元格内的卡片顺序(不改分组字段、不跨列/泳道;走 `view_issue_positions`) |
@@ -498,10 +498,13 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 服务端在**一个数据库事务**内按固定顺序完成:
 
-1. 以 `FOR SHARE`(或更强等价锁)锁定并读取当前 view 配置及解析命中的 project/status/label/field/option 行直到提交,校验调用者同时拥有 view 写权限、issue 创建权限与目标项目写权限;按当前可见值域解析两轴 key。project/status/category 使用 §2.4 的 project-first resolver;label / 自定义 option 必须在目标项目作用域内可用且 active。任一不可见资源仍按 §3.4 返回统一 403/404,不得通过 key 错误探测值域;并发停用/删除目标值必须等待本事务结束,不能在“校验后、关联写前”制造悬空值。
-2. 从目标两轴值生成唯一 issue 写集。单值轴写 issue 主行/单值字段;label 轴在 `issue_labels` 写目标 label;`multi_select` 轴以**只含目标 option 的数组**写对应 `issue_custom_field_values.value_json`;`__none__` 对该轴显式写空/不建关联并抑制字段默认值。category + status 不相容仍以 `422 incompatible_projection_cell` 在任何写入前拒绝。
-3. 若最终候选 issue 命中 view filters 并会增加目标主列成员,先取得既有 advisory lock `'wip:'||view_id||':'||group_key`,再按该视图 filters 事务内汇总该主列全部泳道的 distinct issue 数。`block` 且已满时返回 `422 wip_limit_exceeded`;`warn` 放行并同事务写 `view.wip_exceeded` outbox。多值轴不得跳过或按泳道拆分该锁。
-4. 复用 issue.md 的编号/默认值创建服务写 issue 主行,再写步骤 2 的 label/自定义字段关联,最后写携带**最终完整关联快照**的 `issue.created` outbox。任一权限、resolver、WIP、编号、label/option 或 outbox 写失败都回滚全部行;不得先调用通用创建端点、再以第二个领域请求补 label/option。成功后才返回 201。
+1. 锁定并读取当前 view 配置及解析命中的 project/status/label/field/option 行直到提交:view 与普通值域行使用 `FOR SHARE`(或更强等价锁),目标项目行(`projects.issue_seq`)或无项目时的工作区行(`workspaces.inbox_issue_seq`)因同时承载编号计数器,从第一次获取就直接使用 `FOR UPDATE`,禁止先取共享锁再升级造成并发 quick-create 死锁。先执行 view **read/execute 门**:私有视图仍只允许 owner,共享视图允许具备该视图读取资格的工作区成员执行;quick-create 不修改 view 配置,**不得**复用 `PATCH/DELETE /views/{id}` 的 view 写门。随后独立校验 `issue:write`/issue 创建权限、目标项目非空时的项目写权限及 label/option 目标值域权限,再按当前可见值域解析两轴 key。project/status/category 使用 §2.4 的 project-first resolver;label / 自定义 option 必须在目标项目作用域内可用且 active。任一不可见资源仍按 §3.4 返回统一 403/404,不得通过 key 错误探测值域;并发停用/删除目标值必须等待本事务结束,不能在“校验后、关联写前”制造悬空值。
+2. 复用 issue.md 创建服务的**无写入候选模式**生成唯一最终候选:包含调用者 reporter、服务器默认值、同一 `transaction_timestamp()`、目标两轴值及最终 label/自定义字段集合;需要 `q` 判定时,从步骤 1 已锁定的编号计数器读取但不递增下一个 identifier。单值轴进入 issue 主行/单值字段;label 轴的最终集合包含目标 label;`multi_select` 轴以**只含目标 option 的数组**覆盖对应字段默认值;`__none__` 对该轴显式置空并抑制默认值。此候选是后续真正持久化的同一份规范化快照,不得在过滤校验后重新套用另一组默认值。category + status 不相容仍以 `422 incompatible_projection_cell` 在任何写入前拒绝。
+3. 使用 `GET /views/{id}/issues` 的**同一份规范化 filter 编译器与 cell 投影器**评估步骤 2 的候选,不得另写一套简化判断。候选必须同时命中已锁定 view 的完整 filters(含嵌套 AND/OR、范围、否定、label/自定义字段与 `q`)并投影到请求的 `(group_key, sub_group_key)`;不自动继承、改写或猜测 filters 中的 assignee/cycle/priority/日期等非 cell 字段。目标 cell 不相容沿用 `422 incompatible_projection_cell`;filters 不命中返回具名 `422 quick_create_filter_mismatch`,`details.unmet_filter_fields` 只列调用者已可见的字段标识,不回显隐藏 option/资源值。两类失败都发生在编号递增、issue/关联/outbox 任一写入前,禁止返回成功后卡片立即从当前视图消失的 silent off-view create。
+4. 候选已确定命中 filters 且会增加目标主列成员时,取得既有 advisory lock `'wip:'||view_id||':'||group_key`,再按同一锁定 view 配置事务内汇总该主列全部泳道的 distinct issue 数。`block` 且已满时返回 `422 wip_limit_exceeded`;`warn` 放行并同事务写 `view.wip_exceeded` outbox。多值轴不得跳过或按泳道拆分该锁。
+5. 递增已锁定的编号计数器并原样持久化步骤 2 的候选,写 issue 主行与 label/自定义字段关联,最后写携带**最终完整关联快照**的 `issue.created` outbox。任一权限、resolver、过滤/cell、WIP、编号、label/option 或 outbox 写失败都回滚全部行;不得先调用通用创建端点、再以第二个领域请求补 label/option。成功后才返回 201。
+
+view 行锁覆盖候选生成、filters/cell 判定、WIP 与提交;`PATCH /views/{id}` 必须取得冲突的更新锁。因此 quick-create 与 filters/group/sub_group 配置变更呈现唯一串行顺序:配置先提交则创建按新配置判定,创建先提交则其 201 线性化点仍命中旧配置,随后正常的 `view.updated` 使客户端按新配置重拉;不存在用旧配置校验、却在新配置版本下静默提交的窗口。
 
 **看板拖拽(原子 move)** `POST /api/v1/views/{id}/moves`
 ```jsonc
@@ -574,13 +577,14 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 | 400 | `filter_too_complex` | filters 嵌套深度 >3 或条件数 >20(README §6.14) |
 | 400 | `projection_field_pending` | label / 自定义字段关联层未就绪时用于 `group_by` / `sub_group_by` / filters |
 | 401 | `unauthorized` | 缺失/失效 token |
-| 403 | `forbidden` | 编辑他人私有视图;对共享视图无写权限 |
+| 403 | `forbidden` | 编辑他人私有视图;对共享视图无配置写权限;quick-create 缺少 issue 创建/目标项目/目标值域写权限 |
 | 404 | `not_found` | 视图不存在或不可见 |
 | 409 | `conflict` | 乐观并发版本不符(move `version` / `If-Match`);默认视图重复设置 |
 | 409 | `cursor_invalidated` | 整体分页快照/视图配置/授权域已变化或游标过期;客户端必须丢弃已拼页并从无 cursor 的首屏重启 |
 | 422 | `wip_limit_exceeded` | 硬 WIP 限制下拖入或 quick-create 进入已满主列(`details` 含 `group_key`/`limit`/`count`) |
 | 422 | `move_confirmation_required` | 跨项目拖拽未确认(`details` 含字段映射/清除预览,README §6.14;见 §3.2 与 issue.md §3.8) |
 | 422 | `incompatible_projection_cell` | category/status 不相容,或 status 不属于先解析出的目标项目状态域 |
+| 422 | `quick_create_filter_mismatch` | quick-create 最终候选不命中当前锁定 view filters;零写入,客户端保留标题并转完整创建 |
 | 422 | `multi_value_axis_move_unsupported` | label / `multi_select` 位于任一轴时调用 move/reorder;该视图只投影且禁止移动/手排 |
 | 422 | `query_cost_exceeded` | 视图查询估算成本/`statement_timeout` 超限(README §6.14,建议收窄条件) |
 | 429 | `rate_limited` | 限流 |
@@ -593,7 +597,7 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 - **游标内容与快照绑定**:`next_cursor` 对客户端保持 opaque 且签名,内部绑定格式版本、`view_id`、规范化 filters/group/sub_group/sort/列泳道顺序指纹、授权可见域指纹、请求 `limit`、首屏各查询作用域的数据水位、上一个完整 `K` 与过期时间。续页必须返回与首屏相同的完整 `columns/lanes/groups` 骨架和快照 count,只填本页 `data`。视图配置/字段定义或排序域变化、授权域变化、请求 limit 改变、任一相关 issue 写入使水位前进、游标过期或快照水位已不可验证时返回 `409 cursor_invalidated`;客户端丢弃该次分页已合并数据,不沿用旧 cursor,从首屏重新请求。签名/格式非法仍按 `400 validation_error`。
 - **页边界与客户端合并**:边界落在格内时,下一页从同格最后 `K` 后的卡片开始;恰落在列格末尾时,从同泳道下一非空 group 开始;恰落在泳道末尾时,从下一非空 lane 开始。客户端先按 `(lane_key, group_key)` 找到完整骨架中的单元格,再 append `data`,并在格内以 `(cell_key, issue_id)` 去重(`cell_key=(lane_key,group_key)`);不得全局按 issue_id 去重,否则会误删合法多值投影。一个未失效快照的全部页并集基数必须等于首屏 `Σ lanes[].groups[].count`,且每个 `(lane_key,group_key,issue_id)` 投影实例恰好一次;`lanes[].count` / `columns[].count` 的 distinct 口径不用于推算该基数。
 - **过滤限制(README §6.14)**:视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底;超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded`(建议收窄条件)。
-- **鉴权**:私有视图仅 `owner_member_id` 可见可写;`shared` 视图工作区成员可读,写需 owner 或具备共享视图写权限(工作区 admin / 项目 lead)。执行视图(`GET /views/{id}/issues`)时,服务端**再次**按成员可见范围裁剪 issues(不暴露其无权 issue)。quick-create 还必须通过 issue 创建权限、目标项目写门与每个 label/option 的作用域/可见值域校验;任一失败都在事务写入前拒绝。
+- **鉴权**:私有视图仅 `owner_member_id` 可见可写;`shared` 视图工作区成员可读/执行,修改/删除/WIP 配置仍需 owner 或共享视图写权限(工作区 admin / 项目 lead)。执行视图(`GET /views/{id}/issues`)时,服务端**再次**按成员可见范围裁剪 issues(不暴露其无权 issue)。quick-create 只要求同一 view read/execute 门,不授予也不要求 view 配置写权;它另行强制 `issue:write`/issue 创建权限、目标项目写门与每个 label/option 的作用域/可见值域门。普通 member 可因此在可读共享板创建但仍不可编辑该 view;guest 因缺少 `issue:write` 不可创建,持 view read 但缺少目标项目写权的成员同样不可创建。任一失败都在事务写入前拒绝。
 - **move 子分组权限**:`to_sub_group_key` 先按视图的 `sub_group_by` 白名单与可见值域解析,不得作为任意字段名或 SQL 片段。`sub_group_by=project` 的预览、未确认与确认路径全部复用 issue.md §3.8 的源 issue 读门、目标项目写门与私有源 payload 脱敏;鉴权失败只返回统一 403/404,不得泄漏项目、泳道或迁移预览是否存在。
 - **无前缀端点 404 口径(workspace.md §5.3)**:`/views/{id}` 各路径对「id 不存在」「存在但非成员」「软删除」返回同一 `view not found`,成员门 404 在路由层转写,无视图存在性 oracle。
 - **乐观并发**:`PATCH /views/{id}` 与 `POST /views/{id}/moves` 支持 `If-Match: <updated_at>` / `version`;版本不符返回 `409 conflict`,客户端拉取最新后重试或提示。
@@ -709,7 +713,7 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 
 - **保存视图**:调好筛选/分组/排序 → 工具条"另存为" → 命名 + 选 `visibility` → 保存 → 出现在侧栏。
 - **切换视图**:点侧栏视图项 → 按其配置 `GET /views/{id}/issues` 重新查询渲染;URL 同步,可分享。
-- **快速创建**:单元格底部"+ 新增" → 轻量表单只提交标题 + 目标 `(group_key, sub_group_key)` 到 `POST /views/{id}/issues` → 服务端按 §2.4 **先定目标 project**,再解析唯一 `status_id` 与其它轴值,并在同一事务执行主列 WIP、issue/label/option/outbox 写入 → 成功后新卡片出现在原单元格并由最终快照 `issue.created` 广播。project 在主轴/category 在副轴与 project 在副轴/category 在主轴时完全同序;status + category 单元格仅在相容时显示入口。多值轴只给新 issue 写目标格的一个 label/option(两轴均多值则各一个),`__none__` 保持该轴为空。平坦 `column_target_status` 仅可在 §2.4 的“唯一状态领域轴 + 固定项目”场景作提示,不是写入事实源;一维看板也改走同一视图命令并保持只继承列分组值的用户行为。
+- **快速创建**:单元格底部"+ 新增" → 轻量表单只提交标题 + 目标 `(group_key, sub_group_key)` 到 `POST /views/{id}/issues` → 服务端按 §2.4 **先定目标 project**,再解析唯一 `status_id` 与其它轴值,并在同一事务执行当前 filters/cell 命中、主列 WIP、issue/label/option/outbox 写入 → 成功后新卡片必然出现在原单元格并由最终快照 `issue.created` 广播。project 在主轴/category 在副轴与 project 在副轴/category 在主轴时完全同序;status + category 单元格仅在相容时显示入口。多值轴只给新 issue 写目标格的一个 label/option(两轴均多值则各一个),`__none__` 保持该轴为空。若服务器返回 `422 quick_create_filter_mismatch`,轻量表单保留用户标题与焦点,用可见字段名说明“未满足当前视图筛选”,并提供“转到完整创建”以补 assignee/cycle/priority/日期等字段;不得清空输入、显示成功 toast 或让卡片闪现后消失。入口按 view read/execute + `issue:write` + 目标项目写权逐 cell 门控:普通 member 可在可读共享 view 创建但仍不能编辑 view,guest/缺目标项目写权者不显示入口(服务端仍独立强制)。平坦 `column_target_status` 仅可在 §2.4 的“唯一状态领域轴 + 固定项目”场景作提示,不是写入事实源;一维看板也改走同一视图命令并保持只继承列分组值的用户行为。
 
 ### 4.6 响应式、键盘与读屏(对齐 design-quality.md §8.3/§9.4/§10.2)
 
@@ -747,10 +751,12 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 - [ ] **每视图/单元格排序隔离(README §6.14)**:`view_issue_positions` 含 `sub_group_key TEXT NOT NULL DEFAULT ''`,唯一键仍为 `(view_id,issue_id)`,查询索引为 `(view_id,group_key,sub_group_key,position)`;浮点中点按单元格计算,精度耗尽只重排该视图该单元格;视图 A 拖动不改变视图 B,一维存量行与缺省回退顺序不变。
 - [ ] **旧 position 不串格**:在 A/X 手排后通过详情 PATCH、批量与 Realtime 三条路径分别把 issue 改到 B/Y;查询/增量合并仅在排序行 key 与当前投影 cell 完全相等时应用 position,三条路径均回退 `issues.position`/view sort + `issue_id`,下一次 B/Y 拖拽才覆盖唯一行。
 - [ ] **主列 WIP**:`columns[].count/wip` 汇总该列全部泳道;`board_wip_limits` 键与 `'wip:'||view_id||':'||group_key` advisory lock 不变,无单元格级 WIP。`warn` 超限允许拖入 + 徽章/toast + `view.wip_exceeded`;`block` 仅在主列成员数增加时事务内汇总计数并可能返回 `422`,纯跨泳道移动即使主列已满也不拒绝。
-- [ ] **原子 quick-create**:`POST /views/{id}/issues` 是所有看板单元格(含一维)的唯一快速创建路径;请求只携 `title/group_key/sub_group_key?`,服务端在单事务完成 view/issue/目标项目权限、project-first status resolver、label/option 值域、主列 WIP 锁与计数、issue + 关联值 + 最终快照 outbox。任一步失败无 issue/关联/outbox 半成品;通用 `POST /workspaces/{ws}/issues` 不承载 view context。折叠列、`card_fields`、泳道头 label + 总数继续生效,本期无泳道折叠。
+- [ ] **原子 quick-create**:`POST /views/{id}/issues` 是所有看板单元格(含一维)的唯一快速创建路径;请求只携 `title/group_key/sub_group_key?`,服务端在单事务完成 view read/execute 门、issue/目标项目/目标值域写门、project-first status resolver、最终候选 filters/cell 命中、主列 WIP 锁与计数、issue + 关联值 + 最终快照 outbox。任一步失败无编号增量/issue/关联/outbox 半成品;通用 `POST /workspaces/{ws}/issues` 不承载 view context。折叠列、`card_fields`、泳道头 label + 总数继续生效,本期无泳道折叠。
+- [ ] **quick-create 权限分层**:普通 member 对 shared view 有 read/execute、具备 `issue:write` 与目标项目写权时返回 201,同一身份 `PATCH/DELETE` 该 view 仍返回 403;guest 即使可读共享 view/项目也因缺少 `issue:write` 返回 403,有 view read/execute 但无目标项目写权的 member 返回 403,私有 view 非 owner 仍按统一不可见口径 404。所有负向断言编号、issue、关联与 outbox 零写入。
+- [ ] **quick-create 不创建视图外卡片**:最终候选使用执行视图的同一 filter/cell evaluator;简单等值 filter 在 cell 值/服务器默认值满足时 201,不满足时 `422 quick_create_filter_mismatch`。嵌套 OR、范围与否定条件逐一覆盖:只按最终候选正常求值,不得从 filter 自动继承或猜值;不命中时数据库零写入,UI 保留标题、列出可见的未满足字段并可转完整创建,无成功 toast/闪现后消失。
 - [ ] **泳道 UX**:桌面列头 sticky top + 泳道头 sticky left 且共享滚动坐标;compact 一次一条 lane、chips 切 column,目标 sheet 同时选择 lane + column;键盘左右选列/上下选泳道/Enter/Esc 完成移动,live region 宣布两轴、WIP、无效落点、回滚与迁移确认;`count>0,data=[]` 显示“待加载”并逐页渐进合并而不阻塞首屏。
 - [ ] 列表视图支持可配置列、列头排序、行内编辑、多选批量(走 `POST /issues/bulk`)。
-- [ ] 视图作用域鉴权:私有仅 owner 可见;共享工作区成员可读;写需 owner/共享写权限;执行视图时按成员可见范围裁剪 issues。
+- [ ] 视图作用域鉴权:私有仅 owner 可见;共享工作区成员可读/执行;PATCH/DELETE/WIP 等视图配置写入需 owner/共享写权限;执行视图时按成员可见范围裁剪 issues。quick-create 复用 read/execute 门后独立校验 issue/目标项目/值域写门,不把执行命令误当成修改 view 配置。
 - [ ] 默认视图唯一约束生效;重复设默认返回 `409`。
 - [ ] 未保存改动有"保存/另存/丢弃"提示;切换视图 URL 同步 `/views/{id}`。
 - [ ] 筛选器支持内置字段 + 标签 + 自定义字段,支持 AND/OR 嵌套,实时预览命中数。
@@ -774,7 +780,8 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 - [ ] **查询性能**(README §10 基准):执行视图(命中 issue.md 索引)在 10 万 issue 工作区、热缓存下 P95 < 500ms;自定义字段筛选命中 GIN 索引。
 - [ ] **WIP 并发不穿透(集成测试)**:`enforcement=block`、`limit=N` 的主列,从多个不同泳道并发(>N)拖入或 quick-create 进入该列时,move 与 `POST /views/{id}/issues` 共用 `pg_advisory_xact_lock(hashtext('wip:'||view_id||':'||group_key))` 串行化 + 事务内跨泳道汇总计数,**最终主列成员总数 ≤ N**,多余写入返回 `422 wip_limit_exceeded`,无端点/泳道拆锁导致的并发穿透。
 - [ ] **quick-create 原子回滚(真实数据库集成测试)**:① inactive/越作用域 `multi_select` option 在写入前被拒且零落库;② 在真实 PostgreSQL 事务中注入关联约束失败,断言 issue 主行、编号增量、`issue_custom_field_values`/`issue_labels` 与 outbox 均回滚;③ 并发停用目标 option 被 resolver 的行锁串行化,提交后不存在悬空值;④ 同一 `Idempotency-Key` 重试只创建一张卡。
+- [ ] **quick-create 与 view 配置并发(真实数据库集成测试)**:并发执行 quick-create 与 `PATCH /views/{id}` 修改 filters/group/sub_group,断言 view 行锁给出唯一串行顺序:PATCH 先提交时创建只按新配置成功或 `422`,创建先提交时 201 候选命中其锁定版本且后续 `view.updated` 触发重拉;不得出现按旧配置放行、却在新配置版本下提交的 silent off-view create。
 - [ ] **一致性**:并发拖拽同一卡片最终一致(服务端 `version`/`updated_at` 仲裁,无丢失更新,README §9 T9)。
 - [ ] **跨租户隔离(README §9 T1)**:`view_issue_positions` / `views` 的复合 FK 拒绝跨 workspace 引用(视图引用别区 issue/member 在 INSERT 被拒);A 区凭证访问 B 区视图返回 403/404。
-- [ ] **安全**:filters/sort、move/quick-create 的两轴 key 经已锁定 view 白名单/可见值域校验 + 参数化绑定,无 SQL 注入;quick-create 同时执行 view 写门、issue 创建门、目标项目写门与 label/option 作用域门;project 泳道迁移的预览与确认均执行源读门/目标写门并遵循私有源 payload 脱敏;跨工作区/越权访问返回 `403`/`404` 且不泄漏泳道/预览存在性。
+- [ ] **安全**:filters/sort、move/quick-create 的两轴 key 经已锁定 view 白名单/可见值域校验 + 参数化绑定,无 SQL 注入;quick-create 执行 view read/execute 门后独立执行 issue 创建门、目标项目写门与 label/option 作用域门,不要求或授予 view 配置写权;filter mismatch details 只含调用者可见字段标识,不回显隐藏值。project 泳道迁移的预览与确认均执行源读门/目标写门并遵循私有源 payload 脱敏;跨工作区/越权访问返回 `403`/`404` 且不泄漏泳道/预览存在性。
 - [ ] **限流**:视图执行接口有 rate limit,超限返回 `429`。
