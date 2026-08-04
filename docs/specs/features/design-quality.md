@@ -221,15 +221,16 @@
 - `Runtimes` → **运行环境**
 - 不再出现两个同名“自动化”。
 
-桌面展开侧栏宽 240px；折叠 rail 宽 64px。图标始终存在，展开态显示文字。当前项使用浅强调背景 + 强文字 + 3px 边缘指示，不使用整块高饱和色作为唯一信号。
+桌面展开侧栏宽 256px；折叠 rail 宽 64px。身份、工作区、统一搜索和导航在同一中性 rail 内，图标始终存在，展开态显示文字。当前项使用低对比中性背景 + 强文字，语义同时由 `aria-current` 和字重表达；不使用高饱和色或装饰性边缘条承担唯一信号。
 
-### 4.2 顶栏
+### 4.2 Rail 头部与内容框
 
-- 高度 56px；品牌是返回首页的链接。
-- 工作区切换器紧随品牌，切换时保留可复用的相对上下文；不存在时回工作区首页。
-- 搜索按钮/输入框打开统一搜索面板，不允许存在无行为输入框。
-- 右侧依次为同步状态、收件箱、帮助、账号菜单。
+- wide/xwide 不设置横贯页面的常驻顶栏；品牌、工作区切换、统一搜索、同步状态、收件箱、帮助和账号动作按紧凑顺序置于 256px rail 顶部。
+- 品牌仍是返回首页的链接；工作区切换时保留可复用的相对上下文，不存在时回工作区首页。
+- 搜索输入打开统一搜索面板，不允许存在无行为输入框。
 - 连接状态在稳定连接时只显示图标和 tooltip；连接中、离线和重同步才显示文字，减少常态噪音。
+- 右侧 `main` 与视口保留 8px 呼吸缝，使用 14px 圆角、1px 中性边界和克制轻阴影；页面自身不得再套第二层装饰性大卡片。
+- medium 折叠为 64px rail；compact 才恢复 48–56px 手机顶栏，并保留底部导航与更多抽屉。
 
 ### 4.3 手机导航
 
@@ -273,30 +274,22 @@
 
 ### 5.2 语义色
 
-下表为实施起始值；合入前 MUST 通过仓库对比度脚本，必要时只调整值、不改变语义名。
+数值由授权运行态黑盒观测冻结，并经 WCAG AA 校准；`interface-design-baseline.md` §3.1 是完整数值表，`tokenValues.ts` 是实现单一事实源。主映射如下：
 
-| Token                      | Light                | Dark              | 用途             |
-| -------------------------- | -------------------- | ----------------- | ---------------- |
-| `--color-canvas`           | `#F7F8FA`            | `#0F1115`         | 应用背景         |
-| `--color-surface`          | `#FFFFFF`            | `#171A21`         | 主内容表面       |
-| `--color-surface-subtle`   | `#F1F3F5`            | `#1D212A`         | 次级区域         |
-| `--color-surface-raised`   | `#FFFFFF`            | `#222732`         | 菜单、浮层、卡片 |
-| `--color-surface-hover`    | `#F4F5F7`            | `#252B36`         | hover            |
-| `--color-surface-pressed`  | `#E9ECF0`            | `#2B3240`         | pressed          |
-| `--color-surface-selected` | `#EEF2FF`            | `#24263F`         | selected         |
-| `--color-text-strong`      | `#16181D`            | `#F4F6F8`         | 标题和主数据     |
-| `--color-text`             | `#2B2F36`            | `#D7DBE0`         | 正文             |
-| `--color-text-muted`       | `#667085`            | `#9AA3AF`         | 辅助信息         |
-| `--color-text-disabled`    | `#98A2B3`            | `#697386`         | 禁用态           |
-| `--color-border-subtle`    | `#EAECF0`            | `#252B35`         | 轻分隔           |
-| `--color-border`           | `#D7DCE3`            | `#343C49`         | 控件与卡片边界   |
-| `--color-border-strong`    | `#B8C0CC`            | `#4A5565`         | 强分隔           |
-| `--color-accent`           | `#4F46E5`            | `#818CF8`         | 主操作、链接     |
-| `--color-accent-hover`     | `#4338CA`            | `#A5B4FC`         | 主操作 hover     |
-| `--color-accent-pressed`   | `#3730A3`            | `#6366F1`         | 主操作 pressed   |
-| `--color-accent-soft`      | `#EEF2FF`            | `#24263F`         | 选中背景         |
-| `--color-focus-ring`       | `#2563EB`            | `#93C5FD`         | 焦点环           |
-| `--color-scrim`            | `rgba(15,23,42,.52)` | `rgba(0,0,0,.72)` | 遮罩             |
+| Token                      | Light                             | Dark                        | 用途            |
+| -------------------------- | --------------------------------- | --------------------------- | --------------- |
+| `--color-canvas`           | `oklch(96.4435% .001327 286.375)` | `oklch(15.5% .005 285.823)` | rail 画布       |
+| `--color-bg`               | `oklch(98.8087% 0 0)`             | `oklch(18% .005 285.823)`   | 内容框          |
+| `--color-surface`          | `oklch(100% 0 0)`                 | `oklch(21% .006 285.885)`   | 控件、卡片      |
+| `--color-surface-selected` | `oklch(95% .002 286.375)`         | `oklch(30% .006 286.033)`   | selected        |
+| `--color-text-strong`      | `oklch(14.1% .005 285.823)`       | `oklch(98.5% 0 0)`          | 标题和主数据    |
+| `--color-text`             | `oklch(21% .006 285.885)`         | `oklch(92% .004 286.32)`    | 正文            |
+| `--color-text-muted`       | `oklch(54% .016 285.938)`         | `oklch(70.5% .015 286.067)` | AA 校准辅助信息 |
+| `--color-border`           | `oklch(94.5% .003 286.32)`        | `oklch(100% 0 0 / .06)`     | 轻边界          |
+| `--color-accent`           | `oklch(21% .006 285.885)`         | `oklch(92% .004 286.32)`    | 主操作、链接    |
+| `--color-focus-ring`       | `oklch(55% .16 255)`              | `oklch(65% .16 255)`        | 焦点环          |
+
+辅助文本黑盒观测亮度为 55.2%，但在浅色 rail 上只有约 4.35:1；实现校准为 54%，保持中性观感并通过正文 4.5:1 门禁。任何后续调整仍只能改值、不能改语义名。
 
 状态色必须拆为 `fg/bg/border` 三元组：
 
@@ -328,8 +321,11 @@
 
 布局变量：
 
-- `--shell-sidebar-expanded: 240px`
+- `--shell-sidebar-expanded: 256px`
 - `--shell-sidebar-collapsed: 64px`
+- `--shell-topbar-offset: 0px`
+- `--shell-frame-gap: 8px`
+- `--shell-page-radius: 14px`
 - `--page-gutter-compact: 16px`
 - `--page-gutter-medium: 24px`
 - `--page-gutter-wide: 32px`
@@ -340,7 +336,7 @@
 
 ### 5.4 圆角、边框和阴影
 
-- 圆角：`radius-xs 4px`、`sm 6px`、`md 8px`、`lg 12px`、`xl 16px`、`full 999px`。
+- 圆角：`radius-xs 4px`、`sm 6px`、`md 8px`、`lg 10px`、`xl 14px`、`full 999px`。
 - 边框：`1px` 常规；选中指示可用 `2px`；禁止用多层重边框制造层级。
 - 阴影：
   - `shadow-1`：轻浮起菜单/卡片。
@@ -372,7 +368,7 @@
 
 ### 6.1 字体配对
 
-- Display/标题：`Manrope`（Latin）+ `Noto Sans SC`（CJK）。
+- Display/标题：`Inter`（Latin）+ `Noto Sans SC`（CJK）。
 - UI/正文：`Inter`（Latin）+ `Noto Sans SC`（CJK）。
 - 代码/日志/标识：`JetBrains Mono` + `SFMono-Regular` + `Consolas`。
 - 字体必须自托管并按 Latin/CJK 子集加载；首屏只加载常用 400/500/600，700 按页面需要加载。
@@ -384,14 +380,14 @@
 | ------------- | --------- | ---- | ------------------------ |
 | `display-lg`  | 36/44     | 650  | 公共页展示标题，极少使用 |
 | `display-sm`  | 30/38     | 650  | 工作台欢迎区             |
-| `title-1`     | 24/32     | 650  | 页面标题                 |
-| `title-2`     | 20/28     | 650  | 对象详情标题             |
-| `title-3`     | 18/26     | 600  | 分区标题、dialog 标题    |
-| `body-lg`     | 16/26     | 400  | 长文本、说明             |
-| `body`        | 14/22     | 400  | 默认 UI 正文             |
-| `body-strong` | 14/22     | 600  | 行标题、字段标签         |
-| `body-sm`     | 13/20     | 400  | 表格、卡片辅助信息       |
-| `caption`     | 12/18     | 500  | 时间、badge、元数据      |
+| `title-1`     | 16/24     | 600  | 页面标题                 |
+| `title-2`     | 16/24     | 600  | 对象详情标题             |
+| `title-3`     | 14/20     | 600  | 分区标题、dialog 标题    |
+| `body-lg`     | 14/20     | 400  | 长文本、说明             |
+| `body`        | 14/20     | 400  | 默认 UI 正文             |
+| `body-strong` | 14/20     | 600  | 行标题、字段标签         |
+| `body-sm`     | 13/16     | 400  | 表格、卡片辅助信息       |
+| `caption`     | 12/16     | 500  | 时间、badge、元数据      |
 | `micro`       | 11/16     | 600  | 极短状态标签，不用于正文 |
 
 默认产品 UI 从当前 16px 调整为 14px；输入场景在 iOS 上实际字号不得低于 16px，以避免自动缩放。可通过控件专用 token 实现，不改变桌面密度。
@@ -580,7 +576,7 @@
 
 ### 9.6 命令面板与搜索
 
-1. 顶栏搜索点击、`Cmd/Ctrl+K` 均打开同一面板；`/` 聚焦搜索。
+1. rail/手机顶栏中的统一搜索、`Cmd/Ctrl+K` 均打开同一面板；`/` 聚焦搜索。
 2. 未输入时展示最近访问、常用命令和快捷创建。
 3. 输入后分组展示工作项、项目、成员/agent、视图、聊天和命令。
 4. 120ms 防抖；请求可取消；旧响应不得覆盖新查询。
@@ -677,7 +673,7 @@ features/
 
 当前目录可渐进迁移，不要求一次性移动所有文件；但新组件必须遵循该依赖方向：`features → patterns → primitives → foundations`，禁止反向依赖。
 
-**MES-158 组件底座契约**：前端以精确锁定的 `@appica/ui-react@1.0.0` 作为 UI 原语与应用外壳基础，仅从公开子路径按需导入，禁止根 barrel import。Mesh 的 `design/components` 继续是业务层唯一稳定接口：适配层负责保留既有 props、className、路由、权限和状态语义，feature 不直接绑定第三方组件 API。桌面侧栏、顶栏搜索和基础 Button/Input/Badge/Avatar/Kbd/Skeleton 由该底座渲染；后端接口、数据模型、路由表、Zustand 状态、Realtime 契约与 RBAC 均不得因视觉迁移改变。
+**MES-158 组件底座契约**：前端以精确锁定的 `@appica/ui-react@1.0.0` 作为 UI 原语与应用外壳基础，仅从公开子路径按需导入，禁止根 barrel import。Mesh 的 `design/components` 继续是业务层唯一稳定接口：适配层负责保留既有 props、className、路由、权限和状态语义，feature 不直接绑定第三方组件 API。桌面侧栏、统一搜索和基础 Button/Input/Badge/Avatar/Kbd/Skeleton 由该底座渲染；后端接口、数据模型、路由表、Zustand 状态、Realtime 契约与 RBAC 均不得因视觉迁移改变。
 
 **MES-159 核心工作区页面契约**：工作区首页、项目列表/详情、issue 列表/详情与看板必须只通过 Mesh `design/components` 适配层消费组件库。页面级搜索、标题、描述、批量选择、表格、页签与动作按钮分别复用 Input、Textarea、Checkbox、DataTable、Tabs 与 Button；feature 不直接导入组件库。迁移须保留 `/w/:workspaceSlug/...` 规范深链、URL 筛选参数、API/Realtime 数据流、RBAC、测试选择器和键盘/触控语义，且桌面与手机、亮色与暗色均使用同一业务实现。
 
@@ -742,7 +738,7 @@ runner 仅将 nginx 前端绑定到 `127.0.0.1:18530`；PostgreSQL、Redis、Min
 ### Phase 0：正确性与手机可达（P0）
 
 - 补 Skills 路由。
-- 顶栏搜索接通统一搜索/命令面板。
+- rail/手机顶栏搜索接通统一搜索/命令面板。
 - 增加手机顶栏、底栏和更多抽屉。
 - 修复看板、成员表在 320/390px 的溢出。
 - 增加 skip link。
@@ -801,7 +797,7 @@ runner 仅将 nginx 前端绑定到 `127.0.0.1:18530`；PostgreSQL、Redis、Min
 
 - [x] 当前 63 个叶子路由及其公开/受保护/权限/重定向状态有 fail-closed 可达性测试（`appRouteManifest.test.ts`、`app-routes.spec.ts`）。
 - [x] `/skills`、市场和详情路由均在新鲜 production preview 中刷新到正常态，API 失败不能冒充通过。
-- [x] 顶栏搜索输入、回车、鼠标点击和快捷键进入同一结果系统（palette/shell UT + 真栈工作区切换后搜索）。
+- [x] rail/手机顶栏搜索输入、回车、鼠标点击和快捷键进入同一结果系统（palette/shell UT + 真栈工作区切换后搜索）。
 - [x] 桌面导航分组明确，中文无两个同名“自动化”（导航清单与 i18n 同步门禁）。
 - [x] 320px、390px、640px（200% 等效）、768px、1024px、1440px 无页面级横向溢出（core/extended reflow crawl）。
 - [x] 320px 手机可完成登录、创建 issue、非拖拽移动看板卡片、评论、切工作区、搜索；真实 `/chat` 流程另验证消息落库（真栈 manifest）。
@@ -869,7 +865,7 @@ manifest 校验文件、route、shown scope、backend kind、尺寸与 SHA-256�
 
 1. 保留现有 React、主题协商、i18n、实时和业务组件逻辑，采用渐进式设计系统迁移。
 2. 首先解决可达性和手机 P0，再做视觉精修；P0 不与大规模组件换肤绑在同一 PR。
-3. 统一搜索入口，不维护“顶栏搜索”和“命令面板搜索”两套状态。
+3. 统一搜索入口，不维护“外壳搜索”和“命令面板搜索”两套状态。
 4. 采用分组桌面侧栏 + 手机底栏/抽屉；禁止隐藏导航后无替代入口。
 5. Issue 详情采用“主内容 + 属性栏/抽屉”，看板手机采用单泳道模式。
 6. 主题基础继续由 `theme.md` 拥有；本 Spec 扩展层级和组件语义，不复制主题协商协议。

@@ -387,11 +387,7 @@ export function MembersPage(): React.JSX.Element {
       });
     }
     const canRemove = member.member_type === 'human' || agentIdOf(member) !== null;
-    if (
-      canRemove &&
-      member.status !== 'removed' &&
-      !isCurrentHumanMember(member, currentUserId)
-    ) {
+    if (canRemove && member.status !== 'removed' && !isCurrentHumanMember(member, currentUserId)) {
       entries.push({
         key: `remove-${member.id}`,
         label: t('members.remove.action'),
@@ -627,6 +623,7 @@ export function MembersPage(): React.JSX.Element {
                     <th scope="col">{t('members.col.role')}</th>
                     <th scope="col">{t('agents.roster.lifecycle')}</th>
                     <th scope="col">{t('agents.roster.presence')}</th>
+                    <th scope="col">{t('issues.detail.activity')}</th>
                     <th scope="col">{t('members.col.actions')}</th>
                   </tr>
                 </thead>
@@ -658,6 +655,14 @@ export function MembersPage(): React.JSX.Element {
                         {lifecycleLabel(member)}
                       </td>
                       <td className="mesh-members__sub">{renderRunState(member, false)}</td>
+                      <td
+                        className="mesh-members__activity mesh-text-caption mesh-tnum"
+                        data-testid={`member-activity-${member.id}`}
+                      >
+                        {member.joined_at === null
+                          ? '—'
+                          : t('members.joined', { date: new Date(member.joined_at) })}
+                      </td>
                       <td>{renderRowMenu(member)}</td>
                     </tr>
                   ))}

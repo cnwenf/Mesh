@@ -107,6 +107,16 @@ describe('parseColor', () => {
     expect(parseColor('rgb( 1 , 2 , 3 )')).toEqual({ r: 1, g: 2, b: 3, a: 1 });
   });
 
+  it('解析 CSS Color 4 oklch() 百分比、色相与 alpha', () => {
+    expect(parseColor('oklch(100% 0 0)')).toEqual({ r: 255, g: 255, b: 255, a: 1 });
+    expect(parseColor('oklch(0% 0 0 / 0.06)')).toEqual({ r: 0, g: 0, b: 0, a: 0.06 });
+
+    const neutral = parseColor('oklch(55.2% 0.016 285.938)');
+    expect(neutral).not.toBeNull();
+    expect(neutral).toMatchObject({ r: 113, g: 113, b: 123 });
+    expect(neutral?.a).toBe(1);
+  });
+
   it('非法输入返回 null(不抛错)', () => {
     const invalid = [
       '',
@@ -118,7 +128,9 @@ describe('parseColor', () => {
       'rgb(1, 2)',
       'rgb(300, 0, 0)',
       'rgba(0, 0, 0, 1.5)',
-      'oklch(0.5 0.1 200)',
+      'oklch(50% nope 200)',
+      'oklch(120% 0 0)',
+      'oklch(50% -0.1 200)',
     ];
     for (const value of invalid) {
       expect(parseColor(value), `expected null for ${JSON.stringify(value)}`).toBeNull();
@@ -149,6 +161,14 @@ describe('compositeOver(alpha 合成 out = fg*a + bg*(1-a))', () => {
   it('全透明前景(a = 0)合成结果即底色', () => {
     expect(compositeOver({ r: 1, g: 2, b: 3, a: 0 }, '#111827')).toEqual({ r: 17, g: 24, b: 39 });
   });
+
+  it('alpha 前景可合成到 oklch 不透明底色', () => {
+    expect(compositeOver({ r: 0, g: 0, b: 0, a: 0.06 }, 'oklch(100% 0 0)')).toEqual({
+      r: 240,
+      g: 240,
+      b: 240,
+    });
+  });
 });
 
 describe('contrastRatio(含 alpha 语义)', () => {
@@ -165,6 +185,10 @@ describe('contrastRatio(含 alpha 语义)', () => {
   it('非法颜色输入抛错(保持既有契约)', () => {
     expect(() => contrastRatio('not-a-color', '#ffffff')).toThrow(/invalid color/i);
     expect(() => contrastRatio('#000000', 'transparent')).toThrow(/invalid color/i);
+  });
+
+  it('oklch 语义色可直接参与 WCAG 比值计算', () => {
+    expect(contrastRatio('oklch(14.1% 0.005 285.823)', 'oklch(100% 0 0)')).toBeGreaterThan(15);
   });
 });
 

@@ -247,7 +247,7 @@ test.describe('手机可达性 @320×640(极窄视口)', () => {
 const FOUNDATION_EVIDENCE_DIR = 'e2e/evidence/mes111-foundation';
 
 test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
-  test('桌面 1440×900 首页亮/暗:新令牌体系(表面分层/强调色/排版节奏)真实渲染', async ({ page }) => {
+  test('桌面 1440×900 首页亮色存证 + 暗色走查:新令牌体系真实渲染', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await login(page);
     await page.goto('/');
@@ -259,7 +259,8 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');
     await expect(page.getByTestId('nav-home')).toBeVisible();
-    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-home-dark.png` });
+    // 与 mes111-b1 的 1440×900 暗色首页是同一验收场景；只保留一份规范存证，
+    // 避免把相同画面冒充两个步骤的独立证据。此处仍执行真实暗色走查断言。
   });
 
   test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({ page }) => {
@@ -287,7 +288,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-dark.png` });
   });
 
-  test('手机 390×844 首页/看板亮/暗:令牌体系在紧凑视口一致呈现且无横向溢出', async ({ page }) => {
+  test('手机 390×844 首页/看板亮色存证 + 暗色走查:紧凑视口一致呈现', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page);
     await page.goto('/');
@@ -308,6 +309,6 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');
     await expect(page.getByTestId('mobile-nav-home')).toBeVisible();
-    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/phone-home-dark.png` });
+    // 与 mes111-b1 的 390×844 暗色首页是同一验收场景；规范截图由该矩阵单一承载。
   });
 });

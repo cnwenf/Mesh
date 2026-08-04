@@ -1,12 +1,14 @@
 /* Autopilot 模块样式(autopilot.md §4;语义色一律走 design/base.css 令牌)。 */
 
 .mesh-autopilots__page {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: var(--space-4);
-  max-width: 1200px;
-  margin: 0 auto;
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-autopilots__header {
@@ -18,8 +20,11 @@
 }
 
 .mesh-autopilots__title {
-  font-size: 1.35rem;
-  font-weight: 650;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
+  color: var(--color-text-strong);
   margin: 0;
 }
 
@@ -28,6 +33,10 @@
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-autopilots__kill-switch {
@@ -35,14 +44,20 @@
   align-items: center;
   gap: var(--space-2);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-3);
+  background: var(--color-surface-raised);
 }
 
 .mesh-autopilots__table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-autopilots__content,
@@ -54,12 +69,14 @@
 .mesh-autopilots__table td {
   text-align: left;
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .mesh-autopilots__table th {
+  background: var(--color-surface-subtle);
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
 }
 
 .mesh-autopilots__row:hover {
@@ -68,7 +85,8 @@
 }
 
 .mesh-autopilots__cell-name {
-  font-weight: 600;
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
 }
 
 /* 触发器列图标(design-quality §7.1):16px 统一 SVG,与文案间距走 --space-* 令牌。 */
@@ -100,6 +118,13 @@
     inline-size: 100%;
   }
 
+  .mesh-autopilots__table {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
   .mesh-autopilots__table thead {
     position: absolute;
     inline-size: 1px;
@@ -124,7 +149,6 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-lg);
     background: var(--color-surface-raised);
-    box-shadow: var(--shadow-1);
   }
 
   .mesh-autopilots__row:hover {
@@ -173,7 +197,8 @@
 
 .mesh-autopilots__section {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
   overflow: hidden;
 }
 
@@ -185,8 +210,8 @@
   padding: var(--space-3) var(--space-4);
   background: var(--color-surface-sunken);
   border: none;
-  font-weight: 650;
-  font-size: 0.95rem;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-body);
   cursor: pointer;
   text-align: left;
 }
@@ -205,8 +230,8 @@
 }
 
 .mesh-autopilots__field label {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
 }
 
@@ -216,7 +241,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--font-size-control);
   background: var(--color-surface);
   color: inherit;
 }
@@ -229,7 +254,7 @@
 
 .mesh-autopilots__action-item {
   border: 1px dashed var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -244,7 +269,7 @@
 }
 
 .mesh-autopilots__preview {
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -261,20 +286,26 @@
   bottom: var(--shell-mobile-nav-offset);
   padding: var(--space-3) 0;
   background: var(--color-surface);
+  border-block-start: 1px solid var(--color-border-subtle);
 }
 
 /* 运行时间线 / 详情。 */
 .mesh-autopilots__runs-table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-autopilots__runs-table th,
 .mesh-autopilots__runs-table td {
   text-align: left;
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .mesh-autopilots__run-detail {
@@ -285,20 +316,22 @@
 
 .mesh-autopilots__card {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-autopilots__card h2 {
   margin: 0 0 var(--space-2);
-  font-size: 1rem;
+  font-size: var(--font-size-body);
 }
 
 .mesh-autopilots__kv {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: var(--space-1) var(--space-3);
-  font-size: 0.9rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-autopilots__kv dt {
@@ -314,7 +347,7 @@
   background: var(--color-surface-sunken);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
   overflow-x: auto;
   max-height: 320px;
   overflow-y: auto;
@@ -322,7 +355,7 @@
 
 .mesh-autopilots__secret-box {
   border: 1px solid var(--color-warn);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -334,5 +367,14 @@
   background: var(--color-surface-sunken);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
+}
+
+:root[data-theme='dark'] .mesh-autopilots__table,
+:root[data-theme='dark'] .mesh-autopilots__runs-table,
+:root[data-theme='dark'] .mesh-autopilots__section,
+:root[data-theme='dark'] .mesh-autopilots__card {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
 }

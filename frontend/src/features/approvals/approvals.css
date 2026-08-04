@@ -3,23 +3,51 @@
 .mesh-approvals {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .mesh-approvals__list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
 }
 
 .mesh-approvals__card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  padding: var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.mesh-approvals__card + .mesh-approvals__card {
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.mesh-approvals .mesh-tabs__list {
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+
+.mesh-approvals .mesh-tabs__tab {
+  min-block-size: 36px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+}
+
+.mesh-approvals .mesh-tabs__tab[aria-selected='true'] {
+  color: var(--color-text-strong);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-approvals__card-head {
@@ -45,7 +73,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-4);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -57,7 +85,7 @@
 
 .mesh-approvals__resume {
   margin: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text);
   border-inline-start: 2px solid var(--color-info);
   padding-inline-start: var(--space-3);
@@ -72,7 +100,7 @@
 
 .mesh-approvals__comment {
   margin: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
   font-style: italic;
 }
@@ -118,7 +146,14 @@
 .mesh-approvals__card-skeleton {
   display: block;
   min-block-size: 120px;
-  border-radius: var(--radius-md);
+  border-radius: 0;
+}
+
+:root[data-theme='dark'] .mesh-approvals__list,
+:root[data-theme='dark'] .mesh-approvals .mesh-tabs__tab[aria-selected='true'] {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
 }
 
 /* 窄屏:操作按钮占满整行,避免挤压(§8.3) */

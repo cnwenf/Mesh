@@ -42,6 +42,29 @@ export function categoryColorClass(key: string): string {
   return `mesh-board__dot--${key}`;
 }
 
+const FIXED_COLUMN_TONES = new Set([
+  'backlog',
+  'todo',
+  'in_progress',
+  'in_review',
+  'blocked',
+  'done',
+  'cancelled',
+  'urgent',
+  'high',
+  'medium',
+  'low',
+  'none',
+]);
+
+/** 固定状态/优先级列使用语义淡色面；服务端动态实体保持中性。 */
+export function columnToneClass(key: string, groupBy: string | null): string {
+  const isFixedGroup = groupBy === null || groupBy === 'state_category' || groupBy === 'priority';
+  return isFixedGroup && FIXED_COLUMN_TONES.has(key)
+    ? `mesh-board__column--${key}`
+    : 'mesh-board__column--neutral';
+}
+
 /**
  * 浮点中点法定位(kanban §4.3):插入 index 处取相邻中点;列顶 = 首张 -1;
  * 列底/空列 = 末张 +1(空列 = 1)。
@@ -313,6 +336,7 @@ interface BoardColumnCardProps {
   readonly dropKey: string;
   readonly testKey: string;
   readonly subGroupKey?: string;
+  readonly toneClass: string;
 }
 
 function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
@@ -334,6 +358,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     dropKey,
     testKey,
     subGroupKey,
+    toneClass,
   } = props;
   const t = useT();
   const headingId = useId();
@@ -354,6 +379,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
       : null;
   const columnClassName = [
     'mesh-board__column',
+    toneClass,
     isDragTarget ? 'mesh-board__column--drag-over' : '',
     isMoveTarget ? 'mesh-board__column--move-target' : '',
   ]
@@ -782,6 +808,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
         dropKey={dropKey}
         testKey={testKey}
         subGroupKey={subGroupKey}
+        toneClass={columnToneClass(column.key, groupBy)}
       />
     );
   };

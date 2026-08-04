@@ -1,10 +1,14 @@
 /* 技能模块样式(skill.md §4 UI/UX):库网格 / 详情 Tab / 导入向导 / 绑定区。 */
 
 .mesh-skills {
-  padding: var(--space-4);
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  padding: var(--space-4);
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-skills__header {
@@ -17,7 +21,11 @@
 
 .mesh-skills__title {
   margin: 0;
-  font-size: 1.4rem;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
+  color: var(--color-text-strong);
 }
 
 .mesh-skills__toolbar {
@@ -25,6 +33,10 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-skills__market-link {
@@ -36,18 +48,31 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
 }
 
 .mesh-skills__card {
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  background: var(--color-surface);
+  background: transparent;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-skills__card + .mesh-skills__card {
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.mesh-skills__card:hover {
+  background: var(--color-surface-hover);
 }
 
 .mesh-skills__card-link {
@@ -59,7 +84,8 @@
 }
 
 .mesh-skills__card-name {
-  font-weight: 600;
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -71,14 +97,14 @@
 
 .mesh-skills__card-summary {
   color: var(--color-text-muted);
-  font-size: 0.9rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-skills__card-meta {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  font-size: 0.85rem;
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
 }
 
@@ -90,9 +116,9 @@
 }
 
 .mesh-skills__status {
-  border-radius: 999px;
-  padding: 0 8px;
-  font-size: 0.8rem;
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-caption);
   border: 1px solid var(--color-border);
 }
 
@@ -118,7 +144,7 @@
   align-items: center;
   gap: var(--space-1);
   color: var(--color-warn);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 /* 卡片元信息统计(下载量/评分):内联图标与数字对齐(§7.1) */
@@ -146,7 +172,7 @@
 
 .mesh-skills__needs-review {
   color: var(--color-warn);
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
 }
 
 .mesh-skills__more {
@@ -157,10 +183,14 @@
 /* --- 详情页 --- */
 
 .mesh-skills-detail {
-  padding: var(--space-4);
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  padding: var(--space-4);
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-skills-detail__header {
@@ -172,22 +202,33 @@
 .mesh-skills-detail__tabs {
   display: flex;
   gap: var(--space-1);
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-skills-detail__tabs button {
   border: none;
-  background: none;
-  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   color: var(--color-text-muted);
 }
 
 .mesh-skills-detail__tabs button.is-active {
-  border-bottom-color: var(--color-primary);
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text-strong);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mesh-skills-detail__tabs button:hover:not(.is-active) {
   color: var(--color-text);
-  font-weight: 600;
+  background: var(--color-surface-hover);
 }
 
 .mesh-skills-detail__body {
@@ -204,33 +245,47 @@
 
 .mesh-skills-detail__versions {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
 }
 
 .mesh-skills-detail__versions th,
 .mesh-skills-detail__versions td {
-  border-bottom: 1px solid var(--color-border);
-  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: var(--space-1-5) var(--space-2);
   text-align: left;
-  font-size: 0.9rem;
+  font-size: var(--font-size-body-sm);
+}
+
+.mesh-skills-detail__versions th {
+  color: var(--color-text-muted);
+  background: var(--color-surface-subtle);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
 }
 
 .mesh-skills-detail__side {
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   align-self: start;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-skills-detail__side dl {
   margin: 0;
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 8px;
-  font-size: 0.9rem;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-skills-detail__side dt {
@@ -244,10 +299,10 @@
 .mesh-skills__cap-chip {
   display: inline-block;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 0 6px;
-  margin-right: 4px;
-  font-size: 0.8rem;
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-1-5);
+  margin-right: var(--space-1);
+  font-size: var(--font-size-caption);
 }
 
 .mesh-skills-detail__installation,
@@ -259,32 +314,32 @@
 
 .mesh-skills-detail__script {
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 8px;
-  margin-bottom: 8px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .mesh-skills-detail__script pre {
   background: var(--color-surface-sunken);
-  padding: 8px;
+  padding: var(--space-2);
   overflow-x: auto;
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-skills-detail__script-caps {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
   list-style: none;
-  margin: 4px 0;
+  margin: var(--space-1) 0;
   padding: 0;
 }
 
 .mesh-skills-detail__script-caps li {
   border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 0 6px;
-  font-size: 0.8rem;
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-1-5);
+  font-size: var(--font-size-caption);
 }
 
 .mesh-skills-detail__script-caps li.is-risky {
@@ -308,15 +363,22 @@
   flex-wrap: wrap;
   gap: var(--space-3);
   margin: 0;
-  padding: 0;
   list-style: none;
-  font-size: 0.9rem;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
 .mesh-skills-wizard__steps li.is-active {
-  font-weight: 700;
-  color: var(--color-text);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
 }
 
 .mesh-skills-wizard__body {
@@ -332,27 +394,27 @@
 .mesh-skills-wizard__instructions {
   background: var(--color-surface-sunken);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
   white-space: pre-wrap;
   max-height: 200px;
   overflow-y: auto;
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-skills-wizard__scripts,
 .mesh-skills-wizard__caps-section {
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .mesh-skills-wizard__warn {
   color: var(--color-warn);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
   margin: 0;
 }
 
@@ -360,8 +422,8 @@
 .mesh-skills-wizard__cap {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.9rem;
+  gap: var(--space-2);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-skills-wizard__script-runtime {
@@ -370,20 +432,20 @@
 
 .mesh-skills-wizard__entry {
   border: 1px solid var(--color-primary);
-  border-radius: 999px;
-  padding: 0 6px;
-  font-size: 0.75rem;
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-1-5);
+  font-size: var(--font-size-caption);
   color: var(--color-primary);
 }
 
 .mesh-skills-wizard__caps,
 .mesh-skills-wizard__caps-hint {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
 }
 
 .mesh-skills__version-tag {
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
 }
 
@@ -400,8 +462,8 @@
 .mesh-skills__field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 0.9rem;
+  gap: var(--space-1);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-skills__form-actions {
@@ -412,7 +474,7 @@
 
 .mesh-skills__form-error {
   color: var(--color-danger);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
   margin: 0;
 }
 
@@ -425,13 +487,13 @@
 
 .mesh-skills__bind-note {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
 }
 
 /* 卡片: 版本/安装态/角标 (§4.1) */
 .mesh-skills__card-version,
 .mesh-skills__card-install {
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
 }
 .mesh-skills__update-flag {
@@ -440,24 +502,24 @@
   gap: var(--space-1);
   margin-inline-start: var(--space-1);
   color: var(--color-primary);
-  font-size: var(--text-body-sm-size);
+  font-size: var(--font-size-body-sm);
 }
 
 /* 导入向导进度条 (§3.5/§4.6) */
 .mesh-skills-wizard__progress {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .mesh-skills-wizard__progress-label {
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 .mesh-skills-wizard__progress-bar {
   display: block;
   height: 8px;
   background: var(--color-surface-sunken);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   overflow: hidden;
 }
 .mesh-skills-wizard__progress-bar > span {
@@ -477,9 +539,9 @@
 /* 详情版本 diff (§4.3) */
 .mesh-skills-detail__diff pre {
   background: var(--color-surface-sunken);
-  padding: 8px;
+  padding: var(--space-2);
   overflow-x: auto;
-  font-size: 0.82rem;
+  font-size: var(--font-size-caption);
 }
 .mesh-skills-detail__diff-add {
   color: var(--color-success);
@@ -491,13 +553,13 @@
   color: var(--color-text-muted);
 }
 .mesh-skills-detail__diff-legend {
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
 }
 .mesh-skills-detail__update {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 /* agent 绑定优先级输入 (§4.3) */
@@ -524,4 +586,27 @@
   margin-inline-start: var(--space-1);
   vertical-align: -2px;
   color: var(--color-success-fg);
+}
+
+:root[data-theme='dark'] .mesh-skills__grid,
+:root[data-theme='dark'] .mesh-skills-detail__versions,
+:root[data-theme='dark'] .mesh-skills-detail__side {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
+}
+
+@media (max-width: 599px) {
+  .mesh-skills,
+  .mesh-skills-detail {
+    padding: var(--space-3);
+  }
+
+  .mesh-skills__toolbar {
+    align-items: stretch;
+  }
+
+  .mesh-skills__toolbar > * {
+    min-inline-size: 100%;
+  }
 }

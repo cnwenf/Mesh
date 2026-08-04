@@ -10,14 +10,31 @@
 .mesh-inbox-page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: 0;
   block-size: 100%;
   min-block-size: 0;
+  overflow: hidden;
+  background: var(--color-surface);
 }
 
 .mesh-inbox__data-view {
   flex: 1;
+  gap: 0;
   min-block-size: 0;
+}
+
+.mesh-inbox__data-view > .mesh-page-header {
+  align-items: center;
+  min-block-size: 3rem;
+  margin-block-end: 0;
+  padding: var(--space-1) var(--space-3);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-inbox__data-view > .mesh-page-header .mesh-page-header__title {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-inbox__data-view > .mesh-data-view__body {
@@ -28,18 +45,36 @@
 /* ConversationLayout 根节点(底座为双栏 grid):撑满剩余高度,两栏各自滚动。 */
 .mesh-inbox {
   flex: 1;
+  grid-template-columns: minmax(18rem, 20rem) minmax(0, 1fr);
+  gap: 0;
   min-block-size: 0;
+  overflow: hidden;
+  background: var(--color-surface);
 }
 
 .mesh-inbox .mesh-conversation-layout__list {
-  gap: var(--space-3);
+  gap: 0;
   overflow-y: auto;
-  padding-block-end: var(--space-2);
+  padding-block-end: 0;
+  border-inline-end: 1px solid var(--color-border-subtle);
+  background: var(--color-surface);
 }
 
 .mesh-inbox .mesh-conversation-layout__detail {
   overflow-y: auto;
-  padding-block-end: var(--space-2);
+  padding-block-end: 0;
+  background: var(--color-surface);
+}
+
+/* Feature-level rail sizing yields to the shared route-driven single pane on phones. */
+@container (max-width: 599px) {
+  .mesh-inbox {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-inbox .mesh-conversation-layout__list {
+    border-inline-end: 0;
+  }
 }
 
 .mesh-inbox__skeleton {
@@ -76,13 +111,16 @@
 .mesh-inbox__filter-tabs .mesh-tabs__list {
   flex: none;
   flex-wrap: wrap;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-3);
+  border-block-end: 1px solid var(--color-border-subtle);
 }
 
 .mesh-inbox__filter-tabs .mesh-tabs__panel {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 0;
   min-block-size: 0;
 }
 
@@ -131,14 +169,14 @@
 .mesh-inbox__groups {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 0;
 }
 
 .mesh-inbox__group {
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-1);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .mesh-inbox__group-head {
@@ -146,7 +184,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  min-block-size: 2rem;
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -186,20 +225,21 @@
 }
 
 .mesh-inbox__row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-block-size: 2.75rem;
-  padding: var(--space-1) var(--space-3);
+  min-block-size: 3.25rem;
+  padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--color-border-subtle);
-  border-inline-start: 3px solid transparent;
+  border-inline-start: 0 solid transparent;
   transition: background-color var(--motion-fast);
 }
 
 .mesh-inbox__row:last-child {
   border-bottom: none;
-  border-end-start-radius: calc(var(--radius-lg) - 1px);
-  border-end-end-radius: calc(var(--radius-lg) - 1px);
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
 }
 
 .mesh-inbox__row:hover {
@@ -214,7 +254,7 @@
 /* 选中(匹配 /inbox/:notificationId):选中面 + 起始侧 3px 强调边。 */
 .mesh-inbox__row--selected {
   background: var(--color-surface-selected);
-  border-inline-start-color: var(--color-accent);
+  border-inline-start-color: transparent;
 }
 
 .mesh-inbox__row-main {
@@ -295,24 +335,42 @@
   flex: none;
 }
 
+/* Selected/unread rows use a darker neutral surface; promote 12px metadata to the
+ * regular text token so the pair remains WCAG AA instead of relying on rounding. */
+.mesh-inbox__row--unread .mesh-inbox__row-preview,
+.mesh-inbox__row--unread .mesh-inbox__row-time,
+.mesh-inbox__row--selected .mesh-inbox__row-preview,
+.mesh-inbox__row--selected .mesh-inbox__row-time {
+  color: var(--color-text);
+}
+
 /* 行操作:hover / focus-within 出现;compact 触控常驻(§8.2)。 */
 .mesh-inbox__row-actions {
+  position: absolute;
+  inset-inline-end: var(--space-2);
+  inset-block: var(--space-1);
   display: flex;
   gap: var(--space-1);
   flex: none;
   opacity: 0;
+  background: var(--color-surface-hover);
+  pointer-events: none;
   transition: opacity var(--motion-fast);
 }
 
 .mesh-inbox__row:hover .mesh-inbox__row-actions,
 .mesh-inbox__row:focus-within .mesh-inbox__row-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .mesh-inbox__row-actions button {
   border: none;
   background: transparent;
-  color: var(--color-text-muted);
+
+  /* These are primary row actions, not metadata. The regular text token keeps
+   * their always-visible mobile state AA-safe on selected/unread surfaces. */
+  color: var(--color-text);
   cursor: pointer;
   font-size: var(--font-size-sm);
   padding: var(--space-1) var(--space-2);
@@ -337,7 +395,10 @@
 
 @media (max-width: 599px) {
   .mesh-inbox__row-actions {
+    position: static;
     opacity: 1;
+    background: transparent;
+    pointer-events: auto;
   }
 
   .mesh-inbox__head {
@@ -352,10 +413,11 @@
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  min-block-size: 100%;
+  background: var(--color-surface);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .mesh-inbox-preview--empty {

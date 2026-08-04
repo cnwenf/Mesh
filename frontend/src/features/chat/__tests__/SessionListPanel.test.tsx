@@ -75,9 +75,13 @@ function renderPanel(props: Partial<React.ComponentProps<typeof SessionListPanel
 describe('SessionListPanel(§4.1)', () => {
   it('渲染会话行 + 预览 + 相对时间', () => {
     renderPanel();
-    expect(screen.getByTestId('chat-session-sess-1')).toBeInTheDocument();
+    const row = screen.getByTestId('chat-session-sess-1');
+    expect(row).toBeInTheDocument();
     expect(screen.getByTestId('chat-session-preview-sess-1')).toHaveTextContent('hi there');
     expect(screen.getByText('First chat')).toBeInTheDocument();
+    // 紧凑双行结构:标题/时间同排,agent/预览同排；保留原文本与 test selector。
+    expect(row.querySelector('.mesh-chat__session-headline')).not.toBeNull();
+    expect(row.querySelector('.mesh-chat__session-subline')).not.toBeNull();
   });
 
   it('置顶会话进入 Pinned 分组', () => {

@@ -1,6 +1,6 @@
 # 前端界面设计实施基线
 
-> 状态：v1.0。本文冻结当前可执行的界面规格，覆盖设计令牌、排版、布局、组件、页面结构、响应式、主题和发布边界。业务行为仍以对应功能 Spec 为准；本文不得改变接口、权限、路由或实时协议。
+> 状态：v1.1。本文冻结当前可执行的界面规格，覆盖设计令牌、排版、布局、组件、页面结构、响应式、主题和发布边界。业务行为仍以对应功能 Spec 为准；本文不得改变接口、权限、路由或实时协议。v1.1 的数值来自授权运行态的黑盒观测，并经过 WCAG AA 校准；未读取或复制任何外部源码、样式表或品牌资产。
 
 ## 1. 目标与单一事实源
 
@@ -32,47 +32,49 @@
 
 ### 2.2 外壳尺寸
 
-| 语义变量                    | 值       | 用途                |
-| --------------------------- | -------- | ------------------- |
-| `--shell-sidebar-expanded`  | `240px`  | 展开侧栏            |
-| `--shell-sidebar-collapsed` | `64px`   | 折叠侧栏            |
-| `--shell-topbar-offset`     | `69px`   | sticky 内容顶部偏移 |
-| `--page-gutter-compact`     | `16px`   | compact 页边距      |
-| `--page-gutter-medium`      | `24px`   | medium 页边距       |
-| `--page-gutter-wide`        | `32px`   | wide/xwide 页边距   |
-| `--content-readable`        | `720px`  | 长文本与讨论流      |
-| `--content-form`            | `640px`  | 设置与表单          |
-| `--content-standard`        | `1120px` | 常规列表和详情      |
-| `--content-wide`            | `1440px` | 看板、分析和宽表    |
+| 语义变量                    | 值       | 用途                                   |
+| --------------------------- | -------- | -------------------------------------- |
+| `--shell-sidebar-expanded`  | `256px`  | wide/xwide 展开侧栏                    |
+| `--shell-sidebar-collapsed` | `64px`   | medium 或用户折叠后的图标 rail         |
+| `--shell-topbar-offset`     | `0px`    | 桌面不设横贯页面的顶栏                 |
+| `--shell-frame-gap`         | `8px`    | 内容框与应用画布的呼吸缝               |
+| `--shell-page-radius`       | `14px`   | 桌面唯一主内容框圆角                   |
+| `--page-gutter-compact`     | `16px`   | compact 页边距                         |
+| `--page-gutter-medium`      | `24px`   | medium 页边距                          |
+| `--page-gutter-wide`        | `32px`   | wide/xwide 内容上限；密集页优先 `16px` |
+| `--content-readable`        | `720px`  | 长文本与讨论流                         |
+| `--content-form`            | `640px`  | 设置与表单                             |
+| `--content-standard`        | `1120px` | 常规列表和详情                         |
+| `--content-wide`            | `1440px` | 看板、分析和宽表                       |
 
-页面外壳固定顺序为：跳到主内容链接 → 导航 → 顶栏 → 唯一 `main` → 页面浮层 → toast 区。页面自身不复制侧栏或顶栏。
+桌面外壳固定为双区：左侧 `256px` 中性导航 rail（身份、工作区、搜索、导航同列）→ 右侧带 `8px` 外缝、`14px` 圆角和轻边界的唯一 `main` 内容框。连接横幅只在异常态占据右栏顶部，不得恢复横贯全视口的常驻顶栏。compact 保留手机顶栏、底部主导航与更多抽屉，确保现有导航和无障碍契约完整。DOM 顺序仍为：跳到主内容链接 → rail/手机顶栏 → 状态横幅 → 唯一 `main` → 页面浮层 → toast 区。
 
 ## 3. 颜色与主题映射
 
 ### 3.1 表面、文字、边界与强调色
 
-| Token                      | 亮色      | 暗色      | 语义             |
-| -------------------------- | --------- | --------- | ---------------- |
-| `--color-canvas`           | `#f7f8fa` | `#0f1115` | 应用画布         |
-| `--color-surface`          | `#ffffff` | `#171a21` | 主内容表面       |
-| `--color-surface-subtle`   | `#f1f3f5` | `#1d212a` | 分组、次级区域   |
-| `--color-surface-raised`   | `#ffffff` | `#222732` | 卡片、浮层       |
-| `--color-surface-hover`    | `#f4f5f7` | `#252b36` | hover            |
-| `--color-surface-pressed`  | `#e9ecf0` | `#2b3240` | pressed          |
-| `--color-surface-selected` | `#eef2ff` | `#24263f` | selected/current |
-| `--color-surface-sunken`   | `#f1f5f9` | `#162032` | 内嵌区域         |
-| `--color-text-strong`      | `#16181d` | `#f4f6f8` | 标题、主数据     |
-| `--color-text`             | `#2b2f36` | `#d7dbe0` | 正文             |
-| `--color-text-muted`       | `#5f6980` | `#9aa3af` | 辅助信息         |
-| `--color-text-disabled`    | `#98a2b3` | `#697386` | 不可用信息       |
-| `--color-border-subtle`    | `#eaecf0` | `#252b35` | 轻分隔           |
-| `--color-border`           | `#d7dce3` | `#343c49` | 控件、卡片边界   |
-| `--color-border-strong`    | `#b8c0cc` | `#4a5565` | 强分隔           |
-| `--color-accent`           | `#4f46e5` | `#818cf8` | 主操作、链接     |
-| `--color-accent-hover`     | `#4338ca` | `#a5b4fc` | 主操作 hover     |
-| `--color-accent-pressed`   | `#3730a3` | `#6366f1` | 主操作 pressed   |
-| `--color-accent-soft`      | `#eef2ff` | `#24263f` | 低权重选中背景   |
-| `--color-focus-ring`       | `#2563eb` | `#93c5fd` | 键盘焦点         |
+| Token                      | 亮色                              | 暗色                        | 语义             |
+| -------------------------- | --------------------------------- | --------------------------- | ---------------- |
+| `--color-canvas`           | `oklch(96.4435% .001327 286.375)` | `oklch(15.5% .005 285.823)` | 应用 rail 画布   |
+| `--color-bg`               | `oklch(98.8087% 0 0)`             | `oklch(18% .005 285.823)`   | 主内容框背景     |
+| `--color-surface`          | `oklch(100% 0 0)`                 | `oklch(21% .006 285.885)`   | 控件和卡片表面   |
+| `--color-surface-subtle`   | `oklch(96.7% .001 286.375)`       | `oklch(27.4% .006 286.033)` | 分组、次级区域   |
+| `--color-surface-raised`   | `oklch(100% 0 0)`                 | `oklch(23.5% .007 285.885)` | 浮层             |
+| `--color-surface-hover`    | `oklch(96.7% .001 286.375)`       | `oklch(27.4% .006 286.033)` | hover            |
+| `--color-surface-pressed`  | `oklch(93.5% .003 286.375)`       | `oklch(30% .006 286.033)`   | pressed          |
+| `--color-surface-selected` | `oklch(95% .002 286.375)`         | `oklch(30% .006 286.033)`   | selected/current |
+| `--color-text-strong`      | `oklch(14.1% .005 285.823)`       | `oklch(98.5% 0 0)`          | 标题、主数据     |
+| `--color-text`             | `oklch(21% .006 285.885)`         | `oklch(92% .004 286.32)`    | 正文             |
+| `--color-text-muted`       | `oklch(54% .016 285.938)`         | `oklch(70.5% .015 286.067)` | AA 校准辅助信息  |
+| `--color-text-disabled`    | `oklch(70.5% .015 286.067)`       | `oklch(55.2% .016 285.938)` | 不可用信息       |
+| `--color-border`           | `oklch(94.5% .003 286.32)`        | `oklch(100% 0 0 / .06)`     | 控件、卡片边界   |
+| `--color-border-strong`    | `oklch(92% .004 286.32)`          | `oklch(100% 0 0 / .15)`     | 强分隔           |
+| `--color-accent`           | `oklch(21% .006 285.885)`         | `oklch(92% .004 286.32)`    | 主操作、链接     |
+| `--color-accent-hover`     | `oklch(27.4% .006 286.033)`       | `oklch(98.5% 0 0)`          | 主操作 hover     |
+| `--color-accent-soft`      | `oklch(93.5% .003 286.375)`       | `oklch(27.4% .006 286.033)` | 低权重选中背景   |
+| `--color-focus-ring`       | `oklch(55% .16 255)`              | `oklch(65% .16 255)`        | 键盘焦点         |
+
+浅色辅助文本的黑盒观测亮度为 `55.2%`，直接放在 rail 画布上只有约 `4.35:1`；实现将其校准为 `54%`，以保持同一中性观感并通过正文 `4.5:1` 门禁。
 
 状态颜色使用 `success`、`warning`、`danger`、`info`、`neutral` 的 `fg/bg/border` 三元组。颜色只增强含义；状态点、徽标、图表和优先级必须同时有图标、线型、形状或可见文案。
 
@@ -120,7 +122,7 @@
 
 ### 4.2 圆角、边界、阴影和 z-index
 
-- 圆角：`xs 4px`、`sm 6px`、`md 8px`、`lg 12px`、`xl 16px`、`full 999px`。
+- 圆角：`xs 4px`、`sm 6px`、`md 8px`、`lg 10px`、`xl 14px`、`full 999px`；页面内容框固定消费 `--shell-page-radius`。
 - 边界：默认 `1px`；选中或焦点指示可用 `2px`，不得叠加多层重边框。
 - `shadow-1` 用于轻浮起卡片和菜单；`shadow-2` 用于 popover 和 sticky 工具条；`shadow-3` 用于 dialog 和 drawer；`shadow-raised` 仅用于需要稳定抬升的对象。
 - 层级：`base 0`、`sticky 100`、`dropdown 200`、`overlay 300`、`toast 400`。业务样式禁止自造相邻整数。
@@ -136,7 +138,7 @@
 
 ### 5.1 字体角色
 
-- 展示标题使用 `--font-family-display`，字重 `650`；字体不支持该字重时回退 `600`。
+- 展示标题与 UI 均以自托管 Inter 优先，缺失时立即回退系统栈；工作台标题字重 `600`。
 - UI、正文、表单使用 `--font-family`，常规字重 `400`，强调 `500/600`。
 - 标识、日志、代码和等宽数字使用 `--font-family-mono`。
 - 字体文件自托管；字体加载失败必须立即回退系统字体，不能阻塞交互。
@@ -147,13 +149,13 @@
 | ---------- | --------- | --------- | ------------------------------- |
 | display-lg | `36/44px` | `650`     | 低频公开页展示标题              |
 | display-sm | `30/38px` | `650`     | 工作台欢迎区                    |
-| title-1    | `24/32px` | `650`     | 页面唯一 `h1`                   |
-| title-2    | `20/28px` | `650`     | 对象详情标题                    |
-| title-3    | `18/26px` | `600`     | 分区、浮层标题                  |
-| body-lg    | `16/26px` | `400`     | 长说明                          |
-| body       | `14/22px` | `400`     | 默认正文、列表行                |
-| body-sm    | `13/20px` | `400/500` | 密集元数据                      |
-| caption    | `12/18px` | `400/500` | 辅助标签                        |
+| title-1    | `16/24px` | `600`     | 页面唯一 `h1`                   |
+| title-2    | `16/24px` | `600`     | 对象详情标题                    |
+| title-3    | `14/20px` | `600`     | 分区、浮层标题                  |
+| body-lg    | `14/20px` | `400`     | 长说明                          |
+| body       | `14/20px` | `400`     | 默认正文、列表行                |
+| body-sm    | `13/16px` | `400/500` | 密集元数据                      |
+| caption    | `12/16px` | `400/500` | 辅助标签                        |
 | micro      | `11/16px` | `500/600` | 极短状态，不承载正文            |
 | control    | `16px`    | 按控件    | 表单输入，避免 compact 聚焦缩放 |
 

@@ -380,17 +380,19 @@ export function AppShell(): React.JSX.Element {
       <ShellShortcutsRegistrar />
       {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
       <SkipLink label={t('a11y.skipLink')} />
-      <TopBar
-        state={state}
-        onOpenPalette={openPalette}
-        onOpenHelp={openHelp}
-        onOpenSearch={openSearch}
-        searchMode="palette"
-      />
+      <aside className="mesh-shell__rail" data-testid="shell-rail">
+        <TopBar
+          state={state}
+          onOpenPalette={openPalette}
+          onOpenHelp={openHelp}
+          onOpenSearch={openSearch}
+          searchMode="palette"
+        />
+        <Sidebar collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
+      </aside>
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>
-      <Sidebar collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />

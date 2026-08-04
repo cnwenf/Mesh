@@ -7,16 +7,17 @@
 
 .mesh-shell {
   min-height: 100vh;
+  height: 100dvh;
   display: grid;
-  grid-template-rows: auto auto 1fr;
-  grid-template-columns: var(--shell-sidebar-expanded) 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: var(--shell-sidebar-expanded) minmax(0, 1fr);
   grid-template-areas:
-    'topbar topbar'
-    'banner banner'
-    'sidebar main';
+    'rail banner'
+    'rail main';
   background: var(--color-canvas);
   color: var(--color-text);
   font-family: var(--font-family);
+  overflow: hidden;
 }
 
 /* 折叠 rail(design-quality §4.1):64px 图标栏,文字经 tooltip 补齐 */
@@ -24,20 +25,28 @@
   grid-template-columns: var(--shell-sidebar-collapsed) 1fr;
 }
 
+.mesh-shell__rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+  overflow: hidden;
+  background: var(--color-canvas);
+}
+
 /* ── 顶栏 ─────────────────────────────────────────────── */
 
 .mesh-topbar {
-  grid-area: topbar;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'brand connection'
+    'workspace actions'
+    'search search';
   align-items: center;
-  gap: var(--space-4);
-  padding: calc(var(--space-3) + env(safe-area-inset-top)) var(--space-6) var(--space-3);
-  background: var(--color-surface-raised);
-  border-bottom: 1px solid var(--color-border);
-  box-shadow: var(--shadow-raised);
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
+  gap: var(--space-2);
+  padding: calc(var(--space-3) + env(safe-area-inset-top)) var(--space-4) var(--space-2);
+  background: transparent;
 }
 
 /* medium(600–1023px):外壳强制 64px rail。文字保留在可访问树中并由 title 提供
@@ -46,6 +55,34 @@
   .mesh-shell,
   .mesh-shell--sidebar-collapsed {
     grid-template-columns: var(--shell-sidebar-collapsed) minmax(0, 1fr);
+  }
+
+  .mesh-topbar {
+    display: flex;
+    flex-direction: column;
+    padding-inline: var(--space-2);
+  }
+
+  .mesh-topbar__brand {
+    font-size: 0;
+  }
+
+  .mesh-topbar__brand::first-letter {
+    font-size: var(--font-size-title-2);
+  }
+
+  .mesh-topbar__search-wrap {
+    display: none;
+  }
+
+  .mesh-topbar > [data-testid='ws-switcher-button'] {
+    inline-size: 48px;
+    max-inline-size: 48px;
+    padding-inline: 0;
+  }
+
+  .mesh-topbar__actions {
+    flex-direction: column;
   }
 
   .mesh-sidebar {
@@ -77,12 +114,23 @@
 }
 
 .mesh-topbar__brand {
-  /* §4.2 品牌链接:返回首页,保持品牌视觉,无下划线 */
-  font-size: var(--font-size-lg);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--color-primary);
+  grid-area: brand;
+  min-inline-size: 0;
+  overflow: hidden;
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+  color: var(--color-text-strong);
   text-decoration: none;
+}
+
+.mesh-topbar > [data-testid='ws-switcher-button'] {
+  grid-area: workspace;
+  min-inline-size: 0;
+  max-inline-size: 172px;
+  justify-self: start;
+  overflow: hidden;
 }
 
 .mesh-topbar__brand:focus-visible {
@@ -95,18 +143,19 @@
 .mesh-topbar__conn .mesh-status {
   display: inline-flex;
   align-items: center;
-  min-inline-size: 44px;
-  min-block-size: 44px;
+  min-inline-size: 32px;
+  min-block-size: 32px;
   justify-content: center;
 }
 
 .mesh-topbar__search {
-  flex: 1;
-  max-width: 420px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  inline-size: 100%;
+  block-size: 32px;
+  min-block-size: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
   color: var(--color-text);
   font-size: var(--font-size-sm);
   transition:
@@ -120,12 +169,20 @@
   box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 
+.mesh-topbar__search-wrap {
+  grid-area: search;
+  inline-size: 100%;
+}
+
 .mesh-topbar__conn {
-  margin-inline-start: auto;
+  grid-area: connection;
+  justify-self: end;
 }
 
 .mesh-topbar__actions {
+  grid-area: actions;
   display: flex;
+  justify-self: end;
   gap: var(--space-1);
 }
 
@@ -133,6 +190,7 @@
 
 .mesh-shell__banner {
   grid-area: banner;
+  margin: var(--shell-frame-gap) var(--shell-frame-gap) 0 0;
 }
 
 .mesh-shell__banner:empty {
@@ -142,13 +200,13 @@
 /* ── 侧栏(design-quality §4.1:四分组 + 可折叠 rail)───────── */
 
 .mesh-sidebar {
-  grid-area: sidebar;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-3);
-  background: var(--color-surface);
-  border-inline-end: 1px solid var(--color-border);
+  flex: 1;
+  min-block-size: 0;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  background: transparent;
   overflow-y: auto;
 }
 
@@ -161,13 +219,12 @@
 /* 组标题仅展开态显示;micro 档、弱化色、大写西文(中文原样) */
 .mesh-sidebar__group-title {
   margin: 0;
-  padding: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   color: var(--color-text-muted);
-  font-size: var(--text-micro-size);
-  line-height: var(--text-micro-lh);
-  font-weight: var(--text-micro-weight);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0;
 }
 
 .mesh-sidebar__list {
@@ -182,15 +239,15 @@
 .mesh-sidebar__link {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  min-block-size: 36px;
-  padding: var(--space-2) var(--space-3);
-  border-inline-start: 3px solid transparent;
-  border-radius: var(--radius-md);
+  gap: var(--space-2);
+  min-block-size: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   color: var(--color-text-muted);
   text-decoration: none;
-  font-size: var(--text-body-sm-size);
-  line-height: var(--text-body-sm-lh);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
   white-space: nowrap;
   transition:
     background-color var(--motion-fast) var(--ease-enter),
@@ -218,17 +275,16 @@
   outline-offset: 2px;
 }
 
-/* 当前项:浅强调背景 + 强文字 + 3px 边缘指示,不用整块高饱和色(§4.1) */
+/* 当前项使用低对比中性面,语义同时由 aria-current 与字重表达。 */
 .mesh-sidebar__link--active {
-  background: var(--color-accent-soft);
-  border-inline-start-color: var(--color-accent);
-  color: var(--color-accent);
-  font-weight: var(--text-body-strong-weight);
+  background: var(--color-surface-selected);
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-sidebar__link--active:hover {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-surface-pressed);
+  color: var(--color-text-strong);
 }
 
 .mesh-sidebar__footer {
@@ -240,16 +296,16 @@
 .mesh-sidebar__toggle {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   inline-size: 100%;
-  min-block-size: 36px;
-  padding: var(--space-2) var(--space-3);
+  min-block-size: 32px;
+  padding: var(--space-1) var(--space-2);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-muted);
   font-family: var(--font-family);
-  font-size: var(--text-body-sm-size);
+  font-size: var(--font-size-body-sm);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -302,9 +358,15 @@
 
 .mesh-shell__main {
   grid-area: main;
-  padding: var(--space-6);
+  margin: var(--shell-frame-gap) var(--shell-frame-gap) var(--shell-frame-gap) 0;
+  padding: var(--space-4);
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--shell-page-radius);
+  box-shadow: var(--shadow-1);
 }
 
 /* ── 通用页面 ─────────────────────────────────────────── */
@@ -664,10 +726,15 @@
 @media (max-width: 599px) {
   .mesh-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
     grid-template-areas:
       'topbar'
       'banner'
       'main';
+  }
+
+  .mesh-shell__rail {
+    display: contents;
   }
 
   .mesh-sidebar {
@@ -675,9 +742,13 @@
   }
 
   .mesh-topbar {
+    grid-area: topbar;
+    display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
     padding: calc(var(--space-2) + env(safe-area-inset-top)) var(--space-3) var(--space-2);
+    background: var(--color-surface);
+    border-block-end: 1px solid var(--color-border);
   }
 
   .mesh-topbar__search {
@@ -686,10 +757,27 @@
     max-width: none;
   }
 
+  .mesh-topbar__search-wrap {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .mesh-topbar__conn {
+    margin-inline-start: auto;
+  }
+
+  .mesh-shell__banner {
+    margin: 0;
+  }
+
   /* 底部主导航高度 + safe-area,防内容/弹窗被遮挡(§4.3) */
   .mesh-shell__main {
+    margin: 0;
     padding: var(--space-3);
     padding-block-end: calc(56px + env(safe-area-inset-bottom) + var(--space-3));
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .mesh-mobile-nav {

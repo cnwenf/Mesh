@@ -323,6 +323,28 @@ describe('BoardColumns 渲染', () => {
     expect(screen.getByTestId('board-column-high')).toHaveTextContent('High');
   });
 
+  it('固定分组列暴露语义色调类，动态分组保持中性', () => {
+    const view = render({
+      columns: [
+        column({ key: 'backlog', label: 'board.category.backlog' }),
+        column({ key: 'in_progress', label: 'board.category.in_progress' }),
+        column({ key: 'in_review', label: 'board.category.in_review' }),
+      ],
+      groupBy: 'state_category',
+    });
+    expect(screen.getByTestId('board-column-backlog')).toHaveClass('mesh-board__column--backlog');
+    expect(screen.getByTestId('board-column-in_progress')).toHaveClass(
+      'mesh-board__column--in_progress',
+    );
+    expect(screen.getByTestId('board-column-in_review')).toHaveClass(
+      'mesh-board__column--in_review',
+    );
+
+    view.unmount();
+    render({ groupBy: 'status', columns: [column({ key: 'status-1', label: 'Status A' })] });
+    expect(screen.getByTestId('board-column-status-1')).toHaveClass('mesh-board__column--neutral');
+  });
+
   it('卡片有负责人时渲染负责人名', () => {
     const withAssignee: BoardCard = { ...card('a', 1), assignee: { id: 'u1', name: '张三' } };
     render({ cardsByKey: { todo: [withAssignee] } });

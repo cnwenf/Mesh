@@ -1,6 +1,6 @@
 /**
  * ProjectsPage + CreateProjectDialog 组件测试(project.md §4.1/§4.3)。
- * 以 fetch 桩驱动:卡片网格渲染(名称/状态徽章/健康度/进度/负责人/目标日)、筛选
+ * 以 fetch 桩驱动:紧凑表格渲染(名称/状态徽章/健康度/进度/负责人/目标日)、筛选
  * (状态/已归档/我参与的,URL 同源)、Load more 游标分页、错误态重试、无工作区空态、
  * 实时列表帧合并;新建对话框:key 自动建议 + 客户端格式校验 + 409 内联错误。
  */
@@ -235,7 +235,7 @@ describe('ProjectsPage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('渲染项目卡片:名称/状态徽章/健康度/进度/负责人/目标日', async () => {
+  it('渲染项目表格行:名称/状态徽章/健康度/进度/负责人/目标日', async () => {
     stub([PROJECT_A, PROJECT_B]);
     renderWithProviders(<ProjectsPage />, { route: '/projects' });
 
@@ -243,14 +243,24 @@ describe('ProjectsPage', () => {
     expect(screen.getByTestId('data-view')).toBeInTheDocument();
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
 
+    const table = await screen.findByRole('table', { name: 'Projects' });
+    expect(table).toHaveClass('mesh-projects__table');
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Name', 'Status', 'Health', 'Progress', 'Lead', 'Target date']);
+    expect(screen.queryByTestId('projects-grid')).not.toBeInTheDocument();
+
     const cardA = await screen.findByTestId('project-card-prj-1');
+    expect(cardA).toHaveRole('row');
     expect(within(cardA).getByRole('link', { name: 'Apollo' })).toHaveAttribute(
       'href',
       '/w/team/projects/prj-1',
     );
     expect(within(cardA).getByText('Active')).toBeInTheDocument();
     expect(within(cardA).getByText('On track')).toBeInTheDocument();
-    expect(within(cardA).getByRole('img', { name: 'Jane Doe' })).toBeInTheDocument();
+    expect(within(cardA).getByRole('img', { name: 'Jane Doe' })).toHaveClass('mesh-avatar--20');
     expect(within(cardA).getByRole('progressbar', { name: '5/10 done' })).toBeInTheDocument();
     expect(screen.getByTestId('project-date-prj-1')).toHaveTextContent('Due');
 

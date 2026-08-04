@@ -384,7 +384,7 @@ describe('IssuesPage', () => {
     await screen.findByText('WS-1');
     const headings = screen.getAllByRole('heading', { level: 1 });
     expect(headings.length).toBe(1);
-    expect(screen.getByTestId('data-view')).toBeTruthy();
+    expect(screen.getByTestId('data-view')).toHaveClass('mesh-issues');
   });
 
   it('routes list, filter, selection and quick-create controls through the design foundation', async () => {

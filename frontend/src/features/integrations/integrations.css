@@ -1,12 +1,14 @@
 /* 集成平台模块样式(integrations.md §4;语义色一律走 design/base.css 令牌)。 */
 
 .mesh-integrations__page {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4, 16px);
-  padding: var(--space-4, 16px);
-  max-width: 1200px;
-  margin: 0 auto;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-integrations__header {
@@ -18,16 +20,23 @@
 }
 
 .mesh-integrations__title {
-  font-size: 1.35rem;
-  font-weight: 650;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
+  color: var(--color-text-strong);
   margin: 0;
 }
 
 .mesh-integrations__toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
   flex-wrap: wrap;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 /* 连接器目录卡片网格(§4.2)。 */
@@ -39,12 +48,13 @@
 
 .mesh-integrations__card {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 8px);
-  padding: var(--space-4, 16px);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2, 8px);
-  background: var(--color-surface);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-integrations__card-icon {
@@ -52,8 +62,8 @@
 }
 
 .mesh-integrations__card-name {
-  font-weight: 650;
-  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-body);
   margin: 0;
 }
 
@@ -64,7 +74,7 @@
 }
 
 .mesh-integrations__tag {
-  font-size: 0.72rem;
+  font-size: var(--font-size-caption);
   padding: 2px var(--space-2, 8px);
   border-radius: var(--radius-full, 999px);
   background: var(--color-surface-subtle);
@@ -83,20 +93,27 @@
 /* 表格。 */
 .mesh-integrations__table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__table th,
 .mesh-integrations__table td {
   text-align: left;
   padding: var(--space-2, 8px) var(--space-3, 12px);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .mesh-integrations__table th {
+  background: var(--color-surface-subtle);
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
 }
 
 .mesh-integrations__row:hover {
@@ -105,7 +122,8 @@
 }
 
 .mesh-integrations__cell-name {
-  font-weight: 600;
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-integrations__actions {
@@ -117,8 +135,8 @@
 /* 卡片式区块(详情 / 台账 / 面板)。 */
 .mesh-integrations__section {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 8px);
-  padding: var(--space-4, 16px);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-3, 12px);
@@ -126,30 +144,40 @@
 
 .mesh-integrations__section h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--font-size-body);
 }
 
 /* 详情 tab 切换。 */
 .mesh-integrations__tabs {
   display: flex;
-  gap: var(--space-1, 4px);
-  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-integrations__tab {
   border: none;
   background: transparent;
   padding: var(--space-2, 8px) var(--space-3, 12px);
-  font-size: 0.9rem;
-  font-weight: 600;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
 }
 
 .mesh-integrations__tab--active {
-  color: var(--color-text);
+  color: var(--color-text-strong);
   border-bottom-color: var(--color-accent);
+  background: var(--color-surface-raised);
+}
+
+.mesh-integrations__tab:hover:not(.mesh-integrations__tab--active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 /* KV 配置只读展示。 */
@@ -157,7 +185,7 @@
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: var(--space-1, 4px) var(--space-3, 12px);
-  font-size: 0.9rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__kv dt {
@@ -173,7 +201,7 @@
   background: var(--color-surface-subtle);
   border-radius: var(--radius-sm, 6px);
   padding: var(--space-3, 12px);
-  font-size: 0.8rem;
+  font-size: var(--font-size-caption);
   overflow-x: auto;
   max-height: 320px;
   overflow-y: auto;
@@ -188,8 +216,8 @@
 
 .mesh-integrations__field > span,
 .mesh-integrations__field > label {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
 }
 
@@ -197,7 +225,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1, 4px);
-  font-size: 0.88rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__footer {
@@ -210,7 +238,7 @@
 /* 一次性密钥框(§3.1 创建后仅显示一次)。 */
 .mesh-integrations__secret-box {
   border: 1px solid var(--color-warning-border);
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-lg);
   padding: var(--space-4, 16px);
   display: flex;
   flex-direction: column;
@@ -222,7 +250,7 @@
   background: var(--color-surface-subtle);
   padding: var(--space-1, 4px) var(--space-2, 8px);
   border-radius: var(--radius-sm, 6px);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 /* 事件台账:rejected/deduped 行高亮。 */
@@ -255,7 +283,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1, 4px);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__timeline-head {
@@ -267,7 +295,7 @@
 
 .mesh-integrations__muted {
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 /* VCS 关联侧栏区块(issue 详情)。 */
@@ -285,7 +313,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2, 8px);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__vcs-ref {
@@ -303,7 +331,7 @@
 
 .mesh-integrations__queue-conversation {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-lg);
   padding: var(--space-3, 12px);
   background: var(--color-surface);
   color: var(--color-text);
@@ -354,7 +382,7 @@
 
 .mesh-integrations__queue-meta {
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-caption);
 }
 
 .mesh-integrations__queue-excerpt {
@@ -382,7 +410,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1, 4px);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__command-preview,
@@ -396,8 +424,8 @@
 
 .mesh-integrations__approval-card {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 8px);
-  padding: var(--space-4, 16px);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-3, 12px);
@@ -409,7 +437,7 @@
 .mesh-integrations__card-state {
   border-radius: var(--radius-sm, 6px);
   padding: var(--space-2, 8px);
-  font-size: 0.85rem;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-integrations__card-state--success {
@@ -459,6 +487,13 @@
   .mesh-integrations__table td {
     display: block;
     inline-size: 100%;
+  }
+
+  .mesh-integrations__table {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
   }
 
   .mesh-integrations__table thead {
@@ -522,4 +557,14 @@
   .mesh-integrations__approval-loader {
     grid-template-columns: 1fr;
   }
+}
+
+:root[data-theme='dark'] .mesh-integrations__card,
+:root[data-theme='dark'] .mesh-integrations__table,
+:root[data-theme='dark'] .mesh-integrations__section,
+:root[data-theme='dark'] .mesh-integrations__queue-conversation,
+:root[data-theme='dark'] .mesh-integrations__approval-card {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
 }

@@ -659,6 +659,7 @@ export function IssuesPage(): React.JSX.Element {
 
   return (
     <DataView
+      className="mesh-issues"
       title={t('issues.pageTitle')}
       actions={
         <Button onClick={() => setCreateOpen((v) => !v)} data-testid="issue-open-create">

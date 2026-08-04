@@ -24,12 +24,16 @@ test.describe('设计底座 @桌面 1280×720', () => {
     await page.goto('/');
     const body = await page.evaluate(() => {
       const style = getComputedStyle(document.body);
-      return { fontSize: style.fontSize, fontFamily: style.fontFamily, lineHeight: style.lineHeight };
+      return {
+        fontSize: style.fontSize,
+        fontFamily: style.fontFamily,
+        lineHeight: style.lineHeight,
+      };
     });
     expect(body.fontSize).toBe('14px');
     expect(body.fontFamily).toContain('Inter');
     expect(body.fontFamily).toContain('Noto Sans SC');
-    expect(body.lineHeight).toBe('22px');
+    expect(body.lineHeight).toBe('20px');
   });
 
   test('令牌底座:暗色为整组替换(canvas/surface/文本/强调色实测)', async ({ page }) => {
@@ -48,8 +52,8 @@ test.describe('设计底座 @桌面 1280×720', () => {
     }));
     expect(dark.canvas).not.toBe(light.canvas);
     expect(dark.text).not.toBe(light.text);
-    // 暗色 canvas 应为深色(token #0f1115 → rgb(15, 17, 21))
-    expect(dark.canvas).toBe('rgb(15, 17, 21)');
+    // 暗色 canvas 使用中性 OKLCH 基线，保留精确亮度与极低色度。
+    expect(dark.canvas).toBe('oklch(0.155 0.005 285.823)');
   });
 
   test('Button 状态矩阵:hover 变色 + focus-visible 焦点环 + 提交全链路', async ({ page }) => {
@@ -113,7 +117,10 @@ test.describe('设计底座 @桌面 1280×720', () => {
     // 打开命令面板(dialog 浮层)
     await page.keyboard.press('ControlOrMeta+KeyK');
     await expect(page.locator('.mesh-palette')).toBeVisible();
-    const border = await page.locator('.mesh-dialog').first().evaluate((el) => getComputedStyle(el).borderTopStyle);
+    const border = await page
+      .locator('.mesh-dialog')
+      .first()
+      .evaluate((el) => getComputedStyle(el).borderTopStyle);
     expect(border).toBe('solid');
   });
 
@@ -135,7 +142,9 @@ test.describe('设计底座 @手机 390×844', () => {
 
   test('触控档输入字号 ≥16px(防 iOS 聚焦缩放,§6.2)', async ({ page }) => {
     await page.goto('/login');
-    const fontSize = await page.getByTestId('login-email').evaluate((el) => getComputedStyle(el).fontSize);
+    const fontSize = await page
+      .getByTestId('login-email')
+      .evaluate((el) => getComputedStyle(el).fontSize);
     expect(parseFloat(fontSize)).toBeGreaterThanOrEqual(16);
   });
 
