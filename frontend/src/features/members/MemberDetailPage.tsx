@@ -110,7 +110,7 @@ export function MemberDetailPage(): React.JSX.Element {
   const profile = member.profile as HumanProfile | null;
 
   return (
-    <div className="mesh-page" data-testid="member-detail">
+    <div className="mesh-page mesh-member-detail" data-testid="member-detail">
       <h1 className="mesh-page__title" data-testid="member-detail-name">
         {member.display_name}
       </h1>

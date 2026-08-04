@@ -10,6 +10,15 @@
   min-block-size: 0;
 }
 
+/* 会话页在外壳的 inset frame 内自成一张连续表面；左栏固定在观察到的紧凑宽度。 */
+.mesh-chat {
+  grid-template-columns: minmax(18rem, 20rem) minmax(0, 1fr);
+  gap: 0;
+  block-size: 100%;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
 .mesh-chat__placeholder {
   flex: 1;
   display: flex;
@@ -24,26 +33,67 @@
 .mesh-chat__sessions {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 0;
   min-height: 0;
-  border-right: 1px solid var(--color-border-subtle);
-  padding-right: var(--space-3);
+  overflow: hidden;
+  border-inline-end: 1px solid var(--color-border-subtle);
+  background: var(--color-surface);
+}
+
+.mesh-chat__sessions-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  min-block-size: 3rem;
+  padding-inline: var(--space-3);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-chat__sessions-title {
+  margin: 0;
+  color: var(--color-text-strong);
 }
 
 .mesh-chat__sessions-toolbar {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.mesh-chat__sessions-toolbar .mesh-field {
+  min-inline-size: 0;
+  gap: var(--space-0-5);
+}
+
+.mesh-chat__sessions-toolbar .mesh-field__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+
+.mesh-chat__sessions-toolbar .mesh-field__control {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 2rem;
+  padding: var(--space-1) var(--space-2);
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-chat__sessions-scroll {
   overflow-y: auto;
   min-height: 0;
+  padding: 0 var(--space-1) var(--space-2);
 }
 
 .mesh-chat__sessions-group {
-  margin: var(--space-2) 0 var(--space-1);
-  font-size: var(--font-size-sm);
+  margin: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
 }
 
@@ -53,20 +103,19 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 0;
 }
 
 .mesh-chat__session {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  min-block-size: 3.5rem;
   min-inline-size: 0;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  transition:
-    background-color var(--motion-fast) ease,
-    border-color var(--motion-fast) ease;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: background-color var(--motion-fast) ease;
 }
 
 /* 行状态矩阵(§8.2):default / hover / selected / focus-visible。 */
@@ -76,19 +125,36 @@
 
 .mesh-chat__session--selected,
 .mesh-chat__session--selected:hover {
-  border-color: var(--color-accent);
   background: var(--color-surface-selected);
-  box-shadow: inset 3px 0 0 0 var(--color-accent);
+  box-shadow: none;
+}
+
+.mesh-chat__session > .mesh-chat__avatar {
+  margin-inline-start: var(--space-2);
+}
+
+.mesh-chat__session-pin {
+  flex: none;
+  margin-inline-end: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--motion-fast) ease;
+}
+
+.mesh-chat__session:hover .mesh-chat__session-pin,
+.mesh-chat__session:focus-within .mesh-chat__session-pin,
+.mesh-chat__session--selected .mesh-chat__session-pin {
+  opacity: 1;
 }
 
 .mesh-chat__session-main {
   flex: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: var(--space-0-5);
   min-inline-size: 0;
   text-align: left;
-  padding: var(--space-2);
+  padding: var(--space-1) var(--space-1-5);
   background: none;
   border: none;
   cursor: pointer;
@@ -101,10 +167,21 @@
   border-radius: var(--radius-sm);
 }
 
+.mesh-chat__session-headline,
+.mesh-chat__session-subline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  inline-size: 100%;
+}
+
 /* 排版(§6):标题 body-strong、agent/预览 caption、时间 caption + 等宽数字(§6.3);
    标题/预览单行截断(长标题不撑破行高,§6.4)。 */
 .mesh-chat__session-title {
-  display: block;
+  display: inline-block;
+  flex: 1;
+  min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -115,12 +192,24 @@
 }
 
 .mesh-chat__session-agent {
+  flex: none;
+  max-inline-size: 34%;
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
   color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-chat__session-separator {
+  flex: none;
+  color: var(--color-text-disabled);
 }
 
 .mesh-chat__session-preview {
+  flex: 1;
+  min-inline-size: 0;
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
   color: var(--color-text-muted);
@@ -130,10 +219,19 @@
 }
 
 .mesh-chat__session-time {
+  flex: none;
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* The selected neutral plane is darker than the page canvas. Keep its 12px
+ * metadata on the regular text token so every label remains WCAG AA. */
+.mesh-chat__session--selected .mesh-chat__session-agent,
+.mesh-chat__session--selected .mesh-chat__session-preview,
+.mesh-chat__session--selected .mesh-chat__session-time {
+  color: var(--color-text);
 }
 
 /* ---- 会话面板 ---- */
@@ -142,7 +240,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: var(--space-3);
+  gap: 0;
+  background: var(--color-surface);
 }
 
 /* 头部节奏(§7 间距):gap 2、块向 3/4 呼吸。 */
@@ -150,7 +249,9 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding-block: var(--space-1) var(--space-2);
+  min-block-size: 3rem;
+  padding: var(--space-1) var(--space-4);
+  border-block-end: 1px solid var(--color-border-subtle);
 }
 
 .mesh-chat__conversation-title {
@@ -196,6 +297,7 @@
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
   font-size: var(--font-size-sm);
+  margin: var(--space-2) var(--space-4) 0;
 }
 
 .mesh-chat__messages {
@@ -205,7 +307,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-2);
+  padding: var(--space-4);
 }
 
 .mesh-chat__message-row {
@@ -374,6 +476,7 @@
   padding-top: var(--space-2);
   position: sticky;
   inset-block-end: 0;
+  padding-inline: var(--space-4);
   padding-block-end: calc(var(--space-3) + env(safe-area-inset-bottom));
   background: var(--color-surface);
 }
@@ -524,13 +627,16 @@
 
 .mesh-chat__sessions-search {
   display: flex;
+  padding: var(--space-2) var(--space-3);
 }
 
 .mesh-chat__search-input {
   flex: 1;
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  min-inline-size: 0;
+  min-block-size: 2rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
   font-family: var(--font-family);
@@ -573,6 +679,31 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Feature-level desktop sizing must not override ConversationLayout's routed phone pane. */
+@container (max-width: 599px) {
+  .mesh-chat {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-chat__sessions {
+    border-inline-end: 0;
+  }
+
+  .mesh-chat__session-pin {
+    opacity: 1;
+  }
+
+  .mesh-chat__conversation-head,
+  .mesh-chat__messages,
+  .mesh-chat__composer {
+    padding-inline: var(--space-3);
+  }
+
+  .mesh-chat__context-bar {
+    margin-inline: var(--space-3);
+  }
 }
 
 /* H3:作者 display:flex 会盖过 UA 的 [hidden]{display:none},致收起失效且与

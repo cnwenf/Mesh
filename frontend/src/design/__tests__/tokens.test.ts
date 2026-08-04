@@ -193,6 +193,30 @@ describe('设计 token(README §6.12 主题契约)', () => {
     expect(LIGHT_TOKENS['--space-6']).toBe('32px');
   });
 
+  it('MES-130 冻结运行态观测并经 AA 校准的中性界面与外壳几何基线', () => {
+    expect(LIGHT_TOKENS).toMatchObject({
+      '--color-canvas': 'oklch(96.4435% 0.001327 286.375)',
+      '--color-bg': 'oklch(98.8087% 0 0)',
+      '--color-surface': 'oklch(100% 0 0)',
+      '--color-text-strong': 'oklch(14.1% 0.005 285.823)',
+      '--color-text-muted': 'oklch(54% 0.016 285.938)',
+      '--color-border': 'oklch(94.5% 0.003 286.32)',
+      '--color-accent': 'oklch(21% 0.006 285.885)',
+      '--shell-sidebar-expanded': '256px',
+      '--shell-frame-gap': '8px',
+      '--shell-page-radius': '14px',
+    });
+    expect(DARK_TOKENS).toMatchObject({
+      '--color-canvas': 'oklch(15.5% 0.005 285.823)',
+      '--color-bg': 'oklch(18% 0.005 285.823)',
+      '--color-surface': 'oklch(21% 0.006 285.885)',
+      '--color-text-strong': 'oklch(98.5% 0 0)',
+      '--color-text-muted': 'oklch(70.5% 0.015 286.067)',
+      '--color-border': 'oklch(100% 0 0 / 0.06)',
+      '--color-accent': 'oklch(92% 0.004 286.32)',
+    });
+  });
+
   it('配对表为对象形式,fg/bg 均引用已登记 token,kind 合法且缺省为 text', () => {
     expect(AA_CONTRAST_PAIRS.length).toBeGreaterThan(0);
     for (const pair of AA_CONTRAST_PAIRS) {

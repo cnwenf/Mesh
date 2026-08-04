@@ -26,7 +26,40 @@ export type ContrastKind = 'text' | 'large-text' | 'graphic';
 const HEX_PATTERN = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 const RGB_PATTERN =
   /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*(0|1|0?\.\d+)\s*)?\)$/;
+const OKLCH_PATTERN =
+  /^oklch\(\s*((?:\d+(?:\.\d+)?|\.\d+)%?)\s+((?:\d+(?:\.\d+)?|\.\d+))\s+(-?(?:\d+(?:\.\d+)?|\.\d+))(?:deg)?\s*(?:\/\s*((?:\d+(?:\.\d+)?|\.\d+)%?))?\s*\)$/i;
 const MAX_CHANNEL = 255;
+
+function parseUnitInterval(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = value.endsWith('%') ? parsed / 100 : parsed;
+  return normalized >= 0 && normalized <= 1 ? normalized : null;
+}
+
+/** CSS Color 4 OKLCH → clipped sRGB, using the published Oklab matrices. */
+function oklchToRgb(lightness: number, chroma: number, hue: number): Rgb {
+  const radians = (hue * Math.PI) / 180;
+  const a = chroma * Math.cos(radians);
+  const b = chroma * Math.sin(radians);
+  const lRoot = lightness + 0.3963377774 * a + 0.2158037573 * b;
+  const mRoot = lightness - 0.1055613458 * a - 0.0638541728 * b;
+  const sRoot = lightness - 0.0894841775 * a - 1.291485548 * b;
+  const l = lRoot ** 3;
+  const m = mRoot ** 3;
+  const s = sRoot ** 3;
+  const linear = {
+    r: 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    g: -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    b: -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  };
+  const encode = (channel: number): number => {
+    const clipped = Math.min(1, Math.max(0, channel));
+    const srgb = clipped <= 0.0031308 ? clipped * 12.92 : 1.055 * clipped ** (1 / 2.4) - 0.055;
+    return Math.round(srgb * MAX_CHANNEL);
+  };
+  return { r: encode(linear.r), g: encode(linear.g), b: encode(linear.b) };
+}
 
 /**
  * 解析 `#rgb` / `#rrggbb`(大小写不敏感)为 0–255 通道值。
@@ -44,7 +77,7 @@ export function hexToRgb(hex: string): Rgb {
 }
 
 /**
- * 解析 `#rgb` / `#rrggbb` / `rgb()` / `rgba()` 为 RGBA 通道(alpha 缺省 1)。
+ * 解析 `#rgb` / `#rrggbb` / `rgb()` / `rgba()` / `oklch()` 为 RGBA 通道(alpha 缺省 1)。
  * 非法输入返回 `null`(不抛错)—— 供门禁脚本对任意 CSS 值安全探测。
  */
 export function parseColor(value: string): Rgba | null {
@@ -53,23 +86,42 @@ export function parseColor(value: string): Rgba | null {
     return { ...hexToRgb(trimmed), a: 1 };
   }
   const match = RGB_PATTERN.exec(trimmed);
-  if (!match) {
+  if (match) {
+    const channels = [match[1], match[2], match[3]].map(Number);
+    if (channels.some((channel) => channel > MAX_CHANNEL)) {
+      return null;
+    }
+    const [r, g, b] = channels;
+    return { r, g, b, a: match[4] === undefined ? 1 : Number(match[4]) };
+  }
+  const oklchMatch = OKLCH_PATTERN.exec(trimmed);
+  if (!oklchMatch) return null;
+  const lightness = parseUnitInterval(oklchMatch[1]);
+  const chroma = Number.parseFloat(oklchMatch[2]);
+  const hue = Number.parseFloat(oklchMatch[3]);
+  const alpha = oklchMatch[4] === undefined ? 1 : parseUnitInterval(oklchMatch[4]);
+  if (
+    lightness === null ||
+    alpha === null ||
+    !Number.isFinite(chroma) ||
+    chroma < 0 ||
+    !Number.isFinite(hue)
+  ) {
     return null;
   }
-  const channels = [match[1], match[2], match[3]].map(Number);
-  if (channels.some((channel) => channel > MAX_CHANNEL)) {
-    return null;
-  }
-  const [r, g, b] = channels;
-  return { r, g, b, a: match[4] === undefined ? 1 : Number(match[4]) };
+  return { ...oklchToRgb(lightness, chroma, hue), a: alpha };
 }
 
 /**
  * Alpha 合成:把(可半透明的)前景叠到不透明底色上,`out = fg * a + bg * (1 - a)`。
  * 逐通道四舍五入回 0–255 整数。
  */
-export function compositeOver(fg: Rgba, bgHex: string): Rgb {
-  return compositeOverRgb(fg, hexToRgb(bgHex));
+export function compositeOver(fg: Rgba, bgColor: string): Rgb {
+  const parsedBg = parseColor(bgColor);
+  if (parsedBg === null || parsedBg.a < 1) {
+    throw new Error(`Invalid opaque background color: ${JSON.stringify(bgColor)}`);
+  }
+  return compositeOverRgb(fg, parsedBg);
 }
 
 /** compositeOver 的 Rgb 版本(底色已是通道值时免去二次解析)。 */

@@ -6,10 +6,14 @@
 /* ---------- 列表页(§4.1) ---------- */
 
 .mesh-runtimes {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-runtimes__header {
@@ -20,8 +24,11 @@
 }
 
 .mesh-runtimes__title {
-  font-size: var(--font-size-lg);
-  color: var(--color-text);
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
+  color: var(--color-text-strong);
   margin: 0;
 }
 
@@ -29,7 +36,11 @@
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-runtimes__search {
@@ -39,7 +50,7 @@
 }
 
 .mesh-runtimes__search-label {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -60,25 +71,30 @@
 
 .mesh-runtimes__table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-runtimes__table th {
   text-align: left;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
+  background: var(--color-surface-subtle);
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .mesh-runtimes__row td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
   color: var(--color-text);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-runtimes__row:last-child td {
@@ -86,7 +102,12 @@
 }
 
 .mesh-runtimes__cell-name {
-  font-weight: 600;
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mesh-runtimes__row:hover td {
+  background: var(--color-surface-hover);
 }
 
 .mesh-runtimes__cell-load {
@@ -145,7 +166,9 @@
 
   .mesh-runtimes__table {
     border: 0;
+    border-radius: 0;
     background: transparent;
+    overflow: visible;
   }
 
   .mesh-runtimes__table thead {
@@ -201,10 +224,14 @@
 /* ---------- 详情页(§4.2) ---------- */
 
 .mesh-runtimes-detail {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-runtimes-detail__header {
@@ -215,7 +242,10 @@
 }
 
 .mesh-runtimes-detail__title {
-  font-size: var(--font-size-lg);
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
   margin: 0;
   color: var(--color-text);
 }
@@ -232,13 +262,14 @@
   gap: var(--space-2) var(--space-4);
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-1);
   margin: 0;
 }
 
 .mesh-runtimes-detail__meta dt {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -255,12 +286,12 @@
 }
 
 .mesh-runtimes-detail__chips-title {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
 .mesh-runtimes-detail__chip {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
   color: var(--color-info);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -286,7 +317,10 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 
 .mesh-runtimes-detail__executions li {
@@ -294,11 +328,15 @@
   align-items: center;
   gap: var(--space-3);
   background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: 0;
   padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text);
+}
+
+.mesh-runtimes-detail__executions li + li {
+  border-block-start: 1px solid var(--color-border-subtle);
 }
 
 .mesh-runtimes-detail__execution-name {
@@ -315,8 +353,8 @@
   margin: 0 auto;
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -370,6 +408,9 @@
   list-style: none;
   margin: 0;
   padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-runtimes-wizard__step {
@@ -380,8 +421,9 @@
 }
 
 .mesh-runtimes-wizard__step--active {
-  color: var(--color-primary-contrast);
-  background: var(--color-primary);
+  color: var(--color-text-strong);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-runtimes-wizard__body {
@@ -507,10 +549,14 @@
 /* ---------- 执行详情页(§4.4) ---------- */
 
 .mesh-executions {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-5);
+  padding: var(--space-4);
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-executions__header {
@@ -521,7 +567,10 @@
 }
 
 .mesh-executions__title {
-  font-size: var(--font-size-lg);
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
   margin: 0;
   color: var(--color-text);
 }
@@ -532,8 +581,9 @@
   gap: var(--space-2) var(--space-4);
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-1);
   margin: 0;
 }
 
@@ -563,8 +613,11 @@
 
 .mesh-executions__tabs {
   display: flex;
-  gap: var(--space-2);
-  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-executions__tab {
@@ -574,13 +627,20 @@
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
   cursor: pointer;
 }
 
 .mesh-executions__tab[aria-selected='true'] {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
+  color: var(--color-text-strong);
+  border-bottom-color: var(--color-accent);
+  background: var(--color-surface-raised);
+}
+
+.mesh-executions__tab:hover:not([aria-selected='true']) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .mesh-executions__tab:focus-visible {
@@ -599,6 +659,10 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 
 .mesh-executions__follow {
@@ -626,9 +690,9 @@
   overflow-y: auto;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   padding: var(--space-2);
-  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
 }
 
@@ -656,10 +720,12 @@
 
 .mesh-executions__credentials {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 
 .mesh-executions__credentials th {
@@ -721,6 +787,18 @@
   gap: var(--space-2);
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: var(--space-4);
+}
+
+:root[data-theme='dark'] .mesh-runtimes__table,
+:root[data-theme='dark'] .mesh-runtimes-detail__meta,
+:root[data-theme='dark'] .mesh-runtimes-detail__executions,
+:root[data-theme='dark'] .mesh-runtimes-rotate,
+:root[data-theme='dark'] .mesh-executions__meta,
+:root[data-theme='dark'] .mesh-executions__log-panel,
+:root[data-theme='dark'] .mesh-executions__credentials {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
 }

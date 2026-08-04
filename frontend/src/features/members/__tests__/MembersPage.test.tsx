@@ -166,6 +166,16 @@ describe('MembersPage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Members');
   });
 
+  it('密集人员表保留加入活动列,与身份/状态/角色/运行态同屏', async () => {
+    stub([HUMAN, AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    const table = await waitForTable();
+
+    expect(within(table).getByRole('columnheader', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByTestId('member-activity-mem-h')).toHaveTextContent('Joined');
+    expect(screen.getByTestId('member-activity-mem-a')).toHaveTextContent('Joined');
+  });
+
   it('名册表位于受控横向滚动容器内(窄屏不溢出页面,首列粘住,design-quality A-05/§7.6)', async () => {
     stub([HUMAN, AGENT]);
     const { container } = renderWithProviders(<MembersPage />, { route: '/members' });

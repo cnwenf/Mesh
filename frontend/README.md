@@ -241,7 +241,7 @@ frontend/
     └── shell/                # App shell(顶栏/侧栏/状态横幅/登录守卫)
         ├── navigation.ts     #   全局导航唯一事实源:四分组入口表(桌面侧栏/手机底栏/更多抽屉同源)
         ├── AppShell/TopBar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
-        ├── Sidebar           #   桌面分组可折叠侧栏(240px ↔ 64px rail,§4.1)
+        ├── Sidebar           #   桌面分组可折叠侧栏(256px ↔ 64px rail,§4.1)
         ├── MobileNav/MobileMoreDrawer  # 手机底栏 + 「更多」全高抽屉(§4.3)
         └── pages/            #   登录页、404、错误页、真实首页(工作区仪表盘,MES-107)
 ```

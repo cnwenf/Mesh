@@ -47,8 +47,9 @@ describe('AppShell', () => {
 
   it('渲染顶栏/侧栏与主区 Outlet 子内容', () => {
     renderShell('/');
-    expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-home')).toBeInTheDocument();
+    const rail = screen.getByTestId('shell-rail');
+    expect(rail).toContainElement(screen.getByTestId('topbar-search'));
+    expect(rail).toContainElement(screen.getByTestId('nav-home'));
     expect(screen.getByTestId('child-stub')).toBeInTheDocument();
   });
 

@@ -2,19 +2,22 @@
 
 .mesh-analytics__grid-layout {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
   grid-template-columns: 1fr;
   container-type: inline-size;
 }
 
 .mesh-analytics__workbench {
   container-type: inline-size;
+  inline-size: 100%;
+  max-inline-size: var(--content-wide);
+  margin-inline: auto;
 }
 
 .mesh-analytics__refreshing {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-analytics__inline-error {
@@ -31,9 +34,10 @@
 
 .mesh-analytics__card {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-analytics__card-title {
@@ -45,7 +49,7 @@
 
 .mesh-analytics__card-note {
   margin: var(--space-2) 0 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -60,7 +64,7 @@
 }
 
 .mesh-analytics__tick {
-  font-size: 10px;
+  font-size: var(--font-size-micro);
   fill: var(--color-text-muted);
 }
 
@@ -72,9 +76,13 @@
 .mesh-analytics__toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  gap: var(--space-2);
   align-items: center;
-  margin-block-end: var(--space-4);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  margin-block-end: var(--space-3);
 }
 
 .mesh-analytics__toolbar .mesh-field {
@@ -98,9 +106,9 @@
 
 .mesh-analytics__kpi-cell {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -157,41 +165,49 @@
 
 .mesh-analytics__agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
 }
 
 .mesh-analytics__agent-card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  background: var(--color-surface);
+  border: 0;
+  border-radius: 0;
+  padding: var(--space-3);
+  background: transparent;
+}
+
+.mesh-analytics__agent-card + .mesh-analytics__agent-card {
+  border-block-start: 1px solid var(--color-border-subtle);
 }
 
 .mesh-analytics__agent-name {
   margin: 0 0 var(--space-2);
-  font-weight: 600;
-  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
 }
 
 .mesh-analytics__agent-metrics {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-2);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
 .mesh-analytics__token-note {
   margin: var(--space-2) 0 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-warn);
 }
 
 .mesh-analytics__subheading {
   margin: 0 0 var(--space-2);
   color: var(--color-text);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -254,6 +270,9 @@
 .mesh-analytics__table-scroll {
   overflow-x: auto;
   overscroll-behavior-inline: contain;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
 }
 
 .mesh-analytics__table-scroll:focus-visible {
@@ -264,8 +283,9 @@
 .mesh-analytics__table {
   inline-size: 100%;
   min-inline-size: 620px;
-  border-collapse: collapse;
-  font-size: var(--font-size-sm);
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-analytics__table th,
@@ -277,8 +297,10 @@
 }
 
 .mesh-analytics__table th {
+  background: var(--color-surface-subtle);
   color: var(--color-text-muted);
-  font-weight: 500;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
 }
 
 .mesh-analytics__member-label {
@@ -294,7 +316,7 @@
 
 .mesh-analytics__visibility-note {
   margin: 0 0 var(--space-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -302,7 +324,7 @@
   display: flex;
   gap: var(--space-4);
   margin-block-start: var(--space-2);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -371,7 +393,7 @@
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-4);
   margin: 0 0 var(--space-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
 }
 
@@ -409,7 +431,7 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-analytics__quantile-track {
@@ -436,4 +458,13 @@
 .mesh-analytics__card-skeleton {
   display: block;
   min-block-size: 220px;
+}
+
+:root[data-theme='dark'] .mesh-analytics__card,
+:root[data-theme='dark'] .mesh-analytics__kpi-cell,
+:root[data-theme='dark'] .mesh-analytics__agent-grid,
+:root[data-theme='dark'] .mesh-analytics__table-scroll {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
 }

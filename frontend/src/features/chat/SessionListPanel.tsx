@@ -71,19 +71,26 @@ function SessionRow(props: SessionRowProps): React.JSX.Element {
         className="mesh-chat__session-main"
         onClick={() => props.onSelect(session)}
       >
-        <span className="mesh-chat__session-title">{session.title}</span>
-        <span className="mesh-chat__session-agent">{session.agent.name}</span>
-        <span
-          className="mesh-chat__session-preview"
-          data-testid={`chat-session-preview-${session.id}`}
-        >
-          {session.last_message_preview ?? t('chat.session.noPreview')}
+        <span className="mesh-chat__session-headline">
+          <span className="mesh-chat__session-title">{session.title}</span>
+          {session.last_message_at !== null ? (
+            <time className="mesh-chat__session-time">
+              {formatRelativeTime(session.last_message_at, { locale: props.locale })}
+            </time>
+          ) : null}
         </span>
-        {session.last_message_at !== null ? (
-          <time className="mesh-chat__session-time">
-            {formatRelativeTime(session.last_message_at, { locale: props.locale })}
-          </time>
-        ) : null}
+        <span className="mesh-chat__session-subline">
+          <span className="mesh-chat__session-agent">{session.agent.name}</span>
+          <span className="mesh-chat__session-separator" aria-hidden="true">
+            ·
+          </span>
+          <span
+            className="mesh-chat__session-preview"
+            data-testid={`chat-session-preview-${session.id}`}
+          >
+            {session.last_message_preview ?? t('chat.session.noPreview')}
+          </span>
+        </span>
       </button>
       <IconButton
         label={session.pinned ? props.unpinLabel : props.pinLabel}
@@ -92,11 +99,7 @@ function SessionRow(props: SessionRowProps): React.JSX.Element {
         data-pinned={session.pinned}
         onClick={() => props.onTogglePin(session)}
       >
-        {session.pinned ? (
-          <Icon name="star" size={16} filled />
-        ) : (
-          <Icon name="star" size={16} />
-        )}
+        {session.pinned ? <Icon name="star" size={16} filled /> : <Icon name="star" size={16} />}
       </IconButton>
     </li>
   );
@@ -127,6 +130,17 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
 
   return (
     <aside className="mesh-chat__sessions" data-testid="chat-session-panel">
+      <header className="mesh-chat__sessions-head">
+        <h2 className="mesh-chat__sessions-title mesh-text-body-strong">{t('nav.chat')}</h2>
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid="chat-new-session"
+          onClick={props.onNewSession}
+        >
+          {t('chat.session.new')}
+        </Button>
+      </header>
       <div className="mesh-chat__sessions-search">
         <input
           type="search"
@@ -139,9 +153,6 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
         />
       </div>
       <div className="mesh-chat__sessions-toolbar">
-        <Button size="sm" data-testid="chat-new-session" onClick={props.onNewSession}>
-          {t('chat.session.new')}
-        </Button>
         <Select
           label={t('chat.filter.agentLabel')}
           value={props.agentFilter}

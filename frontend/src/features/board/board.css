@@ -9,6 +9,8 @@
   min-inline-size: 0;
   max-inline-size: 100%;
   min-height: 60vh;
+  font-family: var(--font-family);
+  font-size: var(--font-size-body-sm);
 }
 
 /* grid 子项默认 auto 最小宽,会撑破容器造成页面级横向溢出;显式归零(design-quality A-04) */
@@ -308,12 +310,50 @@
   min-width: min(260px, 85vw);
   max-width: 300px;
   flex: 1 0 min(260px, 85vw);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  background: var(--color-neutral-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+/* 固定分组列的淡色语义面由 light/dark token 成对切换。 */
+.mesh-board__column--backlog,
+.mesh-board__column--cancelled,
+.mesh-board__column--none,
+.mesh-board__column--neutral {
+  background: var(--color-neutral-bg);
+}
+
+.mesh-board__column--todo,
+.mesh-board__column--medium {
+  background: var(--color-info-bg);
+}
+
+.mesh-board__column--in_progress {
+  background: var(--color-warning-bg);
+}
+
+.mesh-board__column--in_review {
+  background: var(--color-success-bg);
+}
+
+.mesh-board__column--blocked,
+.mesh-board__column--urgent {
+  background: var(--color-danger-bg);
+}
+
+.mesh-board__column--done {
+  background: var(--color-success-bg);
+}
+
+.mesh-board__column--high {
+  background: var(--color-warning-bg);
+}
+
+.mesh-board__column--low {
+  background: var(--color-surface-subtle);
 }
 
 /* 手机(0–599px):视图导轨堆叠为横向滚动条,看板单列工作区(design-quality §8.3
@@ -339,7 +379,7 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .mesh-board__dot {
@@ -389,9 +429,9 @@
 
 .mesh-board__column-name {
   margin: 0;
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
-  font-weight: 600;
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-board__count {
@@ -487,21 +527,20 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
   padding: var(--space-2) var(--space-3);
   cursor: grab;
   transition:
+    background-color var(--motion-fast) var(--ease-enter),
     border-color var(--motion-fast) var(--ease-enter),
-    box-shadow var(--motion-fast) var(--ease-enter),
-    transform var(--motion-fast) var(--ease-enter);
+    color var(--motion-fast) var(--ease-enter);
 }
 
 .mesh-board__card:hover {
   border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-1);
-  transform: translateY(-1px);
+  background: var(--color-surface-hover);
 }
 
 .mesh-board__card:active {
@@ -520,10 +559,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
 }
 
 .mesh-board__card-priority {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-caption);
   border-radius: var(--radius-sm);
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border);
@@ -537,7 +578,7 @@
 }
 
 .mesh-board__card-assignee {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
 }
 

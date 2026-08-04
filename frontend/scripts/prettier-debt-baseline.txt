@@ -14,7 +14,6 @@ e2e/evidence/mes111-b4/README.md
 e2e/evidence/mes111-b5-real/manifest.json
 e2e/evidence/mes111-shell/README.md
 e2e/members-global-setup.mjs
-e2e/mes111-foundation.spec.ts
 e2e/mes79-keyboard.spec.ts
 e2e/mes90/compose.override.yml
 e2e/real-autopilots.spec.ts
@@ -140,7 +139,6 @@ src/features/chat/ChatPage.tsx
 src/features/chat/ContextBar.tsx
 src/features/chat/ConversationPanel.tsx
 src/features/chat/DistillDialog.tsx
-src/features/chat/SessionListPanel.tsx
 src/features/chat/__tests__/ChatComposer.test.tsx
 src/features/chat/__tests__/ConversationPanel.runstate.test.tsx
 src/features/chat/__tests__/ConversationPanel.test.tsx
@@ -221,7 +219,6 @@ src/features/labels/__tests__/api.test.ts
 src/features/labels/__tests__/associationApi.test.ts
 src/features/labels/__tests__/pages.test.tsx
 src/features/labels/associationApi.ts
-src/features/members/MembersPage.tsx
 src/features/members/__tests__/MemberDetailPage.test.tsx
 src/features/members/__tests__/MembersPage.onboarding.test.tsx
 src/features/members/__tests__/MembersPage.optimistic.test.tsx
@@ -266,7 +263,6 @@ src/features/squads/__tests__/api.test.ts
 src/features/squads/__tests__/stream.test.ts
 src/features/squads/__tests__/useTaskStream.test.ts
 src/features/squads/api.ts
-src/features/squads/squads.css
 src/hooks/__tests__/usePreferencesBootstrap.test.tsx
 src/hooks/__tests__/useWorkspaceLocale.test.tsx
 src/i18n/__tests__/negotiate.test.ts

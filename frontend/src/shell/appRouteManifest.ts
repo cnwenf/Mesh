@@ -385,7 +385,7 @@ export const APP_ROUTE_MANIFEST: readonly AppRouteManifestEntry[] = [
     access: 'protected',
     permission: 'authenticated',
     kind: 'page',
-    browser: { level: 'extended', readySelector: '[data-testid="projects-grid"]' },
+    browser: { level: 'extended', readySelector: '[data-testid="projects-table"]' },
   },
   {
     id: 'project-detail',

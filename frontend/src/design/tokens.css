@@ -1,38 +1,38 @@
 /* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
 :root {
   /* 表面层级(design-quality.md §5.2:canvas→surface→raised 三层 + 交互表面) */
-  --color-canvas: #f7f8fa;
-  --color-bg: #f7f8fa;
-  --color-surface: #ffffff;
-  --color-surface-subtle: #f1f3f5;
-  --color-surface-raised: #ffffff;
-  --color-surface-hover: #f4f5f7;
-  --color-surface-pressed: #e9ecf0;
-  --color-surface-selected: #eef2ff;
-  --color-surface-sunken: #f1f5f9;
+  --color-canvas: oklch(96.4435% 0.001327 286.375);
+  --color-bg: oklch(98.8087% 0 0);
+  --color-surface: oklch(100% 0 0);
+  --color-surface-subtle: oklch(96.7% 0.001 286.375);
+  --color-surface-raised: oklch(100% 0 0);
+  --color-surface-hover: oklch(96.7% 0.001 286.375);
+  --color-surface-pressed: oklch(93.5% 0.003 286.375);
+  --color-surface-selected: oklch(95% 0.002 286.375);
+  --color-surface-sunken: oklch(96.7% 0.001 286.375);
 
   /* 文本层级(strong/text/muted/disabled 四级) */
-  --color-text-strong: #16181d;
-  --color-text: #2b2f36;
-  --color-text-muted: #5f6980;
-  --color-text-disabled: #98a2b3;
+  --color-text-strong: oklch(14.1% 0.005 285.823);
+  --color-text: oklch(21% 0.006 285.885);
+  --color-text-muted: oklch(54% 0.016 285.938);
+  --color-text-disabled: oklch(70.5% 0.015 286.067);
 
   /* 边界(subtle/border/strong 三级) */
-  --color-border-subtle: #eaecf0;
-  --color-border: #d7dce3;
-  --color-border-strong: #b8c0cc;
+  --color-border-subtle: oklch(94.5% 0.003 286.32);
+  --color-border: oklch(94.5% 0.003 286.32);
+  --color-border-strong: oklch(92% 0.004 286.32);
 
   /* 品牌强调色(accent 系,旧 primary 系别名见下) */
-  --color-accent: #4f46e5;
-  --color-accent-hover: #4338ca;
-  --color-accent-pressed: #3730a3;
-  --color-accent-soft: #eef2ff;
-  --color-accent-contrast: #ffffff;
+  --color-accent: oklch(21% 0.006 285.885);
+  --color-accent-hover: oklch(27.4% 0.006 286.033);
+  --color-accent-pressed: oklch(14.1% 0.005 285.823);
+  --color-accent-soft: oklch(93.5% 0.003 286.375);
+  --color-accent-contrast: oklch(98.5% 0 0);
 
   /* 旧主色别名(迁移期保留一个发布周期,取值与 accent 系一致) */
-  --color-primary: #4f46e5;
-  --color-primary-contrast: #ffffff;
-  --color-primary-bg: #eef2ff;
+  --color-primary: oklch(21% 0.006 285.885);
+  --color-primary-contrast: oklch(98.5% 0 0);
+  --color-primary-bg: oklch(93.5% 0.003 286.375);
 
   /* 状态色三元组(fg/bg/border;颜色不作唯一信号,组件须配图标+文案) */
   --color-success-fg: #15803d;
@@ -102,7 +102,7 @@
   --color-code-comment: #4b5563;
 
   /* 焦点环 */
-  --color-focus-ring: #2563eb;
+  --color-focus-ring: oklch(55% 0.16 255);
 
   /* 遮罩(design-quality.md §5.2) */
   --color-scrim: rgba(15, 23, 42, 0.52);
@@ -123,10 +123,12 @@
   --space-16: 64px;
 
   /* 布局变量(外壳/页边距/内容宽度,主题无关) */
-  --shell-sidebar-expanded: 240px;
+  --shell-sidebar-expanded: 256px;
   --shell-sidebar-collapsed: 64px;
-  --shell-topbar-offset: 69px;
+  --shell-topbar-offset: 0px;
   --shell-mobile-nav-offset: env(safe-area-inset-bottom);
+  --shell-frame-gap: 8px;
+  --shell-page-radius: 14px;
   --page-gutter-compact: 16px;
   --page-gutter-medium: 24px;
   --page-gutter-wide: 32px;
@@ -139,8 +141,8 @@
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
   --radius-full: 999px;
 
   /* 字号(旧三档兼容) */
@@ -151,10 +153,10 @@
   /* Type scale 字号(design-quality.md §6.2:display→micro 十一档) */
   --font-size-display-lg: 2.25rem;
   --font-size-display-sm: 1.875rem;
-  --font-size-title-1: 1.5rem;
-  --font-size-title-2: 1.25rem;
-  --font-size-title-3: 1.125rem;
-  --font-size-body-lg: 1rem;
+  --font-size-title-1: 1rem;
+  --font-size-title-2: 1rem;
+  --font-size-title-3: 0.875rem;
+  --font-size-body-lg: 0.875rem;
   --font-size-body: 0.875rem;
   --font-size-body-sm: 0.8125rem;
   --font-size-caption: 0.75rem;
@@ -164,31 +166,31 @@
   /* Type scale 行高(与字号一一对应) */
   --line-height-display-lg: 2.75rem;
   --line-height-display-sm: 2.375rem;
-  --line-height-title-1: 2rem;
-  --line-height-title-2: 1.75rem;
-  --line-height-title-3: 1.625rem;
-  --line-height-body-lg: 1.625rem;
-  --line-height-body: 1.375rem;
-  --line-height-body-sm: 1.25rem;
-  --line-height-caption: 1.125rem;
+  --line-height-title-1: 1.5rem;
+  --line-height-title-2: 1.5rem;
+  --line-height-title-3: 1.25rem;
+  --line-height-body-lg: 1.25rem;
+  --line-height-body: 1.25rem;
+  --line-height-body-sm: 1rem;
+  --line-height-caption: 1rem;
   --line-height-micro: 1rem;
 
   /* 字重(展示标题 650 需可变字体;回退环境按 600 渲染) */
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-display: 650;
+  --font-weight-display: 600;
 
   /* 字体配对(design-quality.md §6.1:Display=Manrope+CJK,UI=Inter+CJK,等宽=JetBrains Mono;自托管字体文件随页面批次加载,未加载时回退系统栈) */
   --font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-family-display: 'Manrope', 'Inter', system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-family-display: 'Inter', system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --font-family-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
 
   /* 阴影(design-quality.md §5.4:1 轻浮起 / 2 浮层 / 3 对话框;暗色配合边框使用) */
-  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.1);
-  --shadow-2: 0 2px 4px rgba(15, 23, 42, 0.06), 0 4px 8px rgba(15, 23, 42, 0.08);
-  --shadow-3: 0 4px 8px rgba(15, 23, 42, 0.08), 0 12px 32px rgba(15, 23, 42, 0.16);
-  --shadow-raised: 0 4px 16px rgba(15, 23, 42, 0.16);
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-2: 0 8px 24px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --shadow-3: 0 16px 40px rgba(15, 23, 42, 0.14), 0 3px 10px rgba(15, 23, 42, 0.08);
+  --shadow-raised: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
 
   /* 动效时长(design-quality.md §5.5:instant/fast/standard/deliberate/slow;旧 duration-* 兼容) */
   --motion-instant: 0ms;

@@ -1,74 +1,149 @@
 /* 数据管理页与导入/导出向导(仅主题令牌,无硬编码颜色)。 */
 .mesh-data-jobs__table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+  font-size: var(--font-size-body-sm);
 }
+
 .mesh-data-jobs__table th,
 .mesh-data-jobs__table td {
   text-align: left;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
+
+.mesh-data-jobs__table th {
+  color: var(--color-text-muted);
+  background: var(--color-surface-subtle);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.mesh-data-jobs__table tbody tr:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-data-jobs__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .mesh-data-jobs__status--completed {
   color: var(--color-success);
 }
+
 .mesh-data-jobs__status--failed {
   color: var(--color-danger);
 }
+
 .mesh-data-jobs__status--running,
 .mesh-data-jobs__status--validating {
   color: var(--color-primary);
 }
+
 .mesh-data-jobs__progress {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
+
 .mesh-data-jobs__progress-bar {
   flex: 1;
-  height: 0.5rem;
-  border-radius: 0.25rem;
+  height: var(--space-2);
+  border-radius: var(--radius-full);
   background: var(--color-border);
   overflow: hidden;
 }
+
 .mesh-data-jobs__progress-fill {
   height: 100%;
   background: var(--color-primary);
 }
+
 .mesh-import-wizard__steps {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  font-size: 0.85rem;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  font-size: var(--font-size-body-sm);
 }
+
+.mesh-import-wizard__steps > * {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
 .mesh-import-wizard__step--active {
-  font-weight: 600;
+  color: var(--color-text-strong);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
+  font-weight: var(--font-weight-semibold);
 }
+
 .mesh-import-wizard__mapping-row {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 0.5rem;
+  gap: var(--space-2);
   align-items: center;
-  margin-bottom: 0.375rem;
+  margin-bottom: var(--space-1-5);
 }
+
 .mesh-import-wizard__errors {
   max-height: 16rem;
   overflow: auto;
-  font-size: 0.85rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-body-sm);
 }
+
 .mesh-import-wizard__errors table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
+
 .mesh-import-wizard__errors th,
 .mesh-import-wizard__errors td {
   text-align: left;
-  padding: 0.25rem 0.5rem;
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
+
 .mesh-data-jobs__actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+:root[data-theme='dark'] .mesh-data-jobs__table,
+:root[data-theme='dark'] .mesh-import-wizard__errors,
+:root[data-theme='dark'] .mesh-import-wizard__step--active {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
+}
+
+@media (max-width: 599px) {
+  .mesh-data-jobs__table {
+    display: block;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    white-space: nowrap;
+  }
+
+  .mesh-import-wizard__mapping-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-data-jobs__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }

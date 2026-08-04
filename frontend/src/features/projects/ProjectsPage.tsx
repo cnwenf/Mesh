@@ -1,6 +1,6 @@
 /**
  * 项目列表页(project.md §4.1):筛选(状态 / 已归档 / 我参与的,URL 同源)+
- * 卡片网格(名称 / 状态徽章 / 健康度灯 / 进度条 / 负责人 / 目标日)+ 游标 Load more。
+ * 紧凑表格(名称 / 状态徽章 / 健康度灯 / 进度条 / 负责人 / 目标日)+ 游标 Load more。
  * 实时经 workspace:{ws}:projects 频道按可见性水位合并(§3.5/§6.7)。
  * 状态渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 空态 → 内容(对齐 MembersPage)。
  */
@@ -10,6 +10,7 @@ import { MeshApiClient, getToken } from '../../api';
 import {
   Button,
   Checkbox,
+  DataTableSurface,
   DataView,
   EmptyState,
   ErrorState,
@@ -43,21 +44,21 @@ function matchesListFilters(project: ProjectSummary, status: string, archived: b
   return true;
 }
 
-interface ProjectCardProps {
+interface ProjectRowProps {
   readonly project: ProjectSummary;
   readonly workspaceSlug: string;
   readonly onHealthClick: (project: ProjectSummary) => void;
 }
 
-function ProjectCard(props: ProjectCardProps): React.JSX.Element {
+function ProjectRow(props: ProjectRowProps): React.JSX.Element {
   const t = useT();
   const { project, workspaceSlug, onHealthClick } = props;
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
   return (
-    <article className="mesh-projects__card" data-testid={`project-card-${project.id}`}>
-      <div className="mesh-projects__card-head">
-        <div className="mesh-projects__card-identity">
+    <tr className="mesh-projects__row" data-testid={`project-card-${project.id}`}>
+      <td className="mesh-projects__cell mesh-projects__cell--name">
+        <div className="mesh-projects__identity">
           {project.color !== null ? (
             <span
               className="mesh-projects__color-swatch"
@@ -75,33 +76,56 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
               {project.icon}
             </span>
           ) : null}
-          <Link to={projectRoute(workspaceSlug, project.id)} className="mesh-projects__card-name">
+          <Link to={projectRoute(workspaceSlug, project.id)} className="mesh-projects__name">
             {project.name}
           </Link>
         </div>
+      </td>
+      <td className="mesh-projects__cell mesh-projects__cell--status">
         <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
-      </div>
-      <div className="mesh-projects__card-meta">
+      </td>
+      <td className="mesh-projects__cell mesh-projects__cell--health">
         <HealthIndicator
           health={project.health}
           onClick={() => onHealthClick(project)}
           testId={`project-health-${project.id}`}
         />
+      </td>
+      <td className="mesh-projects__cell mesh-projects__cell--progress">
+        <div className="mesh-projects__progress-cell">
+          <ProgressBar progress={project.progress} title={progressTitle} />
+          <span className="mesh-projects__progress-label">
+            {project.done_issues}/{total}
+          </span>
+        </div>
+      </td>
+      <td className="mesh-projects__cell mesh-projects__cell--lead">
         {project.lead !== null ? (
-          <AvatarInitial
-            name={project.lead.name}
-            accessibleName={project.lead.name}
-            kind={project.lead.member_type}
-          />
-        ) : null}
+          <span className="mesh-projects__lead">
+            <AvatarInitial
+              name={project.lead.name}
+              accessibleName={project.lead.name}
+              kind={project.lead.member_type}
+              size={20}
+            />
+            <span>{project.lead.name}</span>
+          </span>
+        ) : (
+          <span className="mesh-projects__cell-empty">{t('projects.settings.leadNone')}</span>
+        )}
+      </td>
+      <td className="mesh-projects__cell mesh-projects__cell--date">
         {project.target_date !== null ? (
-          <span className="mesh-projects__card-date" data-testid={`project-date-${project.id}`}>
+          <span className="mesh-projects__date" data-testid={`project-date-${project.id}`}>
             {t('projects.card.due', { date: new Date(project.target_date) })}
           </span>
-        ) : null}
-      </div>
-      <ProgressBar progress={project.progress} title={progressTitle} />
-    </article>
+        ) : (
+          <span className="mesh-projects__cell-empty" aria-hidden="true">
+            —
+          </span>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -372,15 +396,30 @@ export function ProjectsPage(): React.JSX.Element {
             }
           />
         ) : (
-          <div className="mesh-projects__grid" data-testid="projects-grid">
-            {projects.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                workspaceSlug={workspace?.workspace_slug ?? workspaceSlug ?? ''}
-                onHealthClick={(p) => setHealthTarget(p)}
-              />
-            ))}
+          <div className="mesh-projects__table-wrap">
+            <DataTableSurface className="mesh-projects__table" data-testid="projects-table">
+              <caption className="sr-only">{t('projects.title')}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">{t('projects.settings.name')}</th>
+                  <th scope="col">{t('projects.settings.status')}</th>
+                  <th scope="col">{t('projects.health.label')}</th>
+                  <th scope="col">{t('dataJobs.import.step.progress')}</th>
+                  <th scope="col">{t('projects.settings.lead')}</th>
+                  <th scope="col">{t('projects.settings.targetDate')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projects.map((project) => (
+                  <ProjectRow
+                    key={project.id}
+                    project={project}
+                    workspaceSlug={workspace?.workspace_slug ?? workspaceSlug ?? ''}
+                    onHealthClick={(p) => setHealthTarget(p)}
+                  />
+                ))}
+              </tbody>
+            </DataTableSurface>
           </div>
         )}
       </DataView>

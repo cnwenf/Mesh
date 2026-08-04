@@ -874,16 +874,19 @@
 .mesh-page-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--space-3) var(--space-4);
-  margin-block-end: var(--space-5);
+  gap: var(--space-2) var(--space-3);
+  min-block-size: 40px;
+  padding-block-end: var(--space-3);
+  margin-block-end: var(--space-3);
+  border-block-end: 1px solid var(--color-border-subtle);
 }
 
 .mesh-page-header__main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-0-5);
   min-inline-size: 0;
 }
 

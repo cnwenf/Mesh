@@ -101,7 +101,11 @@ export function DataManagementPage(): React.JSX.Element {
       )}
 
       {!loadError && jobs !== null && jobs.length > 0 && (
-        <table className="mesh-data-jobs__table" aria-label={t('dataJobs.page.tableLabel')}>
+        <table
+          className="mesh-data-jobs__table"
+          aria-label={t('dataJobs.page.tableLabel')}
+          tabIndex={0}
+        >
           <caption className="sr-only">{t('dataJobs.page.tableLabel')}</caption>
           <thead>
             <tr>

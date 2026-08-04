@@ -1,30 +1,30 @@
 /* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
 @media print {
   :root, :root[data-theme='dark'] {
-    --color-canvas: #f7f8fa;
-    --color-bg: #f7f8fa;
-    --color-surface: #ffffff;
-    --color-surface-subtle: #f1f3f5;
-    --color-surface-raised: #ffffff;
-    --color-surface-hover: #f4f5f7;
-    --color-surface-pressed: #e9ecf0;
-    --color-surface-selected: #eef2ff;
-    --color-surface-sunken: #f1f5f9;
-    --color-text-strong: #16181d;
-    --color-text: #2b2f36;
-    --color-text-muted: #5f6980;
-    --color-text-disabled: #98a2b3;
-    --color-border-subtle: #eaecf0;
-    --color-border: #d7dce3;
-    --color-border-strong: #b8c0cc;
-    --color-accent: #4f46e5;
-    --color-accent-hover: #4338ca;
-    --color-accent-pressed: #3730a3;
-    --color-accent-soft: #eef2ff;
-    --color-accent-contrast: #ffffff;
-    --color-primary: #4f46e5;
-    --color-primary-contrast: #ffffff;
-    --color-primary-bg: #eef2ff;
+    --color-canvas: oklch(96.4435% 0.001327 286.375);
+    --color-bg: oklch(98.8087% 0 0);
+    --color-surface: oklch(100% 0 0);
+    --color-surface-subtle: oklch(96.7% 0.001 286.375);
+    --color-surface-raised: oklch(100% 0 0);
+    --color-surface-hover: oklch(96.7% 0.001 286.375);
+    --color-surface-pressed: oklch(93.5% 0.003 286.375);
+    --color-surface-selected: oklch(95% 0.002 286.375);
+    --color-surface-sunken: oklch(96.7% 0.001 286.375);
+    --color-text-strong: oklch(14.1% 0.005 285.823);
+    --color-text: oklch(21% 0.006 285.885);
+    --color-text-muted: oklch(54% 0.016 285.938);
+    --color-text-disabled: oklch(70.5% 0.015 286.067);
+    --color-border-subtle: oklch(94.5% 0.003 286.32);
+    --color-border: oklch(94.5% 0.003 286.32);
+    --color-border-strong: oklch(92% 0.004 286.32);
+    --color-accent: oklch(21% 0.006 285.885);
+    --color-accent-hover: oklch(27.4% 0.006 286.033);
+    --color-accent-pressed: oklch(14.1% 0.005 285.823);
+    --color-accent-soft: oklch(93.5% 0.003 286.375);
+    --color-accent-contrast: oklch(98.5% 0 0);
+    --color-primary: oklch(21% 0.006 285.885);
+    --color-primary-contrast: oklch(98.5% 0 0);
+    --color-primary-bg: oklch(93.5% 0.003 286.375);
     --color-success-fg: #15803d;
     --color-success-bg: #dcfce7;
     --color-success-border: #86efac;
@@ -78,7 +78,7 @@
     --color-code-keyword: #6d28d9;
     --color-code-string: #166534;
     --color-code-comment: #4b5563;
-    --color-focus-ring: #2563eb;
+    --color-focus-ring: oklch(55% 0.16 255);
     --color-scrim: rgba(15, 23, 42, 0.52);
   }
 }

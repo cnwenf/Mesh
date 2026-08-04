@@ -3,7 +3,7 @@
  * 适配器渲染;项目状态始终保留文本信号，不只依赖颜色。
  */
 import { Avatar, Badge, Button, StatusDot, Textarea } from '../../design';
-import type { BadgeTone } from '../../design';
+import type { AvatarSize, BadgeTone } from '../../design';
 import { useT } from '../../i18n';
 import type { ProjectHealth, ProjectStatus } from './types';
 
@@ -78,6 +78,7 @@ export interface AvatarInitialProps {
   /** 可访问名(如负责人完整姓名) */
   readonly accessibleName?: string;
   readonly kind?: 'human' | 'agent';
+  readonly size?: AvatarSize;
 }
 
 /** 项目负责人头像的兼容包装，内部使用共享头像语义。 */
@@ -87,7 +88,7 @@ export function AvatarInitial(props: AvatarInitialProps): React.JSX.Element {
     <Avatar
       name={displayName}
       kind={props.kind ?? 'human'}
-      size={32}
+      size={props.size ?? 32}
       className="mesh-projects__avatar"
     />
   );
