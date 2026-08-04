@@ -367,7 +367,10 @@
 .mesh-inbox__row-actions button {
   border: none;
   background: transparent;
-  color: var(--color-text-muted);
+
+  /* These are primary row actions, not metadata. The regular text token keeps
+   * their always-visible mobile state AA-safe on selected/unread surfaces. */
+  color: var(--color-text);
   cursor: pointer;
   font-size: var(--font-size-sm);
   padding: var(--space-1) var(--space-2);
