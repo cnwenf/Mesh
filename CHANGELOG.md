@@ -5,6 +5,21 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-08-04
+
+MES-130 Step 2 前端 React 迁移批次①/③/④(MES-158 / MES-160 / MES-161)——静态交互蓝图全面迁移为对接真实后端的 React SPA:appica-ui 设计系统底座与应用外壳(批次①)、通讯与管理页族(批次③)、全局辅助页族与全局收尾(批次④),三批次均经「程序员开发 → 验收员全量验收 → 安全审核员审核」闭环(验收/审核结论见 MES-162/163、MES-167/168、MES-169/170;批次④含 MES-176 返修复验与安全增量确认)。前端单测 4501 例全绿,整体 statements/lines 98.6%+、branches 93%+,逐变更文件源码 ≥90% 门禁不回退;CI 14/14 门禁全绿,npm audit 0 高危漏洞。合入另含 MES-166 brace-expansion / fast-uri 高危公告清零与 67 张视觉基线更新(PR #130 独立纯 PNG 基线流程 45 张 + 批次④收尾 22 张,零代码夹带)。
+
+### Added
+
+- **MES-130 Step 2 批次①:Appica UI 底座与应用外壳(MES-158,PR #123)**:引入 `@appica/ui-react@1.0.0`、Tailwind CSS 4.3.3 及 Vite 集成(保留完整 MIT 声明,新增版本/许可/导入/审计 fail-closed 门禁);Appica 设计 token 桥接既有生成器的 Mesh 语义 token,Provider 消费 Mesh 已解析主题、不接管存储/系统偏好解析/首帧行为;静态原型迁移为 React 应用并对接后端。
+- **MES-130 Step 2 批次③:通讯与管理页族迁移(MES-160,PR #126)**:收件箱、聊天、成员、agent、运行时、技能、squad、自动值守全部迁移至 Appica 组件底座与 Mesh 设计 token;规范化工作区路由、权限、实时订阅与空/加载/错误态;SPA 工作区切换以 keyed workspace 子树隔离,provider 感知的成员解析器带真实重试;真实栈浏览器验收集 + 桌面/移动亮暗双主题证据。
+- **MES-130 Step 2 批次④:全局辅助页族 + 全局收尾(MES-161,PR #127)**:搜索/命令面板(⌘K,九组命令全集 + 角色门控、IME 安全键盘处理、同源激活守卫、modified-click 支持、forced-colors 处理、移动端底部 sheet 重排);Analytics 重做(工作区/项目作用域隔离、筛选切换中止旧请求与 stale 刷新、权限恢复、响应式表格、非颜色唯一信号的图表信号);独立 `/register` 入口、受保护 `/forbidden` 恢复页、工作区感知嵌入式 404、onboarding 完成 Badge;移动端(390px)与亮暗主题全局收尾。
+- **CI/验收集扩展**:production 鉴权真栈浏览器覆盖(真实 API/PostgreSQL 断言、桌面/移动 × 亮暗证据、动态隔离测试端口),MES-128 3/3、MES-161 2/2 全过;真实栈 runner 端口与环境配置统一 fail-fast。
+
+### Security
+
+- **高危依赖公告清零(MES-166)**:`brace-expansion` 收敛至 5.0.9、`fast-uri` 收敛至 3.1.5,lockfile 锁定保持,`npm audit`(全量与 prod)0 漏洞。
+
 ## [0.27.2] - 2026-08-04
 
 ### Fixed
