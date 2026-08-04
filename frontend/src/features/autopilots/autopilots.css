@@ -45,6 +45,11 @@
   font-size: 0.9rem;
 }
 
+.mesh-autopilots__content,
+.mesh-autopilots__cell-value {
+  min-inline-size: 0;
+}
+
 .mesh-autopilots__table th,
 .mesh-autopilots__table td {
   text-align: left;
@@ -75,8 +80,88 @@
 }
 
 .mesh-autopilots__actions {
-  display: flex;
+  white-space: nowrap;
+}
+
+.mesh-autopilots__action-buttons {
+  display: inline-flex;
+  flex-wrap: wrap;
   gap: var(--space-1);
+}
+
+/*
+ * 手机列表转主次信息卡片(design-quality §11.1/§11.2):保留语义 table，
+ * 视觉上以 data-label 重排，避免七列被压成逐字竖排。
+ */
+@container (max-width: 560px) {
+  .mesh-autopilots__table,
+  .mesh-autopilots__table tbody {
+    display: block;
+    inline-size: 100%;
+  }
+
+  .mesh-autopilots__table thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .mesh-autopilots__table tbody {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .mesh-autopilots__row {
+    display: grid;
+    overflow: hidden;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-1);
+  }
+
+  .mesh-autopilots__row:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .mesh-autopilots__table td,
+  .mesh-autopilots__actions {
+    display: grid;
+    grid-template-columns: minmax(5.5rem, 0.38fr) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    white-space: normal;
+  }
+
+  .mesh-autopilots__table td + td {
+    border-block-start: 1px solid var(--color-border-subtle);
+  }
+
+  .mesh-autopilots__table td::before {
+    content: attr(data-label);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-caption);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .mesh-autopilots__cell-value {
+    overflow-wrap: anywhere;
+  }
+
+  .mesh-autopilots__action-buttons {
+    display: flex;
+    min-inline-size: 0;
+  }
 }
 
 /* 编辑器:四段可折叠区块(§4.2)。 */

@@ -2,7 +2,7 @@
  * AutopilotsPage 组件测试(autopilot.md §4.1):行渲染、筛选、kill switch
  * 二次确认流程、暂停/启用、空态与错误态、行级实时重拉。
  */
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -145,6 +145,14 @@ describe('AutopilotsPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('autopilot-name-ap-1')).toBeInTheDocument());
     expect(screen.getByTestId('data-view')).toHaveClass('mesh-autopilots__page');
+    const page = screen.getByTestId('autopilots-page');
+    const table = screen.getByTestId('autopilots-table');
+    expect(page).toContainElement(table);
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((header) => header.textContent);
+    const cells = within(screen.getByTestId('autopilot-row-ap-1')).getAllByRole('cell');
+    expect(cells.map((cell) => cell.getAttribute('data-label'))).toEqual(headers);
     expect(screen.getByTestId('autopilot-name-ap-2')).toBeInTheDocument();
     expect(screen.getByTestId('autopilot-success-ap-1').textContent).toContain('95%');
     expect(screen.getByTestId('autopilot-trigger-ap-1').textContent).toContain('Asia/Shanghai');

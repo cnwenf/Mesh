@@ -685,6 +685,8 @@ features/
 
 该页族的视觉迁移不得改变业务通道：成员名册继续消费 `workspace:{workspace_id}` 的 `member.*`，Agent 详情继续消费 `workspace:{workspace_id}:agents` 的平铺 `agent_id|id` 载荷，收件箱继续消费 `member:{member_id}:inbox`，聊天列表即使尚无会话也须通过当前人类名册身份订阅 `chat_list:{member_id}`，会话正文仍走既有 SSE。错误、无成员身份和 Provider 未就绪必须呈现显式门控态，禁止以无限 skeleton 掩盖失败。真实验收必须至少构造两个工作区并访问非首 membership，对 REST 目标工作区、WebSocket 帧、聊天 SSE、PostgreSQL 落库逐项断言；SSE 须校验实际 stream URL、`text/event-stream` 响应和至少一个非空 `message.delta` 帧，不得只以最终 DOM 推断流式链路。桌面/手机 × 亮/暗四组合均须检查无横向溢出。
 
+自动值守列表的 loading、error、empty 与数据态必须位于同一个可见页面根节点内，测试标识不得落在仅供读屏的旁路占位上。七列桌面表格在手机容器中必须转换为逐字段带标签的卡片；名称、触发器、状态、上次运行、成功率、下次运行和操作均须可读，长且无断点的内容必须换行，操作按钮不得被裁切。MES-171 的 62 张逐项视觉核对与实现修复记录见 [`docs/audits/mes171-visual-regression-audit.md`](../../audits/mes171-visual-regression-audit.md)。
+
 依赖接入还须满足以下约束：
 
 - `@appica/ui-react`、Tailwind CSS 与 Vite 插件均精确锁版本，lockfile 必须提交；
@@ -851,6 +853,7 @@ runner 仅将 nginx 前端绑定到 `127.0.0.1:18530`；PostgreSQL、Redis、Min
 - [x] 自动无障碍扫描 + 键盘 E2E。
 - [x] 手机 overflow 检查（`scrollWidth <= clientWidth`，显式横向滚动容器除外）。
 - [x] mock 契约浏览器套件每次使用新鲜 production build/preview 与 mock 进程；不使用 Vite dev/HMR，不复用进程，`retries: 0`。
+- [x] 通讯与管理页族迁移后的 62 张差异均先审查 actual/expected/diff；失效排版变量、自动值守 loading 根节点与手机表格实现缺陷修复后，才更新对应基线（MES-171）。
 
 MES-128 工程基线为：104 个核心正常态快照、146 个核心异常态快照、112 个逐页四组合
 证据单元格、63 路由可达/权限/正常态清单，以及 320/390px production-auth 真栈键盘旅程。

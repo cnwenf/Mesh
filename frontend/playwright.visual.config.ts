@@ -1,5 +1,10 @@
 import { defineConfig } from '@playwright/test';
 
+const mockPort = Number(process.env.MESH_MOCK_VISUAL_PORT ?? 8911);
+const frontendPort = Number(process.env.MESH_VISUAL_FRONTEND_PORT ?? 5199);
+const mockBaseUrl = `http://127.0.0.1:${mockPort}`;
+const frontendBaseUrl = `http://127.0.0.1:${frontendPort}`;
+
 /**
  * 暗色视觉回归门禁(theme.md §5.4 / Task 21)。
  *
@@ -37,7 +42,7 @@ export default defineConfig({
     },
   },
   use: {
-    baseURL: 'http://127.0.0.1:5199',
+    baseURL: frontendBaseUrl,
     headless: true,
     locale: 'zh-CN',
     timezoneId: 'UTC',
@@ -74,19 +79,20 @@ export default defineConfig({
     {
       // 视觉专用 mock(8911):mock-server.mjs fork + 核心页恒定 fixture + 字体分发。
       command: 'node e2e/fixtures/mock-server-visual.mjs',
-      url: 'http://127.0.0.1:8911/healthz',
+      url: `${mockBaseUrl}/healthz`,
       reuseExistingServer: false,
       timeout: 30_000,
+      env: { MESH_MOCK_VISUAL_PORT: String(mockPort) },
     },
     {
       // 每次门禁新建生产包并启动 preview,不复用 dev/HMR 模块图。
-      command: 'npm run build && npm run preview -- --port 5199 --strictPort --host 127.0.0.1',
-      url: 'http://127.0.0.1:5199',
+      command: `npm run build && npm run preview -- --port ${frontendPort} --strictPort --host 127.0.0.1`,
+      url: frontendBaseUrl,
       reuseExistingServer: false,
       timeout: 180_000,
       env: {
-        VITE_MESH_API_BASE_URL: 'http://127.0.0.1:8911',
-        VITE_MESH_WS_BASE_URL: 'ws://127.0.0.1:8911',
+        VITE_MESH_API_BASE_URL: mockBaseUrl,
+        VITE_MESH_WS_BASE_URL: `ws://127.0.0.1:${mockPort}`,
       },
     },
   ],
