@@ -10,8 +10,7 @@ import { Button, EmptyState, ErrorState, Icon, Select, Skeleton, useToast } from
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
 import {
   getSkill,
   getVersion,
@@ -111,8 +110,9 @@ export function SkillDetailPage(): React.JSX.Element {
   const { skillId } = useParams<{ skillId: string }>();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
 
-  const [membership, setMembership] = useState<Membership | null>(null);
   const [skill, setSkill] = useState<SkillDetail | null>(null);
   const [versions, setVersions] = useState<SkillVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<SkillVersion | null>(null);
@@ -121,20 +121,6 @@ export function SkillDetailPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setMembership(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        /* keep empty state when there is no membership */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   const workspaceId = membership?.workspace_id ?? null;
   const canManage = membership?.role === 'admin' || membership?.role === 'owner';
@@ -297,10 +283,16 @@ export function SkillDetailPage(): React.JSX.Element {
     [client, workspaceId, skill, t, toast],
   );
 
+  if (membershipState.kind === 'error') {
+    return <ErrorState title={t('state.errorTitle')} description={t('skills.loadError')} />;
+  }
+  if (membershipState.kind === 'no_workspace') {
+    return <EmptyState title={t('state.emptyTitle')} description={t('members.noWorkspace')} />;
+  }
   if (error !== null) {
     return <ErrorState title={t('state.errorTitle')} description={error} />;
   }
-  if (loading || skill === null) {
+  if (membershipState.kind === 'loading' || loading || skill === null) {
     return <Skeleton loadingLabel={t('state.loading')} />;
   }
 

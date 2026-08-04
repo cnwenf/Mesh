@@ -14,6 +14,7 @@ import { MeshApiError, errorToI18nKey } from '../../api/errors';
 import { Button, Dialog, Input, Select, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { createRuntime, workspaceRuntimesChannel } from './api';
 import { buildInstallScript } from './format';
 import type { RuntimeKind, RuntimeWithActivation } from './types';
@@ -37,6 +38,8 @@ export interface RegisterRuntimeWizardProps {
   readonly onClose: () => void;
   readonly client: MeshApiClient;
   readonly workspaceId: string;
+  /** Canonical route slug; omitted only by legacy flat-route tests/callers. */
+  readonly workspaceSlug?: string;
   /** 注册成功(创建影子记录)后回调,供列表页重拉。 */
   readonly onRegistered: (runtime: RuntimeWithActivation) => void;
 }
@@ -54,7 +57,7 @@ function labelsToRecord(rows: readonly LabelRow[]): Record<string, string> | nul
 }
 
 export function RegisterRuntimeWizard(props: RegisterRuntimeWizardProps): React.JSX.Element {
-  const { open, onClose, client, workspaceId, onRegistered } = props;
+  const { open, onClose, client, workspaceId, workspaceSlug, onRegistered } = props;
   const t = useT();
   const toast = useToast();
   const realtime = useRealtimeContext();
@@ -323,7 +326,11 @@ export function RegisterRuntimeWizard(props: RegisterRuntimeWizardProps): React.
             )}
             <Link
               className="mesh-runtimes-wizard__link"
-              to={`/runtimes/${created.id}`}
+              to={
+                workspaceSlug === undefined
+                  ? `/runtimes/${created.id}`
+                  : workspaceRoute(workspaceSlug, `/automations/runtimes/${created.id}`)
+              }
               data-testid="runtime-wizard-detail-link"
             >
               {t('runtimes.wizard.goDetail')}
@@ -332,7 +339,11 @@ export function RegisterRuntimeWizard(props: RegisterRuntimeWizardProps): React.
         ) : null}
 
         {errorKey !== null ? (
-          <p role="alert" className="mesh-runtimes-wizard__error" data-testid="runtime-wizard-error">
+          <p
+            role="alert"
+            className="mesh-runtimes-wizard__error"
+            data-testid="runtime-wizard-error"
+          >
             {t(errorKey)}
           </p>
         ) : null}
@@ -349,10 +360,7 @@ export function RegisterRuntimeWizard(props: RegisterRuntimeWizardProps): React.
             </Button>
           ) : null}
           {step === 'install' ? (
-            <Button
-              data-testid="runtime-wizard-to-waiting"
-              onClick={() => setStep('waiting')}
-            >
+            <Button data-testid="runtime-wizard-to-waiting" onClick={() => setStep('waiting')}>
               {t('runtimes.wizard.installed')}
             </Button>
           ) : null}

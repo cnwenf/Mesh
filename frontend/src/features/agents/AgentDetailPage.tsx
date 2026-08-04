@@ -28,8 +28,7 @@ import {
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   agentPresenceChannel,
   getAgent,
@@ -71,11 +70,12 @@ export function AgentDetailPage(): React.JSX.Element {
   const { agentId } = useParams<{ agentId: string }>();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = tabFromParam(searchParams.get('tab'));
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [versions, setVersions] = useState<AgentConfigVersion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -116,22 +116,14 @@ export function AgentDetailPage(): React.JSX.Element {
     awaiting: number;
   } | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        if (!cancelled) setError(t('state.errorDescription'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, t]);
-
   const loadAgent = useCallback(() => {
-    if (workspace === null || agentId === undefined) return;
+    if (membershipState.kind !== 'ready' || workspace === null || agentId === undefined) {
+      setIsLoading(membershipState.kind === 'loading');
+      if (membershipState.kind === 'error' || membershipState.kind === 'no_workspace') {
+        setError(t('state.errorDescription'));
+      }
+      return;
+    }
     setIsLoading(true);
     setError(null);
     getAgent(client, workspace.workspace_id, agentId)
@@ -148,7 +140,7 @@ export function AgentDetailPage(): React.JSX.Element {
       })
       .catch((err) => setError(err instanceof Error ? err.message : t('state.errorDescription')))
       .finally(() => setIsLoading(false));
-  }, [client, workspace, agentId, t]);
+  }, [client, workspace, membershipState.kind, agentId, t]);
 
   useEffect(() => {
     loadAgent();
@@ -176,11 +168,12 @@ export function AgentDetailPage(): React.JSX.Element {
     const channel = workspaceAgentsChannel(workspace.workspace_id);
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
-      const payload = frame.payload as { data?: { id?: string; agent_id?: string } };
-      const targetId = payload.data?.agent_id ?? payload.data?.id;
+      if (frame.channel !== channel) return;
+      const payload = frame.payload as { id?: string; agent_id?: string };
+      const targetId = payload.agent_id ?? payload.id;
       if (targetId !== agentId) return;
       if (frame.event === 'agent.deleted') {
-        navigate('/members');
+        navigate(workspaceRoute(workspace.workspace_slug, '/members'));
         return;
       }
       if (frame.event === 'agent.updated' || frame.event === 'agent.lifecycle_changed') {
@@ -200,7 +193,7 @@ export function AgentDetailPage(): React.JSX.Element {
     const channel = agentPresenceChannel(agentId);
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
-      if (frame.event !== 'agent.presence') return;
+      if (frame.channel !== channel || frame.event !== 'agent.presence') return;
       const data = frame.payload as {
         running?: number;
         queued?: number;
@@ -399,13 +392,17 @@ export function AgentDetailPage(): React.JSX.Element {
           title={t('state.errorTitle')}
           description={error}
           retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
+          onRetry={
+            membershipState.kind === 'error'
+              ? membershipState.retry
+              : () => setReloadKey((key) => key + 1)
+          }
         />
       </div>
     );
   }
 
-  if (isLoading || agent === null) {
+  if (isLoading || agent === null || workspace === null) {
     return (
       <div className="mesh-agents-detail">
         <Skeleton loadingLabel={t('common.loading')} />
@@ -424,7 +421,7 @@ export function AgentDetailPage(): React.JSX.Element {
           <Button
             variant="ghost"
             data-testid="agent-detail-back"
-            onClick={() => navigate('/members')}
+            onClick={() => navigate(workspaceRoute(workspace.workspace_slug, '/members'))}
           >
             {t('agents.detail.back')}
           </Button>

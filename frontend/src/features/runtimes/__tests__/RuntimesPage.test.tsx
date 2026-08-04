@@ -14,6 +14,7 @@ import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import { WorkspaceProvider } from '../../../workspace/WorkspaceProvider';
 import { RuntimesPage } from '../RuntimesPage';
 
 afterEach(() => {
@@ -150,15 +151,91 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
         }
       />
       <Route path="/runtimes/:runtimeId" element={<div data-testid="navigated-to-detail" />} />
+      <Route
+        path="/w/:workspaceSlug/automations/runtimes/:runtimeId"
+        element={<div data-testid="navigated-to-detail" />}
+      />
     </Routes>,
   );
 }
 
 describe('RuntimesPage', () => {
+  it('canonical workspace route resolves its matching membership and preserves the slug in detail navigation', async () => {
+    const user = userEvent.setup();
+    const secondWorkspace = {
+      id: 'ws-2',
+      name: 'Beta',
+      slug: 'beta',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    const memberships = [
+      ME.memberships[0],
+      {
+        ...ME.memberships[0],
+        workspace_id: 'ws-2',
+        workspace_name: 'Beta',
+        workspace_slug: 'beta',
+      },
+    ];
+    const calls: Recorded[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? 'GET' });
+      if (url.includes('/users/me')) {
+        return fakeResponse({ body: { data: { ...ME, memberships } } });
+      }
+      return fakeResponse({ body: { data: [RUNTIME_ONLINE], next_cursor: null } });
+    }) as typeof fetch);
+    const providerClient = {
+      request: vi.fn(async () => secondWorkspace),
+    };
+
+    renderWithProviders(
+      <WorkspaceProvider slug="beta" client={providerClient as never}>
+        <Routes>
+          <Route path="/w/:workspaceSlug/automations/runtimes" element={<RuntimesPage />} />
+          <Route
+            path="/w/:workspaceSlug/automations/runtimes/:runtimeId"
+            element={<div data-testid="canonical-runtime-detail" />}
+          />
+        </Routes>
+      </WorkspaceProvider>,
+      { route: '/w/beta/automations/runtimes' },
+    );
+
+    await screen.findByTestId('runtime-row-r-1');
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-2/runtimes'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-1/runtimes'))).toBe(false);
+    await user.click(screen.getByTestId('runtime-detail-r-1'));
+    expect(await screen.findByTestId('canonical-runtime-detail')).toBeInTheDocument();
+  });
+
+  it('member can inspect runtimes but cannot see fleet management controls', async () => {
+    const memberMe = {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) =>
+      String(input).includes('/users/me')
+        ? fakeResponse({ body: { data: memberMe } })
+        : fakeResponse({ body: { data: [RUNTIME_ONLINE], next_cursor: null } })) as typeof fetch);
+    renderPage();
+    await screen.findByTestId('runtime-row-r-1');
+    expect(screen.queryByTestId('new-runtime-button')).toBeNull();
+    expect(screen.queryByTestId('runtime-pause-r-1')).toBeNull();
+    expect(screen.getByTestId('runtime-detail-r-1')).toBeInTheDocument();
+  });
+
   it('渲染行:状态文本 + 名称 + 类型 + 负载 + 心跳新鲜度', async () => {
     setup();
     renderPage();
     expect(await screen.findByTestId('runtime-row-r-1')).toBeInTheDocument();
+    expect(screen.getByTestId('data-view')).toHaveClass('mesh-runtimes');
     expect(screen.getByTestId('runtime-name-r-1')).toHaveTextContent('intranet-build-01');
     expect(screen.getByTestId('runtime-row-r-1')).toHaveTextContent('Online');
     expect(screen.getByTestId('runtime-row-r-1')).toHaveTextContent('Self-hosted');
@@ -346,7 +423,7 @@ describe('RuntimesPage', () => {
     expect(screen.getByTestId('runtime-load-r-4')).toHaveAttribute('aria-valuemax', '0');
   });
 
-  it('行详情按钮导航至 /runtimes/{id}(哨兵路由承接)', async () => {
+  it('行详情按钮导航至工作区规范 runtime 深链(哨兵路由承接)', async () => {
     const user = userEvent.setup();
     setup();
     renderPage();

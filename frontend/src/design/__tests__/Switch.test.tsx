@@ -12,6 +12,7 @@ describe('Switch(二态开关)', () => {
     const onCheckedChange = vi.fn();
     render(<Switch label="仅提及我" checked={false} onCheckedChange={onCheckedChange} />);
     const control = screen.getByRole('switch', { name: '仅提及我' });
+    expect(control).toHaveAttribute('data-slot', 'switch');
     expect(control).toHaveAttribute('aria-checked', 'false');
     await user.click(control);
     expect(onCheckedChange).toHaveBeenCalledWith(true);

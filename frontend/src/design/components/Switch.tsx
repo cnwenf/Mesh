@@ -5,6 +5,7 @@
  * label 经 aria-labelledby 关联(可选 description 经 describedby)。无硬编码文案。
  */
 import { useId } from 'react';
+import { Switch as AppicaSwitch } from '@appica/ui-react/switch';
 import './components.css';
 
 export interface SwitchProps {
@@ -42,19 +43,18 @@ export function Switch(props: SwitchProps): React.JSX.Element {
             </span>
           ) : null}
         </span>
-        <button
-          type="button"
-          role="switch"
+        <AppicaSwitch
+          render={<button type="button" />}
+          nativeButton
           id={switchId}
           className={checked ? 'mesh-switch__control mesh-switch__control--on' : 'mesh-switch__control'}
-          aria-checked={checked}
           aria-labelledby={labelId}
           aria-describedby={description ? descriptionId : undefined}
+          checked={checked}
           disabled={disabled}
-          onClick={() => onCheckedChange(!checked)}
-        >
-          <span className="mesh-switch__thumb" aria-hidden="true" />
-        </button>
+          onCheckedChange={(next) => onCheckedChange(next)}
+          size="lg"
+        />
       </div>
     </div>
   );

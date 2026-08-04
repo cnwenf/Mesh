@@ -8,8 +8,8 @@
  * - inbox.unread_count(载荷 {count})→ 未读计数变更(经 extractUnreadCount 取出)。
  */
 import type { RealtimeEventFrame } from '../../types/realtime';
-import type { Notification } from './types';
-import { isNotification } from './types';
+import type { InboxFilter, Notification } from './types';
+import { isNotification, isUnread } from './types';
 
 function actionOf(event: string): string {
   const dot = event.lastIndexOf('.');
@@ -30,6 +30,7 @@ function entityOf(event: string): string {
 export function applyInboxFrame(
   notifications: readonly Notification[],
   frame: RealtimeEventFrame,
+  filter: InboxFilter = 'all',
 ): Notification[] {
   const entity = entityOf(frame.event);
   if (entity !== 'notification') return notifications as Notification[];
@@ -39,6 +40,7 @@ export function applyInboxFrame(
   if (action === 'created') {
     const candidate = (payload.notification ?? payload) as unknown;
     if (!isNotification(candidate)) return notifications as Notification[];
+    if (!matchesFilter(candidate, filter)) return notifications as Notification[];
     if (notifications.some((item) => item.id === candidate.id)) return notifications as Notification[];
     return [candidate, ...notifications];
   }
@@ -48,15 +50,33 @@ export function applyInboxFrame(
     if (id === undefined) return notifications as Notification[];
     const readAt = typeof payload.read_at === 'string' ? payload.read_at : new Date().toISOString();
     let changed = false;
-    const next = notifications.map((item) => {
-      if (item.id !== id) return item;
+    const next = notifications.flatMap((item) => {
+      if (item.id !== id) return [item];
       changed = true;
-      return { ...item, read_at: readAt };
+      const updated = { ...item, read_at: readAt };
+      return matchesFilter(updated, filter) ? [updated] : [];
     });
     return changed ? next : (notifications as Notification[]);
   }
 
   return notifications as Notification[];
+}
+
+/** 与 GET /inbox `filter` 口径一致,避免实时帧把不匹配行插入当前视图。 */
+function matchesFilter(notification: Notification, filter: InboxFilter): boolean {
+  if (notification.archived_at !== null) return false;
+  switch (filter) {
+    case 'unread':
+      return isUnread(notification);
+    case 'mentions':
+      return notification.type === 'mentioned';
+    case 'assigned':
+      return notification.type === 'assigned';
+    case 'agent':
+      return notification.actor?.member_type === 'agent';
+    case 'all':
+      return true;
+  }
 }
 
 /** 从 inbox.unread_count 帧取出计数;非该事件返回 null。 */

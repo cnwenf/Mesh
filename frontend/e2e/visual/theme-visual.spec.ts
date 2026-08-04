@@ -35,7 +35,7 @@ test.beforeAll(async ({ browser }) => {
 for (const name of Object.keys(PAGES)) {
   const spec = PAGES[name];
   for (const theme of THEMES) {
-    test(`${name} ${theme}`, async ({ page }) => {
+    test(`${name} ${theme}`, async ({ page }, testInfo) => {
       await prepareVisualPage(page, theme);
       await navigateToPage(page, name);
 
@@ -43,6 +43,14 @@ for (const name of Object.keys(PAGES)) {
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 
       await waitForStable(page);
+
+      if (spec.snapshotKey === 'autopilots' && testInfo.project.name === 'phone') {
+        await expect(page.getByTestId('autopilot-row-autopilot-1')).toHaveCSS('display', 'grid');
+        await expect(page.getByTestId('autopilots-table').locator('thead')).toHaveCSS(
+          'position',
+          'absolute',
+        );
+      }
 
       const mask = [...commonMasks(page), ...spec.masks(page)];
       await expect(page).toHaveScreenshot(`${spec.snapshotKey}-${theme}.png`, {

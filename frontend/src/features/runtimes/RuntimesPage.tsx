@@ -13,6 +13,7 @@ import { MeshApiClient, getToken } from '../../api';
 import {
   Banner,
   Button,
+  DataView,
   EmptyState,
   ErrorState,
   Select,
@@ -24,8 +25,7 @@ import type { StatusDotTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   deleteRuntime,
   listRuntimes,
@@ -70,10 +70,11 @@ interface RuntimeRowProps {
   readonly onPause: (runtime: RuntimeDetail) => void;
   readonly onResume: (runtime: RuntimeDetail) => void;
   readonly onDelete: (runtime: RuntimeDetail) => void;
+  readonly canManage: boolean;
 }
 
 function RuntimeRow(props: RuntimeRowProps): React.JSX.Element {
-  const { runtime, nowMs, onOpen, onPause, onResume, onDelete } = props;
+  const { runtime, nowMs, onOpen, onPause, onResume, onDelete, canManage } = props;
   const t = useT();
   const age = heartbeatAge(runtime.last_heartbeat_at, nowMs);
   const heartbeatLabel =
@@ -144,7 +145,7 @@ function RuntimeRow(props: RuntimeRowProps): React.JSX.Element {
         >
           {t('runtimes.action.detail')}
         </Button>
-        {showPause ? (
+        {canManage && showPause ? (
           <Button
             variant="secondary"
             size="sm"
@@ -154,7 +155,7 @@ function RuntimeRow(props: RuntimeRowProps): React.JSX.Element {
             {t('runtimes.action.pause')}
           </Button>
         ) : null}
-        {showResume ? (
+        {canManage && showResume ? (
           <Button
             variant="secondary"
             size="sm"
@@ -164,7 +165,7 @@ function RuntimeRow(props: RuntimeRowProps): React.JSX.Element {
             {t('runtimes.action.resume')}
           </Button>
         ) : null}
-        {showDelete ? (
+        {canManage && showDelete ? (
           <Button
             variant="danger"
             size="sm"
@@ -185,12 +186,14 @@ export function RuntimesPage(): React.JSX.Element {
   const navigate = useNavigate();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  const membershipState = useWorkspaceMembership(client);
+  const workspace = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = workspace?.role === 'owner' || workspace?.role === 'admin';
 
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFilter = searchParams.get('status') ?? STATUS_ALL;
   const kindFilter = searchParams.get('kind') ?? KIND_ALL;
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [runtimes, setRuntimes] = useState<RuntimeDetail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -199,20 +202,6 @@ export function RuntimesPage(): React.JSX.Element {
   const [queueDepth, setQueueDepth] = useState<number | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe(client)
-      .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
-      })
-      .catch(() => {
-        if (!cancelled) setError(t('state.errorDescription'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, t]);
 
   const loadRuntimes = useCallback(() => {
     if (workspace === null) {
@@ -302,11 +291,20 @@ export function RuntimesPage(): React.JSX.Element {
     return runtimes.filter((runtime) => runtime.name.toLowerCase().includes(query));
   }, [runtimes, search]);
 
+  const membershipError = membershipState.kind === 'error' ? t('state.errorDescription') : null;
+  const visibleError = membershipError ?? error;
+  const loading = membershipState.kind === 'loading' || isLoading;
+  const detailPath = (runtimeId: string): string =>
+    workspace === null
+      ? `/runtimes/${runtimeId}`
+      : workspaceRoute(workspace.workspace_slug, `/automations/runtimes/${runtimeId}`);
+
   return (
-    <div className="mesh-runtimes">
-      <div className="mesh-runtimes__header">
-        <h1 className="mesh-runtimes__title">{t('runtimes.title')}</h1>
-        {workspace !== null ? (
+    <DataView
+      className="mesh-runtimes"
+      title={t('runtimes.title')}
+      actions={
+        workspace !== null && canManage ? (
           <Button
             variant="primary"
             data-testid="new-runtime-button"
@@ -314,9 +312,53 @@ export function RuntimesPage(): React.JSX.Element {
           >
             {t('runtimes.new')}
           </Button>
-        ) : null}
-      </div>
-
+        ) : undefined
+      }
+      toolbar={
+        <div className="mesh-runtimes__toolbar" role="group" aria-label={t('runtimes.filterLabel')}>
+          <Select
+            label={t('runtimes.filter.status')}
+            value={statusFilter}
+            data-testid="runtimes-status-filter"
+            onChange={(event) =>
+              updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
+            }
+          >
+            <option value={STATUS_ALL}>{t('runtimes.filter.all')}</option>
+            {RUNTIME_STATUS_ORDER.map((status) => (
+              <option key={status} value={status}>
+                {t(`runtimes.status.${status}`)}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label={t('runtimes.filter.kind')}
+            value={kindFilter}
+            data-testid="runtimes-kind-filter"
+            onChange={(event) =>
+              updateParam('kind', event.target.value === KIND_ALL ? null : event.target.value)
+            }
+          >
+            <option value={KIND_ALL}>{t('runtimes.filter.all')}</option>
+            {RUNTIME_KIND_ORDER.map((kind) => (
+              <option key={kind} value={kind}>
+                {t(`runtimes.kind.${kind}`)}
+              </option>
+            ))}
+          </Select>
+          <label className="mesh-runtimes__search">
+            <span className="mesh-runtimes__search-label">{t('common.search')}</span>
+            <input
+              type="search"
+              value={search}
+              data-testid="runtimes-search"
+              placeholder={t('runtimes.searchPlaceholder')}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+        </div>
+      }
+    >
       {queueDepth !== null ? (
         <Banner tone={queueDepth > 0 ? 'warn' : 'info'}>
           <span data-testid="runtimes-queue-depth">
@@ -325,59 +367,20 @@ export function RuntimesPage(): React.JSX.Element {
         </Banner>
       ) : null}
 
-      <div className="mesh-runtimes__toolbar" role="group" aria-label={t('runtimes.filterLabel')}>
-        <Select
-          label={t('runtimes.filter.status')}
-          value={statusFilter}
-          data-testid="runtimes-status-filter"
-          onChange={(event) =>
-            updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
-          }
-        >
-          <option value={STATUS_ALL}>{t('runtimes.filter.all')}</option>
-          {RUNTIME_STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>
-              {t(`runtimes.status.${status}`)}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label={t('runtimes.filter.kind')}
-          value={kindFilter}
-          data-testid="runtimes-kind-filter"
-          onChange={(event) =>
-            updateParam('kind', event.target.value === KIND_ALL ? null : event.target.value)
-          }
-        >
-          <option value={KIND_ALL}>{t('runtimes.filter.all')}</option>
-          {RUNTIME_KIND_ORDER.map((kind) => (
-            <option key={kind} value={kind}>
-              {t(`runtimes.kind.${kind}`)}
-            </option>
-          ))}
-        </Select>
-        <label className="mesh-runtimes__search">
-          <span className="mesh-runtimes__search-label">{t('common.search')}</span>
-          <input
-            type="search"
-            value={search}
-            data-testid="runtimes-search"
-            placeholder={t('runtimes.searchPlaceholder')}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </label>
-      </div>
-
-      {workspace === null && !isLoading && error === null ? (
+      {membershipState.kind === 'no_workspace' && !loading && visibleError === null ? (
         <EmptyState title={t('state.emptyTitle')} description={t('runtimes.noWorkspace')} />
-      ) : error !== null ? (
+      ) : visibleError !== null ? (
         <ErrorState
           title={t('state.errorTitle')}
-          description={error}
+          description={visibleError}
           retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
+          onRetry={
+            membershipState.kind === 'error'
+              ? membershipState.retry
+              : () => setReloadKey((key) => key + 1)
+          }
         />
-      ) : isLoading ? (
+      ) : loading ? (
         <Skeleton loadingLabel={t('common.loading')} />
       ) : filtered.length === 0 ? (
         <EmptyState title={t('state.emptyTitle')} description={t('runtimes.empty')} />
@@ -400,7 +403,8 @@ export function RuntimesPage(): React.JSX.Element {
                 key={runtime.id}
                 runtime={runtime}
                 nowMs={nowMs}
-                onOpen={(r) => navigate(`/runtimes/${r.id}`)}
+                canManage={canManage}
+                onOpen={(r) => navigate(detailPath(r.id))}
                 onPause={(r) =>
                   void runAction(
                     () => pauseRuntime(client, workspace?.workspace_id ?? '', r.id),
@@ -431,9 +435,10 @@ export function RuntimesPage(): React.JSX.Element {
           onClose={() => setWizardOpen(false)}
           client={client}
           workspaceId={workspace.workspace_id}
+          workspaceSlug={workspace.workspace_slug}
           onRegistered={() => setReloadKey((key) => key + 1)}
         />
       ) : null}
-    </div>
+    </DataView>
   );
 }

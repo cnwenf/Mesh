@@ -12,6 +12,7 @@ import { uuidv4 } from '../../api/uuid';
 import { Button, ErrorState, Icon, IconButton, RunStateBadge, Skeleton, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   chatSessionChannel,
   listChatMessages,
@@ -55,6 +56,8 @@ function upsertById(list: readonly ChatMessage[], message: ChatMessage): ChatMes
 export interface ConversationPanelProps {
   readonly client: MeshApiClient;
   readonly workspaceId: string;
+  /** 规范工作区路由 slug;隔离测试/旧入口为空时保留扁平路由兼容。 */
+  readonly workspaceSlug?: string | null;
   readonly session: ChatSession;
   readonly locale: string;
   /** 会话字段变更(如移除上下文)后回写父级列表。 */
@@ -65,6 +68,10 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
   const t = useT();
   const toast = useToast();
   const navigate = useNavigate();
+  const chatPath =
+    props.workspaceSlug === undefined || props.workspaceSlug === null
+      ? '/chat'
+      : workspaceRoute(props.workspaceSlug, 'chat');
   const realtime = useRealtimeContext();
   const { client, workspaceId, session } = props;
 
@@ -287,7 +294,7 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
           variant="ghost"
           className="mesh-chat__back"
           data-testid="chat-back"
-          onClick={() => navigate('/chat')}
+          onClick={() => navigate(chatPath)}
         >
           <Icon name="chevron-left" />
         </IconButton>
@@ -375,7 +382,11 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
         onClose={() => setDistillOpen(false)}
         onDistilled={(issueId) => {
           setDistillOpen(false);
-          navigate(`/issues/${issueId}`);
+          navigate(
+            props.workspaceSlug === undefined || props.workspaceSlug === null
+              ? `/issues/${issueId}`
+              : workspaceRoute(props.workspaceSlug, `issues/${issueId}`),
+          );
         }}
       />
     </section>

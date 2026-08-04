@@ -3,13 +3,12 @@
  * (创建后仅显示一次,提示妥善保存)+ 密钥轮换(旧 token 立即失效,规则按
  * secret_id 绑定保持可用)。列表面绝不回显 token / secret(§5.3 红线)。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
 import { Banner, Button, EmptyState, ErrorState, Input, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
 import {
   createWebhookSecret,
   inboundWebhookUrl,
@@ -29,7 +28,10 @@ import './autopilots.css';
 export function WebhookConfigPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
-  const [membership, setMembership] = useState<Membership | null>(null);
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const membershipState = useWorkspaceMembership(client);
+  const membership = membershipState.kind === 'ready' ? membershipState.membership : null;
+  const canManage = membership?.role === 'owner' || membership?.role === 'admin';
   const [secrets, setSecrets] = useState<WebhookSecretPublic[] | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -39,21 +41,18 @@ export function WebhookConfigPage(): React.JSX.Element {
   const [events, setEvents] = useState<WebhookEventItem[] | null>(null);
 
   useEffect(() => {
+    if (membershipState.kind === 'loading') return;
+    if (membershipState.kind !== 'ready' || membership === null || !canManage) {
+      setSecrets([]);
+      setEvents([]);
+      return;
+    }
     let cancelled = false;
-    const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
     void (async () => {
       try {
-        const me = await fetchMe(client);
-        const workspace = activeWorkspace(me.memberships);
-        if (cancelled) return;
-        setMembership(workspace);
-        if (workspace === null) {
-          setSecrets([]);
-          return;
-        }
         const [secretListing, eventListing] = await Promise.all([
-          listWebhookSecrets(client, workspace.workspace_id),
-          listWebhookEvents(client, workspace.workspace_id, { limit: 20 }),
+          listWebhookSecrets(client, membership.workspace_id),
+          listWebhookEvents(client, membership.workspace_id, { limit: 20 }),
         ]);
         setSecrets(secretListing);
         setEvents(eventListing.data);
@@ -66,12 +65,11 @@ export function WebhookConfigPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [client, membership, membershipState.kind, canManage, reloadKey]);
 
   const createSecret = useCallback(async () => {
     setBusy(true);
     try {
-      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       const created = await createWebhookSecret(
         client,
         membership!.workspace_id,
@@ -84,13 +82,12 @@ export function WebhookConfigPage(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [membership, label, toast, t]);
+  }, [client, membership, label, toast, t]);
 
   const rotateSecret = useCallback(
     async (secretId: string) => {
       setBusy(true);
       try {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const rotated = await rotateWebhookSecret(client, membership!.workspace_id, secretId);
         setFreshCredential(rotated);
         setReloadKey((key) => key + 1);
@@ -100,8 +97,46 @@ export function WebhookConfigPage(): React.JSX.Element {
         setBusy(false);
       }
     },
-    [membership, toast, t],
+    [client, membership, toast, t],
   );
+
+  if (membershipState.kind === 'loading') {
+    return (
+      <div className="mesh-autopilots__page">
+        <Skeleton loadingLabel={t('autopilots.loading')} />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'no_workspace') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState
+          title={t('autopilots.noWorkspace.title')}
+          description={t('autopilots.noWorkspace.description')}
+        />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'error') {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState title={t('error.unknown')} />
+      </div>
+    );
+  }
+
+  if (membershipState.kind === 'ready' && !canManage) {
+    return (
+      <div className="mesh-autopilots__page">
+        <ErrorState
+          title={t('state.permissionTitle')}
+          description={t('state.permissionDescription')}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="mesh-autopilots__page" data-testid="webhook-config-page">

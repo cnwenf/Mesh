@@ -18,7 +18,8 @@
 import type { Browser, Locator, Page } from '@playwright/test';
 
 /** 视觉专用 mock 服务端基址(独立端口,勿与默认套件 8901 冲突)。 */
-export const VISUAL_MOCK_BASE = 'http://127.0.0.1:8911';
+const visualMockPort = Number(process.env.MESH_MOCK_VISUAL_PORT ?? 8911);
+export const VISUAL_MOCK_BASE = `http://127.0.0.1:${visualMockPort}`;
 
 /** dev 鉴权 token(与视觉 mock 的 mesh-dev: 前缀校验一致;仅 e2e 自测用,非密钥)。 */
 export const VISUAL_TOKEN = 'mesh-dev:00000000-0000-0000-0000-000000000001';
@@ -173,7 +174,10 @@ export const PAGES: Record<string, VisualPageSpec> = {
     ready: async (page) => {
       await page.getByTestId('autopilot-row-autopilot-1').waitFor({ state: 'visible' });
     },
-    masks: (page) => [page.locator('[data-testid^="autopilot-last-run-"]')],
+    // 仅遮罩相对时间值；手机卡片的 data-label 必须保留在视觉断言中。
+    masks: (page) => [
+      page.locator('[data-testid^="autopilot-last-run-"] .mesh-autopilots__cell-value'),
+    ],
   },
   集成: {
     snapshotKey: 'integrations',

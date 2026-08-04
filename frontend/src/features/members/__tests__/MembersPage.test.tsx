@@ -9,10 +9,12 @@
  */
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { RealtimeContext } from '../../../shell/AppShell';
+import { WorkspaceProvider } from '../../../workspace/WorkspaceProvider';
 import { MembersPage } from '../MembersPage';
 
 const ME = {
@@ -79,6 +81,12 @@ function makeFetch(members: unknown[]) {
     }
     if (method === 'POST' && url.includes('/invitations')) {
       return fakeResponse({ body: { data: [{ invite_link: '/invite/tok' }] } });
+    }
+    if (method === 'POST' && url.includes('/onboarding/reset')) {
+      return fakeResponse({ body: { data: {} } });
+    }
+    if (method === 'POST' && /\/agents\/[^/]+:(disable|enable)$/.test(url)) {
+      return fakeResponse({ body: { data: AGENT } });
     }
     if (method === 'POST' && url.endsWith('/agents')) {
       return fakeResponse({ body: { data: { id: 'agt-new' } } });
@@ -184,7 +192,7 @@ describe('MembersPage', () => {
     expect(screen.getByTestId('new-agent-button')).toBeInTheDocument();
   });
 
-  it('agent 行展示类型/角色标签/生命周期,无工作区角色下拉(H-F1)', async () => {
+  it('agent 行展示类型/角色标签/生命周期,并复用工作区角色下拉(owner 禁用)', async () => {
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
     await waitForTable();
@@ -192,9 +200,124 @@ describe('MembersPage', () => {
     expect(screen.getByTestId('member-type-mem-a')).toHaveTextContent('Agent');
     expect(screen.getByTestId('member-role-tag-mem-a')).toHaveTextContent('测试工程师');
     expect(screen.getByTestId('member-lifecycle-mem-a')).toBeInTheDocument();
-    expect(screen.queryByTestId('role-select-mem-a')).not.toBeInTheDocument();
-    // 人类行仍保留角色下拉。
+    const agentRole = screen.getByTestId('role-select-mem-a') as HTMLSelectElement;
+    expect(agentRole).toBeInTheDocument();
+    expect(
+      (within(agentRole).getByRole('option', { name: 'Owner' }) as HTMLOptionElement).disabled,
+    ).toBe(true);
+    // 人类行保留完整角色下拉。
     expect(screen.getByTestId('role-select-mem-h')).toBeInTheDocument();
+  });
+
+  it('agent workspace role 变更复用 member PATCH helper', async () => {
+    const user = userEvent.setup();
+    const calls = stub([AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await user.selectOptions(screen.getByTestId('role-select-mem-a'), 'admin');
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.init?.method === 'PATCH' &&
+            call.url.includes('/members/mem-a') &&
+            String(call.init.body).includes('"role":"admin"'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('agent 停用走 agent lifecycle helper,不再 PATCH member status', async () => {
+    const user = userEvent.setup();
+    const calls = stub([AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await openRowMenu(user, 'mem-a');
+    await user.click(screen.getByRole('menuitem', { name: 'Disable' }));
+    await user.click(await screen.findByTestId('remove-confirm'));
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            (call.init?.method ?? 'GET') === 'POST' && call.url.includes('/agents/agt-9:disable'),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      calls.some((call) => call.init?.method === 'PATCH' && call.url.includes('/members/mem-a')),
+    ).toBe(false);
+  });
+
+  it('agent 启用走 agent lifecycle helper,不再 PATCH member status', async () => {
+    const user = userEvent.setup();
+    const disabledAgent = {
+      ...AGENT,
+      status: 'disabled',
+      profile: { ...AGENT.profile, lifecycle_status: 'disabled' },
+    };
+    const calls = stub([disabledAgent]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await openRowMenu(user, 'mem-a');
+    await user.click(screen.getByRole('menuitem', { name: 'Enable' }));
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            (call.init?.method ?? 'GET') === 'POST' && call.url.includes('/agents/agt-9:enable'),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      calls.some((call) => call.init?.method === 'PATCH' && call.url.includes('/members/mem-a')),
+    ).toBe(false);
+  });
+
+  it('agent 移除走 DELETE agent helper,不再 DELETE member endpoint', async () => {
+    const user = userEvent.setup();
+    const calls = stub([AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await openRowMenu(user, 'mem-a');
+    await user.click(screen.getByRole('menuitem', { name: 'Remove' }));
+    await user.click(await screen.findByTestId('remove-confirm'));
+
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.init?.method === 'DELETE' && call.url.includes('/agents/agt-9')),
+      ).toBe(true),
+    );
+    expect(
+      calls.some((call) => call.init?.method === 'DELETE' && call.url.includes('/members/mem-a')),
+    ).toBe(false);
+  });
+
+  it('当前人类成员以 profile user id 识别,不提供移除自己的破坏性动作', async () => {
+    const user = userEvent.setup();
+    const ownerMember = {
+      ...HUMAN,
+      id: 'mem-owner',
+      role: 'owner',
+      display_name: 'Owner',
+      profile: {
+        ...HUMAN.profile,
+        id: ME.user.id,
+        full_name: 'Owner',
+        email: ME.user.email,
+      },
+    };
+    stub([ownerMember]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await openRowMenu(user, ownerMember.id);
+    expect(screen.queryByRole('menuitem', { name: 'Remove' })).not.toBeInTheDocument();
   });
 
   it('点击 [+ New Agent] 打开创建向导第一步(唯一创建入口,agent.md §4.4)', async () => {
@@ -233,6 +356,28 @@ describe('MembersPage', () => {
     await openRowMenu(user, 'mem-h');
     await user.click(screen.getByRole('menuitem', { name: 'Disable' }));
     expect(await screen.findByText('Disable member')).toBeInTheDocument();
+  });
+
+  it('管理员可从人类行菜单确认重置 onboarding', async () => {
+    const user = userEvent.setup();
+    const calls = stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await openRowMenu(user, 'mem-h');
+    await user.click(screen.getByRole('menuitem', { name: 'Reset onboarding' }));
+    expect(await screen.findByTestId('reset-onboarding-body')).toBeInTheDocument();
+    await user.click(screen.getByTestId('reset-onboarding-confirm'));
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            (call.init?.method ?? 'GET') === 'POST' && call.url.includes('/onboarding/reset'),
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByText('Onboarding progress reset')).toBeInTheDocument();
   });
 
   it('点击成员打开详情抽屉(经 GET 详情,展示名下进行中 issue)', async () => {
@@ -284,7 +429,7 @@ describe('MembersPage', () => {
   it('无名册成员时显示空态', async () => {
     stub([]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    expect(await screen.findByText('Nothing here yet')).toBeInTheDocument();
+    expect(await screen.findByText('No members yet')).toBeInTheDocument();
   });
 
   it('无工作区成员身份时提示无工作区', async () => {
@@ -620,10 +765,106 @@ describe('MembersPage', () => {
       ).not.toBeNull(),
     );
   });
+
+  it('canonical workspace provider 选中第二个 membership,并保留 DataView/Tabs 与 workspace 深链', async () => {
+    const user = userEvent.setup();
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+      role: 'admin',
+    };
+    const me = { ...ME, memberships: [ME.memberships[0], betaMembership] };
+    const calls: Recorded[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/workspaces/ws-2/members')) {
+        return fakeResponse({ body: { data: [AGENT], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch);
+    const providerClient = {
+      request: vi.fn(async () => ({
+        id: 'ws-2',
+        name: 'Beta',
+        slug: 'beta',
+        logo_url: null,
+        timezone: 'UTC',
+        settings: {},
+        my_role: 'admin',
+        created_at: '2026-08-04T00:00:00Z',
+        updated_at: '2026-08-04T00:00:00Z',
+      })),
+    };
+
+    renderWithProviders(
+      <WorkspaceProvider slug="beta" client={providerClient as never}>
+        <Routes>
+          <Route path="/w/:workspaceSlug/members" element={<MembersPage />} />
+          <Route
+            path="/w/:workspaceSlug/agents/:agentId"
+            element={<div data-testid="canonical-agent-route" />}
+          />
+        </Routes>
+      </WorkspaceProvider>,
+      { route: '/w/beta/members' },
+    );
+
+    await waitForTable();
+    expect(screen.getByTestId('data-view')).toBeInTheDocument();
+    expect(screen.getByTestId('tab-all')).toHaveAttribute('role', 'tab');
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-2/members'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-1/members'))).toBe(false);
+
+    await user.click(screen.getByTestId('member-open-mem-a'));
+    expect(await screen.findByTestId('canonical-agent-route')).toBeInTheDocument();
+  });
+
+  it('workspace member events reload the roster and reject other channels', async () => {
+    const rt = makeFakeRealtime();
+    const calls = stub([HUMAN]);
+    renderWithProviders(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试替身
+      <RealtimeContext.Provider value={rt as any}>
+        <MembersPage />
+      </RealtimeContext.Provider>,
+      { route: '/members' },
+    );
+    await waitForTable();
+    await waitFor(() => expect(rt.client.subscribe).toHaveBeenCalledWith('workspace:ws-1'));
+    const rosterCalls = (): number =>
+      calls.filter(
+        (call) =>
+          (call.init?.method ?? 'GET') === 'GET' && call.url.includes('/workspaces/ws-1/members'),
+      ).length;
+    const before = rosterCalls();
+
+    act(() => {
+      rt.emit({
+        channel: 'workspace:other',
+        event: 'member.updated',
+        payload: { member_id: 'mem-h', changes: { role: 'admin' } },
+      });
+    });
+    expect(rosterCalls()).toBe(before);
+
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1',
+        event: 'member.updated',
+        payload: { member_id: 'mem-h', changes: { role: 'admin' } },
+      });
+    });
+    await waitFor(() => expect(rosterCalls()).toBeGreaterThan(before));
+  });
 });
 
 interface FakeFrame {
   channel: string;
+  event?: string;
   payload?: unknown;
 }
 
