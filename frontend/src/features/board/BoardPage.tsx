@@ -30,9 +30,10 @@ import {
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
+import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import { createIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
 import type { CreateIssueBody, IssuePriority } from '../issues/types';
-import { activeWorkspace, fetchMe, listMembers } from '../members/api';
+import { fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
 import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
 import { EmptyBoardColumns } from '../onboarding/illustrations';
@@ -140,14 +141,44 @@ export function BoardPage(): React.JSX.Element {
   const toast = useToast();
   const client = useMemo(() => getApiClient(), []);
   const realtime = useRealtimeContext();
+  const workspaceContext = useOptionalWorkspace();
+  const hasWorkspaceContext = workspaceContext !== null;
+  const workspaceContextStatus = workspaceContext?.status ?? null;
+  const contextWorkspace = workspaceContext?.workspace ?? null;
 
   // addToast 经 ref 持有:避免 toast 上下文对象每次渲染换引用而让回调失效,
   // 进而触发挂载 effect 在加载失败路径上无限重跑(§6.12 错误态)。
   const addToastRef = useRef(toast.addToast);
   addToastRef.current = toast.addToast;
 
-  const [membership, setMembership] = useState<Membership | null>(null);
-  const [wsStatus, setWsStatus] = useState<LoadStatus>('loading');
+  const [standaloneMembership, setStandaloneMembership] = useState<Membership | null>(null);
+  const [standaloneWsStatus, setStandaloneWsStatus] = useState<LoadStatus>('loading');
+  // 生产路由由 AppShell 挂载 WorkspaceProvider；视图、创建、订阅与深链均以该
+  // provider 当前 workspace 为唯一真源。Provider 外兼容仅供独立测试/嵌入渲染。
+  const providerMembership = useMemo<Membership | null>(() => {
+    if (workspaceContextStatus !== 'ready' || contextWorkspace === null) return null;
+    const current = contextWorkspace;
+    return {
+      workspace_id: current.id,
+      workspace_name: current.name,
+      workspace_slug: current.slug,
+      role: current.my_role,
+      status: 'active',
+      joined_at: null,
+    };
+  }, [workspaceContextStatus, contextWorkspace]);
+  const membership = hasWorkspaceContext ? providerMembership : standaloneMembership;
+  const wsStatus: LoadStatus = hasWorkspaceContext
+    ? workspaceContextStatus === 'loading'
+      ? 'loading'
+      : workspaceContextStatus === 'ready'
+        ? providerMembership === null
+          ? 'empty'
+          : 'ready'
+        : workspaceContextStatus === 'not_found'
+          ? 'empty'
+          : 'error'
+    : standaloneWsStatus;
   const [views, setViews] = useState<readonly View[]>([]);
   const [viewsStatus, setViewsStatus] = useState<LoadStatus>('loading');
   const [draft, setDraft] = useState<ViewDraft | null>(null);
@@ -192,10 +223,10 @@ export function BoardPage(): React.JSX.Element {
 
   // 规范路由前缀:挂载于 /w/{slug}/* 时内部导航保持 workspace-scoped 规范形态。
   const workspaceRouteMatch = useMatch('/w/:workspaceSlug/*');
+  const routeWorkspaceSlug = workspaceRouteMatch?.params.workspaceSlug;
+  const canonicalWorkspaceSlug = providerMembership?.workspace_slug ?? routeWorkspaceSlug;
   const routePrefix =
-    workspaceRouteMatch !== null && workspaceRouteMatch.params.workspaceSlug !== undefined
-      ? `/w/${workspaceRouteMatch.params.workspaceSlug}`
-      : '';
+    canonicalWorkspaceSlug !== undefined ? `/w/${encodeURIComponent(canonicalWorkspaceSlug)}` : '';
   const routePrefixRef = useRef(routePrefix);
   routePrefixRef.current = routePrefix;
 
@@ -217,20 +248,98 @@ export function BoardPage(): React.JSX.Element {
     const actions = () => boardActionsRef.current;
     const move = (direction: BoardDirection) => () => actions().move(direction);
     return registry.registerShortcuts([
-      { id: 'board.move.up', combo: 'arrowup', label: t('shortcuts.boardMove'), group: 'board', run: move('up') },
-      { id: 'board.move.down', combo: 'arrowdown', label: t('shortcuts.boardMove'), group: 'board', run: move('down') },
-      { id: 'board.move.left', combo: 'arrowleft', label: t('shortcuts.boardMove'), group: 'board', run: move('left') },
-      { id: 'board.move.right', combo: 'arrowright', label: t('shortcuts.boardMove'), group: 'board', run: move('right') },
-      { id: 'board.move.up.vim', combo: 'k', label: t('shortcuts.boardMove'), group: 'board', run: move('up') },
-      { id: 'board.move.down.vim', combo: 'j', label: t('shortcuts.boardMove'), group: 'board', run: move('down') },
-      { id: 'board.move.left.vim', combo: 'h', label: t('shortcuts.boardMove'), group: 'board', run: move('left') },
-      { id: 'board.move.right.vim', combo: 'l', label: t('shortcuts.boardMove'), group: 'board', run: move('right') },
+      {
+        id: 'board.move.up',
+        combo: 'arrowup',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('up'),
+      },
+      {
+        id: 'board.move.down',
+        combo: 'arrowdown',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('down'),
+      },
+      {
+        id: 'board.move.left',
+        combo: 'arrowleft',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('left'),
+      },
+      {
+        id: 'board.move.right',
+        combo: 'arrowright',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('right'),
+      },
+      {
+        id: 'board.move.up.vim',
+        combo: 'k',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('up'),
+      },
+      {
+        id: 'board.move.down.vim',
+        combo: 'j',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('down'),
+      },
+      {
+        id: 'board.move.left.vim',
+        combo: 'h',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('left'),
+      },
+      {
+        id: 'board.move.right.vim',
+        combo: 'l',
+        label: t('shortcuts.boardMove'),
+        group: 'board',
+        run: move('right'),
+      },
       // §4.3.1 规则 3:看板 C 仲裁胜出于全局 C(复用列快速创建并预填当前列)。
-      { id: 'board.new.card', combo: 'c', label: t('shortcuts.boardNewCard'), group: 'board', run: () => actions().newCard() },
-      { id: 'board.change.status', combo: 's', label: t('shortcuts.boardChangeStatus'), group: 'board', run: () => actions().changeStatus() },
-      { id: 'board.change.assignee', combo: 'a', label: t('shortcuts.boardChangeAssignee'), group: 'board', run: () => actions().changeAssignee() },
-      { id: 'board.open.card', combo: 'enter', label: t('shortcuts.boardOpenCard'), group: 'board', run: () => actions().openCard() },
-      { id: 'board.filter', combo: 'f', label: t('shortcuts.boardFilter'), group: 'board', run: () => actions().toggleFilter() },
+      {
+        id: 'board.new.card',
+        combo: 'c',
+        label: t('shortcuts.boardNewCard'),
+        group: 'board',
+        run: () => actions().newCard(),
+      },
+      {
+        id: 'board.change.status',
+        combo: 's',
+        label: t('shortcuts.boardChangeStatus'),
+        group: 'board',
+        run: () => actions().changeStatus(),
+      },
+      {
+        id: 'board.change.assignee',
+        combo: 'a',
+        label: t('shortcuts.boardChangeAssignee'),
+        group: 'board',
+        run: () => actions().changeAssignee(),
+      },
+      {
+        id: 'board.open.card',
+        combo: 'enter',
+        label: t('shortcuts.boardOpenCard'),
+        group: 'board',
+        run: () => actions().openCard(),
+      },
+      {
+        id: 'board.filter',
+        combo: 'f',
+        label: t('shortcuts.boardFilter'),
+        group: 'board',
+        run: () => actions().toggleFilter(),
+      },
     ]);
   }, [t]);
 
@@ -261,27 +370,47 @@ export function BoardPage(): React.JSX.Element {
     [t],
   );
 
-  const loadWorkspace = useCallback(async () => {
-    setWsStatus('loading');
+  const loadStandaloneWorkspace = useCallback(async () => {
+    setStandaloneWsStatus('loading');
     try {
       const me = await fetchMe(client);
-      const active = activeWorkspace(me.memberships);
-      setMembership(active);
-      setWsStatus(active === null ? 'empty' : 'ready');
+      // Provider 外不得猜首项:有 scoped URL 时按 slug 精确匹配；无 scoped URL
+      // 仅接受唯一 membership（现有独立组件测试均为该形态）。
+      const active =
+        routeWorkspaceSlug !== undefined
+          ? (me.memberships.find(
+              (membership) => membership.workspace_slug === routeWorkspaceSlug,
+            ) ?? null)
+          : me.memberships.length === 1
+            ? (me.memberships.find(() => true) ?? null)
+            : null;
+      setStandaloneMembership(active);
+      setStandaloneWsStatus(active === null ? 'empty' : 'ready');
     } catch (error) {
-      setWsStatus('error');
+      setStandaloneWsStatus('error');
       toastError(error);
     }
-  }, [client, toastError]);
+  }, [client, routeWorkspaceSlug, toastError]);
+
+  const currentWorkspaceIdRef = useRef<string | null>(membership?.workspace_id ?? null);
+  currentWorkspaceIdRef.current = membership?.workspace_id ?? null;
+  const viewsLoadSeqRef = useRef(0);
 
   const loadViews = useCallback(
     async (workspaceId: string) => {
+      const seq = ++viewsLoadSeqRef.current;
       setViewsStatus('loading');
       try {
         const page = await listViews(client, workspaceId, { limit: 100 });
+        if (seq !== viewsLoadSeqRef.current || currentWorkspaceIdRef.current !== workspaceId) {
+          return;
+        }
         setViews(page.data);
         setViewsStatus(page.data.length === 0 ? 'empty' : 'ready');
       } catch (error) {
+        if (seq !== viewsLoadSeqRef.current || currentWorkspaceIdRef.current !== workspaceId) {
+          return;
+        }
         setViewsStatus('error');
         toastError(error);
       }
@@ -290,23 +419,33 @@ export function BoardPage(): React.JSX.Element {
   );
 
   useEffect(() => {
-    void loadWorkspace();
-  }, [loadWorkspace]);
+    if (!hasWorkspaceContext) void loadStandaloneWorkspace();
+  }, [hasWorkspaceContext, loadStandaloneWorkspace]);
 
+  const currentWorkspaceId = membership?.workspace_id ?? null;
   useEffect(() => {
-    if (membership !== null) {
-      void loadViews(membership.workspace_id);
-    }
-  }, [membership, loadViews]);
+    viewsLoadSeqRef.current += 1;
+    setViews([]);
+    membersCacheRef.current = null;
+    if (currentWorkspaceId !== null) void loadViews(currentWorkspaceId);
+  }, [currentWorkspaceId, loadViews]);
+
+  const scopedViews = useMemo(
+    () =>
+      currentWorkspaceId === null
+        ? []
+        : views.filter((view) => view.workspace_id === currentWorkspaceId),
+    [views, currentWorkspaceId],
+  );
 
   const selectedView = useMemo(() => {
-    if (views.length === 0) return null;
+    if (scopedViews.length === 0) return null;
     if (viewId !== undefined) {
-      const match = views.find((view) => view.id === viewId);
+      const match = scopedViews.find((view) => view.id === viewId);
       if (match !== undefined) return match;
     }
-    return views.find((view) => view.is_default) ?? views[0] ?? null;
-  }, [views, viewId]);
+    return scopedViews.find((view) => view.is_default) ?? scopedViews[0] ?? null;
+  }, [scopedViews, viewId]);
   selectedViewIdRef.current = selectedView?.id ?? null;
 
   useEffect(() => {
@@ -315,7 +454,7 @@ export function BoardPage(): React.JSX.Element {
 
   const selectView = useCallback(
     (nextId: string) => {
-      navigate(`${routePrefixRef.current}/views/${nextId}`);
+      navigate(`${routePrefixRef.current}/views/${encodeURIComponent(nextId)}`);
     },
     [navigate],
   );
@@ -439,7 +578,10 @@ export function BoardPage(): React.JSX.Element {
           title={t('state.errorTitle')}
           description={t('state.errorDescription')}
           retryLabel={t('common.retry')}
-          onRetry={() => void loadWorkspace()}
+          onRetry={() => {
+            if (workspaceContext === null) void loadStandaloneWorkspace();
+            else void workspaceContext.refresh();
+          }}
         />
       </div>
     );
@@ -536,7 +678,7 @@ export function BoardPage(): React.JSX.Element {
     return (
       <div className="mesh-board" data-testid="board-page">
         <ViewSwitcher
-          views={views}
+          views={scopedViews}
           selectedId={null}
           canWrite={(view) => view.can_write === true}
           onSelect={selectView}
@@ -619,7 +761,7 @@ export function BoardPage(): React.JSX.Element {
     const targetKey =
       selectedCardIdRef.current !== null
         ? columnKeyOfCard(grid, selectedCardIdRef.current)
-        : grid[0]?.key ?? null;
+        : (grid[0]?.key ?? null);
     if (targetKey === null) {
       navigate(`${routePrefixRef.current}/issues?create=1`);
       return;
@@ -671,7 +813,7 @@ export function BoardPage(): React.JSX.Element {
   const keyboardOpenCard = (): void => {
     const cardId = selectedCardIdRef.current;
     if (cardId === null) return;
-    navigate(`${routePrefixRef.current}/issues/${cardId}`);
+    navigate(`${routePrefixRef.current}/issues/${encodeURIComponent(cardId)}`);
   };
 
   boardActionsRef.current = {
@@ -910,7 +1052,7 @@ export function BoardPage(): React.JSX.Element {
   return (
     <div className="mesh-board" data-testid="board-page">
       <ViewSwitcher
-        views={views}
+        views={scopedViews}
         selectedId={selectedView.id}
         canWrite={(view) => view.can_write === true}
         onSelect={selectView}
@@ -1055,7 +1197,9 @@ export function BoardPage(): React.JSX.Element {
               groups={displayGroups}
               columnTargetStatus={columnTargetStatus}
               canWrite={canWrite}
-              onOpenIssue={(id: string) => navigate(`/issues/${id}`)}
+              onOpenIssue={(id: string) =>
+                navigate(`${routePrefixRef.current}/issues/${encodeURIComponent(id)}`)
+              }
               onChanged={() => void loadBoard(selectedView)}
             />
           )

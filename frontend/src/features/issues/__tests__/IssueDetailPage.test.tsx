@@ -17,6 +17,7 @@ import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { useSettingsStore } from '../../../state/settingsStore';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import { IssueByIdRedirect } from '../IssueByIdRedirect';
 import { IssueDetailPage, categoryTone } from '../IssueDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
@@ -83,12 +84,13 @@ function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
 
 function renderDetail(): void {
   render(
-    <MemoryRouter initialEntries={['/issues/iss-1']}>
+    <MemoryRouter initialEntries={['/w/ws/issues/iss-1']}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
             <Routes>
-              <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+              <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
+              <Route path="/w/:workspaceSlug/issues" element={<div data-testid="issue-list" />} />
             </Routes>
           </ToastLayer>
         </I18nProvider>
@@ -131,13 +133,13 @@ function makeFakeRealtime(): FakeRealtime {
 
 function renderDetailWithRealtime(realtime: RealtimeContextValue): ReturnType<typeof render> {
   return render(
-    <MemoryRouter initialEntries={['/issues/iss-1']}>
+    <MemoryRouter initialEntries={['/w/ws/issues/iss-1']}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
             <RealtimeContext.Provider value={realtime}>
               <Routes>
-                <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+                <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
               </Routes>
             </RealtimeContext.Provider>
           </ToastLayer>
@@ -387,8 +389,18 @@ describe('IssueDetailPage', () => {
     expect((screen.getByTestId('issue-detail-description') as HTMLTextAreaElement).value).toBe(
       'Detailed description',
     );
+    expect(screen.getByTestId('issue-detail-title')).toHaveAttribute('data-slot', 'input');
+    expect(screen.getByTestId('issue-detail-description')).toHaveAttribute('data-slot', 'textarea');
+    expect(screen.getByTestId('dep-target-input')).toHaveAttribute('data-slot', 'input');
+    expect(screen.getByTestId('issue-detail-estimate')).toHaveAttribute('data-slot', 'input');
+    expect(screen.getByTestId('issue-detail-start')).toHaveAttribute('data-slot', 'input');
+    expect(screen.getByTestId('issue-detail-due')).toHaveAttribute('data-slot', 'input');
     expect(screen.getByTestId('issue-detail-deps')).toBeTruthy();
     expect(screen.getByText('WS-7')).toBeTruthy();
+    expect(screen.getByTestId('dep-link-dep-1')).toHaveAttribute(
+      'href',
+      '/w/ws/issues/by-identifier/WS-7',
+    );
     // DetailLayout + summary chips(§8.3:关键状态保留在标题下)
     expect(screen.getByTestId('detail-layout')).toBeTruthy();
     expect(screen.getByTestId('issue-chip-status').textContent).toContain('Todo');
@@ -506,7 +518,15 @@ describe('IssueDetailPage', () => {
     expect(screen.getByTestId('issue-chip-due').textContent).toContain('2026-10-01');
     expect((screen.getByTestId('issue-detail-description') as HTMLTextAreaElement).value).toBe('');
     expect(screen.getByTestId('issue-detail-children').textContent).toContain('Child issue');
+    expect(screen.getByRole('link', { name: /APL-2/ })).toHaveAttribute(
+      'href',
+      '/w/ws/issues/by-identifier/APL-2',
+    );
     expect(screen.getByTestId('dep-link-dep-fallback').textContent).toBe('12345678');
+    expect(screen.getByTestId('dep-link-dep-fallback')).toHaveAttribute(
+      'href',
+      '/w/ws/issues/12345678-1234-1234-1234-123456789012',
+    );
 
     const title = screen.getByTestId('issue-detail-title');
     fireEvent.change(title, { target: { value: '   ' } });
@@ -516,6 +536,58 @@ describe('IssueDetailPage', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     expect(screen.getByTestId('issue-detail-activity').textContent).toContain('System');
+  });
+
+  it('renders the empty activity state when the issue has no activity entries', async () => {
+    const responses = detailResponses();
+    responses[4] = fakeResponse({ body: { data: [], next_cursor: null } });
+    const stub = detailStub(...responses);
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(screen.getByText('No activity yet.')).toBeTruthy();
+  });
+
+  it('生产 UUID 深链经 IssueByIdRedirect 挂载详情并保留 workspace slug', async () => {
+    queue();
+    render(
+      <MemoryRouter initialEntries={['/w/ws/issues/550e8400-e29b-41d4-a716-446655440000']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <Routes>
+                <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueByIdRedirect />} />
+              </Routes>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('issue-detail');
+    expect(screen.getByTestId('dep-link-dep-1')).toHaveAttribute(
+      'href',
+      '/w/ws/issues/by-identifier/WS-7',
+    );
+  });
+
+  it('rejects a workspace-scoped deep link whose slug does not own the issue', async () => {
+    const responses = detailResponses();
+    responses[8] = fakeResponse({
+      body: {
+        data: {
+          ...ME_PAGE,
+          memberships: [{ ...ME_PAGE.memberships[0], workspace_slug: 'another-workspace' }],
+        },
+      },
+    });
+    const stub = detailStub(...responses);
+    vi.stubGlobal('fetch', stub.fetchImpl);
+
+    renderDetail();
+
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByTestId('issue-detail')).toBeNull();
   });
 
   it('subscribes to the detail channel, merges a fresh frame and cleans up', async () => {
@@ -586,7 +658,7 @@ describe('IssueDetailPage', () => {
   });
 
   it('deletes the issue only after the confirm dialog (§13.3 destructive 确认)', async () => {
-    const stub = queue(fakeResponse({ body: { id: 'iss-1', deleted: true } }));
+    const stub = queue(fakeResponse({ body: { data: { id: 'iss-1', deleted: true } } }));
     renderDetail();
     await screen.findByTestId('issue-detail');
     await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
@@ -597,6 +669,12 @@ describe('IssueDetailPage', () => {
     expect(stub.calls.filter((c) => c.init?.method === 'DELETE').length).toBe(0);
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // 对话框内 Cancel 走独立回调，同样不得发 DELETE。
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(stub.calls.filter((c) => c.init?.method === 'DELETE').length).toBe(0);
     // 再次打开并确认删除
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
@@ -604,6 +682,7 @@ describe('IssueDetailPage', () => {
     await waitFor(() => {
       expect(stub.calls.filter((c) => c.init?.method === 'DELETE').length).toBe(1);
     });
+    expect(await screen.findByTestId('issue-list')).toBeTruthy();
   });
 
   it('renders with a malformed children_progress envelope instead of blanking the page (defensive default)', async () => {
@@ -616,12 +695,12 @@ describe('IssueDetailPage', () => {
       );
       vi.stubGlobal('fetch', stub.fetchImpl);
       const { unmount } = render(
-        <MemoryRouter initialEntries={['/issues/iss-1']}>
+        <MemoryRouter initialEntries={['/w/ws/issues/iss-1']}>
           <ThemeProvider>
             <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
               <ToastLayer>
                 <Routes>
-                  <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+                  <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
                 </Routes>
               </ToastLayer>
             </I18nProvider>

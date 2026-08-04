@@ -10,7 +10,7 @@
  * - 手机横向滚动由调用方包裹受控滚动容器(边缘提示 + 首列粘住,§7.6),
  *   本组件只保证表格自身不破版。无硬编码文案。
  */
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import {
   Table as AppicaTable,
   TableBody as AppicaTableBody,
@@ -62,6 +62,19 @@ export interface DataTableProps<T> {
   emptyState?: ReactNode;
 }
 
+export type DataTableSurfaceProps = ComponentProps<typeof AppicaTable>;
+
+/**
+ * Appica-backed table root for page-specific compositions that need custom
+ * headers, row keyboard state, or interactive cells beyond the column schema.
+ */
+export function DataTableSurface({
+  size = 'sm',
+  ...props
+}: DataTableSurfaceProps): React.JSX.Element {
+  return <AppicaTable size={size} {...props} />;
+}
+
 export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
   const {
     caption,
@@ -85,23 +98,36 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
     .join(' ');
 
   return (
-    <AppicaTable
+    <DataTableSurface
       size={density === 'comfortable' ? 'md' : 'sm'}
       hoverableRows={onRowClick !== undefined}
       className={tableClasses}
     >
-      <AppicaTableCaption className={hideCaption ? 'mesh-data-table__caption mesh-visually-hidden' : 'mesh-data-table__caption'}>
+      <AppicaTableCaption
+        className={
+          hideCaption ? 'mesh-data-table__caption mesh-visually-hidden' : 'mesh-data-table__caption'
+        }
+      >
         {caption}
       </AppicaTableCaption>
       <AppicaTableHeader>
         <AppicaTableRow>
           {columns.map((column) => {
             const isSorted = sortBy?.id === column.id;
-            const ariaSort = isSorted ? (sortBy.direction === 'asc' ? 'ascending' : 'descending') : undefined;
+            const ariaSort = isSorted
+              ? sortBy.direction === 'asc'
+                ? 'ascending'
+                : 'descending'
+              : undefined;
             const alignClass = column.align === 'end' ? ' mesh-data-table__cell--end' : '';
             if (column.sortable === true) {
               return (
-                <AppicaTableHead key={column.id} scope="col" aria-sort={ariaSort} className={`mesh-data-table__header${alignClass}`}>
+                <AppicaTableHead
+                  key={column.id}
+                  scope="col"
+                  aria-sort={ariaSort}
+                  className={`mesh-data-table__header${alignClass}`}
+                >
                   <button
                     type="button"
                     className="mesh-data-table__sort"
@@ -137,7 +163,9 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
         ) : (
           rows.map((row) => {
             const extra = rowClassName?.(row);
-            const rowClasses = ['mesh-data-table__row', extra].filter((p): p is string => Boolean(p)).join(' ');
+            const rowClasses = ['mesh-data-table__row', extra]
+              .filter((p): p is string => Boolean(p))
+              .join(' ');
             return (
               <AppicaTableRow
                 key={rowKey(row)}
@@ -150,7 +178,9 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
                         const target = event.target;
                         if (
                           target instanceof HTMLElement &&
-                          target.closest('a, button, [role="button"], input, select, textarea, label') !== null
+                          target.closest(
+                            'a, button, [role="button"], input, select, textarea, label',
+                          ) !== null
                         ) {
                           return;
                         }
@@ -173,7 +203,11 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
                 {columns.map((column) => (
                   <AppicaTableCell
                     key={column.id}
-                    className={column.align === 'end' ? 'mesh-data-table__cell mesh-data-table__cell--end' : 'mesh-data-table__cell'}
+                    className={
+                      column.align === 'end'
+                        ? 'mesh-data-table__cell mesh-data-table__cell--end'
+                        : 'mesh-data-table__cell'
+                    }
                   >
                     {column.cell(row)}
                   </AppicaTableCell>
@@ -183,6 +217,6 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
           })
         )}
       </AppicaTableBody>
-    </AppicaTable>
+    </DataTableSurface>
   );
 }

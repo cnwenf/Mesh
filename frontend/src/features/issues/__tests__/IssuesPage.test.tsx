@@ -5,7 +5,7 @@
  * fetch 桩按调用序驱动:users/me → members → issues → statuses。
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -19,6 +19,49 @@ import type { RealtimeEventFrame } from '../../../types/realtime';
 import { requestOptimisticStepComplete } from '../../onboarding/notify';
 import { SAVED_VIEWS_STORAGE_KEY } from '../issuesSavedViews';
 import { IssuesPage } from '../IssuesPage';
+
+const workspaceContextState = vi.hoisted(() => ({
+  enabled: true,
+  status: 'ready' as 'loading' | 'ready' | 'not_found' | 'error',
+  workspace: {
+    id: 'ws-1',
+    name: 'Team',
+    slug: 'team',
+    logo_url: null,
+    timezone: 'UTC',
+    settings: {},
+    my_role: 'owner' as const,
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+  } as {
+    id: string;
+    name: string;
+    slug: string;
+    logo_url: null;
+    timezone: string;
+    settings: Record<string, unknown>;
+    my_role: 'owner';
+    created_at: string;
+    updated_at: string;
+  } | null,
+}));
+
+const refreshWorkspace = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock('../../../workspace/WorkspaceProvider', () => ({
+  useOptionalWorkspace: () =>
+    workspaceContextState.enabled
+      ? {
+          status: workspaceContextState.status,
+          workspace: workspaceContextState.workspace,
+          error: null,
+          isAdmin: true,
+          isOwner: true,
+          refresh: refreshWorkspace,
+          patch: vi.fn(async () => workspaceContextState.workspace),
+        }
+      : null,
+}));
 
 vi.mock('../../onboarding/notify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../onboarding/notify')>();
@@ -51,6 +94,24 @@ const MEMBERS = {
       display_name: 'Owner',
       joined_at: null,
       profile: { id: 'usr-1', full_name: 'Owner', email: 'owner@acme.com', avatar_url: null },
+    },
+    {
+      id: 'agent-1',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Planner',
+      joined_at: null,
+      profile: null,
+    },
+    {
+      id: 'mem-inactive',
+      member_type: 'human',
+      role: 'member',
+      status: 'suspended',
+      display_name: 'Suspended member',
+      joined_at: null,
+      profile: null,
     },
   ],
   next_cursor: null,
@@ -141,14 +202,16 @@ function makeFakeRealtime(): {
   };
 }
 
-function renderPage(realtime: RealtimeContextValue, route = '/issues'): void {
+function renderPage(realtime: RealtimeContextValue, route = '/w/team/issues'): void {
   render(
     <MemoryRouter initialEntries={[route]}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
             <RealtimeContext.Provider value={realtime}>
-              <IssuesPage />
+              <Routes>
+                <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+              </Routes>
             </RealtimeContext.Provider>
           </ToastLayer>
         </I18nProvider>
@@ -158,7 +221,7 @@ function renderPage(realtime: RealtimeContextValue, route = '/issues'): void {
 }
 
 /** 带路由捕获的渲染(键盘 Enter 打开详情用)。 */
-function renderPageWithRoutes(realtime: RealtimeContextValue, route = '/issues'): void {
+function renderPageWithRoutes(realtime: RealtimeContextValue, route = '/w/team/issues'): void {
   render(
     <MemoryRouter initialEntries={[route]}>
       <ThemeProvider>
@@ -166,8 +229,11 @@ function renderPageWithRoutes(realtime: RealtimeContextValue, route = '/issues')
           <ToastLayer>
             <RealtimeContext.Provider value={realtime}>
               <Routes>
-                <Route path="/issues" element={<IssuesPage />} />
-                <Route path="/issues/:issueId" element={<div data-testid="nav-detail" />} />
+                <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+                <Route
+                  path="/w/:workspaceSlug/issues/by-identifier/:identifier"
+                  element={<div data-testid="nav-detail" />}
+                />
               </Routes>
             </RealtimeContext.Provider>
           </ToastLayer>
@@ -192,7 +258,21 @@ function queueInitialLoad(...extra: ReturnType<typeof fakeResponse>[]): FetchStu
 beforeEach(() => {
   vi.unstubAllGlobals();
   vi.mocked(requestOptimisticStepComplete).mockClear();
+  refreshWorkspace.mockClear();
   window.localStorage.clear();
+  workspaceContextState.enabled = true;
+  workspaceContextState.status = 'ready';
+  workspaceContextState.workspace = {
+    id: 'ws-1',
+    name: 'Team',
+    slug: 'team',
+    logo_url: null,
+    timezone: 'UTC',
+    settings: {},
+    my_role: 'owner',
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+  };
 });
 
 afterEach(() => {
@@ -200,6 +280,88 @@ afterEach(() => {
 });
 
 describe('IssuesPage', () => {
+  it('uses the routed WorkspaceProvider workspace for list, create, deep links and realtime', async () => {
+    workspaceContextState.workspace = {
+      id: 'ws-2',
+      name: 'Second',
+      slug: 'second',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner',
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    const secondIssue = {
+      ...issueFixture('iss-second', 'SECOND-1', 'Second workspace issue'),
+      workspace_id: 'ws-2',
+    };
+    const firstWorkspaceMe = {
+      ...ME,
+      memberships: [
+        ME.memberships[0],
+        {
+          workspace_id: 'ws-2',
+          workspace_name: 'Second',
+          workspace_slug: 'second',
+          role: 'owner',
+          status: 'active',
+          joined_at: null,
+        },
+      ],
+    };
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: firstWorkspaceMe } });
+      if (url.includes('/workspaces/ws-2/members')) return fakeResponse({ body: MEMBERS });
+      if (method === 'POST' && url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ status: 201, body: { data: secondIssue } });
+      }
+      if (method === 'GET' && url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ body: { data: [secondIssue], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-2/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-1/members')) return fakeResponse({ body: MEMBERS });
+      if (url.includes('/workspaces/ws-1/issues')) {
+        return fakeResponse({ body: { data: [ISSUE_1], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-1/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    const rt = makeFakeRealtime();
+    renderPage(rt.value, '/w/second/issues');
+
+    expect(await screen.findByText('SECOND-1')).toBeTruthy();
+    expect(screen.queryByText('WS-1')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Second workspace issue' })).toHaveAttribute(
+      'href',
+      '/w/second/issues/by-identifier/SECOND-1',
+    );
+    expect(rt.subscribe).toHaveBeenCalledWith('workspace:ws-2:issues');
+
+    fireEvent.click(screen.getByTestId('issue-open-create'));
+    fireEvent.change(screen.getByTestId('issue-create-title'), {
+      target: { value: 'Created in second' },
+    });
+    fireEvent.submit(screen.getByTestId('issue-create-form'));
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (call) => call.method === 'POST' && call.url.includes('/workspaces/ws-2/issues'),
+        ),
+      ).toBe(true);
+    });
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-1/issues'))).toBe(false);
+  });
+
   it('renders issue rows after loading (identifier / title / status / assignee)', async () => {
     queueInitialLoad();
     const rt = makeFakeRealtime();
@@ -209,6 +371,10 @@ describe('IssuesPage', () => {
     expect(screen.getByText('WS-2')).toBeTruthy();
     expect(screen.getAllByText('Todo').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Owner').length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: 'Fix the login bug' })).toHaveAttribute(
+      'href',
+      '/w/team/issues/by-identifier/WS-1',
+    );
     expect(rt.subscribe).toHaveBeenCalledWith('workspace:ws-1:issues');
   });
 
@@ -221,24 +387,37 @@ describe('IssuesPage', () => {
     expect(screen.getByTestId('data-view')).toBeTruthy();
   });
 
+  it('routes list, filter, selection and quick-create controls through the design foundation', async () => {
+    queueInitialLoad();
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+
+    expect(screen.getByTestId('issue-filter-q')).toHaveAttribute('data-slot', 'input');
+    expect(screen.getByTestId('issue-filter-mine').closest('.mesh-checkbox')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Key' })).toHaveAttribute('data-slot', 'button');
+    expect(
+      screen.getByTestId('issue-status-iss-1').querySelector('[data-slot="badge"]'),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('issue-open-create'));
+    expect(screen.getByTestId('issue-create-title')).toHaveAttribute('data-slot', 'input');
+  });
+
   it('shows a same-shape skeleton before the first load (骨架同形,§13.3)', async () => {
     // issues 请求挂起:工作区解析后、列表返回前,呈现与行同形的骨架。
     let resolveIssues: (response: Response) => void = () => undefined;
     const pendingIssues = new Promise<Response>((resolve) => {
       resolveIssues = resolve;
     });
-    vi.stubGlobal(
-      'fetch',
-      (async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-        if (url.includes('/members')) return fakeResponse({ body: MEMBERS });
-        if (url.includes('/statuses')) {
-          return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
-        }
-        return pendingIssues;
-      }) as typeof fetch,
-    );
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/members')) return fakeResponse({ body: MEMBERS });
+      if (url.includes('/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      return pendingIssues;
+    }) as typeof fetch);
     renderPage(makeFakeRealtime().value);
     expect(await screen.findByTestId('issues-skeleton')).toBeTruthy();
     // 放行挂起请求,干净收尾(避免未处理 rejection)
@@ -303,6 +482,10 @@ describe('IssuesPage', () => {
     });
     fireEvent.submit(screen.getByTestId('issue-create-form'));
     await screen.findByText('WS-3');
+    expect(screen.getByRole('link', { name: 'Brand new' })).toHaveAttribute(
+      'href',
+      '/w/team/issues/by-identifier/WS-3',
+    );
     // 建 issue 成功 → 乐观推进清单步骤 3(onboarding.md §1.2.2)
     expect(requestOptimisticStepComplete).toHaveBeenCalledWith('create_first_issue');
   });
@@ -425,6 +608,39 @@ describe('IssuesPage', () => {
     });
   });
 
+  it('ignores foreign-workspace realtime channels and payloads after routing', async () => {
+    queueInitialLoad();
+    const rt = makeFakeRealtime();
+    renderPage(rt.value);
+    await screen.findByText('WS-1');
+
+    const foreignIssue = {
+      ...issueFixture('iss-foreign', 'OTHER-1', 'Foreign workspace issue'),
+      workspace_id: 'ws-2',
+    };
+    await act(async () => {
+      // A listener registered by the shared realtime client sees every frame;
+      // a queued frame from another workspace must not enter this route.
+      rt.emit({
+        op: 'event',
+        channel: 'workspace:ws-2:issues',
+        seq: 4,
+        event: 'issue.created',
+        payload: { issue: foreignIssue },
+      } as RealtimeEventFrame);
+      // Defend against an incorrectly routed payload on the active channel too.
+      rt.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:issues',
+        seq: 5,
+        event: 'issue.created',
+        payload: { issue: { ...foreignIssue, id: 'iss-foreign-active-channel' } },
+      } as RealtimeEventFrame);
+    });
+
+    expect(screen.queryByText('Foreign workspace issue')).toBeNull();
+  });
+
   it('does not re-insert filtered-out issues via realtime frames (§3.6 水位含 q)', async () => {
     // 过滤切换触发的重拉:仅 WS-2 命中 'docs'
     queueInitialLoad(
@@ -455,10 +671,45 @@ describe('IssuesPage', () => {
         channel: 'workspace:ws-1:issues',
         seq: 10,
         event: 'issue.updated',
-        payload: { id: 'iss-2', changes: { title: 'Ship the docs v2' }, updated_at: '2026-07-03T00:00:00Z' },
+        payload: {
+          id: 'iss-2',
+          changes: { title: 'Ship the docs v2' },
+          updated_at: '2026-07-03T00:00:00Z',
+        },
       } as RealtimeEventFrame);
     });
     await screen.findByText('Ship the docs v2');
+  });
+
+  it('rejects realtime rows that miss the active category or priority watermark', async () => {
+    queueInitialLoad();
+    const rt = makeFakeRealtime();
+    renderPage(rt.value, '/w/team/issues?category=todo&priority=high');
+    await screen.findByText('WS-1');
+
+    await act(async () => {
+      rt.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:issues',
+        seq: 11,
+        event: 'issue.created',
+        payload: {
+          issue: { ...issueFixture('iss-done', 'WS-10', 'Done elsewhere'), state_category: 'done' },
+        },
+      } as RealtimeEventFrame);
+      rt.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:issues',
+        seq: 12,
+        event: 'issue.created',
+        payload: {
+          issue: { ...issueFixture('iss-urgent', 'WS-11', 'Wrong priority'), priority: 'urgent' },
+        },
+      } as RealtimeEventFrame);
+    });
+
+    expect(screen.queryByText('WS-10')).toBeNull();
+    expect(screen.queryByText('WS-11')).toBeNull();
   });
 
   it('expands the quick create form with project and assignee (§4.3 MEDIUM-3)', async () => {
@@ -466,11 +717,27 @@ describe('IssuesPage', () => {
     const projectsResp = fakeResponse({
       body: {
         data: [
-          { id: 'prj-9', name: 'Apollo', key: 'APL', status: 'active', health: null,
-            visibility: 'public', lead: null, lead_member_id: null, start_date: null,
-            target_date: null, progress: 0, open_issues: 0, done_issues: 0, issue_seq: 1,
-            archived: false, archived_at: null, my_role: 'lead',
-            created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z' },
+          {
+            id: 'prj-9',
+            name: 'Apollo',
+            key: 'APL',
+            status: 'active',
+            health: null,
+            visibility: 'public',
+            lead: null,
+            lead_member_id: null,
+            start_date: null,
+            target_date: null,
+            progress: 0,
+            open_issues: 0,
+            done_issues: 0,
+            issue_seq: 1,
+            archived: false,
+            archived_at: null,
+            my_role: 'lead',
+            created_at: '2026-07-01T00:00:00Z',
+            updated_at: '2026-07-01T00:00:00Z',
+          },
         ],
         next_cursor: null,
       },
@@ -485,7 +752,11 @@ describe('IssuesPage', () => {
     fireEvent.click(screen.getByTestId('issue-create-expand'));
     await screen.findByTestId('issue-create-project');
     await screen.findByTestId('issue-create-assignee');
-    fireEvent.change(screen.getByTestId('issue-create-title'), { target: { value: 'Expanded create' } });
+    expect(screen.getByRole('option', { name: 'Planner (agent)' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Suspended member' })).toBeNull();
+    fireEvent.change(screen.getByTestId('issue-create-title'), {
+      target: { value: 'Expanded create' },
+    });
     fireEvent.change(screen.getByTestId('issue-create-project'), { target: { value: 'prj-9' } });
     fireEvent.change(screen.getByTestId('issue-create-assignee'), { target: { value: 'mem-1' } });
     fireEvent.submit(screen.getByTestId('issue-create-form'));
@@ -509,7 +780,7 @@ describe('IssuesPage', () => {
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
-    renderPage(makeFakeRealtime().value, '/issues?mine=true');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?mine=true');
     await screen.findByText('WS-1');
     // 首载 issues 请求即携带 assignee_id(修复前首载无过滤参数)
     const issueCalls = stub.calls.filter((c) => String(c.url).includes('/issues?'));
@@ -528,10 +799,12 @@ describe('IssuesPage', () => {
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
-    renderPage(makeFakeRealtime().value, '/issues?priority=urgent');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?priority=urgent');
     await screen.findByText('WS-1');
     fireEvent.click(screen.getByTestId('issue-open-create'));
-    fireEvent.change(screen.getByTestId('issue-create-title'), { target: { value: 'Off-filter create' } });
+    fireEvent.change(screen.getByTestId('issue-create-title'), {
+      target: { value: 'Off-filter create' },
+    });
     fireEvent.submit(screen.getByTestId('issue-create-form'));
     await waitFor(() => {
       expect(stub.calls.filter((c) => c.init?.method === 'POST').length).toBe(1);
@@ -542,8 +815,24 @@ describe('IssuesPage', () => {
 
   it('opens the quick create form via ?create=1 (M12)', async () => {
     queueInitialLoad();
-    renderPage(makeFakeRealtime().value, '/issues?create=1');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?create=1');
     await screen.findByTestId('issue-create-form');
+    fireEvent.click(screen.getByText('Cancel'));
+    await waitFor(() => expect(screen.queryByTestId('issue-create-form')).toBeNull());
+  });
+
+  it('keeps the quick-create draft and renders an inline error after a rejected create', async () => {
+    queueInitialLoad(
+      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-open-create'));
+    const title = screen.getByTestId('issue-create-title') as HTMLInputElement;
+    fireEvent.change(title, { target: { value: 'Keep this draft' } });
+    fireEvent.submit(screen.getByTestId('issue-create-form'));
+    await screen.findByRole('alert');
+    expect(title.value).toBe('Keep this draft');
   });
 
   it('bulk partial failure toast surfaces per-item codes (F4)', async () => {
@@ -603,8 +892,11 @@ describe('IssuesPage', () => {
     expect(rows[0].getAttribute('data-testid')).toBe('issue-row-WS-2');
     // 再点 → 清除排序(aria-sort none,恢复服务端序)
     fireEvent.click(titleHeader);
+    expect(screen.getByTestId('issue-table')).toHaveAttribute('data-slot', 'table');
     expect(screen.getByTestId('issue-table').querySelector('th[aria-sort="ascending"]')).toBeNull();
-    expect(screen.getByTestId('issue-table').querySelector('th[aria-sort="descending"]')).toBeNull();
+    expect(
+      screen.getByTestId('issue-table').querySelector('th[aria-sort="descending"]'),
+    ).toBeNull();
   });
 
   it('sorts by priority header (rank compare)', async () => {
@@ -630,7 +922,7 @@ describe('IssuesPage', () => {
       fakeResponse({ body: { data: [ISSUE_1, ISSUE_2], next_cursor: null } }),
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
     );
-    renderPage(makeFakeRealtime().value, '/issues?q=docs&category=todo');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?q=docs&category=todo');
     await screen.findByText('WS-2');
     expect(screen.getByTestId('filter-chip-q')).toBeTruthy();
     expect(screen.getByTestId('filter-chip-category')).toBeTruthy();
@@ -647,7 +939,7 @@ describe('IssuesPage', () => {
       fakeResponse({ body: { data: [ISSUE_1, ISSUE_2], next_cursor: null } }),
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
     );
-    renderPage(makeFakeRealtime().value, '/issues?priority=urgent&category=todo');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?priority=urgent&category=todo');
     await screen.findByText('WS-1');
     const chip = screen.getByTestId('filter-chip-priority');
     fireEvent.click(within(chip).getByRole('button'));
@@ -673,6 +965,7 @@ describe('IssuesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Saved views' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Save current view' }));
     const nameInput = await screen.findByTestId('saved-view-name');
+    expect(nameInput).toHaveAttribute('data-slot', 'input');
     fireEvent.change(nameInput, { target: { value: 'High board' } });
     fireEvent.click(screen.getByTestId('saved-view-save'));
     // 持久化到 localStorage
@@ -686,7 +979,9 @@ describe('IssuesPage', () => {
     });
     // 删除预设(en 目录文案为 Delete view "{name}",触发器 name 为空)
     fireEvent.click(screen.getByRole('button', { name: 'Delete view ""' }));
-    const deleteItems = await screen.findAllByRole('menuitem', { name: 'Delete view "High board"' });
+    const deleteItems = await screen.findAllByRole('menuitem', {
+      name: 'Delete view "High board"',
+    });
     fireEvent.click(deleteItems[0]);
     expect(JSON.parse(window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY) ?? '[]')).toEqual([]);
     void stub;
@@ -761,6 +1056,42 @@ describe('IssuesPage', () => {
     fireEvent.click(await screen.findByTestId('bulk-delete-confirm'));
     // 计数 toast(无逐条明细)
     await screen.findByText(/0 succeeded, 1 failed/);
+  });
+
+  it('uses safe count defaults when a partial-failure envelope omits tally details', async () => {
+    queueInitialLoad(
+      fakeResponse({
+        status: 422,
+        body: {
+          error: {
+            code: 'bulk_partial_failure',
+            message: 'partial',
+            details: {},
+          },
+        },
+      }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    fireEvent.click(await screen.findByText('Delete'));
+    fireEvent.click(await screen.findByTestId('bulk-delete-confirm'));
+    await screen.findByText(/0 succeeded, 1 failed/);
+  });
+
+  it('maps a transport-level bulk failure to the generic danger feedback', async () => {
+    const stub = queueInitialLoad();
+    const queuedFetch = stub.fetchImpl;
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') throw new Error('network unavailable');
+      return queuedFetch(input, init);
+    }) as typeof fetch);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    fireEvent.click(await screen.findByText('Delete'));
+    fireEvent.click(await screen.findByTestId('bulk-delete-confirm'));
+    await waitFor(() => expect(document.querySelector('.mesh-toast--danger')).not.toBeNull());
   });
 
   it('cancelling the delete confirm dialog performs no bulk call', async () => {
@@ -855,12 +1186,35 @@ describe('IssuesPage', () => {
     });
   });
 
+  it('clears active select and mine filters through their toolbar controls', async () => {
+    const stub = queueInitialLoad(
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    renderPage(makeFakeRealtime().value, '/w/team/issues?category=todo&priority=high&mine=true');
+    await screen.findByText('WS-1');
+
+    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'all' } });
+    await waitFor(() => expect(screen.queryByTestId('filter-chip-category')).toBeNull());
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: 'all' } });
+    await waitFor(() => expect(screen.queryByTestId('filter-chip-priority')).toBeNull());
+    fireEvent.click(screen.getByTestId('issue-filter-mine'));
+    await waitFor(() => expect(screen.queryByTestId('filter-chip-mine')).toBeNull());
+
+    const last = stub.calls.filter((call) => String(call.url).includes('/issues?')).pop();
+    expect(String(last?.url)).not.toContain('assignee_id=');
+  });
+
   it('removing the q chip clears the search filter', async () => {
     const stub = queueInitialLoad(
       fakeResponse({ body: { data: [ISSUE_1, ISSUE_2], next_cursor: null } }),
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
     );
-    renderPage(makeFakeRealtime().value, '/issues?q=login');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?q=login');
     await screen.findByText('WS-1');
     const chip = screen.getByTestId('filter-chip-q');
     fireEvent.click(within(chip).getByRole('button'));
@@ -877,7 +1231,7 @@ describe('IssuesPage', () => {
       fakeResponse({ body: { data: [ISSUE_1, ISSUE_2], next_cursor: null } }),
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
     );
-    renderPage(makeFakeRealtime().value, '/issues?priority=high&sort=title&order=desc');
+    renderPage(makeFakeRealtime().value, '/w/team/issues?priority=high&sort=title&order=desc');
     await screen.findByText('WS-1');
     // 保存当前视图(含 priority + sort 快照)
     fireEvent.click(screen.getByRole('button', { name: 'Saved views' }));
@@ -961,15 +1315,196 @@ describe('IssuesPage', () => {
       fakeResponse({ body: MEMBERS }),
       fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'cur-1' } }),
       fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+      fakeResponse({ body: { data: [ISSUE_1, ISSUE_2], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(
+      makeFakeRealtime().value,
+      '/w/team/issues?q=login&category=todo&priority=high&mine=true',
+    );
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByText('Load more'));
+    await screen.findByText('WS-2');
+    expect(screen.getAllByText('WS-1')).toHaveLength(1);
+    // 第二页请求保留全部过滤水位并携带 cursor。
+    const lastCall = stub.calls.filter((c) => String(c.url).includes('/issues?')).pop();
+    expect(String(lastCall?.url)).toContain('cursor=cur-1');
+    expect(String(lastCall?.url)).toContain('q=login');
+    expect(String(lastCall?.url)).toContain('state_category=todo');
+    expect(String(lastCall?.url)).toContain('priority=high');
+    expect(String(lastCall?.url)).toContain('assignee_id=mem-1');
+  });
+
+  it('drops a stale load-more failure after the provider route switches workspace', async () => {
+    let rejectAlphaMore!: (reason: unknown) => void;
+    const alphaMore = new Promise<Response>((_resolve, reject) => {
+      rejectAlphaMore = reject;
+    });
+    const betaIssue = {
+      ...issueFixture('iss-beta', 'BETA-1', 'Beta issue'),
+      workspace_id: 'ws-2',
+    };
+    const betaWorkspace = {
+      id: 'ws-2',
+      name: 'Beta',
+      slug: 'beta',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner' as const,
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/members')) return fakeResponse({ body: MEMBERS });
+      if (url.includes('/workspaces/ws-1/issues') && url.includes('cursor=alpha-more')) {
+        return alphaMore;
+      }
+      if (url.includes('/workspaces/ws-1/issues')) {
+        return fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'alpha-more' } });
+      }
+      if (url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ body: { data: [betaIssue], next_cursor: null } });
+      }
+      if (url.includes('/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    const rt = makeFakeRealtime();
+    render(
+      <MemoryRouter initialEntries={['/w/team/issues']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={rt.value}>
+                <Routes>
+                  <Route
+                    path="/w/:workspaceSlug/issues"
+                    element={
+                      <>
+                        <Link
+                          to="/w/beta/issues"
+                          onClick={() => {
+                            workspaceContextState.workspace = betaWorkspace;
+                          }}
+                        >
+                          Switch to Beta
+                        </Link>
+                        <IssuesPage />
+                      </>
+                    }
+                  />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByText('Load more'));
+    fireEvent.click(screen.getByRole('link', { name: 'Switch to Beta' }));
+    await screen.findByText('BETA-1');
+
+    await act(async () => {
+      rejectAlphaMore(new TypeError('alpha pagination failed late'));
+      await alphaMore.catch(() => undefined);
+    });
+    expect(document.querySelector('.mesh-toast--danger')).toBeNull();
+  });
+
+  it('loads an unfiltered next page and supports deselect-all branches', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'cur-plain' } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
       fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderPage(makeFakeRealtime().value);
     await screen.findByText('WS-1');
+
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    await waitFor(() => expect(screen.queryByTestId('bulk-bar')).toBeNull());
+    fireEvent.click(screen.getByTestId('issue-select-all'));
+    fireEvent.click(screen.getByTestId('issue-select-all'));
+    await waitFor(() => expect(screen.queryByTestId('bulk-bar')).toBeNull());
+
     fireEvent.click(screen.getByText('Load more'));
     await screen.findByText('WS-2');
-    // 第二页请求携带 cursor
-    const lastCall = stub.calls.filter((c) => String(c.url).includes('/issues?')).pop();
-    expect(String(lastCall?.url)).toContain('cursor=cur-1');
+    const lastCall = stub.calls.filter((call) => String(call.url).includes('/issues?')).pop();
+    expect(String(lastCall?.url)).toContain('cursor=cur-plain');
+    expect(String(lastCall?.url)).not.toContain('state_category=');
+    expect(String(lastCall?.url)).not.toContain('priority=');
+    expect(String(lastCall?.url)).not.toContain('assignee_id=');
+  });
+
+  it('renders the no-workspace empty state without issuing scoped list requests', async () => {
+    workspaceContextState.status = 'not_found';
+    workspaceContextState.workspace = null;
+    const stub = stubFetch();
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('No active workspace — create or join one to manage issues.');
+    expect(stub.calls.some((call) => String(call.url).includes('/issues?'))).toBe(false);
+  });
+
+  it('renders WorkspaceProvider loading and error states and retries provider resolution', async () => {
+    workspaceContextState.status = 'loading';
+    workspaceContextState.workspace = null;
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/w/team/issues']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <Routes>
+                  <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId('issues-skeleton')).toBeTruthy();
+
+    workspaceContextState.status = 'error';
+    rerender(
+      <MemoryRouter initialEntries={['/w/team/issues']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <Routes>
+                  <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(refreshWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps standalone route compatibility by matching the explicit workspace slug', async () => {
+    workspaceContextState.enabled = false;
+    queueInitialLoad();
+    renderPage(makeFakeRealtime().value);
+
+    expect(await screen.findByText('WS-1')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Fix the login bug' })).toHaveAttribute(
+      'href',
+      '/w/team/issues/by-identifier/WS-1',
+    );
   });
 });

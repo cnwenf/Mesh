@@ -4,7 +4,7 @@
  * 状态选择器按 category 分组(§1.2.3);项目为两步式迁移入口(§4.3/§3.8)。
  * 本组件不持有乐观逻辑:经 onPatch 上抛,由页面统一 mutation + 冲突收敛。
  */
-import { Select } from '../../design';
+import { Input, Select } from '../../design';
 import type { MeshApiClient } from '../../api';
 import { useT } from '../../i18n';
 import type { RealtimeContextValue } from '../../shell/AppShell';
@@ -19,6 +19,7 @@ import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
 import './issues.css';
 
 export interface IssuePropertiesProps {
+  readonly workspaceSlug: string;
   readonly issue: IssueDetail;
   readonly statuses: readonly IssueStatusRef[];
   readonly members: readonly MemberSummary[];
@@ -36,6 +37,7 @@ export interface IssuePropertiesProps {
 export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element {
   const t = useT();
   const {
+    workspaceSlug,
     issue,
     statuses,
     members,
@@ -59,7 +61,7 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
     <div className="mesh-issues-detail__properties">
       <Select
         label={t('issues.columns.status')}
-        value={issue.status_id}
+        value={issue.status_id ?? ''}
         data-testid="issue-detail-status"
         onChange={(event) => onPatch({ status_id: event.target.value, version: issue.version })}
       >
@@ -112,26 +114,24 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
       {/* 小队分派(§4.3-2):单一责任主体徽章 + 分派给小队入口(独立于人类负责人下拉)。 */}
       <IssueSquadAssignment
         workspaceId={issue.workspace_id}
+        workspaceSlug={workspaceSlug}
         issueId={issue.id}
         onChanged={onIssueChanged}
       />
-      <label className="mesh-issues__field">
-        <span>{t('issues.detail.estimate')}</span>
-        <input
-          type="number"
-          min="0"
-          step="0.5"
-          value={issue.estimate ?? ''}
-          onChange={(event) =>
-            onPatch({
-              estimate: event.target.value === '' ? null : Number(event.target.value),
-              version: issue.version,
-            })
-          }
-          aria-label={t('issues.detail.estimate')}
-          data-testid="issue-detail-estimate"
-        />
-      </label>
+      <Input
+        label={t('issues.detail.estimate')}
+        type="number"
+        min="0"
+        step="0.5"
+        value={issue.estimate ?? ''}
+        onChange={(event) =>
+          onPatch({
+            estimate: event.target.value === '' ? null : Number(event.target.value),
+            version: issue.version,
+          })
+        }
+        data-testid="issue-detail-estimate"
+      />
       <Select
         label={t('issues.detail.estimateUnit')}
         value={issue.estimate_unit ?? ''}
@@ -147,36 +147,30 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
         <option value="points">{t('issues.detail.estimateUnit.points')}</option>
         <option value="hours">{t('issues.detail.estimateUnit.hours')}</option>
       </Select>
-      <label className="mesh-issues__field">
-        <span>{t('issues.detail.start')}</span>
-        <input
-          type="date"
-          value={issue.start_date ?? ''}
-          onChange={(event) =>
-            onPatch({
-              start_date: event.target.value === '' ? null : event.target.value,
-              version: issue.version,
-            })
-          }
-          aria-label={t('issues.detail.start')}
-          data-testid="issue-detail-start"
-        />
-      </label>
-      <label className="mesh-issues__field">
-        <span>{t('issues.columns.due')}</span>
-        <input
-          type="date"
-          value={issue.due_date ?? ''}
-          onChange={(event) =>
-            onPatch({
-              due_date: event.target.value === '' ? null : event.target.value,
-              version: issue.version,
-            })
-          }
-          aria-label={t('issues.columns.due')}
-          data-testid="issue-detail-due"
-        />
-      </label>
+      <Input
+        label={t('issues.detail.start')}
+        type="date"
+        value={issue.start_date ?? ''}
+        onChange={(event) =>
+          onPatch({
+            start_date: event.target.value === '' ? null : event.target.value,
+            version: issue.version,
+          })
+        }
+        data-testid="issue-detail-start"
+      />
+      <Input
+        label={t('issues.columns.due')}
+        type="date"
+        value={issue.due_date ?? ''}
+        onChange={(event) =>
+          onPatch({
+            due_date: event.target.value === '' ? null : event.target.value,
+            version: issue.version,
+          })
+        }
+        data-testid="issue-detail-due"
+      />
       <Select
         label={t('issues.detail.milestone')}
         value={issue.milestone_id ?? ''}

@@ -3,7 +3,7 @@
  * 新建视图、行内操作菜单(重命名 / 复制 / 设默认 / 删除)。
  */
 import { useState } from 'react';
-import { Button, Dialog, Icon, Input } from '../../design';
+import { Button, Dialog, Icon, IconButton, Input, Select } from '../../design';
 import type { IconName } from '../../design';
 import { useT } from '../../i18n';
 import type { View } from './types';
@@ -13,7 +13,11 @@ interface ViewSwitcherProps {
   readonly selectedId: string | null;
   readonly canWrite: (view: View) => boolean;
   readonly onSelect: (viewId: string) => void;
-  readonly onCreate: (name: string, layout: View['layout'], visibility: View['visibility']) => Promise<void>;
+  readonly onCreate: (
+    name: string,
+    layout: View['layout'],
+    visibility: View['visibility'],
+  ) => Promise<void>;
   readonly onRename: (view: View, name: string) => Promise<void>;
   readonly onDuplicate: (view: View) => Promise<void>;
   readonly onSetDefault: (view: View) => Promise<void>;
@@ -84,8 +88,8 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
           const selected = view.id === selectedId;
           return (
             <li key={view.id} className="mesh-view-switcher__item">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 className={
                   selected
                     ? 'mesh-view-switcher__entry mesh-view-switcher__entry--active'
@@ -104,24 +108,34 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                     <Icon name="star" size={16} filled label={t('board.defaultView')} />
                   </span>
                 ) : null}
-              </button>
+              </Button>
               {canWrite(view) ? (
                 <>
-                  <button
-                    type="button"
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
                     className="mesh-view-switcher__menu-trigger"
-                    aria-label={t('board.viewActions', { name: view.name })}
+                    label={t('board.viewActions', { name: view.name })}
                     aria-expanded={menuFor === view.id}
+                    aria-haspopup="menu"
+                    aria-controls={`view-menu-list-${view.id}`}
                     data-testid={`view-menu-${view.id}`}
                     onClick={() => setMenuFor(menuFor === view.id ? null : view.id)}
                   >
-                    …
-                  </button>
+                    <Icon name="more-horizontal" size={16} />
+                  </IconButton>
                   {menuFor === view.id ? (
-                    <ul className="mesh-view-switcher__menu" data-testid={`view-menu-list-${view.id}`}>
+                    <ul
+                      id={`view-menu-list-${view.id}`}
+                      className="mesh-view-switcher__menu"
+                      role="menu"
+                      data-testid={`view-menu-list-${view.id}`}
+                    >
                       <li>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          role="menuitem"
                           onClick={() => {
                             setRenameTarget(view);
                             setRenameName(view.name);
@@ -129,35 +143,41 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                           }}
                         >
                           {t('board.renameView')}
-                        </button>
+                        </Button>
                       </li>
                       <li>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          role="menuitem"
                           onClick={() => {
                             void onDuplicate(view);
                             setMenuFor(null);
                           }}
                         >
                           {t('board.duplicateView')}
-                        </button>
+                        </Button>
                       </li>
                       {view.is_default ? null : (
                         <li>
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            role="menuitem"
                             onClick={() => {
                               void onSetDefault(view);
                               setMenuFor(null);
                             }}
                           >
                             {t('board.makeDefault')}
-                          </button>
+                          </Button>
                         </li>
                       )}
                       <li>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          role="menuitem"
                           className="mesh-view-switcher__danger"
                           data-testid={`view-delete-open-${view.id}`}
                           onClick={() => {
@@ -166,7 +186,7 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                           }}
                         >
                           {t('board.deleteView')}
-                        </button>
+                        </Button>
                       </li>
                     </ul>
                   ) : null}
@@ -184,7 +204,12 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
         <Icon name="plus" size={16} /> {t('board.newView')}
       </Button>
 
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} title={t('board.newViewTitle')} closeLabel={t('common.close')}>
+      <Dialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title={t('board.newViewTitle')}
+        closeLabel={t('common.close')}
+      >
         <div className="mesh-view-switcher__dialog">
           <Input
             label={t('board.viewNameLabel')}
@@ -193,42 +218,45 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
             onChange={(event) => setCreateName(event.target.value)}
             data-testid="view-create-name"
           />
-          <label className="mesh-view-switcher__field">
-            {t('board.viewLayoutLabel')}
-            <select
-              value={createLayout}
-              onChange={(event) => setCreateLayout(event.target.value as View['layout'])}
-              data-testid="view-create-layout"
-            >
-              <option value="board">{t('board.layout.board')}</option>
-              <option value="list">{t('board.layout.list')}</option>
-            </select>
-          </label>
-          <label className="mesh-view-switcher__field">
-            {t('board.viewVisibilityLabel')}
-            <select
-              value={createVisibility}
-              onChange={(event) =>
-                setCreateVisibility(event.target.value as View['visibility'])
-              }
-              data-testid="view-create-visibility"
-            >
-              <option value="private">{t('board.visibility.private')}</option>
-              <option value="shared">{t('board.visibility.shared')}</option>
-            </select>
-          </label>
+          <Select
+            label={t('board.viewLayoutLabel')}
+            value={createLayout}
+            onChange={(event) => setCreateLayout(event.target.value as View['layout'])}
+            data-testid="view-create-layout"
+          >
+            <option value="board">{t('board.layout.board')}</option>
+            <option value="list">{t('board.layout.list')}</option>
+          </Select>
+          <Select
+            label={t('board.viewVisibilityLabel')}
+            value={createVisibility}
+            onChange={(event) => setCreateVisibility(event.target.value as View['visibility'])}
+            data-testid="view-create-visibility"
+          >
+            <option value="private">{t('board.visibility.private')}</option>
+            <option value="shared">{t('board.visibility.shared')}</option>
+          </Select>
           <div className="mesh-view-switcher__dialog-actions">
             <Button variant="secondary" onClick={() => setCreateOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={() => void submitCreate()} disabled={createName.trim() === '' || busy} data-testid="view-create-submit">
+            <Button
+              onClick={() => void submitCreate()}
+              disabled={createName.trim() === '' || busy}
+              data-testid="view-create-submit"
+            >
               {t('common.save')}
             </Button>
           </div>
         </div>
       </Dialog>
 
-      <Dialog open={renameTarget !== null} onClose={() => setRenameTarget(null)} title={t('board.renameViewTitle')} closeLabel={t('common.close')}>
+      <Dialog
+        open={renameTarget !== null}
+        onClose={() => setRenameTarget(null)}
+        title={t('board.renameViewTitle')}
+        closeLabel={t('common.close')}
+      >
         <div className="mesh-view-switcher__dialog">
           <Input
             label={t('board.viewNameLabel')}
@@ -241,7 +269,11 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
             <Button variant="secondary" onClick={() => setRenameTarget(null)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={() => void submitRename()} disabled={renameName.trim() === '' || busy} data-testid="view-rename-submit">
+            <Button
+              onClick={() => void submitRename()}
+              disabled={renameName.trim() === '' || busy}
+              data-testid="view-rename-submit"
+            >
               {t('common.save')}
             </Button>
           </div>

@@ -7,6 +7,13 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${DIR}/stack.env"
+FRONTEND_PORT="${MES128_FRONTEND_PORT:-18430}"
+
+if [[ ! "${FRONTEND_PORT}" =~ ^[0-9]+$ ]] ||
+  ((10#${FRONTEND_PORT} < 1 || 10#${FRONTEND_PORT} > 65535)); then
+  echo "MES128_FRONTEND_PORT must be an integer between 1 and 65535." >&2
+  exit 2
+fi
 
 if [[ -e "${ENV_FILE}" && "${1:-}" != "--force" ]]; then
   echo "stack.env already exists — leaving it untouched (--force to regenerate)." >&2
@@ -34,11 +41,11 @@ umask 077
   echo 'MESH_SESSION_COOKIE_SECURE=false'
   echo 'MESH_API_PORT=18420'
   echo 'MESH_WS_PORT=18421'
-  echo 'MESH_FRONTEND_PORT=18430'
+  echo "MESH_FRONTEND_PORT=${FRONTEND_PORT}"
   echo 'MESH_STORAGE_PORT=19420'
   echo 'MESH_STORAGE_CONSOLE_PORT=19421'
   echo 'MESH_STORAGE_PUBLIC_ENDPOINT=http://127.0.0.1:19420'
-  echo 'MESH_APP_BASE_URL=http://127.0.0.1:18430'
+  echo "MESH_APP_BASE_URL=http://127.0.0.1:${FRONTEND_PORT}"
 } > "${ENV_FILE}"
 
 echo "Wrote ${ENV_FILE} (mode $(stat -c '%a' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp' "${ENV_FILE}"))."

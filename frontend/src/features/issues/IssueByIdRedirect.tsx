@@ -15,6 +15,7 @@
  */
 import { Navigate, useParams } from 'react-router';
 import { IssueDetailPage } from './IssueDetailPage';
+import { workspaceIssueByIdentifierPath } from './issueRoutes';
 
 /** issue identifier 形态:`KEY-N`(§3.4;大小写不敏感,归一大写) */
 const IDENTIFIER_PATTERN = /^[A-Z0-9]+-\d+$/i;
@@ -22,10 +23,7 @@ const IDENTIFIER_PATTERN = /^[A-Z0-9]+-\d+$/i;
 export function IssueByIdRedirect(): React.JSX.Element {
   const { workspaceSlug, issueId } = useParams<{ workspaceSlug: string; issueId: string }>();
   if (issueId !== undefined && IDENTIFIER_PATTERN.test(issueId)) {
-    const canonical = encodeURIComponent(issueId.toUpperCase());
-    return (
-      <Navigate to={`/w/${workspaceSlug}/issues/by-identifier/${canonical}`} replace />
-    );
+    return <Navigate to={workspaceIssueByIdentifierPath(workspaceSlug, issueId)} replace />;
   }
   return <IssueDetailPage />;
 }

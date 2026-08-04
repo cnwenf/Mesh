@@ -13,27 +13,58 @@ import type { View } from '../types';
 const ME = {
   user: { id: 'u', email: 'o@x.com', display_name: 'O' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
-function view(): View {
+function view(overrides: Partial<View> = {}): View {
   return {
-    id: 'v1', workspace_id: 'ws-1', project_id: null, owner_member_id: 'm1', name: 'B',
-    layout: 'board', visibility: 'private', filters: {}, group_by: null, sub_group_by: null,
-    sort: [], display_fields: [], board_settings: {}, position: 1, is_default: true,
-    created_at: '', updated_at: '2026-07-26T00:00:00Z', can_write: true,
+    id: 'v1',
+    workspace_id: 'ws-1',
+    project_id: null,
+    owner_member_id: 'm1',
+    name: 'B',
+    layout: 'board',
+    visibility: 'private',
+    filters: {},
+    group_by: null,
+    sub_group_by: null,
+    sort: [],
+    display_fields: [],
+    board_settings: {},
+    position: 1,
+    is_default: true,
+    created_at: '',
+    updated_at: '2026-07-26T00:00:00Z',
+    can_write: true,
+    ...overrides,
   };
 }
 
 const CARD = {
-  id: 'i1', identifier: 'WEB-1', title: 'Card', state_category: 'todo',
-  status: { id: 'st', name: 'Todo', category: 'todo' }, status_id: 'st', priority: 'high',
-  assignee: null, assignee_id: null, project_id: null, position: 1, version: 1,
+  id: 'i1',
+  identifier: 'WEB-1',
+  title: 'Card',
+  state_category: 'todo',
+  status: { id: 'st', name: 'Todo', category: 'todo' },
+  status_id: 'st',
+  priority: 'high',
+  assignee: null,
+  assignee_id: null,
+  project_id: null,
+  position: 1,
+  version: 1,
   updated_at: '2026-07-26T10:00:00Z',
 };
 
-function stub() {
+function stub(selectedView: View = view()) {
   const calls: string[] = [];
   const impl = (async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -42,13 +73,17 @@ function stub() {
     if (url.includes('/issues')) {
       return fakeResponse({
         body: {
-          layout: 'board', group_by: 'state_category', column_target_status: {},
+          layout: 'board',
+          group_by: 'state_category',
+          column_target_status: {},
           groups: [{ key: 'todo', label: 'Todo', count: 1, wip: null, data: [CARD] }],
           next_cursor: null,
         },
       });
     }
-    if (url.includes('/views')) return fakeResponse({ body: { data: [view()], next_cursor: null } });
+    if (url.includes('/views')) {
+      return fakeResponse({ body: { data: [selectedView], next_cursor: null } });
+    }
     return fakeResponse({ status: 404 });
   }) as typeof fetch;
   vi.stubGlobal('fetch', impl);
@@ -73,7 +108,11 @@ function makeRealtime() {
       return () => {};
     }),
   };
-  return { client, emitFrame: (f: unknown) => frameCb?.(f), emitState: (s: string) => stateCb?.(s) };
+  return {
+    client,
+    emitFrame: (f: unknown) => frameCb?.(f),
+    emitState: (s: string) => stateCb?.(s),
+  };
 }
 
 describe('看板实时增量合并接线', () => {
@@ -106,7 +145,10 @@ describe('看板实时增量合并接线', () => {
     await screen.findByTestId('board-card-i1');
     act(() => {
       rt.emitFrame({
-        op: 'event', channel: 'workspace:ws-1:issues', seq: 2, event: 'issue.created',
+        op: 'event',
+        channel: 'workspace:ws-1:issues',
+        seq: 2,
+        event: 'issue.created',
         payload: { issue: { ...CARD, id: 'i2', identifier: 'WEB-2' } },
       });
     });
@@ -145,8 +187,12 @@ describe('看板实时增量合并接线', () => {
     expect(screen.queryByTestId('board-resync-banner')).not.toBeInTheDocument();
     act(() => rt.emitState('resyncing'));
     expect(await screen.findByTestId('board-resync-banner')).toBeInTheDocument();
+    act(() => rt.emitState('reconnecting'));
+    expect(await screen.findByTestId('board-resync-banner')).toBeInTheDocument();
     act(() => rt.emitState('connected'));
-    await waitFor(() => expect(screen.queryByTestId('board-resync-banner')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId('board-resync-banner')).not.toBeInTheDocument(),
+    );
   });
 
   it('卸载时取消订阅', async () => {
@@ -175,7 +221,10 @@ describe('看板实时增量合并接线', () => {
     await screen.findByTestId('board-columns');
     act(() => {
       rt.emitFrame({
-        op: 'event', channel: 'view:v1', seq: 4, event: 'view.wip_exceeded',
+        op: 'event',
+        channel: 'view:v1',
+        seq: 4,
+        event: 'view.wip_exceeded',
         payload: { view_id: 'v1', group_key: 'in_progress', limit: 2, count: 3 },
       });
     });
@@ -184,5 +233,60 @@ describe('看板实时增量合并接线', () => {
       (content) => content.includes('in_progress') && content.includes('3/2'),
     );
     expect(document.querySelector('.mesh-toast--warn')).toBeInTheDocument();
+  });
+
+  it('忽略无关/在线帧并为缺省 WIP 载荷使用安全回退值', async () => {
+    stub();
+    const rt = makeRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/views/v1' },
+    );
+    await screen.findByTestId('board-card-i1');
+
+    act(() => {
+      rt.emitFrame({
+        op: 'event',
+        channel: 'workspace:other:issues',
+        seq: 5,
+        event: 'issue.deleted',
+        payload: { issue_id: 'i1' },
+      });
+      rt.emitFrame({
+        op: 'event',
+        channel: 'view:v1',
+        seq: 6,
+        event: 'view.presence',
+        payload: {},
+      });
+    });
+    expect(screen.getByTestId('board-card-i1')).toBeInTheDocument();
+
+    act(() => {
+      rt.emitFrame({
+        op: 'event',
+        channel: 'view:v1',
+        seq: 7,
+        event: 'view.wip_exceeded',
+        payload: {},
+      });
+    });
+    await screen.findByText((content) => content.includes('0/0'));
+  });
+
+  it('非投影布局不注册实时频道', async () => {
+    stub(view({ layout: 'timeline' }));
+    const rt = makeRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/views/v1' },
+    );
+
+    expect(await screen.findByText('Layout not implemented')).toBeInTheDocument();
+    expect(rt.client.subscribe).not.toHaveBeenCalled();
   });
 });

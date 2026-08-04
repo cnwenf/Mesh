@@ -6,7 +6,7 @@
  * 当前页经 accent 态 + 3px 边缘指示表达(§4.1 同构);命中区 ≥44×44px(§8.2),
  * 底部适配 safe-area。全部文案经 i18n(mobileNav.*)。
  */
-import { NavLink } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { Icon } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
@@ -30,29 +30,42 @@ const MOBILE_PRIMARY_ITEMS: ReadonlyArray<NavItemDef> = MOBILE_PRIMARY_KEYS.map(
   return item;
 });
 
+function targetIsActive(pathname: string, target: string, end: boolean): boolean {
+  return end ? pathname === target : pathname === target || pathname.startsWith(`${target}/`);
+}
+
 export function MobileNav(props: MobileNavProps): React.JSX.Element {
   const { onOpenMore } = props;
   const t = useT();
+  const location = useLocation();
   const workspaceContext = useOptionalWorkspace();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   return (
     <nav className="mesh-mobile-nav" aria-label={t('mobileNav.moreTitle')}>
-      {MOBILE_PRIMARY_ITEMS.map((item) => (
-        <NavLink
-          key={item.key}
-          to={resolveNavTarget(item, workspace?.slug ?? null)}
-          end={item.end === true}
-          data-testid={'mobile-nav-' + item.key}
-          className={({ isActive }) =>
-            isActive
-              ? 'mesh-mobile-nav__item mesh-mobile-nav__item--active'
-              : 'mesh-mobile-nav__item'
-          }
-        >
-          <Icon name={item.icon} size={20} className="mesh-mobile-nav__icon" />
-          <span className="mesh-mobile-nav__label">{t('mobileNav.' + item.key)}</span>
-        </NavLink>
-      ))}
+      {MOBILE_PRIMARY_ITEMS.map((item) => {
+        const target = resolveNavTarget(item, workspace?.slug ?? null);
+        const isBoardView =
+          item.key === 'board' &&
+          (location.pathname.startsWith('/views/') ||
+            (workspace !== null && location.pathname.startsWith(`/w/${workspace.slug}/views/`)));
+        const active = isBoardView || targetIsActive(location.pathname, target, item.end === true);
+        return (
+          <Link
+            key={item.key}
+            to={target}
+            aria-current={active ? 'page' : undefined}
+            data-testid={'mobile-nav-' + item.key}
+            className={
+              active
+                ? 'mesh-mobile-nav__item mesh-mobile-nav__item--active'
+                : 'mesh-mobile-nav__item'
+            }
+          >
+            <Icon name={item.icon} size={20} className="mesh-mobile-nav__icon" />
+            <span className="mesh-mobile-nav__label">{t('mobileNav.' + item.key)}</span>
+          </Link>
+        );
+      })}
       <button
         type="button"
         data-testid="mobile-nav-more"

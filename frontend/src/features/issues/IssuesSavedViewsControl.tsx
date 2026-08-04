@@ -4,7 +4,7 @@
  * 名称非空)。预设持久化由父组件经 issuesSavedViews 助手负责(本组件纯交互)。
  */
 import { useState } from 'react';
-import { Button, Dialog, Icon, Menu } from '../../design';
+import { Button, Dialog, Icon, Input, Menu } from '../../design';
 import type { MenuEntry } from '../../design';
 import { useT } from '../../i18n';
 import type { SavedView } from './issuesSavedViews';
@@ -89,16 +89,14 @@ export function IssuesSavedViewsControl(props: IssuesSavedViewsControlProps): Re
             submit();
           }}
         >
-          <label className="mesh-issues__field">
-            <span>{t('patterns.viewName')}</span>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={t('patterns.viewName')}
-              data-testid="saved-view-name"
-              autoFocus
-            />
-          </label>
+          <Input
+            label={t('patterns.viewName')}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={t('patterns.viewName')}
+            data-testid="saved-view-name"
+            autoFocus
+          />
           <div className="mesh-issues__confirm-actions">
             <Button type="submit" disabled={name.trim() === ''} data-testid="saved-view-save">
               {t('common.save')}

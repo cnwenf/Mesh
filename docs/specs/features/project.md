@@ -565,6 +565,8 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 - **项目状态徽章**:`planning`/`active`/`paused`/`completed`/`cancelled` 用不同颜色标签。
 - **负责人选择器**:混合列出人类与 agent(各带类型图标),复用统一成员选择器(见 member.md)。**仅现 `lead` 或工作区 `admin` 及以上可改派/置空(§3.4,后端为权威校验);非 lead/admin 的项目设置页该选择器只读(禁用),避免暴露无权限操作。**
 
+项目列表与详情遵循 design-quality.md §11 的 Mesh 适配层边界：筛选、创建/编辑表单、健康度动作、页签、状态徽章和反馈态复用共享设计组件；项目 feature 不直接依赖底层组件库。所有卡片、创建成功、设置和删除回跳必须保留 `/w/:workspaceSlug/projects...` 规范深链，动态 slug/id 路径段须 URL 编码。生产路由以 `WorkspaceProvider` 解析的当前工作区为列表、创建、健康度更新与 Realtime 的唯一作用域，禁止按 membership 顺序猜测。列表请求以单调代次或取消信号守卫；同一组件 A→B 切换后，必须关闭 A 的创建/健康度对话框，A 的迟到响应或 Realtime 帧不得改写 B 的网格、游标、错误或加载态。
+
 ### 4.3 关键交互流程
 
 **创建项目**:新建 → 填名称(自动建议大写 `key`)→ `key` 实时去重校验(绿勾/红叉)→ 选负责人/目标日/可见性 → 完成,进入空项目页。

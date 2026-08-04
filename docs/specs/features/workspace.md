@@ -445,6 +445,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 ### 4.2 关键组件
 
 - **工作区切换器**:左上角下拉,列出当前用户所有工作区,顶部"创建工作区"。切换后整页上下文(项目、成员、看板)随之刷新。
+- **工作区页面上下文**:首页、项目、issue 与看板通过共享 PageHeader/Card/Button/Input/Skeleton 等适配组件组合；不得在页面内重建基础控件。`/w/:workspaceSlug/*` 下由 `WorkspaceProvider` 解析出的工作区是页面 API、Realtime、创建动作和深链的唯一数据作用域。路由有 slug 时不得回退到首个或其他 membership；A→B 原位切换期间，A 的迟到列表/游标/错误/加载态响应必须由取消或请求代次守卫丢弃。
 - **创建向导**:模态框,步骤 名称 → slug(实时校验占用,绿勾/红叉)→ 邀请成员(可跳过)→ 完成。
 - **基本信息表单**:名称、Logo 上传、slug 输入框(带可用性校验与"旧链接将自动重定向"提示)、时区下拉、语言下拉。
 - **邀请面板**:多邮箱输入 chip(回车成 chip,支持粘贴批量)、角色选择、"生成邀请链接"按钮;下方待处理邀请列表(邮箱/角色/状态/过期时间/撤销按钮)。
@@ -515,6 +516,7 @@ active ──到期(定时/惰性)───────────► expired(�
 - [ ] **前缀注册表(README §6.3 / §9 T19)**:`identifier_prefix_registry.UNIQUE(workspace_id, key)` 使项目 `key` 与收件箱前缀(含 `retired` 历史前缀)工作区级排他——冲突分别返回 409 `project_key_taken`(project.md §3.3)/ 422 `prefix_reserved`;变更收件箱前缀后旧前缀置 `retired` 永久保留、历史 identifier 不重编号;工作区创建时播种默认 `WS` 的 `kind='inbox'` 首行。
 - [ ] 非成员访问任意工作区资源返回 404(不泄露存在性)。
 - [ ] 所有业务查询隐式按 `workspace_id` 过滤,跨工作区不可读。
+- [ ] 工作区页面族以路由 slug 对应的 `WorkspaceProvider` 为唯一客户端作用域；双工作区用户访问 B 的项目、issue、看板时，读取、创建、Realtime 与深链均只使用 B，且 A 的迟到响应不会覆盖 B。
 - [ ] **workspace locale 单一真源(R4,HIGH-3,集成测试 T32)**:当前模型**无 `default_language` 列**(迁移说明见 §2.2 migration note:存量值一次性写入 `settings.default_locale` 后删列,无双写期);创建/读取响应**只返回 `settings.default_locale`**(默认 `en`),不含任何 `default_language` 字段;`PATCH` 写 `settings.default_locale` 按键浅合并生效,非法 locale → `422 unsupported_locale`、非法时区 → `422 invalid_timezone`(与 auth.md §3.1 canonical 对齐);locale 协商链按 README §6.18 只走本键。
 
 ### 5.2 性能

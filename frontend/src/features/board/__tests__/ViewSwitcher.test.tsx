@@ -2,7 +2,7 @@
  * 视图切换器测试(kanban.md §4.2):视图条目选择、默认视图星标、
  * 删除二次确认(§13.3 destructive 明确确认)。
  */
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../test-utils/render';
 import { ViewSwitcher } from '../ViewSwitcher';
@@ -10,10 +10,25 @@ import type { View } from '../types';
 
 function view(overrides: Partial<View> = {}): View {
   return {
-    id: 'v1', workspace_id: 'ws-1', project_id: null, owner_member_id: 'm1', name: '看板一',
-    layout: 'board', visibility: 'private', filters: {}, group_by: null, sub_group_by: null,
-    sort: [], display_fields: [], board_settings: {}, position: 1, is_default: true,
-    created_at: '', updated_at: '', can_write: true, ...overrides,
+    id: 'v1',
+    workspace_id: 'ws-1',
+    project_id: null,
+    owner_member_id: 'm1',
+    name: '看板一',
+    layout: 'board',
+    visibility: 'private',
+    filters: {},
+    group_by: null,
+    sub_group_by: null,
+    sort: [],
+    display_fields: [],
+    board_settings: {},
+    position: 1,
+    is_default: true,
+    created_at: '',
+    updated_at: '',
+    can_write: true,
+    ...overrides,
   };
 }
 
@@ -37,7 +52,9 @@ function render(overrides: Partial<React.ComponentProps<typeof ViewSwitcher>> = 
 describe('ViewSwitcher', () => {
   it('视图条目可选;默认视图渲染星标(label 经 board.defaultView)', () => {
     const { onSelect } = render();
-    fireEvent.click(screen.getByTestId('view-entry-v1'));
+    const entry = screen.getByTestId('view-entry-v1');
+    expect(entry).toHaveAttribute('data-slot', 'button');
+    fireEvent.click(entry);
     expect(onSelect).toHaveBeenCalledWith('v1');
     expect(screen.getByRole('img', { name: 'Default view' })).toBeInTheDocument();
   });
@@ -51,6 +68,11 @@ describe('ViewSwitcher', () => {
     // 取消路径:不调用删除。
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onDelete).not.toHaveBeenCalled();
+    // 对话框自身关闭入口同样不删除。
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByTestId('view-delete-open-v1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onDelete).not.toHaveBeenCalled();
     // 再次打开并确认:调用删除(携带该视图)。
     fireEvent.click(screen.getByTestId('view-menu-v1'));
     fireEvent.click(screen.getByTestId('view-delete-open-v1'));
@@ -62,5 +84,66 @@ describe('ViewSwitcher', () => {
   it('无写权限时不渲染行内菜单入口', () => {
     render({ canWrite: () => false });
     expect(screen.queryByTestId('view-menu-v1')).toBeNull();
+  });
+
+  it('新建视图表单通过共享控件提交名称、布局与可见性', async () => {
+    const { onCreate } = render();
+    fireEvent.click(screen.getByTestId('view-create-open'));
+    expect(screen.getByTestId('view-create-layout')).toHaveClass('mesh-field__control');
+    expect(screen.getByTestId('view-create-visibility')).toHaveClass('mesh-field__control');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('view-create-name')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('view-create-open'));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('view-create-name')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('view-create-open'));
+    fireEvent.change(screen.getByTestId('view-create-name'), { target: { value: '列表视图' } });
+    fireEvent.change(screen.getByTestId('view-create-layout'), { target: { value: 'list' } });
+    fireEvent.change(screen.getByTestId('view-create-visibility'), {
+      target: { value: 'shared' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('view-create-submit'));
+    });
+    expect(onCreate).toHaveBeenCalledWith('列表视图', 'list', 'shared');
+  });
+
+  it('行内菜单可收起，并路由复制、设默认与重命名操作', async () => {
+    const editable = view({ is_default: false });
+    const { onDuplicate, onSetDefault, onRename } = render({ views: [editable] });
+
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }));
+    expect(onDuplicate).toHaveBeenCalledWith(editable);
+
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Set as default' }));
+    expect(onSetDefault).toHaveBeenCalledWith(editable);
+
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    expect(screen.getByTestId('view-rename-name')).toHaveValue('看板一');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('view-rename-name')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('view-rename-name')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByTestId('view-rename-name'), { target: { value: '重命名看板' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('view-rename-submit'));
+    });
+    expect(onRename).toHaveBeenCalledWith(editable, '重命名看板');
   });
 });

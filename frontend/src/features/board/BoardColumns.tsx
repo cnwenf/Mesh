@@ -12,13 +12,13 @@
  * - 移动紧凑(BoardCompact,§8.1/§8.3):compact 视口(≤599px)单泳道 + chips 切列;
  * - 虚拟化(VirtualColumnBody,§11.4):列内 ≥200 卡片仅渲染可见窗口。
  *
- * a11y 模型:列体 role="list",卡片 role="listitem"(aria-roledescription 标注可拖拽、
- * aria-keyshortcuts 暴露键盘序列);拖拽提供等价的键盘/触摸替代路径(§10.2);
+ * a11y 模型:列体 role="list",卡片 role="listitem"(aria-keyshortcuts 暴露键盘
+ * 序列);拖拽提供等价的键盘/触摸替代路径(§10.2);
  * 拖拽各阶段经 aria-live assertive 区域(board-live)播报。
  */
 /* eslint-disable react-refresh/only-export-components -- 纯工具与列组件同模块契约 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Icon } from '../../design';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Button, Icon, IconButton, Input } from '../../design';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useShortcutRegistry } from '../../shortcuts';
@@ -140,12 +140,12 @@ function QuickCreate({
   };
   return (
     <div className="mesh-board__quick-create">
-      <input
+      <Input
+        label={t('board.quickAdd')}
         className="mesh-board__quick-create-input"
         placeholder={t('board.quickAdd')}
         value={title}
         disabled={!canWrite || pending}
-        aria-label={t('board.quickAdd')}
         data-testid={`quick-add-${groupKey}`}
         onChange={(event) => setTitle(event.target.value)}
         onKeyDown={(event) => {
@@ -221,7 +221,6 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
       data-testid={`board-card-${card.id}`}
       role="listitem"
       tabIndex={0}
-      aria-roledescription="draggable card"
       aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight J K H L C S A F Enter Escape"
       aria-current={isSelected ? 'true' : undefined}
       aria-setsize={virtualSetSize}
@@ -319,6 +318,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     fullListMode,
   } = props;
   const t = useT();
+  const headingId = useId();
 
   // 拖拽悬停目标列 → 高亮;命中且未被 WIP block → 呈现落点指示线。
   // 回位动画阶段(returning)不再呈现目标列反馈,仅浮层滑回源卡(§9.4.4)。
@@ -366,26 +366,29 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     <section
       className={columnClassName}
       data-testid={`board-column-${column.key}`}
-      aria-label={label}
+      aria-labelledby={headingId}
     >
       <header className="mesh-board__column-head">
         <span className={`mesh-board__dot ${categoryColorClass(column.key)}`} aria-hidden="true" />
-        <span className="mesh-board__column-name">{label}</span>
+        <h2 id={headingId} className="mesh-board__column-name">
+          {label}
+        </h2>
         <span className="mesh-board__count" data-testid={`count-${column.key}`}>
           {column.count}
         </span>
         <WipBadge column={column} />
-        <button
-          type="button"
+        <IconButton
+          variant="ghost"
+          size="sm"
           className="mesh-board__collapse"
           aria-expanded={!column.collapsed}
-          aria-label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', {
+          label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', {
             name: label,
           })}
           onClick={() => onToggleCollapse(column.key)}
         >
           <Icon name={column.collapsed ? 'chevron-right' : 'chevron-down'} size={16} />
-        </button>
+        </IconButton>
       </header>
       {column.collapsed ? null : (
         <div
@@ -690,14 +693,15 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
         {announcement}
       </div>
       {columns.some((column) => shouldVirtualize((cardsByKey[column.key] ?? []).length)) ? (
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           className="mesh-board__a11y-list-toggle"
           aria-pressed={fullListMode}
           onClick={() => setFullListMode((current) => !current)}
         >
           {t(fullListMode ? 'board.useVirtualList' : 'board.useCompleteA11yList')}
-        </button>
+        </Button>
       ) : null}
       {drag.dragState !== null ? <BoardDragLayer dragState={drag.dragState} /> : null}
       {isCompact ? (

@@ -13,7 +13,10 @@ const ITEMS: TabItem[] = [
 describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
   it('非受控默认选中首个可用项,渲染对应 panel', () => {
     render(<Tabs items={ITEMS} label="对象页签" />);
-    expect(screen.getByRole('tablist', { name: '对象页签' })).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: '对象页签' })).toHaveAttribute(
+      'data-slot',
+      'tabs-list',
+    );
     const overview = screen.getByRole('tab', { name: '概览' });
     expect(overview).toHaveAttribute('data-testid', 'overview-tab');
     expect(overview).toHaveAttribute('aria-selected', 'true');
@@ -88,12 +91,7 @@ describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
   });
 
   it('全部禁用时不崩溃且无 panel', () => {
-    render(
-      <Tabs
-        items={[{ value: 'x', label: 'X', content: null, disabled: true }]}
-        label="t"
-      />,
-    );
+    render(<Tabs items={[{ value: 'x', label: 'X', content: null, disabled: true }]} label="t" />);
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
     expect(screen.queryByRole('tabpanel')).toBeNull();
   });

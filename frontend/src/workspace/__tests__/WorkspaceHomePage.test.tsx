@@ -28,7 +28,10 @@ function stubClient(...responses: Array<{ status: number; body: unknown }>) {
     client: {
       request: async (method: string, path: string) => {
         const response = await fetchImpl(`http://localhost${path}`, { method });
-        const body = (await response.json()) as { data?: unknown; error?: { code: string; message: string } };
+        const body = (await response.json()) as {
+          data?: unknown;
+          error?: { code: string; message: string };
+        };
         if (!response.ok) {
           throw new MeshApiError({
             status: response.status,
@@ -58,7 +61,10 @@ function renderHome(client: unknown): ReturnType<typeof render> {
   const wrapper = (): React.JSX.Element => (
     <MemoryRouter initialEntries={['/w/acme']}>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+        <I18nProvider
+          workspaceDefaultLocale={null}
+          reporter={{ report: () => undefined, reported: [] }}
+        >
           <ToastProvider regionLabel="notifications">
             <WorkspaceProvider slug="acme" client={client as never}>
               <Routes>
@@ -76,7 +82,9 @@ function renderHome(client: unknown): ReturnType<typeof render> {
 describe('WorkspaceHomePage(工作区概览,§4.1)', () => {
   it('加载中呈现 loading 态', () => {
     // 永不 resolve 的桩 → 停在 loading
-    const fetchImpl = vi.fn((_url: string, _init: unknown) => new Promise<Response>(() => undefined));
+    const fetchImpl = vi.fn(
+      (_url: string, _init: unknown) => new Promise<Response>(() => undefined),
+    );
     renderHome({ request: () => fetchImpl('x', {}) });
     expect(screen.getByTestId('ws-loading')).toBeTruthy();
   });
@@ -91,6 +99,56 @@ describe('WorkspaceHomePage(工作区概览,§4.1)', () => {
     expect(screen.getByTestId('ws-settings-link')).toBeTruthy();
   });
 
+  it('用统一页头建立唯一主标题,并提供工作区内的快速入口', async () => {
+    const { client } = stubClient({ status: 200, body: { data: DETAIL } });
+    const { container } = renderHome(client);
+
+    await screen.findByTestId('ws-home-name');
+    expect(container.querySelector('.mesh-page-header')).not.toBeNull();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByText('UTC')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+      'href',
+      '/w/acme/projects',
+    );
+    expect(screen.getByRole('link', { name: 'Issues' })).toHaveAttribute('href', '/w/acme/issues');
+    expect(screen.getByRole('link', { name: 'Board' })).toHaveAttribute('href', '/w/acme/board');
+    expect(screen.getByRole('link', { name: 'Members' })).toHaveAttribute(
+      'href',
+      '/w/acme/members',
+    );
+  });
+
+  it('快速入口逐段编码 workspace slug 中的保留字符', async () => {
+    const { client } = stubClient({
+      status: 200,
+      body: { data: { ...DETAIL, slug: 'blue team/ops' } },
+    });
+    renderHome(client);
+
+    await screen.findByTestId('ws-home-name');
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/projects',
+    );
+    expect(screen.getByRole('link', { name: 'Issues' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/issues',
+    );
+    expect(screen.getByRole('link', { name: 'Board' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/board',
+    );
+    expect(screen.getByRole('link', { name: 'Members' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/members',
+    );
+    expect(screen.getByTestId('ws-settings-link')).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/settings',
+    );
+  });
+
   it('member 视角:设置入口隐藏,提示可见性', async () => {
     const { client } = stubClient({
       status: 200,
@@ -100,6 +158,17 @@ describe('WorkspaceHomePage(工作区概览,§4.1)', () => {
 
     await waitFor(() => expect(screen.getByTestId('ws-home-name')).toBeTruthy());
     expect(screen.queryByTestId('ws-settings-link')).toBeNull();
+  });
+
+  it('工作区未配置默认语言时回退为 en', async () => {
+    const { client } = stubClient({
+      status: 200,
+      body: { data: { ...DETAIL, settings: {} } },
+    });
+    renderHome(client);
+
+    await screen.findByTestId('ws-home-name');
+    expect(screen.getByTestId('ws-home-meta')).toHaveTextContent('default language: en');
   });
 
   it('404 → not-found 门控呈现(与不存在同形)', async () => {

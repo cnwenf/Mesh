@@ -12,8 +12,8 @@
  * 看板视觉用例间歇红,验收第 3 轮打回),视口模式即时可得且稳定。
  */
 /* eslint-disable react-refresh/only-export-components -- useIsCompactViewport 与紧凑组件同模块契约 */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Icon, IconButton } from '../../design';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Button, Icon, IconButton } from '../../design';
 import { useT } from '../../i18n';
 import type { BoardCard } from './projection';
 import type { BoardColumn } from './types';
@@ -59,15 +59,31 @@ export function useIsCompactViewport(): boolean {
 export function BoardCompact(props: BoardCompactProps): React.JSX.Element {
   const { columns, activeIndex, onSelectIndex, getColumnLabel, renderCardBody } = props;
   const t = useT();
+  const tabsId = useId();
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const swipeRef = useRef<{ startX: number; startY: number } | null>(null);
+  const normalizedActiveIndex =
+    columns.length === 0 ? 0 : ((activeIndex % columns.length) + columns.length) % columns.length;
+
+  const selectAndFocus = useCallback(
+    (index: number) => {
+      if (columns.length === 0) return;
+      const nextIndex = ((index % columns.length) + columns.length) % columns.length;
+      onSelectIndex(nextIndex);
+      tabRefs.current[nextIndex]?.focus();
+    },
+    [columns.length, onSelectIndex],
+  );
 
   const goPrev = useCallback(() => {
-    onSelectIndex((activeIndex - 1 + columns.length) % columns.length);
-  }, [activeIndex, columns.length, onSelectIndex]);
+    if (columns.length < 2) return;
+    onSelectIndex((normalizedActiveIndex - 1 + columns.length) % columns.length);
+  }, [columns.length, normalizedActiveIndex, onSelectIndex]);
 
   const goNext = useCallback(() => {
-    onSelectIndex((activeIndex + 1) % columns.length);
-  }, [activeIndex, columns.length, onSelectIndex]);
+    if (columns.length < 2) return;
+    onSelectIndex((normalizedActiveIndex + 1) % columns.length);
+  }, [columns.length, normalizedActiveIndex, onSelectIndex]);
 
   const onPointerDown = useCallback((event: React.PointerEvent) => {
     swipeRef.current = { startX: event.clientX, startY: event.clientY };
@@ -88,7 +104,9 @@ export function BoardCompact(props: BoardCompactProps): React.JSX.Element {
     [goNext, goPrev],
   );
 
-  const activeColumn = columns[activeIndex] ?? null;
+  const activeColumn = columns[normalizedActiveIndex] ?? null;
+  const activeTabId = `${tabsId}-tab-${normalizedActiveIndex}`;
+  const activePanelId = `${tabsId}-panel-${normalizedActiveIndex}`;
 
   return (
     <div className="mesh-board-compact" data-testid="board-compact">
@@ -98,29 +116,55 @@ export function BoardCompact(props: BoardCompactProps): React.JSX.Element {
           className="mesh-board-compact__arrow"
           data-testid="compact-prev"
           onClick={goPrev}
+          disabled={columns.length < 2}
         >
           <Icon name="chevron-left" size={20} />
         </IconButton>
         <div
           className="mesh-board-compact__chips"
           role="tablist"
+          aria-orientation="horizontal"
           aria-label={t('board.compactChipsLabel')}
           data-testid="compact-chips"
         >
           {columns.map((column, index) => (
-            <button
+            <Button
               key={column.key}
-              type="button"
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
+              id={`${tabsId}-tab-${index}`}
+              variant="ghost"
               role="tab"
-              aria-selected={index === activeIndex}
-              className={`mesh-board-compact__chip ${index === activeIndex ? 'mesh-board-compact__chip--active' : ''}`.trim()}
+              aria-selected={index === normalizedActiveIndex}
+              aria-controls={`${tabsId}-panel-${index}`}
+              tabIndex={index === normalizedActiveIndex ? 0 : -1}
+              className={`mesh-board-compact__chip ${index === normalizedActiveIndex ? 'mesh-board-compact__chip--active' : ''}`.trim()}
               data-testid={`compact-chip-${column.key}`}
               onClick={() => onSelectIndex(index)}
+              onKeyDown={(event) => {
+                let nextIndex: number | null = null;
+                if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                  nextIndex = normalizedActiveIndex + 1;
+                } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                  nextIndex = normalizedActiveIndex - 1;
+                } else if (event.key === 'Home') {
+                  nextIndex = 0;
+                } else if (event.key === 'End') {
+                  nextIndex = columns.length - 1;
+                }
+                if (nextIndex === null) return;
+                event.preventDefault();
+                selectAndFocus(nextIndex);
+              }}
             >
-              <span className={`mesh-board__dot mesh-board__dot--${column.key}`} aria-hidden="true" />
+              <span
+                className={`mesh-board__dot mesh-board__dot--${column.key}`}
+                aria-hidden="true"
+              />
               <span>{getColumnLabel(column.key)}</span>
               <span className="mesh-board-compact__chip-count">{column.count}</span>
-            </button>
+            </Button>
           ))}
         </div>
         <IconButton
@@ -128,6 +172,7 @@ export function BoardCompact(props: BoardCompactProps): React.JSX.Element {
           className="mesh-board-compact__arrow"
           data-testid="compact-next"
           onClick={goNext}
+          disabled={columns.length < 2}
         >
           <Icon name="chevron-right" size={20} />
         </IconButton>
@@ -135,8 +180,11 @@ export function BoardCompact(props: BoardCompactProps): React.JSX.Element {
 
       {activeColumn === null ? null : (
         <div
+          id={activePanelId}
           className="mesh-board-compact__body"
           data-testid="compact-body"
+          role="tabpanel"
+          aria-labelledby={activeTabId}
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
         >
