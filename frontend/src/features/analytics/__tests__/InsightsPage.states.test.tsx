@@ -376,6 +376,34 @@ describe('InsightsPage layout and skeleton', () => {
     expect(screen.queryByTestId('insights-throughput')).toBeNull();
   });
 
+  it('aborts the previous in-flight dashboard read when filters change', async () => {
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await screen.findByTestId('insights-throughput');
+
+    let release: () => void = () => undefined;
+    state.holdDashboard = new Promise((resolve) => {
+      release = () => resolve(undefined);
+    });
+    try {
+      fireEvent.change(screen.getByTestId('insights-range'), { target: { value: '90' } });
+      await waitFor(() => expect(state.dashboardSignals).toHaveLength(2));
+
+      const staleSignal = state.dashboardSignals[1];
+      expect(staleSignal?.aborted).toBe(false);
+
+      fireEvent.change(screen.getByTestId('insights-granularity'), {
+        target: { value: 'week' },
+      });
+      await waitFor(() => expect(state.dashboardSignals).toHaveLength(3));
+
+      expect(staleSignal?.aborted).toBe(true);
+      expect(state.dashboardSignals[2]?.aborted).toBe(false);
+    } finally {
+      state.holdDashboard = null;
+      await act(async () => release());
+    }
+  });
+
   it('aborts an in-flight dashboard read on unmount', async () => {
     state.holdDashboard = new Promise(() => undefined);
     const { unmount } = renderWithProviders(<InsightsPage />, { route: '/insights' });

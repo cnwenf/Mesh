@@ -256,6 +256,22 @@ describe('App 路由', () => {
     });
   });
 
+  it('离开 /forbidden 后恢复工作区级浮层快捷键', async () => {
+    signIn();
+    navigateTo('/forbidden?workspace=%2Fw%2Fws');
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+
+    fireEvent.click(screen.getByTestId('forbidden-home'));
+    await waitFor(() => expect(window.location.pathname).toBe('/'));
+    await waitFor(() => expect(screen.getByTestId('home-greeting')).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+  });
+
   it('TopBar 命令面板/帮助按钮开启对应对话框', () => {
     signIn();
     navigateTo('/');

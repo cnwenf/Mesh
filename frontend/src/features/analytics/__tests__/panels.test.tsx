@@ -64,6 +64,17 @@ const PROJECT_DASHBOARD = {
   },
 };
 
+const PROJECT_DASHBOARD_WITHOUT_QUANTILES = {
+  ...PROJECT_DASHBOARD,
+  cycle_time: {
+    ...PROJECT_DASHBOARD.cycle_time,
+    p50_seconds: null,
+    p90_seconds: null,
+    sample_size: 0,
+    meta: { insufficient_data: 0, display_timezone: 'UTC' },
+  },
+};
+
 function makeStubClient(handler: (path: string) => unknown): MeshApiClient {
   return {
     request: vi.fn(async (_method: string, path: string) => handler(path)),
@@ -432,6 +443,36 @@ describe('ProjectDashboardPanel', () => {
     });
     expect(screen.queryByTestId('project-dashboard-insufficient')).toBeNull();
   });
+
+  it('renders unavailable KPIs and omits the distribution when both quantiles are null', async () => {
+    const client = makeStubClient(() => PROJECT_DASHBOARD_WITHOUT_QUANTILES);
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
+
+    const cycleCard = within(await screen.findByTestId('project-dashboard-cycletime'));
+    expect(cycleCard.getAllByText('—')).toHaveLength(2);
+    expect(cycleCard.getByText('0')).toBeInTheDocument();
+    expect(screen.queryByTestId('project-dashboard-cycle-distribution')).toBeNull();
+  });
+
+  it.each([
+    { p50: null, p90: 483840, expectedWidths: ['0%', '100%'] },
+    { p50: 172800, p90: null, expectedWidths: ['100%', '0%'] },
+  ])('keeps the available quantile visible when the other is null', async (fixture) => {
+    const client = makeStubClient(() => ({
+      ...PROJECT_DASHBOARD,
+      cycle_time: {
+        ...PROJECT_DASHBOARD.cycle_time,
+        p50_seconds: fixture.p50,
+        p90_seconds: fixture.p90,
+      },
+    }));
+    renderWithProviders(<ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />);
+
+    const distribution = await screen.findByTestId('project-dashboard-cycle-distribution');
+    const fills = distribution.querySelectorAll<HTMLElement>('.mesh-analytics__quantile-fill');
+    expect([...fills].map((fill) => fill.style.inlineSize)).toEqual(fixture.expectedWidths);
+    expect(within(distribution).getByText('—')).toBeInTheDocument();
+  });
 });
 
 const AGENT_STATS = {
@@ -535,6 +576,20 @@ describe('AgentStatsCard', () => {
     const outcomes = await screen.findByTestId('agent-stats-outcomes');
     expect(outcomes).toHaveAccessibleName(/success —, failed —, timeout —/i);
     expect(outcomes.querySelectorAll('[style="inline-size: 0%;"]')).toHaveLength(3);
+  });
+
+  it('clamps out-of-range outcome rates to the valid percentage interval', async () => {
+    const client = makeStubClient(() => ({
+      ...AGENT_STATS,
+      success_rate: 1.2,
+      timeout_rate: -0.1,
+    }));
+    renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
+
+    const outcomes = await screen.findByTestId('agent-stats-outcomes');
+    expect(outcomes).toHaveAccessibleName(/success 100\.0%, failed 0\.0%, timeout 0\.0%/i);
+    const segments = outcomes.querySelectorAll<HTMLElement>('.mesh-analytics__outcome-segment');
+    expect([...segments].map((segment) => segment.style.inlineSize)).toEqual(['100%', '0%', '0%']);
   });
 
   it('unmount in flight is a no-op (cancelled guard; no post-unmount state)', async () => {
