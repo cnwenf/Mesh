@@ -21,11 +21,14 @@ as the issue module gates ``group_by=label`` (no mock stand-ins).
 
 from __future__ import annotations
 
+import hashlib
+import json
+import secrets
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import String, and_, cast, func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
 
@@ -36,7 +39,13 @@ from mesh.db.models.project import Project
 from mesh.db.models.view import View
 from mesh.db.models.view_position import ViewIssuePosition
 from mesh.db.tenant import set_tenant_context
-from mesh.errors import BusinessRuleError, MeshError, NotFoundError, ValidationError
+from mesh.errors import (
+    BusinessRuleError,
+    ConflictError,
+    MeshError,
+    NotFoundError,
+    ValidationError,
+)
 from mesh.issue.filters import (
     LIST_STATEMENT_TIMEOUT_MS,
     MAX_FILTER_CONDITIONS,
@@ -45,7 +54,13 @@ from mesh.issue.filters import (
     coerce_date,
 )
 from mesh.issue.statuses import resolve_default_status
-from mesh.views.config import PRIORITY_KEYS, STATE_CATEGORY_KEYS
+from mesh.search.cursor import (
+    decode_cursor as decode_signed_cursor,
+)
+from mesh.search.cursor import (
+    encode_cursor as encode_signed_cursor,
+)
+from mesh.views.config import PRIORITY_KEYS, STATE_CATEGORY_KEYS, validate_group_axes
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -132,9 +147,7 @@ def _enforce_limits(filters: dict) -> None:
                 )
             return
         if depth > MAX_FILTER_DEPTH:
-            raise FilterTooComplexError(
-                _TOO_COMPLEX, details={"depth": depth, "max_depth": MAX_FILTER_DEPTH}
-            )
+            raise FilterTooComplexError(_TOO_COMPLEX, details={"depth": depth, "max_depth": MAX_FILTER_DEPTH})
         conditions = node.get("conditions")
         if not isinstance(conditions, list):
             raise _invalid_filters("conditions must be an array")
@@ -243,6 +256,8 @@ _EMPTY_MEMBER_KEY = "__none__"
 _EMPTY_PROJECT_KEY = "__none__"
 
 _SUPPORTED_GROUP_BY = frozenset({"state_category", "status", "assignee", "priority", "project"})
+_PROCESS_VIEW_CURSOR_SECRET = secrets.token_bytes(32)
+SWIMLANE_CURSOR_TTL = timedelta(minutes=15)
 
 _CATEGORY_LABELS: dict[str, str] = {
     "backlog": "Backlog",
@@ -268,6 +283,10 @@ _GROUP_EXPR: dict[str, Any] = {
     "priority": Issue.priority,
     "project": Issue.project_id,
 }
+
+
+def _now(clock: Any | None) -> datetime:
+    return clock() if clock is not None else datetime.now(UTC)
 
 
 class NotImplementedLayout(MeshError):
@@ -319,11 +338,16 @@ class ProjectionService:
         view_service: ViewService,
         *,
         clock: Any | None = None,
+        cursor_secret: str | bytes | None = None,
     ) -> None:
         self._factory = session_factory
         self._issues = issue_service
         self._views = view_service
         self._clock = clock
+        if isinstance(cursor_secret, str):
+            self._cursor_secret = cursor_secret.encode("utf-8")
+        else:
+            self._cursor_secret = cursor_secret or _PROCESS_VIEW_CURSOR_SECRET
 
     async def execute_view(
         self,
@@ -337,9 +361,7 @@ class ProjectionService:
         page_limit = _limit_page(limit)
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            await session.execute(
-                text(f"SET LOCAL statement_timeout = {LIST_STATEMENT_TIMEOUT_MS}")
-            )
+            await session.execute(text(f"SET LOCAL statement_timeout = {LIST_STATEMENT_TIMEOUT_MS}"))
             view = await session.scalar(
                 select(View).where(View.id == view_id, View.workspace_id == workspace_id)
             )
@@ -347,15 +369,21 @@ class ProjectionService:
                 raise NotFoundError(_VIEW_NOT_FOUND)
             await self._views.assert_can_read(session, viewer=viewer, view=view)
             if view.layout in ("timeline", "table"):
-                raise NotImplementedLayout(
-                    "layout is not renderable", details={"layout": view.layout}
-                )
+                raise NotImplementedLayout("layout is not renderable", details={"layout": view.layout})
             group_by = view.group_by or "state_category"
+            sub_group_by = view.sub_group_by
+            validate_group_axes(view.group_by, sub_group_by)
             if group_by not in _SUPPORTED_GROUP_BY:
                 raise ValidationError(
                     "group_by=label/custom-field awaits the label-property association increment",
                     code=PROJECTION_FIELD_PENDING,
                     details={"group_by": group_by},
+                )
+            if sub_group_by is not None and sub_group_by not in _SUPPORTED_GROUP_BY:
+                raise ValidationError(
+                    "sub_group_by=label/custom-field awaits the label-property association increment",
+                    code=PROJECTION_FIELD_PENDING,
+                    details={"sub_group_by": sub_group_by},
                 )
             try:
                 return await self._run(
@@ -400,6 +428,17 @@ class ProjectionService:
         page_limit: int,
         cursor: str | None,
     ) -> dict:
+        if view.layout == "board" and view.sub_group_by is not None:
+            return await self._run_swimlanes(
+                session,
+                workspace_id=workspace_id,
+                viewer=viewer,
+                view=view,
+                group_by=group_by,
+                sub_group_by=view.sub_group_by,
+                page_limit=page_limit,
+                cursor=cursor,
+            )
         conditions = self._base_conditions(viewer, session, view)
         group_expr = _GROUP_EXPR[group_by]
 
@@ -407,9 +446,7 @@ class ProjectionService:
         # count is the group total, data the current page slice).
         counts: dict[str, int] = {}
         count_rows = (
-            await session.execute(
-                select(group_expr, func.count()).where(*conditions).group_by(group_expr)
-            )
+            await session.execute(select(group_expr, func.count()).where(*conditions).group_by(group_expr))
         ).all()
         for value, count in count_rows:
             counts[_group_key(group_by, value)] = int(count)
@@ -418,17 +455,24 @@ class ProjectionService:
         # issues.position is the fallback (kanban §2.7). One overall cursor.
         vip = aliased(ViewIssuePosition)
         sort_col = func.coalesce(vip.position, Issue.position)
+        current_group_key = func.coalesce(cast(group_expr, String), _EMPTY_MEMBER_KEY)
         stmt = (
             select(Issue, vip.position)
-            .outerjoin(vip, and_(vip.view_id == view.id, vip.issue_id == Issue.id))
+            .outerjoin(
+                vip,
+                and_(
+                    vip.view_id == view.id,
+                    vip.issue_id == Issue.id,
+                    vip.group_key == current_group_key,
+                    vip.sub_group_key == "",
+                ),
+            )
             .where(*conditions)
             .order_by(sort_col.asc(), Issue.id.asc())
         )
         if cursor is not None:
             position = decode_cursor(cursor)
-            stmt = stmt.where(
-                func.row(sort_col, Issue.id) > func.row(position.sort_value, position.id)
-            )
+            stmt = stmt.where(func.row(sort_col, Issue.id) > func.row(position.sort_value, position.id))
         raw_rows = (await session.execute(stmt.limit(page_limit + 1))).all()
 
         next_cursor = None
@@ -447,7 +491,12 @@ class ProjectionService:
 
         wip_map = (view.board_settings or {}).get("wip", {})
         ordered_keys = await self._ordered_group_keys(
-            session, group_by=group_by, workspace_id=workspace_id, counts=counts, membership=membership
+            session,
+            group_by=group_by,
+            workspace_id=workspace_id,
+            counts=counts,
+            membership=membership,
+            configured_order=(view.board_settings or {}).get("columns"),
         )
         labels = await self._group_labels(
             session, group_by=group_by, workspace_id=workspace_id, keys=ordered_keys
@@ -464,15 +513,299 @@ class ProjectionService:
                 }
             )
 
-        return {
+        result: dict[str, Any] = {
             "layout": view.layout,
             "group_by": group_by,
-            "column_target_status": await self._column_target_status(
-                session, group_by=group_by, workspace_id=workspace_id, view=view, keys=ordered_keys
-            ),
             "groups": groups,
             "next_cursor": next_cursor,
         }
+        # Workspace-wide boards can contain issues from projects with
+        # different private status domains, so one flat category→status map
+        # would be ambiguous even in the one-dimensional response.
+        if group_by == "state_category" and view.project_id is not None:
+            result["column_target_status"] = await self._column_target_status(
+                session,
+                group_by=group_by,
+                workspace_id=workspace_id,
+                view=view,
+                keys=ordered_keys,
+            )
+        return result
+
+    @staticmethod
+    def _sort_value(issue: Issue, *, field: str, position: float) -> Any:
+        if field == "position":
+            return position
+        value = getattr(issue, field)
+        if field == "priority":
+            return PRIORITY_KEYS.index(value)
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        return value
+
+    def _sort_cell_rows(
+        self,
+        rows: list[tuple[Issue, str, str, float]],
+        *,
+        sort_rules: list[dict],
+    ) -> list[tuple[Issue, str, str, float]]:
+        ordered = sorted(rows, key=lambda row: str(row[0].id))
+        rules = sort_rules or [{"field": "position", "order": "asc"}]
+        for rule in reversed(rules):
+            if rule.get("field_kind") == "custom_field":
+                raise ValidationError(
+                    "custom-field sorting awaits the association increment",
+                    code=PROJECTION_FIELD_PENDING,
+                )
+            field = rule["field"]
+            present = [
+                row for row in ordered if self._sort_value(row[0], field=field, position=row[3]) is not None
+            ]
+            missing = [row for row in ordered if row not in present]
+            present.sort(
+                key=lambda row: self._sort_value(row[0], field=field, position=row[3]),
+                reverse=rule["order"] == "desc",
+            )
+            ordered = present + missing
+        return ordered
+
+    @staticmethod
+    def _swimlane_fingerprint(
+        *,
+        view: View,
+        viewer: Member,
+        page_limit: int,
+        group_keys: list[str],
+        lane_keys: list[str],
+        rows: list[tuple[Issue, str, str, float]],
+    ) -> str:
+        snapshot = {
+            "v": 1,
+            "view_id": str(view.id),
+            "viewer_id": str(viewer.id),
+            "limit": page_limit,
+            "updated_at": view.updated_at.isoformat(),
+            "filters": view.filters,
+            "group_by": view.group_by or "state_category",
+            "sub_group_by": view.sub_group_by,
+            "sort": view.sort,
+            "columns": group_keys,
+            "lanes": lane_keys,
+            "rows": [
+                [
+                    str(issue.id),
+                    issue.updated_at.isoformat(),
+                    lane_key,
+                    group_key,
+                    position,
+                ]
+                for issue, lane_key, group_key, position in sorted(
+                    rows, key=lambda row: (row[1], row[2], str(row[0].id))
+                )
+            ],
+        }
+        canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    async def _run_swimlanes(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        viewer: Member,
+        view: View,
+        group_by: str,
+        sub_group_by: str,
+        page_limit: int,
+        cursor: str | None,
+    ) -> dict:
+        """Build the two-dimensional board envelope.
+
+        The query intentionally loads the filtered projection snapshot once,
+        then applies the deterministic lane → column → cell-position ordering
+        in memory. This keeps the response skeleton, distinct aggregate
+        counts and page slicing anchored to the exact same visible row set;
+        it also makes a stale cursor fail closed instead of drifting into a
+        different cell.
+        """
+        conditions = self._base_conditions(viewer, session, view)
+        vip = aliased(ViewIssuePosition)
+        raw_rows = (
+            await session.execute(
+                select(
+                    Issue,
+                    vip.position,
+                    vip.group_key,
+                    vip.sub_group_key,
+                )
+                .outerjoin(vip, and_(vip.view_id == view.id, vip.issue_id == Issue.id))
+                .where(*conditions)
+            )
+        ).all()
+
+        group_counts: dict[str, int] = {}
+        lane_counts: dict[str, int] = {}
+        cell_counts: dict[tuple[str, str], int] = {}
+        group_ids: dict[str, set[uuid.UUID]] = {}
+        lane_ids: dict[str, set[uuid.UUID]] = {}
+        rows: list[tuple[Issue, str, str, float]] = []
+        for issue, manual_position, manual_group, manual_sub_group in raw_rows:
+            group_key = group_key_for(group_by, issue)
+            lane_key = group_key_for(sub_group_by, issue)
+            group_ids.setdefault(group_key, set()).add(issue.id)
+            lane_ids.setdefault(lane_key, set()).add(issue.id)
+            cell = (lane_key, group_key)
+            cell_counts[cell] = cell_counts.get(cell, 0) + 1
+            position = (
+                float(manual_position)
+                if manual_position is not None and manual_group == group_key and manual_sub_group == lane_key
+                else float(issue.position)
+            )
+            rows.append((issue, lane_key, group_key, position))
+        group_counts.update({key: len(ids) for key, ids in group_ids.items()})
+        lane_counts.update({key: len(ids) for key, ids in lane_ids.items()})
+
+        group_keys = await self._ordered_group_keys(
+            session,
+            group_by=group_by,
+            workspace_id=workspace_id,
+            counts=group_counts,
+            membership={},
+            configured_order=(view.board_settings or {}).get("columns"),
+        )
+        lane_keys = await self._ordered_group_keys(
+            session,
+            group_by=sub_group_by,
+            workspace_id=workspace_id,
+            counts=lane_counts,
+            membership={},
+        )
+        rows_by_cell: dict[tuple[str, str], list[tuple[Issue, str, str, float]]] = {}
+        for row in rows:
+            rows_by_cell.setdefault((row[1], row[2]), []).append(row)
+        rows = [
+            row
+            for lane_key in lane_keys
+            for group_key in group_keys
+            for row in self._sort_cell_rows(
+                rows_by_cell.get((lane_key, group_key), []),
+                sort_rules=view.sort or [],
+            )
+        ]
+        fingerprint = self._swimlane_fingerprint(
+            view=view,
+            viewer=viewer,
+            page_limit=page_limit,
+            group_keys=group_keys,
+            lane_keys=lane_keys,
+            rows=rows,
+        )
+
+        start = 0
+        if cursor is not None:
+            cursor_fingerprint, factors = decode_signed_cursor(self._cursor_secret, cursor)
+            if cursor_fingerprint != fingerprint or len(factors) != 5:
+                raise ConflictError("cursor no longer matches this view", code="cursor_invalidated")
+            expires_at, cursor_lane, cursor_group, cursor_position, cursor_issue_id = factors
+            if type(expires_at) is not int or int(_now(self._clock).timestamp()) > expires_at:
+                raise ConflictError("cursor no longer matches this view", code="cursor_invalidated")
+            for index, (issue, lane_key, group_key, position) in enumerate(rows):
+                if [lane_key, group_key, position, str(issue.id)] == [
+                    cursor_lane,
+                    cursor_group,
+                    cursor_position,
+                    cursor_issue_id,
+                ]:
+                    start = index + 1
+                    break
+            else:
+                raise ConflictError("cursor no longer matches this view", code="cursor_invalidated")
+
+        page_rows = rows[start : start + page_limit + 1]
+        has_more = len(page_rows) > page_limit
+        page_rows = page_rows[:page_limit]
+        next_cursor = None
+        if has_more and page_rows:
+            last_issue, last_lane, last_group, last_position = page_rows[-1]
+            next_cursor = encode_signed_cursor(
+                self._cursor_secret,
+                fp=fingerprint,
+                factors=[
+                    int((_now(self._clock) + SWIMLANE_CURSOR_TTL).timestamp()),
+                    last_lane,
+                    last_group,
+                    last_position,
+                    str(last_issue.id),
+                ],
+            )
+
+        page_membership: dict[tuple[str, str], list[dict]] = {}
+        for issue, lane_key, group_key, _position in page_rows:
+            page_membership.setdefault((lane_key, group_key), []).append(
+                await self._issues.render_issue(session, issue)
+            )
+
+        group_labels = await self._group_labels(
+            session,
+            group_by=group_by,
+            workspace_id=workspace_id,
+            keys=group_keys,
+        )
+        lane_labels = await self._group_labels(
+            session,
+            group_by=sub_group_by,
+            workspace_id=workspace_id,
+            keys=lane_keys,
+        )
+        wip_map = (view.board_settings or {}).get("wip", {})
+        columns = [
+            {
+                "key": key,
+                "label": group_labels.get(key, key),
+                "count": group_counts.get(key, 0),
+                "wip": wip_map.get(key),
+            }
+            for key in group_keys
+        ]
+        lanes = [
+            {
+                "key": lane_key,
+                "label": lane_labels.get(lane_key, lane_key),
+                "count": lane_counts.get(lane_key, 0),
+                "groups": [
+                    {
+                        "key": group_key,
+                        "count": cell_counts.get((lane_key, group_key), 0),
+                        "data": page_membership.get((lane_key, group_key), []),
+                    }
+                    for group_key in group_keys
+                ],
+            }
+            for lane_key in lane_keys
+        ]
+        result: dict[str, Any] = {
+            "layout": view.layout,
+            "group_by": group_by,
+            "sub_group_by": sub_group_by,
+            "columns": columns,
+            "lanes": lanes,
+            "next_cursor": next_cursor,
+        }
+        # A flat target-status map is safe only when every cell shares a fixed
+        # target project and the swimlane is not another status/project axis.
+        if (
+            group_by == "state_category"
+            and view.project_id is not None
+            and sub_group_by not in {"status", "project"}
+        ):
+            result["column_target_status"] = await self._column_target_status(
+                session,
+                group_by=group_by,
+                workspace_id=workspace_id,
+                view=view,
+                keys=group_keys,
+            )
+        return result
 
     async def _ordered_group_keys(
         self,
@@ -482,17 +815,58 @@ class ProjectionService:
         workspace_id: uuid.UUID,
         counts: dict[str, int],
         membership: dict[str, list[dict]],
+        configured_order: list[str] | None = None,
     ) -> list[str]:
         present = set(counts) | set(membership)
         if group_by == "state_category":
-            return list(STATE_CATEGORY_KEYS)
-        if group_by == "priority":
-            return list(PRIORITY_KEYS)
-        # Dynamic groups (status/assignee/project): order by label.
-        labels = await self._group_labels(
-            session, group_by=group_by, workspace_id=workspace_id, keys=sorted(present)
-        )
-        return sorted(present, key=lambda key: (labels.get(key, key), key))
+            ordered = list(STATE_CATEGORY_KEYS)
+        elif group_by == "priority":
+            ordered = list(PRIORITY_KEYS)
+        elif group_by == "status":
+            status_ids = [uuid.UUID(key) for key in present]
+            status_rows = (
+                await session.execute(
+                    select(
+                        IssueStatus.id,
+                        IssueStatus.category,
+                        IssueStatus.position,
+                    ).where(
+                        IssueStatus.workspace_id == workspace_id,
+                        IssueStatus.id.in_(status_ids) if status_ids else IssueStatus.id.is_(None),
+                    )
+                )
+            ).all()
+            status_order = {
+                str(status_id): (
+                    STATE_CATEGORY_KEYS.index(category),
+                    float(position),
+                    str(status_id),
+                )
+                for status_id, category, position in status_rows
+            }
+            ordered = sorted(
+                present,
+                key=lambda key: status_order.get(key, (len(STATE_CATEGORY_KEYS), float("inf"), key)),
+            )
+        else:
+            # Dynamic groups (status/assignee/project): deterministic label,
+            # then key ordering. ``casefold`` approximates lower(... COLLATE C)
+            # without relying on the database's locale.
+            labels = await self._group_labels(
+                session, group_by=group_by, workspace_id=workspace_id, keys=sorted(present)
+            )
+            ordered = sorted(
+                present,
+                key=lambda key: (
+                    key == _EMPTY_MEMBER_KEY,
+                    labels.get(key, key).casefold(),
+                    key,
+                ),
+            )
+        if not configured_order:
+            return ordered
+        configured = list(dict.fromkeys(key for key in configured_order if key in ordered))
+        return configured + [key for key in ordered if key not in configured]
 
     async def _group_labels(
         self,
@@ -534,9 +908,7 @@ class ProjectionService:
                 labels[key] = "No project"
                 continue
             project = await session.scalar(
-                select(Project).where(
-                    Project.id == uuid.UUID(key), Project.workspace_id == workspace_id
-                )
+                select(Project).where(Project.id == uuid.UUID(key), Project.workspace_id == workspace_id)
             )
             labels[key] = project.name if project is not None else key
         return labels
@@ -552,9 +924,9 @@ class ProjectionService:
     ) -> dict[str, str]:
         """Map a drop target (group key) to the status_id a drag should set.
 
-        state_category → that category's default status in the view's scope
-        (kanban §2.4); status → identity. Empty for assignee/priority/project
-        (the move command handles those group keys directly).
+        This helper is called only for ``state_category`` in a project-scoped
+        view, where the whole response has one unambiguous target status
+        domain (kanban §2.4).
         """
         if group_by == "state_category":
             mapping: dict[str, str] = {}
@@ -570,8 +942,6 @@ class ProjectionService:
                     continue
                 mapping[category] = str(status.id)
             return mapping
-        if group_by == "status":
-            return {key: key for key in keys if key != _EMPTY_MEMBER_KEY}
         return {}
 
 

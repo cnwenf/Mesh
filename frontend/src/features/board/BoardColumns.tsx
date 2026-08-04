@@ -119,12 +119,16 @@ function WipStrip({
 
 function QuickCreate({
   groupKey,
+  subGroupKey,
+  testKey,
   canWrite,
   onQuickCreate,
 }: {
   groupKey: string;
+  subGroupKey?: string;
+  testKey: string;
   canWrite: boolean;
-  onQuickCreate: (groupKey: string, title: string) => void | Promise<void>;
+  onQuickCreate: (groupKey: string, title: string, subGroupKey?: string) => void | Promise<void>;
 }): React.JSX.Element {
   const t = useT();
   const [title, setTitle] = useState('');
@@ -136,7 +140,11 @@ function QuickCreate({
     if (trimmed === '' || pending) return;
     setPending(true);
     setTitle('');
-    void Promise.resolve(onQuickCreate(groupKey, trimmed)).finally(() => setPending(false));
+    const result =
+      subGroupKey === undefined
+        ? onQuickCreate(groupKey, trimmed)
+        : onQuickCreate(groupKey, trimmed, subGroupKey);
+    void Promise.resolve(result).finally(() => setPending(false));
   };
   return (
     <div className="mesh-board__quick-create">
@@ -146,7 +154,7 @@ function QuickCreate({
         placeholder={t('board.quickAdd')}
         value={title}
         disabled={!canWrite || pending}
-        data-testid={`quick-add-${groupKey}`}
+        data-testid={`quick-add-${testKey}`}
         onChange={(event) => setTitle(event.target.value)}
         onKeyDown={(event) => {
           // §9.3.3:Enter / Cmd|Ctrl+Enter 提交,Esc 清空(有内容时即「关闭」)。
@@ -161,7 +169,7 @@ function QuickCreate({
       {pending ? (
         <span
           className="mesh-board__quick-create-spinner"
-          data-testid={`quick-add-pending-${groupKey}`}
+          data-testid={`quick-add-pending-${testKey}`}
           role="status"
           aria-label={t('common.loading')}
         />
@@ -291,13 +299,20 @@ interface BoardColumnCardProps {
   readonly dragState: DragState | null;
   readonly moveState: KeyboardMoveState | null;
   readonly onToggleCollapse: (key: string) => void;
-  readonly onQuickCreate: (groupKey: string, title: string) => void | Promise<void>;
+  readonly onQuickCreate: (
+    groupKey: string,
+    title: string,
+    subGroupKey?: string,
+  ) => void | Promise<void>;
   readonly highlightCardId: string | null;
   readonly onCardPointerDown: BoardCardItemProps['onCardPointerDown'];
   readonly onCardKeyDown: BoardCardItemProps['onCardKeyDown'];
   readonly onSelectCard: BoardCardItemProps['onSelect'];
   readonly selectedCardId: string | null;
   readonly fullListMode: boolean;
+  readonly dropKey: string;
+  readonly testKey: string;
+  readonly subGroupKey?: string;
 }
 
 function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
@@ -316,6 +331,9 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     onSelectCard,
     selectedCardId,
     fullListMode,
+    dropKey,
+    testKey,
+    subGroupKey,
   } = props;
   const t = useT();
   const headingId = useId();
@@ -323,9 +341,9 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
   // 拖拽悬停目标列 → 高亮;命中且未被 WIP block → 呈现落点指示线。
   // 回位动画阶段(returning)不再呈现目标列反馈,仅浮层滑回源卡(§9.4.4)。
   const isDragTarget =
-    dragState !== null && dragState.returning !== true && dragState.hit?.columnKey === column.key;
+    dragState !== null && dragState.returning !== true && dragState.hit?.columnKey === dropKey;
   const showIndicator = isDragTarget && dragState !== null && !dragState.isBlocked;
-  const isMoveTarget = moveState !== null && moveState.targetColumnKey === column.key;
+  const isMoveTarget = moveState !== null && moveState.targetColumnKey === dropKey;
   const stripTone: 'warn' | 'block' | null =
     isDragTarget && dragState !== null
       ? dragState.isBlocked
@@ -350,7 +368,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     <BoardCardItem
       key={card.id}
       card={card}
-      columnKey={column.key}
+      columnKey={dropKey}
       isPlaceholder={dragState?.cardId === card.id}
       isSelected={moveState?.cardId === card.id || selectedCardId === card.id}
       isHighlighted={highlightCardId === card.id}
@@ -365,7 +383,8 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
   return (
     <section
       className={columnClassName}
-      data-testid={`board-column-${column.key}`}
+      data-testid={`board-column-${testKey}`}
+      data-board-drop-key={dropKey}
       aria-labelledby={headingId}
     >
       <header className="mesh-board__column-head">
@@ -373,7 +392,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
         <h2 id={headingId} className="mesh-board__column-name">
           {label}
         </h2>
-        <span className="mesh-board__count" data-testid={`count-${column.key}`}>
+        <span className="mesh-board__count" data-testid={`count-${testKey}`}>
           {column.count}
         </span>
         <WipBadge column={column} />
@@ -393,7 +412,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
       {column.collapsed ? null : (
         <div
           className={`mesh-board__column-body ${wipFull ? 'mesh-board__column-body--blocked' : ''}`.trim()}
-          data-testid={`column-body-${column.key}`}
+          data-testid={`column-body-${testKey}`}
         >
           {stripTone !== null ? <WipStrip columnKey={column.key} tone={stripTone} /> : null}
           {cards.length === 0 ? (
@@ -433,11 +452,27 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
               )}
             </div>
           )}
-          <QuickCreate groupKey={column.key} canWrite={canWrite} onQuickCreate={onQuickCreate} />
+          <QuickCreate
+            groupKey={column.key}
+            subGroupKey={subGroupKey}
+            testKey={testKey}
+            canWrite={canWrite}
+            onQuickCreate={onQuickCreate}
+          />
         </div>
       )}
     </section>
   );
+}
+
+export interface BoardDropTarget {
+  /** 同一视图内唯一的 cell key，供拖拽命中与键盘移动使用。 */
+  readonly key: string;
+  readonly groupKey: string;
+  readonly subGroupKey: string;
+  readonly label: string;
+  readonly column: BoardColumn;
+  readonly cards: readonly BoardCard[];
 }
 
 interface BoardColumnsProps {
@@ -447,8 +482,24 @@ interface BoardColumnsProps {
   readonly canWrite: boolean;
   readonly dragEnabled: boolean;
   readonly onToggleCollapse: (key: string) => void;
-  readonly onDropCard: (issueId: string, toGroupKey: string, position: number) => void;
-  readonly onQuickCreate: (groupKey: string, title: string) => void | Promise<void>;
+  readonly onDropCard: (
+    issueId: string,
+    toGroupKey: string,
+    position: number,
+    toSubGroupKey?: string,
+  ) => void;
+  readonly onQuickCreate: (
+    groupKey: string,
+    title: string,
+    subGroupKey?: string,
+  ) => void | Promise<void>;
+  /** 二维泳道中当前行的 key；一维时不传以保持旧 DOM 契约。 */
+  readonly subGroupKey?: string;
+  /** 二维模式的全板 cell 集，使单个泳道内起拖可命中其他泳道。 */
+  readonly dropTargets?: readonly BoardDropTarget[];
+  /** 多泳道共享的视觉拖拽态，使非源 lane 也能显示命中反馈。 */
+  readonly sharedDragState?: DragState | null;
+  readonly onDragStateChange?: (state: DragState | null) => void;
   /** 新建卡片 1.2s 插入高亮(§9.3.4);缺省无高亮。 */
   readonly highlightCardId?: string | null;
 }
@@ -470,6 +521,10 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     onDropCard,
     onQuickCreate,
     highlightCardId,
+    subGroupKey,
+    dropTargets,
+    sharedDragState,
+    onDragStateChange,
   } = props;
   const t = useT();
   const boardRef = useRef<HTMLDivElement>(null);
@@ -486,27 +541,43 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
   const columnLabelByKey = useMemo(() => {
     const map: Record<string, string> = {};
     for (const column of columns) map[column.key] = resolveColumnLabel(column, groupBy, t);
+    for (const target of dropTargets ?? []) map[target.key] = target.label;
     return map;
-  }, [columns, groupBy, t]);
+  }, [columns, dropTargets, groupBy, t]);
   const getColumnLabel = useCallback(
     (key: string) => columnLabelByKey[key] ?? key,
     [columnLabelByKey],
   );
-  const columnKeys = useMemo(() => columns.map((column) => column.key), [columns]);
+  const columnKeys = useMemo(
+    () => dropTargets?.map((target) => target.key) ?? columns.map((column) => column.key),
+    [columns, dropTargets],
+  );
+  const effectiveCardsByKey = useMemo<Readonly<Record<string, readonly BoardCard[]>>>(() => {
+    if (dropTargets === undefined) return cardsByKey;
+    return Object.fromEntries(dropTargets.map((target) => [target.key, target.cards]));
+  }, [cardsByKey, dropTargets]);
+  const currentDropKey = useCallback(
+    (groupKey: string) =>
+      dropTargets?.find(
+        (target) => target.groupKey === groupKey && target.subGroupKey === subGroupKey,
+      )?.key ?? groupKey,
+    [dropTargets, subGroupKey],
+  );
   const firstSelection = useCallback((): BoardSelection | null => {
     for (const column of columns) {
-      const first = cardsByKey[column.key]?.[0];
-      if (first !== undefined) return { cardId: first.id, columnKey: column.key, index: 0 };
+      const dropKey = currentDropKey(column.key);
+      const first = effectiveCardsByKey[dropKey]?.[0];
+      if (first !== undefined) return { cardId: first.id, columnKey: dropKey, index: 0 };
     }
     return null;
-  }, [columns, cardsByKey]);
+  }, [columns, currentDropKey, effectiveCardsByKey]);
 
   const selectCard = useCallback(
     (cardId: string, columnKey: string) => {
-      const index = (cardsByKey[columnKey] ?? []).findIndex((card) => card.id === cardId);
+      const index = (effectiveCardsByKey[columnKey] ?? []).findIndex((card) => card.id === cardId);
       if (index >= 0) setSelection({ cardId, columnKey, index });
     },
-    [cardsByKey],
+    [effectiveCardsByKey],
   );
 
   // 选中态变化后把真实 DOM 焦点送到卡片；虚拟窗口通过 activeCardId 保证该卡挂载。
@@ -520,11 +591,11 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
   // 数据刷新移除当前卡时回到首张，避免快捷键引用陈旧 id。
   useEffect(() => {
     if (selection === null) return;
-    const exists = (cardsByKey[selection.columnKey] ?? []).some(
+    const exists = (effectiveCardsByKey[selection.columnKey] ?? []).some(
       (card) => card.id === selection.cardId,
     );
     if (!exists) setSelection(firstSelection());
-  }, [cardsByKey, selection, firstSelection]);
+  }, [effectiveCardsByKey, selection, firstSelection]);
 
   // search-command-palette.md §4.3:BoardPage owns the keyboard handlers and page context.
   // Palette commands delegate to those exact registered actions, avoiding a second business path.
@@ -555,16 +626,18 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
 
   const computePosition = useCallback(
     (columnKey: string, index: number | null) =>
-      computeDropPosition(cardsByKey[columnKey] ?? [], index),
-    [cardsByKey],
+      computeDropPosition(effectiveCardsByKey[columnKey] ?? [], index),
+    [effectiveCardsByKey],
   );
   const getCardCount = useCallback(
-    (columnKey: string) => (cardsByKey[columnKey] ?? []).length,
-    [cardsByKey],
+    (columnKey: string) => (effectiveCardsByKey[columnKey] ?? []).length,
+    [effectiveCardsByKey],
   );
   const findColumn = useCallback(
-    (key: string) => columns.find((column) => column.key === key),
-    [columns],
+    (key: string) =>
+      dropTargets?.find((target) => target.key === key)?.column ??
+      columns.find((column) => column.key === key),
+    [columns, dropTargets],
   );
   const isColumnBlocked = useCallback(
     (key: string) => {
@@ -595,39 +668,62 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
   const getColumnRects = useCallback((): readonly ColumnRect[] => {
     const root = boardRef.current;
     if (root === null) return [];
-    const elements = root.querySelectorAll<HTMLElement>('[data-testid^="board-column-"]');
+    const scope = dropTargets === undefined ? root : root.closest('[data-board-drag-scope]');
+    if (scope === null) return [];
+    const elements = scope.querySelectorAll<HTMLElement>('[data-board-drop-key]');
     return [...elements].map((element) => {
       const rect = element.getBoundingClientRect();
       return {
-        columnKey: element.dataset.testid?.replace('board-column-', '') ?? '',
+        columnKey: element.dataset.boardDropKey ?? '',
         left: rect.left,
         top: rect.top,
         right: rect.right,
         bottom: rect.bottom,
       };
     });
-  }, []);
-  const getCardRects = useCallback((columnKey: string): readonly CardRect[] => {
-    const root = boardRef.current;
-    if (root === null) return [];
-    const body = root.querySelector<HTMLElement>(`[data-testid="column-body-${columnKey}"]`);
-    if (body === null) return [];
-    const cardElements = body.querySelectorAll<HTMLElement>('[data-testid^="board-card-"]');
-    return [...cardElements].map((element) => {
-      const rect = element.getBoundingClientRect();
-      return {
-        cardId: element.dataset.testid?.replace('board-card-', '') ?? '',
-        top: rect.top,
-        bottom: rect.bottom,
-      };
-    });
-  }, []);
+  }, [dropTargets]);
+  const getCardRects = useCallback(
+    (columnKey: string): readonly CardRect[] => {
+      const root = boardRef.current;
+      if (root === null) return [];
+      const scope = dropTargets === undefined ? root : root.closest('[data-board-drag-scope]');
+      if (scope === null) return [];
+      const column = [...scope.querySelectorAll<HTMLElement>('[data-board-drop-key]')].find(
+        (element) => element.dataset.boardDropKey === columnKey,
+      );
+      const body = column?.querySelector<HTMLElement>('.mesh-board__column-body') ?? null;
+      if (body === null) return [];
+      const cardElements = body.querySelectorAll<HTMLElement>('[data-testid^="board-card-"]');
+      return [...cardElements].map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          cardId: element.dataset.testid?.replace('board-card-', '') ?? '',
+          top: rect.top,
+          bottom: rect.bottom,
+        };
+      });
+    },
+    [dropTargets],
+  );
+
+  const dropCard = useCallback(
+    (issueId: string, targetKey: string, position: number) => {
+      const target = dropTargets?.find((candidate) => candidate.key === targetKey);
+      const targetSubGroupKey = target?.subGroupKey ?? subGroupKey;
+      if (targetSubGroupKey === undefined) {
+        onDropCard(issueId, target?.groupKey ?? targetKey, position);
+      } else {
+        onDropCard(issueId, target?.groupKey ?? targetKey, position, targetSubGroupKey);
+      }
+    },
+    [dropTargets, onDropCard, subGroupKey],
+  );
 
   const onLongPress = useCallback((cardId: string) => setTouchCardId(cardId), []);
   const drag = useBoardDrag(
     dragEnabled,
     {
-      onDropCard,
+      onDropCard: dropCard,
       computePosition,
       isColumnBlocked,
       isColumnWarn,
@@ -639,12 +735,16 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     getColumnRects,
     getCardRects,
   );
+  useEffect(() => {
+    onDragStateChange?.(drag.dragState);
+  }, [drag.dragState, onDragStateChange]);
+  const visualDragState = drag.dragState ?? sharedDragState ?? null;
   const keyboard = useBoardKeyboardMove({
     enabled: dragEnabled,
     columns: columnKeys,
     getCardCount,
     getColumnLabel,
-    onDropCard,
+    onDropCard: dropCard,
     computePosition,
     announce,
     t,
@@ -652,32 +752,39 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
 
   const touchCard = useMemo(() => {
     if (touchCardId === null) return null;
-    for (const group of Object.values(cardsByKey)) {
+    for (const group of Object.values(effectiveCardsByKey)) {
       const found = group.find((card) => card.id === touchCardId);
       if (found !== undefined) return found;
     }
     return null;
-  }, [touchCardId, cardsByKey]);
+  }, [touchCardId, effectiveCardsByKey]);
 
-  const renderColumn = (column: BoardColumn): React.JSX.Element => (
-    <BoardColumnCard
-      key={column.key}
-      column={column}
-      label={getColumnLabel(column.key)}
-      cards={cardsByKey[column.key] ?? []}
-      canWrite={canWrite}
-      dragState={drag.dragState}
-      moveState={keyboard.moveState}
-      onToggleCollapse={onToggleCollapse}
-      onQuickCreate={onQuickCreate}
-      highlightCardId={highlightCardId ?? null}
-      onCardPointerDown={drag.onPointerDown}
-      onCardKeyDown={keyboard.handleCardKeyDown}
-      onSelectCard={selectCard}
-      selectedCardId={selection?.cardId ?? null}
-      fullListMode={fullListMode}
-    />
-  );
+  const renderColumn = (column: BoardColumn): React.JSX.Element => {
+    const dropKey = currentDropKey(column.key);
+    const testKey = subGroupKey === undefined ? column.key : `${subGroupKey}-${column.key}`;
+    return (
+      <BoardColumnCard
+        key={column.key}
+        column={column}
+        label={getColumnLabel(column.key)}
+        cards={cardsByKey[column.key] ?? []}
+        canWrite={canWrite}
+        dragState={visualDragState}
+        moveState={keyboard.moveState}
+        onToggleCollapse={onToggleCollapse}
+        onQuickCreate={onQuickCreate}
+        highlightCardId={highlightCardId ?? null}
+        onCardPointerDown={drag.onPointerDown}
+        onCardKeyDown={keyboard.handleCardKeyDown}
+        onSelectCard={selectCard}
+        selectedCardId={selection?.cardId ?? null}
+        fullListMode={fullListMode}
+        dropKey={dropKey}
+        testKey={testKey}
+        subGroupKey={subGroupKey}
+      />
+    );
+  };
 
   const activeCompactIndex = columns.length === 0 ? 0 : compactIndex % columns.length;
 
@@ -685,7 +792,9 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     <div
       className="mesh-board__columns-wrap"
       ref={boardRef}
-      data-testid="board-columns-wrap"
+      data-testid={
+        subGroupKey === undefined ? 'board-columns-wrap' : `board-columns-wrap-${subGroupKey}`
+      }
       data-a11y-list-mode={fullListMode ? 'full' : 'virtual'}
     >
       {/* aria-live 播报区(视觉隐藏,复用 design/base.css .sr-only):拖拽/键盘移动各阶段,§10.2。 */}
@@ -723,8 +832,8 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
           card={touchCard}
           columns={columns}
           cardsByKey={cardsByKey}
-          computePosition={computePosition}
-          onDropCard={onDropCard}
+          computePosition={(groupKey, index) => computePosition(currentDropKey(groupKey), index)}
+          onDropCard={dropCard}
           onClose={() => setTouchCardId(null)}
           announce={announce}
           getColumnLabel={getColumnLabel}

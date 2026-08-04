@@ -154,12 +154,16 @@ MES128_EVIDENCE_DIR=./test-results/mes128-real-evidence \
 
 ```bash
 npm run lint            # ESLint 9(flat config)
+npm run format:check    # frontend/ 新增 drift + 本分支触及文件 fail-closed 格式门禁
+npm run format:check:all # 全量 Prettier 债务盘点（用于分批清零）
+npm run test:format-gate # 格式门禁脚本单元/负向测试
 npm run typecheck       # tsc --noEmit
 npm run test            # vitest 单元/组件测试
 npm run test:coverage   # 覆盖率(整体 lines/functions/branches/statements ≥90% 门禁)
 node scripts/verify-coverage.mjs --base origin/main   # 新增/变更代码覆盖率 ≥90% 校验
 npm run build           # 生产构建(gen:tokens + tsc -b + vite build)
 npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与生产构建预览)
+npm run test:e2e:mes130 # 一次性强凭据隔离真栈：二维斜向移动、cell 创建、亮暗/compact/离线截图；结束销毁数据卷
 ```
 
 mock 契约套件在每次运行时先生成一次生产构建,再由 `vite preview`
@@ -168,7 +172,9 @@ mock 契约套件在每次运行时先生成一次生产构建,再由 `vite prev
 HMR/源码模块图参与门禁结果。测试构建会显式启用内置 `mock` OAuth
 提供商,不依赖 `import.meta.env.DEV` 的开发默认值。
 
-CI:`.github/workflows/frontend.yml` 在 `frontend/**` 变更时跑 lint → typecheck → test:coverage → 新增代码覆盖率校验 → build → e2e。
+CI:`.github/workflows/frontend.yml` 在 `frontend/**` 变更时先验证格式门禁本身，随后拒绝新增或本 PR 触及的格式债务，再跑 lint → typecheck → test:coverage → 新增代码覆盖率校验 → build → e2e。历史债务清单位于 `scripts/prettier-debt-baseline.txt`；修正文件时必须同步移除对应条目，禁止增加条目绕过门禁，最终以 `npm run format:check:all` 全绿后删除兼容基线。
+
+生产前端必须置于受信任 HTTPS 边缘之后，容器的 HTTP 端口仅供回环开发或私有网络反代，不得直接暴露公网。生产镜像使用同源 `/api` 与 `/ws`；HTTPS 页面会从 `window.location` 派生 `wss://<当前主机>/ws`。公网 HTTP 必须重定向到 HTTPS 或拒绝，证书/边缘缺失时停止发布，会话 cookie 保持 `Secure`。完整部署与验收清单见 `../docs/specs/frontend/interface-design-baseline.md` §10。
 
 ## 目录结构
 

@@ -680,7 +680,7 @@ describe('BoardPage keyboard actions', () => {
           },
         });
       }
-      if (method === 'POST' && url.includes('/workspaces/ws-1/issues')) {
+      if (method === 'POST' && url.includes('/views/view-1/issues')) {
         const createIndex = calls.filter((call) => call.method === 'POST').length;
         return fakeResponse({
           status: 201,
@@ -704,7 +704,7 @@ describe('BoardPage keyboard actions', () => {
     }
 
     for (const call of calls.filter((entry) => entry.method === 'POST')) {
-      expect(call.body).toMatchObject(scenario.expected);
+      expect(call.body).toMatchObject({ group_key: scenario.groupKey });
     }
   });
 

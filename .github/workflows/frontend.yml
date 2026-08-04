@@ -50,6 +50,14 @@ jobs:
       - name: Audit dependency tree (high severity fails)
         run: npm audit --audit-level=high
 
+      - name: Verify formatting gate behavior
+        run: npm run test:format-gate
+
+      - name: Reject new or touched formatting debt
+        run: npm run format:check
+        env:
+          FORMAT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+
       - name: Verify Appica version, MIT notice, and subpath imports
         run: npm run check:appica
 
@@ -73,6 +81,9 @@ jobs:
 
       - name: Verify real-stack harness contracts
         run: npm run test:e2e:mes128-contracts
+
+      - name: Verify 2-D board real-stack harness contracts
+        run: npm run test:e2e:mes130-contracts
 
       - name: Unit & component tests (coverage >= 90% gate)
         run: npm run test:coverage
@@ -223,8 +234,8 @@ jobs:
           retention-days: 7
 
   mes128-real-stack-e2e:
-    # MES-128/MES-158/MES-161:production 鉴权隔离栈；1440/320/390px 完成真实键盘
-    # 旅程与主题往返，再以 1440/390px 验收全局辅助页族，同时断言真实 HTTP 响应、
+    # MES-128/MES-130/MES-158/MES-161:production 鉴权隔离栈；1440/320/390px 完成真实键盘
+    # 旅程、主题往返及二维看板，再以 1440/390px 验收全局辅助页族，同时断言真实 HTTP 响应、
     # 容器内 PostgreSQL 真值及 Appica shell runtime。只有 loopback 前端端口发布到
     # 宿主，所有中间件凭据均为本 job 即时生成的强随机值。
     runs-on: ubuntu-latest
@@ -251,7 +262,7 @@ jobs:
       - name: Generate isolated strong credentials
         run: ./e2e/mes128-real/gen-stack-env.sh --force
 
-      - name: Run desktop/mobile real-stack keyboard, theme, and project journeys
+      - name: Run desktop/mobile real-stack keyboard, theme, project, and board journeys
         run: ./e2e/mes128-real/run-e2e.sh
 
       - name: Upload redacted journey evidence

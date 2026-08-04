@@ -16,17 +16,63 @@ function groupedClient(pages: unknown[]): StubClient {
   return { request: vi.fn(), grouped };
 }
 
-const CARD_A = { id: 'a', identifier: 'A', title: 'A', state_category: 'todo', status: null, status_id: 's', priority: 'none', assignee: null, assignee_id: null, project_id: null, position: 1, version: 1, updated_at: '' };
-const CARD_B = { id: 'b', identifier: 'B', title: 'B', state_category: 'todo', status: null, status_id: 's', priority: 'none', assignee: null, assignee_id: null, project_id: null, position: 2, version: 1, updated_at: '' };
-const CARD_C = { id: 'c', identifier: 'C', title: 'C', state_category: 'done', status: null, status_id: 's', priority: 'none', assignee: null, assignee_id: null, project_id: null, position: 1, version: 1, updated_at: '' };
+const CARD_A = {
+  id: 'a',
+  identifier: 'A',
+  title: 'A',
+  state_category: 'todo',
+  status: null,
+  status_id: 's',
+  priority: 'none',
+  assignee: null,
+  assignee_id: null,
+  project_id: null,
+  position: 1,
+  version: 1,
+  updated_at: '',
+};
+const CARD_B = {
+  id: 'b',
+  identifier: 'B',
+  title: 'B',
+  state_category: 'todo',
+  status: null,
+  status_id: 's',
+  priority: 'none',
+  assignee: null,
+  assignee_id: null,
+  project_id: null,
+  position: 2,
+  version: 1,
+  updated_at: '',
+};
+const CARD_C = {
+  id: 'c',
+  identifier: 'C',
+  title: 'C',
+  state_category: 'done',
+  status: null,
+  status_id: 's',
+  priority: 'none',
+  assignee: null,
+  assignee_id: null,
+  project_id: null,
+  position: 1,
+  version: 1,
+  updated_at: '',
+};
 
 const PAGE1 = {
-  layout: 'board', group_by: 'state_category', column_target_status: {},
+  layout: 'board',
+  group_by: 'state_category',
+  column_target_status: {},
   groups: [{ key: 'todo', label: 'Todo', count: 2, wip: null, data: [CARD_A] }],
   next_cursor: 'cur1',
 };
 const PAGE2 = {
-  layout: 'board', group_by: 'state_category', column_target_status: {},
+  layout: 'board',
+  group_by: 'state_category',
+  column_target_status: {},
   groups: [
     { key: 'todo', label: 'Todo', count: 2, wip: null, data: [CARD_B] },
     { key: 'done', label: 'Done', count: 1, wip: null, data: [CARD_C] },
@@ -49,5 +95,75 @@ describe('loadAllGroups', () => {
     const byKey = new Map(result.groups.map((g) => [g.key, g]));
     expect(byKey.get('todo')?.data.map((c) => c.id)).toEqual(['a', 'b']);
     expect(byKey.get('done')?.data.map((c) => c.id)).toEqual(['c']);
+  });
+
+  it('多页按 lane + group cell 合并二维数据', async () => {
+    const skeleton = {
+      layout: 'board',
+      group_by: 'state_category',
+      sub_group_by: 'priority',
+      column_target_status: {},
+      columns: [
+        { key: 'todo', label: 'Todo', count: 2, wip: null },
+        { key: 'done', label: 'Done', count: 1, wip: null },
+      ],
+    };
+    const client = groupedClient([
+      {
+        ...skeleton,
+        lanes: [
+          {
+            key: 'high',
+            label: 'High',
+            count: 2,
+            groups: [
+              { key: 'todo', count: 2, data: [CARD_A] },
+              { key: 'done', count: 0, data: [] },
+            ],
+          },
+          {
+            key: 'low',
+            label: 'Low',
+            count: 1,
+            groups: [
+              { key: 'todo', count: 0, data: [] },
+              { key: 'done', count: 1, data: [] },
+            ],
+          },
+        ],
+        next_cursor: 'cur-two-d',
+      },
+      {
+        ...skeleton,
+        lanes: [
+          {
+            key: 'high',
+            label: 'High',
+            count: 2,
+            groups: [
+              { key: 'todo', count: 2, data: [CARD_B] },
+              { key: 'done', count: 0, data: [] },
+            ],
+          },
+          {
+            key: 'low',
+            label: 'Low',
+            count: 1,
+            groups: [
+              { key: 'todo', count: 0, data: [] },
+              { key: 'done', count: 1, data: [CARD_C] },
+            ],
+          },
+        ],
+        next_cursor: null,
+      },
+    ]);
+
+    const result = await loadAllGroups(client as never, 'v1');
+
+    expect(result.groups).toEqual([]);
+    expect(result.lanes[0]?.groups[0]?.data.map((item) => item.id)).toEqual(['a', 'b']);
+    expect(result.lanes[1]?.groups[1]?.data.map((item) => item.id)).toEqual(['c']);
+    expect(result.columns.map((column) => column.key)).toEqual(['todo', 'done']);
   });
 });

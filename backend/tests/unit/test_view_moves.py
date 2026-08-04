@@ -9,18 +9,19 @@ group_by=project two-step cross-project contract (preview → confirm).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.user import User
-from mesh.db.models.view_position import ViewIssuePosition
+from mesh.db.models.view_position import ViewIssuePosition, ViewQuickCreateRequest
 from mesh.db.models.workspace import Workspace
-from mesh.errors import BusinessRuleError, ConflictError
+from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError, ValidationError
 from mesh.issue.move import MoveService
 from mesh.issue.schemas import CreateIssueRequest
 from mesh.issue.service import IssueService
@@ -65,9 +66,7 @@ async def _setup(session_factory):
     issue_service = IssueService(session_factory, clock=_clock)
     view_service = ViewService(session_factory, clock=_clock)
     move_service = MoveService(issue_service)
-    board = BoardMoveService(
-        session_factory, issue_service, move_service, view_service, clock=_clock
-    )
+    board = BoardMoveService(session_factory, issue_service, move_service, view_service, clock=_clock)
     return workspace, member, issue_service, view_service, board
 
 
@@ -311,6 +310,397 @@ async def test_move_group_by_assignee(session_factory) -> None:
 
 
 # ---------------------------------------------------------------------------
+# two-dimensional cell moves + quick-create (kanban §3.2/§4.5)
+# ---------------------------------------------------------------------------
+
+
+async def test_move_updates_primary_and_swimlane_axes_atomically(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    status_map = await _status_map(session_factory, workspace)
+    issue = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        priority="low",
+    )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    view_id = uuid.UUID(view["id"])
+
+    result = await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=view_id,
+        issue_id=uuid.UUID(issue["id"]),
+        to_group_key="in_progress",
+        to_sub_group_key="high",
+        position=2.5,
+        version=issue["version"],
+    )
+
+    assert result["state_category"] == "in_progress"
+    assert result["priority"] == "high"
+    row = await _position_row(session_factory, view_id, uuid.UUID(issue["id"]))
+    assert row is not None
+    assert row.group_key == "in_progress"
+    assert row.sub_group_key == "high"
+    moved = await _outbox_events(session_factory, "issue.moved")
+    frame = next(frame for frame in moved if frame["data"]["id"] == issue["id"])
+    assert frame["data"]["from_sub_group"] == "low"
+    assert frame["data"]["to_sub_group"] == "high"
+
+
+async def test_pure_swimlane_move_does_not_reapply_full_primary_wip(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    status_map = await _status_map(session_factory, workspace)
+    mover = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        priority="low",
+    )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+        board_settings={"wip": {"todo": {"limit": 1, "enforcement": "block"}}},
+    )
+    result = await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        issue_id=uuid.UUID(mover["id"]),
+        to_group_key="todo",
+        to_sub_group_key="high",
+        position=1.0,
+        version=mover["version"],
+    )
+    assert result["priority"] == "high"
+
+
+async def test_move_sub_group_shape_is_fail_closed(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    status_map = await _status_map(session_factory, workspace)
+    issue = await _mk_issue(
+        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map
+    )
+    one_dimensional = await _mk_view(
+        view_service, actor=member, workspace=workspace, group_by="state_category"
+    )
+    with pytest.raises(ValidationError):
+        await board.move(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(one_dimensional["id"]),
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key="todo",
+            to_sub_group_key="high",
+            position=1.0,
+        )
+
+
+async def test_quick_create_inherits_both_cell_axes(session_factory) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    created = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        title="Created in cell",
+        group_key="in_progress",
+        sub_group_key="urgent",
+    )
+    assert created["title"] == "Created in cell"
+    assert created["state_category"] == "in_progress"
+    assert created["priority"] == "urgent"
+    row = await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(created["id"]))
+    assert row is not None
+    assert (row.group_key, row.sub_group_key) == ("in_progress", "urgent")
+
+
+async def test_quick_create_filter_mismatch_rolls_back(session_factory) -> None:
+    from mesh.db.models.issue import Issue
+
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+        filters={
+            "operator": "AND",
+            "conditions": [{"field": "priority", "op": "eq", "value": "high"}],
+        },
+    )
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Must roll back",
+            group_key="todo",
+            sub_group_key="low",
+        )
+    assert excinfo.value.code == "quick_create_filter_mismatch"
+    async with session_factory() as session:
+        count = await session.scalar(
+            select(func.count()).select_from(Issue).where(Issue.workspace_id == workspace.id)
+        )
+        stored_workspace = await session.get(Workspace, workspace.id)
+        position_count = await session.scalar(
+            select(func.count())
+            .select_from(ViewIssuePosition)
+            .where(ViewIssuePosition.view_id == uuid.UUID(view["id"]))
+        )
+    assert count == 0
+    assert stored_workspace is not None and stored_workspace.inbox_issue_seq == 0
+    assert position_count == 0
+    assert await _outbox_events(session_factory, "issue.created") == []
+
+
+async def test_quick_create_idempotency_key_replays_first_result(session_factory) -> None:
+    from mesh.db.models.issue import Issue
+
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    kwargs = {
+        "actor": member,
+        "workspace_id": workspace.id,
+        "view_id": uuid.UUID(view["id"]),
+        "group_key": "todo",
+        "sub_group_key": "high",
+        "idempotency_key": "quick-create-retry-1",
+    }
+    first = await board.quick_create(title="First title", **kwargs)
+    replay = await board.quick_create(title="A changed retry body", **kwargs)
+
+    assert replay["id"] == first["id"]
+    assert replay["title"] == "First title"
+    async with session_factory() as session:
+        issue_count = await session.scalar(
+            select(func.count()).select_from(Issue).where(Issue.workspace_id == workspace.id)
+        )
+        position_count = await session.scalar(
+            select(func.count())
+            .select_from(ViewIssuePosition)
+            .where(ViewIssuePosition.view_id == uuid.UUID(view["id"]))
+        )
+        ledger_count = await session.scalar(
+            select(func.count())
+            .select_from(ViewQuickCreateRequest)
+            .where(ViewQuickCreateRequest.view_id == uuid.UUID(view["id"]))
+        )
+    assert (issue_count, position_count, ledger_count) == (1, 1, 1)
+    created_events = await _outbox_events(session_factory, "issue.created")
+    matching_events = [frame for frame in created_events if frame["data"]["issue"]["id"] == first["id"]]
+    # One detail-channel and one workspace-list event, both from the first
+    # transaction only. A replay must not emit either channel again.
+    assert len(matching_events) == 2
+    assert len({frame["channel"] for frame in matching_events}) == 2
+
+
+async def test_quick_create_rejects_empty_idempotency_key(session_factory) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="state_category")
+    with pytest.raises(ValidationError) as excinfo:
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Not created",
+            group_key="todo",
+            idempotency_key="   ",
+        )
+    assert excinfo.value.details == {"field": "Idempotency-Key"}
+
+
+async def test_quick_create_guest_is_rejected_before_writes(session_factory) -> None:
+    from mesh.db.models.issue import Issue
+
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        visibility="shared",
+        group_by="state_category",
+    )
+    async with session_factory() as session, session.begin():
+        stored = await session.get(Member, member.id)
+        assert stored is not None
+        stored.role = "guest"
+    member.role = "guest"
+
+    with pytest.raises(ForbiddenError):
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Guest must not create",
+            group_key="todo",
+        )
+    async with session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(Issue).where(Issue.workspace_id == workspace.id)
+            )
+            == 0
+        )
+
+
+async def test_quick_create_project_axes_are_symmetric(session_factory) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    project, _unused = await _two_projects(session_factory, workspace, member)
+
+    project_columns = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="project",
+        sub_group_by="state_category",
+    )
+    first = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(project_columns["id"]),
+        title="Project first",
+        group_key=str(project.id),
+        sub_group_key="in_progress",
+    )
+
+    project_lanes = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="project",
+    )
+    second = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(project_lanes["id"]),
+        title="Project lane",
+        group_key="in_review",
+        sub_group_key=str(project.id),
+    )
+
+    assert (first["project_id"], first["state_category"]) == (
+        str(project.id),
+        "in_progress",
+    )
+    assert (second["project_id"], second["state_category"]) == (
+        str(project.id),
+        "in_review",
+    )
+
+
+async def test_quick_create_requires_target_project_write(session_factory) -> None:
+    from tests.unit.test_view_service import _create_project
+
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    project = await _create_project(session_factory, workspace, visibility="public", key="NOACCESS")
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="project",
+    )
+    with pytest.raises(ForbiddenError):
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="No project permission",
+            group_key="todo",
+            sub_group_key=str(project.id),
+        )
+
+
+async def test_quick_create_category_status_incompatibility_is_zero_write(
+    session_factory,
+) -> None:
+    from mesh.db.models.issue import Issue
+
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    statuses = await _status_map(session_factory, workspace)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="status",
+    )
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Incompatible cell",
+            group_key="todo",
+            sub_group_key=str(statuses["in_progress"]),
+        )
+    assert excinfo.value.code == "incompatible_projection_cell"
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(Issue)) == 0
+
+
+async def test_quick_create_wip_is_shared_across_swimlanes(session_factory) -> None:
+    from mesh.db.models.issue import Issue
+
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+        board_settings={"wip": {"todo": {"limit": 1, "enforcement": "block"}}},
+    )
+
+    async def create_in_lane(priority: str):
+        return await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title=f"Lane {priority}",
+            group_key="todo",
+            sub_group_key=priority,
+        )
+
+    outcomes = await asyncio.gather(create_in_lane("low"), create_in_lane("high"), return_exceptions=True)
+    assert sum(isinstance(item, dict) for item in outcomes) == 1
+    rejected = next(item for item in outcomes if isinstance(item, BusinessRuleError))
+    assert rejected.code == "wip_limit_exceeded"
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(Issue)) == 1
+
+
+# ---------------------------------------------------------------------------
 # group_by = project → two-step cross-project contract (README §9 T22)
 # ---------------------------------------------------------------------------
 
@@ -413,6 +803,72 @@ async def test_move_project_confirmed(session_factory) -> None:
     assert any(frame["data"]["id"] == issue["id"] for frame in changed)
 
 
+@pytest.mark.parametrize(
+    ("group_by", "sub_group_by"),
+    [
+        ("project", "state_category"),
+        ("state_category", "project"),
+    ],
+)
+async def test_move_project_axis_is_symmetric_in_two_dimensions(
+    session_factory, group_by: str, sub_group_by: str
+) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    status_map = await _status_map(session_factory, workspace)
+    src, dst = await _two_projects(session_factory, workspace, member)
+    issue = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        project_id=str(src.id),
+    )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=group_by,
+        sub_group_by=sub_group_by,
+    )
+    if group_by == "project":
+        group_key, sub_group_key = str(dst.id), "in_progress"
+    else:
+        group_key, sub_group_key = "in_progress", str(dst.id)
+
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await board.move(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key=group_key,
+            to_sub_group_key=sub_group_key,
+            position=3.0,
+            version=issue["version"],
+        )
+    assert excinfo.value.code == "move_confirmation_required"
+
+    moved = await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        issue_id=uuid.UUID(issue["id"]),
+        to_group_key=group_key,
+        to_sub_group_key=sub_group_key,
+        position=3.0,
+        version=issue["version"],
+        confirm=True,
+    )
+    assert (moved["project_id"], moved["state_category"]) == (
+        str(dst.id),
+        "in_progress",
+    )
+    row = await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(issue["id"]))
+    assert row is not None
+    assert (row.group_key, row.sub_group_key) == (group_key, sub_group_key)
+
+
 # ---------------------------------------------------------------------------
 # reorder (no status change)
 # ---------------------------------------------------------------------------
@@ -467,10 +923,40 @@ async def test_reorder_does_not_touch_other_view(session_factory) -> None:
     )
     # Only view A got a position row; view B is unaffected (kanban §2.7 isolation).
     assert await _position_row(session_factory, uuid.UUID(view_a["id"]), uuid.UUID(issue["id"]))
-    assert (
-        await _position_row(session_factory, uuid.UUID(view_b["id"]), uuid.UUID(issue["id"]))
-        is None
+    assert await _position_row(session_factory, uuid.UUID(view_b["id"]), uuid.UUID(issue["id"])) is None
+
+
+async def test_reorder_rejects_a_forged_swimlane_cell(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    status_map = await _status_map(session_factory, workspace)
+    issue = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        priority="low",
     )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    view_id = uuid.UUID(view["id"])
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await board.reorder(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=view_id,
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key="todo",
+            sub_group_key="high",
+            position=1.0,
+        )
+    assert excinfo.value.code == "incompatible_projection_cell"
+    assert await _position_row(session_factory, view_id, uuid.UUID(issue["id"])) is None
 
 
 async def test_reorder_precision_exhaustion_reranks_column(session_factory) -> None:
@@ -492,14 +978,20 @@ async def test_reorder_precision_exhaustion_reranks_column(session_factory) -> N
     async with session_factory() as session, session.begin():
         session.add(
             ViewIssuePosition(
-                workspace_id=workspace.id, view_id=view_id, issue_id=uuid.UUID(a["id"]),
-                group_key="todo", position=1.0,
+                workspace_id=workspace.id,
+                view_id=view_id,
+                issue_id=uuid.UUID(a["id"]),
+                group_key="todo",
+                position=1.0,
             )
         )
         session.add(
             ViewIssuePosition(
-                workspace_id=workspace.id, view_id=view_id, issue_id=uuid.UUID(b["id"]),
-                group_key="todo", position=1.0 + 1e-9,
+                workspace_id=workspace.id,
+                view_id=view_id,
+                issue_id=uuid.UUID(b["id"]),
+                group_key="todo",
+                position=1.0 + 1e-9,
             )
         )
 
@@ -595,12 +1087,20 @@ async def test_move_wip_priority_group(session_factory) -> None:
     workspace, member, issue_service, view_service, board = await _setup(session_factory)
     status_map = await _status_map(session_factory, workspace)
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, priority="high",
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        priority="high",
     )
     mover = await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, priority="low",
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        priority="low",
     )
     view = await _mk_view(
         view_service,
@@ -627,12 +1127,14 @@ async def test_move_wip_assignee_group_none(session_factory) -> None:
     workspace, member, issue_service, view_service, board = await _setup(session_factory)
     status_map = await _status_map(session_factory, workspace)
     # One unassigned issue already occupies the __none__ column (limit 1, block).
-    await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map
-    )
+    await _mk_issue(issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map)
     mover = await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, assignee_id=str(member.id),
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        assignee_id=str(member.id),
     )
     view = await _mk_view(
         view_service,
@@ -664,9 +1166,7 @@ async def _make_project(session_factory, workspace, *, key: str):
     from mesh.db.models.project import Project
 
     async with session_factory() as session, session.begin():
-        project = Project(
-            workspace_id=workspace.id, name=f"Proj {key}", key=key, visibility="public"
-        )
+        project = Project(workspace_id=workspace.id, name=f"Proj {key}", key=key, visibility="public")
         session.add(project)
     return project
 
@@ -695,8 +1195,12 @@ async def test_move_project_confirmed_is_single_transaction(session_factory) -> 
     await _grant(session_factory, workspace, src, member)
     await _grant(session_factory, workspace, dst, member)
     issue = await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, project_id=str(src.id),
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        project_id=str(src.id),
     )
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="project")
     issue_id = uuid.UUID(issue["id"])
@@ -710,9 +1214,14 @@ async def test_move_project_confirmed_is_single_transaction(session_factory) -> 
 
     with _pt.raises(RuntimeError):
         await board.move(
-            actor=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"]),
-            issue_id=issue_id, to_group_key=str(dst.id), position=1.5,
-            version=issue["version"], confirm=True,
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            issue_id=issue_id,
+            to_group_key=str(dst.id),
+            position=1.5,
+            version=issue["version"],
+            confirm=True,
         )
 
     # Migration rolled back alongside the upsert → project_id unchanged.

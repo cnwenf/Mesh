@@ -14,7 +14,14 @@ import { ensurePointerEvent, mockRect } from './dragTestUtils';
 const ME = {
   user: { id: 'u', email: 'o@x.com', display_name: 'O' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -39,16 +46,33 @@ function card(id: string, overrides: Partial<BoardCard> = {}): BoardCard {
 
 function view(overrides: Partial<View> = {}): View {
   return {
-    id: 'v1', workspace_id: 'ws-1', project_id: null, owner_member_id: 'm1', name: 'B',
-    layout: 'board', visibility: 'private', filters: {}, group_by: null, sub_group_by: null,
-    sort: [], display_fields: [], board_settings: {}, position: 1, is_default: true,
-    created_at: '', updated_at: '2026-07-26T00:00:00Z', can_write: true, ...overrides,
+    id: 'v1',
+    workspace_id: 'ws-1',
+    project_id: null,
+    owner_member_id: 'm1',
+    name: 'B',
+    layout: 'board',
+    visibility: 'private',
+    filters: {},
+    group_by: null,
+    sub_group_by: null,
+    sort: [],
+    display_fields: [],
+    board_settings: {},
+    position: 1,
+    is_default: true,
+    created_at: '',
+    updated_at: '2026-07-26T00:00:00Z',
+    can_write: true,
+    ...overrides,
   };
 }
 
 interface StubOptions {
   view?: View;
   groups?: unknown[];
+  columns?: unknown[];
+  lanes?: unknown[];
   columnTargetStatus?: Record<string, string>;
   moveStatus?: number;
   moveBody?: unknown;
@@ -60,8 +84,11 @@ function stubBoard(options: StubOptions = {}) {
   const groups = options.groups ?? [
     { key: 'todo', label: 'Todo', count: 1, wip: null, data: [card('i1')] },
     {
-      key: 'in_progress', label: 'In Progress', count: 1,
-      wip: { limit: 1, enforcement: 'block' }, data: [card('i2', { state_category: 'in_progress' })],
+      key: 'in_progress',
+      label: 'In Progress',
+      count: 1,
+      wip: { limit: 1, enforcement: 'block' },
+      data: [card('i2', { state_category: 'in_progress' })],
     },
   ];
   const calls: { url: string; method: string; body?: unknown }[] = [];
@@ -75,8 +102,14 @@ function stubBoard(options: StubOptions = {}) {
         body: {
           layout: 'board',
           group_by: v.group_by ?? 'state_category',
-          column_target_status: options.columnTargetStatus ?? { todo: 'st_todo', in_progress: 'st_ip' },
-          groups,
+          sub_group_by: v.sub_group_by,
+          column_target_status: options.columnTargetStatus ?? {
+            todo: 'st_todo',
+            in_progress: 'st_ip',
+          },
+          ...(v.sub_group_by === null
+            ? { groups }
+            : { columns: options.columns ?? [], lanes: options.lanes ?? [] }),
           next_cursor: null,
         },
       });
@@ -85,14 +118,27 @@ function stubBoard(options: StubOptions = {}) {
       return fakeResponse({ body: { data: [v], next_cursor: null } });
     }
     if (method === 'POST' && url.includes('/moves')) {
-      return fakeResponse({ status: options.moveStatus ?? 200, body: options.moveBody ?? { data: card('i1', { state_category: 'in_progress', version: 2 }) } });
+      return fakeResponse({
+        status: options.moveStatus ?? 200,
+        body: options.moveBody ?? {
+          data: card('i1', { state_category: 'in_progress', version: 2 }),
+        },
+      });
+    }
+    if (method === 'POST' && url.includes('/reorder')) {
+      return fakeResponse({
+        body: {
+          data: { id: 'i1', group_key: 'todo', sub_group_key: 'high', position: 2 },
+        },
+      });
     }
     if (method === 'PATCH' && url.includes('/wip')) {
       return fakeResponse({
         status: options.wipStatus ?? 200,
-        body: options.wipStatus && options.wipStatus >= 400
-          ? { error: { code: 'internal_error', message: 'x' } }
-          : { data: v },
+        body:
+          options.wipStatus && options.wipStatus >= 400
+            ? { error: { code: 'internal_error', message: 'x' } }
+            : { data: v },
       });
     }
     if (method === 'POST' && url.includes('/issues')) {
@@ -111,8 +157,18 @@ function stubBoard(options: StubOptions = {}) {
 function dropCard(issueId: string, sourceColumnKey: string, targetColumnKey: string): void {
   const sourceCard = screen.getByTestId(`board-card-${issueId}`);
   mockRect(sourceCard, { left: 0, top: 0, right: 100, bottom: 40 });
-  mockRect(screen.getByTestId(`board-column-${sourceColumnKey}`), { left: 0, top: 0, right: 100, bottom: 600 });
-  mockRect(screen.getByTestId(`board-column-${targetColumnKey}`), { left: 200, top: 0, right: 300, bottom: 600 });
+  mockRect(screen.getByTestId(`board-column-${sourceColumnKey}`), {
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 600,
+  });
+  mockRect(screen.getByTestId(`board-column-${targetColumnKey}`), {
+    left: 200,
+    top: 0,
+    right: 300,
+    bottom: 600,
+  });
   fireEvent.pointerDown(sourceCard, { clientX: 10, clientY: 10, button: 0, pointerType: 'mouse' });
   fireEvent.pointerMove(document, { clientX: 20, clientY: 10 }); // 越阈值进入拖拽
   fireEvent.pointerMove(document, { clientX: 250, clientY: 300 }); // 命中目标列
@@ -159,10 +215,22 @@ describe('看板投影层交互', () => {
     const calls = stubBoard({
       groups: [
         { key: 'todo', label: 'Todo', count: 1, wip: null, data: [card('i1')] },
-        { key: 'in_progress', label: 'In Progress', count: 0, wip: { limit: 1, enforcement: 'block' }, data: [] },
+        {
+          key: 'in_progress',
+          label: 'In Progress',
+          count: 0,
+          wip: { limit: 1, enforcement: 'block' },
+          data: [],
+        },
       ],
       moveStatus: 422,
-      moveBody: { error: { code: 'wip_limit_exceeded', message: 'x', details: { group_key: 'in_progress', limit: 1, count: 1 } } },
+      moveBody: {
+        error: {
+          code: 'wip_limit_exceeded',
+          message: 'x',
+          details: { group_key: 'in_progress', limit: 1, count: 1 },
+        },
+      },
     });
     renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-column-todo');
@@ -172,7 +240,9 @@ describe('看板投影层交互', () => {
     });
     // 弹回:i1 仍在 todo 列。
     await waitFor(() => {
-      expect(within(screen.getByTestId('board-column-todo')).getByTestId('board-card-i1')).toBeInTheDocument();
+      expect(
+        within(screen.getByTestId('board-column-todo')).getByTestId('board-card-i1'),
+      ).toBeInTheDocument();
     });
   });
 
@@ -182,14 +252,34 @@ describe('看板投影层交互', () => {
       view: projectView,
       columnTargetStatus: {},
       groups: [
-        { key: 'p-src', label: 'Src', count: 1, wip: null, data: [card('i1', { project_id: 'p-src' })] },
-        { key: 'p-dst', label: 'Dst', count: 1, wip: null, data: [card('i3', { project_id: 'p-dst' })] },
+        {
+          key: 'p-src',
+          label: 'Src',
+          count: 1,
+          wip: null,
+          data: [card('i1', { project_id: 'p-src' })],
+        },
+        {
+          key: 'p-dst',
+          label: 'Dst',
+          count: 1,
+          wip: null,
+          data: [card('i3', { project_id: 'p-dst' })],
+        },
       ],
       moveStatus: 422,
       moveBody: {
         error: {
-          code: 'move_confirmation_required', message: 'x',
-          details: { preview: { issue_id: 'i1', mapped_fields: [{ field: 'status' }], cleared_fields: [{ field: 'milestone_id' }], kept_fields: [] } },
+          code: 'move_confirmation_required',
+          message: 'x',
+          details: {
+            preview: {
+              issue_id: 'i1',
+              mapped_fields: [{ field: 'status' }],
+              cleared_fields: [{ field: 'milestone_id' }],
+              kept_fields: [],
+            },
+          },
         },
       },
     });
@@ -204,7 +294,10 @@ describe('看板投影层交互', () => {
     fireEvent.click(screen.getByTestId('move-preview-confirm'));
     await waitFor(() => {
       const confirmCall = calls.find(
-        (c) => c.method === 'POST' && c.url.includes('/moves') && (c.body as { confirm?: boolean })?.confirm === true,
+        (c) =>
+          c.method === 'POST' &&
+          c.url.includes('/moves') &&
+          (c.body as { confirm?: boolean })?.confirm === true,
       );
       expect(confirmCall).toBeDefined();
     });
@@ -218,9 +311,146 @@ describe('看板投影层交互', () => {
     fireEvent.change(input, { target: { value: '新卡片' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => {
-      const create = calls.find((c) => c.method === 'POST' && c.url.includes('/workspaces/ws-1/issues'));
+      const create = calls.find((c) => c.method === 'POST' && c.url.includes('/views/v1/issues'));
       expect(create).toBeDefined();
-      expect(create?.body).toMatchObject({ title: '新卡片', status_id: 'st_todo' });
+      expect(create?.body).toMatchObject({ title: '新卡片', group_key: 'todo' });
+    });
+  });
+
+  it('二维泳道渲染 cell，快速创建携带两轴', async () => {
+    const calls = stubBoard({
+      view: view({ group_by: 'state_category', sub_group_by: 'priority' }),
+      columns: [
+        { key: 'todo', label: 'Todo', count: 1, wip: null },
+        { key: 'done', label: 'Done', count: 0, wip: null },
+      ],
+      lanes: [
+        {
+          key: 'high',
+          label: 'High',
+          count: 1,
+          groups: [
+            { key: 'todo', count: 1, data: [card('i1')] },
+            { key: 'done', count: 0, data: [] },
+          ],
+        },
+      ],
+    });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+    expect(await screen.findByTestId('board-swimlane-high')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('board-column-high-todo')).getByTestId('board-card-i1'),
+    ).toBeInTheDocument();
+
+    const input = screen.getByTestId('quick-add-high-done');
+    fireEvent.change(input, { target: { value: 'Two dimensional' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      const create = calls.find(
+        (call) => call.method === 'POST' && call.url.includes('/views/v1/issues'),
+      );
+      expect(create?.body).toEqual({
+        title: 'Two dimensional',
+        group_key: 'done',
+        sub_group_key: 'high',
+      });
+    });
+  });
+
+  it('跨泳道拖拽携带 to_sub_group_key', async () => {
+    const calls = stubBoard({
+      view: view({ group_by: 'state_category', sub_group_by: 'priority' }),
+      columns: [
+        { key: 'todo', label: 'Todo', count: 1, wip: null },
+        { key: 'done', label: 'Done', count: 0, wip: null },
+      ],
+      lanes: [
+        {
+          key: 'high',
+          label: 'High',
+          count: 1,
+          groups: [
+            { key: 'todo', count: 1, data: [card('i1')] },
+            { key: 'done', count: 0, data: [] },
+          ],
+        },
+        {
+          key: 'low',
+          label: 'Low',
+          count: 0,
+          groups: [
+            { key: 'todo', count: 0, data: [] },
+            { key: 'done', count: 0, data: [] },
+          ],
+        },
+      ],
+    });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+    const sourceCard = await screen.findByTestId('board-card-i1');
+    mockRect(sourceCard, { left: 220, top: 20, right: 320, bottom: 60 });
+    mockRect(screen.getByTestId('board-column-high-todo'), {
+      left: 200,
+      top: 0,
+      right: 340,
+      bottom: 200,
+    });
+    mockRect(screen.getByTestId('board-column-low-done'), {
+      left: 400,
+      top: 240,
+      right: 540,
+      bottom: 440,
+    });
+    fireEvent.pointerDown(sourceCard, {
+      clientX: 230,
+      clientY: 30,
+      button: 0,
+      pointerType: 'mouse',
+    });
+    fireEvent.pointerMove(document, { clientX: 245, clientY: 30 });
+    fireEvent.pointerMove(document, { clientX: 470, clientY: 320 });
+    expect(screen.getByTestId('board-column-low-done')).toHaveClass(
+      'mesh-board__column--drag-over',
+    );
+    fireEvent.pointerUp(document, { clientX: 470, clientY: 320 });
+
+    await waitFor(() => {
+      const move = calls.find((call) => call.method === 'POST' && call.url.includes('/moves'));
+      expect(move?.body).toMatchObject({
+        issue_id: 'i1',
+        to_group_key: 'done',
+        to_sub_group_key: 'low',
+      });
+    });
+  });
+
+  it('二维 cell 内排序使用 reorder 并携带 sub_group_key', async () => {
+    const calls = stubBoard({
+      view: view({ group_by: 'state_category', sub_group_by: 'priority' }),
+      columns: [{ key: 'todo', label: 'Todo', count: 1, wip: null }],
+      lanes: [
+        {
+          key: 'high',
+          label: 'High',
+          count: 1,
+          groups: [{ key: 'todo', count: 1, data: [card('i1')] }],
+        },
+      ],
+    });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+    const issue = await screen.findByTestId('board-card-i1');
+    fireEvent.keyDown(issue, { key: 'ArrowDown' });
+    fireEvent.keyDown(issue, { key: 'Enter' });
+
+    await waitFor(() => {
+      const reorder = calls.find((call) => call.method === 'POST' && call.url.includes('/reorder'));
+      expect(reorder?.body).toMatchObject({
+        issue_id: 'i1',
+        to_group_key: 'todo',
+        sub_group_key: 'high',
+      });
+      expect(calls.some((call) => call.method === 'POST' && call.url.includes('/moves'))).toBe(
+        false,
+      );
     });
   });
 

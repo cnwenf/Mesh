@@ -119,7 +119,12 @@ function isListEnvelopeShape(value: unknown): value is ListEnvelope<unknown> {
 }
 
 function isGroupedEnvelopeShape(value: unknown): value is GroupedEnvelope<unknown> {
-  return isRecord(value) && Array.isArray((value as { groups?: unknown }).groups);
+  if (!isRecord(value)) return false;
+  const candidate = value as { groups?: unknown; columns?: unknown; lanes?: unknown };
+  return (
+    Array.isArray(candidate.groups) ||
+    (Array.isArray(candidate.columns) && Array.isArray(candidate.lanes))
+  );
 }
 
 /**
@@ -169,7 +174,10 @@ export class MeshApiClient {
     return parsed as ListEnvelope<T>;
   }
 
-  /** 分组包络:原样返回 `{groups, next_cursor}`(整体游标,§6.14)。 */
+  /**
+   * 分组包络:原样返回一维 `{groups,next_cursor}` 或二维
+   * `{columns,lanes,next_cursor}`。两者都使用唯一顶层游标。
+   */
   async grouped<T>(path: string, opts: RequestOptions = {}): Promise<GroupedEnvelope<T>> {
     const response = await this.execute('GET', path, opts);
     const parsed = await this.readEnvelope(response);

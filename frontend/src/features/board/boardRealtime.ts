@@ -9,7 +9,7 @@
  * 保守保留卡片(不静默移除),由上层在需要时重拉对账。
  */
 import type { RealtimeEventFrame } from '../../types/realtime';
-import type { BoardCard, BoardGroup } from './projection';
+import type { BoardCard, BoardGroup, BoardLane, BoardProjectionColumn } from './projection';
 import type { WipLimit } from './types';
 
 /** 空分组 key(assignee/project 无值列,对齐后端 §2.4)。 */
@@ -67,6 +67,8 @@ const FRAME_META_KEYS = new Set([
   'mapped_fields',
   'cleared_fields',
   'visibility',
+  'from_sub_group',
+  'to_sub_group',
 ]);
 
 function mergedCard(existing: BoardCard, payload: FramePayload): BoardCard {
@@ -96,6 +98,12 @@ export interface BoardMergeResult {
   readonly groups: readonly BoardGroup[];
   /** view.updated 等投影规则变更 → 上层整板重拉。 */
   readonly refetch: boolean;
+  /** 目标卡当前不在投影中：上层仅 GET 该卡后按当前视图重判，禁止整板刷新。 */
+  readonly reconcileIssueId?: string;
+}
+
+function needsIssueReconcile(action: string): boolean {
+  return action === 'updated' || action === 'moved' || action === 'project_changed';
 }
 
 function removeFromGroups(
@@ -107,7 +115,11 @@ function removeFromGroups(
     const card = group.data.find((item) => item.id === id);
     if (card === undefined) return group;
     removed = card;
-    return { ...group, count: Math.max(0, group.count - 1), data: group.data.filter((item) => item.id !== id) };
+    return {
+      ...group,
+      count: Math.max(0, group.count - 1),
+      data: group.data.filter((item) => item.id !== id),
+    };
   });
   return { groups: next, removed };
 }
@@ -120,20 +132,14 @@ function upsertIntoGroup(
 ): BoardGroup[] {
   const exists = groups.some((group) => group.key === key);
   if (!exists) {
-    return [
-      ...groups,
-      { key, label, count: 1, wip: null, data: [card] },
-    ];
+    return [...groups, { key, label, count: 1, wip: null, data: [card] }];
   }
   return groups.map((group) => {
     if (group.key !== key) return group;
-    const present = group.data.some((item) => item.id === card.id);
     return {
       ...group,
-      count: present ? group.count : group.count + 1,
-      data: present
-        ? group.data.map((item) => (item.id === card.id ? card : item))
-        : [...group.data, card],
+      count: group.count + 1,
+      data: [...group.data, card],
     };
   });
 }
@@ -183,10 +189,11 @@ export function applyBoardFrame(
   if (action === 'deleted') {
     return { groups: removeFromGroups(groups, id).groups, refetch: false };
   }
+  if (!needsIssueReconcile(action)) return { groups, refetch: false };
 
   // updated / moved / project_changed
   const { groups: stripped, removed } = removeFromGroups(groups, id);
-  if (removed === null) return { groups, refetch: false };
+  if (removed === null) return { groups, refetch: false, reconcileIssueId: id };
   if (isStale(removed, payload)) return { groups, refetch: false };
   const merged = mergedCard(removed, payload);
   if (!ctx.belongs(merged)) return { groups: stripped, refetch: false };
@@ -194,15 +201,305 @@ export function applyBoardFrame(
   return { groups: upsertIntoGroup(stripped, key, merged, labelFor(groups, key)), refetch: false };
 }
 
+export interface BoardLaneMergeContext extends BoardMergeContext {
+  readonly subGroupBy: string;
+}
+
+export interface BoardLaneMergeResult {
+  readonly columns: readonly BoardProjectionColumn[];
+  readonly lanes: readonly BoardLane[];
+  /** 仅 view.updated 改变投影规则时请求整板重拉。 */
+  readonly refetch: boolean;
+  /** 目标卡当前不在投影中：上层仅 GET 该卡后按当前视图重判。 */
+  readonly reconcileIssueId?: string;
+}
+
+interface BoardCellPlacement {
+  readonly card: BoardCard;
+  readonly groupKey: string;
+  readonly subGroupKey: string;
+}
+
+function unchangedLaneResult(
+  columns: readonly BoardProjectionColumn[],
+  lanes: readonly BoardLane[],
+  refetch = false,
+  reconcileIssueId?: string,
+): BoardLaneMergeResult {
+  return {
+    columns,
+    lanes,
+    refetch,
+    ...(reconcileIssueId === undefined ? {} : { reconcileIssueId }),
+  };
+}
+
+function flattenLaneCards(lanes: readonly BoardLane[]): BoardCellPlacement[] {
+  return lanes.flatMap((lane) =>
+    lane.groups.flatMap((group) =>
+      group.data.map((card) => ({ card, groupKey: group.key, subGroupKey: lane.key })),
+    ),
+  );
+}
+
+function addMissingKey(keys: string[], seen: Set<string>, key: string): void {
+  if (seen.has(key)) return;
+  seen.add(key);
+  keys.push(key);
+}
+
+/**
+ * 已加载二维投影使用整体游标，故所有 cell 均在内存中；一次单卡变化后可从
+ * placements 精确重算 column/lane/cell 三层 count，同时保留服务端骨架顺序、标签与 WIP。
+ */
+function rebuildLaneProjection(
+  columns: readonly BoardProjectionColumn[],
+  lanes: readonly BoardLane[],
+  placements: readonly BoardCellPlacement[],
+  ctx: BoardLaneMergeContext,
+): Pick<BoardLaneMergeResult, 'columns' | 'lanes'> {
+  const columnTemplates = new Map(columns.map((column) => [column.key, column]));
+  const laneTemplates = new Map(lanes.map((lane) => [lane.key, lane]));
+  const columnKeys = columns.map((column) => column.key);
+  const laneKeys = lanes.map((lane) => lane.key);
+  const knownColumns = new Set(columnKeys);
+  const knownLanes = new Set(laneKeys);
+
+  for (const placement of placements) {
+    addMissingKey(columnKeys, knownColumns, placement.groupKey);
+    addMissingKey(laneKeys, knownLanes, placement.subGroupKey);
+  }
+
+  const columnCounts = new Map(columnKeys.map((key) => [key, 0]));
+  const laneCounts = new Map(laneKeys.map((key) => [key, 0]));
+  const cellCards = new Map<string, Map<string, BoardCard[]>>();
+  const firstColumnCard = new Map<string, BoardCard>();
+  const firstLaneCard = new Map<string, BoardCard>();
+
+  for (const placement of placements) {
+    columnCounts.set(placement.groupKey, columnCounts.get(placement.groupKey)! + 1);
+    laneCounts.set(placement.subGroupKey, laneCounts.get(placement.subGroupKey)! + 1);
+    if (!firstColumnCard.has(placement.groupKey)) {
+      firstColumnCard.set(placement.groupKey, placement.card);
+    }
+    if (!firstLaneCard.has(placement.subGroupKey)) {
+      firstLaneCard.set(placement.subGroupKey, placement.card);
+    }
+    let laneCells = cellCards.get(placement.subGroupKey);
+    if (laneCells === undefined) {
+      laneCells = new Map<string, BoardCard[]>();
+      cellCards.set(placement.subGroupKey, laneCells);
+    }
+    const data = laneCells.get(placement.groupKey);
+    if (data === undefined) {
+      laneCells.set(placement.groupKey, [placement.card]);
+    } else {
+      data.push(placement.card);
+    }
+  }
+
+  return {
+    columns: columnKeys.map((key) => {
+      const template = columnTemplates.get(key);
+      const card = firstColumnCard.get(key);
+      return {
+        key,
+        label: template?.label ?? fallbackLabel(key, [card!], ctx.groupBy),
+        count: columnCounts.get(key)!,
+        wip: template?.wip ?? null,
+      };
+    }),
+    lanes: laneKeys.map((key) => {
+      const template = laneTemplates.get(key);
+      const card = firstLaneCard.get(key);
+      const cells = cellCards.get(key);
+      return {
+        key,
+        label: template?.label ?? fallbackLabel(key, [card!], ctx.subGroupBy),
+        count: laneCounts.get(key)!,
+        groups: columnKeys.map((columnKey) => {
+          const data = cells?.get(columnKey) ?? [];
+          return { key: columnKey, count: data.length, data };
+        }),
+      };
+    }),
+  };
+}
+
+function patchCardAxis(card: BoardCard, axis: string, targetKey: string): BoardCard {
+  switch (axis) {
+    case 'status':
+      return { ...card, status_id: targetKey };
+    case 'assignee':
+      return {
+        ...card,
+        assignee_id: targetKey === NONE_KEY ? null : targetKey,
+        ...(targetKey === NONE_KEY ? { assignee: null } : {}),
+      };
+    case 'priority':
+      return { ...card, priority: targetKey };
+    case 'project':
+      return { ...card, project_id: targetKey === NONE_KEY ? null : targetKey };
+    case 'state_category':
+    default:
+      return { ...card, state_category: targetKey };
+  }
+}
+
+function movedAxisTarget(payload: FramePayload, axis: string): string | undefined {
+  if (typeof payload.to !== 'object' || payload.to === null) return undefined;
+  const target = payload.to as Record<string, unknown>;
+  const value = target[axis];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function applyProjectChangedPayload(card: BoardCard, payload: FramePayload): BoardCard {
+  let next = card;
+  if (typeof payload.to_project_id === 'string' || payload.to_project_id === null) {
+    next = { ...next, project_id: payload.to_project_id };
+  }
+  if (!Array.isArray(payload.mapped_fields)) return next;
+
+  const statusMapping = payload.mapped_fields.find(
+    (entry) =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      (entry as Record<string, unknown>).field === 'status',
+  ) as Record<string, unknown> | undefined;
+  if (
+    statusMapping === undefined ||
+    typeof statusMapping.to !== 'object' ||
+    statusMapping.to === null
+  ) {
+    return next;
+  }
+  const status = statusMapping.to as Record<string, unknown>;
+  const id = typeof status.id === 'string' ? status.id : undefined;
+  const category = typeof status.category === 'string' ? status.category : undefined;
+  if (id === undefined) return next;
+  return {
+    ...next,
+    status_id: id,
+    ...(category === undefined ? {} : { state_category: category }),
+    status: {
+      id,
+      name: typeof status.name === 'string' ? status.name : (next.status?.name ?? id),
+      category: category ?? next.status?.category ?? next.state_category,
+    },
+  };
+}
+
+/**
+ * 把一帧并入二维泳道投影。issue.* 仅改动目标卡及其 cell；三层 count 由
+ * 当前整体游标数据同步重算。view.updated 才请求投影重拉，presence/WIP 等视图帧不动。
+ */
+export function applyBoardLaneFrame(
+  columns: readonly BoardProjectionColumn[],
+  lanes: readonly BoardLane[],
+  frame: RealtimeEventFrame,
+  ctx: BoardLaneMergeContext,
+): BoardLaneMergeResult {
+  const entity = entityOf(frame.event);
+  if (entity === 'view') {
+    return unchangedLaneResult(columns, lanes, actionOf(frame.event) === 'updated');
+  }
+  if (entity !== 'issue') return unchangedLaneResult(columns, lanes);
+
+  const payload = payloadOf(frame);
+  const action = actionOf(frame.event);
+  const placements = flattenLaneCards(lanes);
+
+  if (action === 'created') {
+    const nested = payload.issue;
+    if (typeof nested !== 'object' || nested === null) return unchangedLaneResult(columns, lanes);
+    const created = nested as BoardCard;
+    if (
+      typeof created.id !== 'string' ||
+      placements.some((placement) => placement.card.id === created.id) ||
+      !ctx.belongs(created)
+    ) {
+      return unchangedLaneResult(columns, lanes);
+    }
+    const rebuilt = rebuildLaneProjection(
+      columns,
+      lanes,
+      [
+        ...placements,
+        {
+          card: created,
+          groupKey: groupKeyForCard(created, ctx.groupBy),
+          subGroupKey: groupKeyForCard(created, ctx.subGroupBy),
+        },
+      ],
+      ctx,
+    );
+    return { ...rebuilt, refetch: false };
+  }
+
+  const id = typeof payload.id === 'string' ? payload.id : undefined;
+  if (id === undefined) return unchangedLaneResult(columns, lanes);
+  const placementIndex = placements.findIndex((placement) => placement.card.id === id);
+  if (placementIndex === -1) {
+    return unchangedLaneResult(columns, lanes, false, needsIssueReconcile(action) ? id : undefined);
+  }
+
+  if (action === 'deleted') {
+    const rebuilt = rebuildLaneProjection(
+      columns,
+      lanes,
+      placements.filter((placement) => placement.card.id !== id),
+      ctx,
+    );
+    return { ...rebuilt, refetch: false };
+  }
+  if (action !== 'updated' && action !== 'moved' && action !== 'project_changed') {
+    return unchangedLaneResult(columns, lanes);
+  }
+
+  const existing = placements[placementIndex]!;
+  if (isStale(existing.card, payload)) {
+    return unchangedLaneResult(columns, lanes);
+  }
+  let merged = mergedCard(existing.card, payload);
+  if (action === 'project_changed') merged = applyProjectChangedPayload(merged, payload);
+
+  let groupKey = groupKeyForCard(merged, ctx.groupBy);
+  let subGroupKey = groupKeyForCard(merged, ctx.subGroupBy);
+  if (action === 'moved') {
+    const target =
+      typeof payload.to === 'object' && payload.to !== null
+        ? (payload.to as Record<string, unknown>)
+        : {};
+    groupKey =
+      (typeof target.group_key === 'string' ? target.group_key : undefined) ??
+      movedAxisTarget(payload, ctx.groupBy) ??
+      groupKey;
+    subGroupKey =
+      (typeof payload.to_sub_group === 'string' ? payload.to_sub_group : undefined) ??
+      movedAxisTarget(payload, ctx.subGroupBy) ??
+      subGroupKey;
+    merged = patchCardAxis(merged, ctx.groupBy, groupKey);
+    merged = patchCardAxis(merged, ctx.subGroupBy, subGroupKey);
+    if (typeof payload.position === 'number') merged = { ...merged, position: payload.position };
+  }
+
+  const remaining = placements.filter((placement) => placement.card.id !== id);
+  if (!ctx.belongs(merged)) {
+    const rebuilt = rebuildLaneProjection(columns, lanes, remaining, ctx);
+    return { ...rebuilt, refetch: false };
+  }
+  const nextPlacements = [...placements];
+  nextPlacements[placementIndex] = { card: merged, groupKey, subGroupKey };
+  const rebuilt = rebuildLaneProjection(columns, lanes, nextPlacements, ctx);
+  return { ...rebuilt, refetch: false };
+}
+
 /**
  * 视图 filters 的本地轻量重判(§3.5 增量合并归属)。
  * 仅评估顶层 AND/OR 的内置字段 eq/neq/in/not_in;含嵌套或无法判定的条件 →
  * 保守返回 true(保留卡片;复杂 filters 由上层按 id 轻量 refetch 对账)。
  */
-export function cardBelongsToView(
-  card: BoardCard,
-  filters: unknown,
-): boolean {
+export function cardBelongsToView(card: BoardCard, filters: unknown): boolean {
   if (typeof filters !== 'object' || filters === null) return true;
   const group = filters as { operator?: unknown; conditions?: unknown };
   if (!Array.isArray(group.conditions) || group.conditions.length === 0) return true;
@@ -265,10 +562,7 @@ function fallbackLabel(key: string, data: readonly BoardCard[], groupBy: string)
  * 标签优先取投影响应携带的(已本地化)组标签,缺失时按卡片内嵌字段回退;
  * count 为本地组内卡片数(整板已分页加载完毕,故等于组内总数)。
  */
-export function rebucketGroups(
-  groups: readonly BoardGroup[],
-  groupBy: string,
-): BoardGroup[] {
+export function rebucketGroups(groups: readonly BoardGroup[], groupBy: string): BoardGroup[] {
   const labelMap = new Map<string, string>();
   const wipMap = new Map<string, WipLimit | null>();
   const cards: BoardCard[] = [];

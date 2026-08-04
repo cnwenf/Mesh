@@ -105,9 +105,7 @@ STATE_CATEGORY_KEYS: tuple[str, ...] = (
 )
 PRIORITY_KEYS: tuple[str, ...] = ("urgent", "high", "medium", "low", "none")
 
-_BOARD_SETTING_KEYS: frozenset[str] = frozenset(
-    {"columns", "collapsed_columns", "card_fields", "wip"}
-)
+_BOARD_SETTING_KEYS: frozenset[str] = frozenset({"columns", "collapsed_columns", "card_fields", "wip"})
 _STRING_ARRAY_KEYS: frozenset[str] = frozenset({"columns", "collapsed_columns", "card_fields"})
 WIP_ENFORCEMENTS: frozenset[str] = frozenset({"warn", "block"})
 WIP_LIMIT_KEYS: frozenset[str] = frozenset({"limit", "enforcement"})
@@ -164,9 +162,7 @@ def _validate_condition(condition: Any, *, path: str, depth: int) -> None:
         operator = condition.get("operator")
         conditions = condition.get("conditions")
         if operator not in ("AND", "OR"):
-            raise _invalid(
-                "invalid_filters", "operator must be AND or OR", path=f"{path}.operator"
-            )
+            raise _invalid("invalid_filters", "operator must be AND or OR", path=f"{path}.operator")
         if not isinstance(conditions, list) or not conditions:
             raise _invalid(
                 "invalid_filters",
@@ -198,14 +194,10 @@ def _validate_condition(condition: Any, *, path: str, depth: int) -> None:
 
     extra = set(condition) - _FILTER_CONDITION_KEYS
     if extra:
-        raise _invalid(
-            "invalid_filters", "unknown keys in filter condition", path=path, keys=sorted(extra)
-        )
+        raise _invalid("invalid_filters", "unknown keys in filter condition", path=path, keys=sorted(extra))
     field = condition.get("field")
     if not isinstance(field, str) or field not in FILTER_FIELDS:
-        raise _invalid(
-            "invalid_filters", "unknown filter field", path=f"{path}.field", field=str(field)
-        )
+        raise _invalid("invalid_filters", "unknown filter field", path=f"{path}.field", field=str(field))
     _validate_op(condition, field=field, path=path)
 
 
@@ -232,9 +224,7 @@ def _validate_op(condition: dict, *, field: str, path: str) -> None:
             )
         return
     if "value" not in condition or value is None:
-        raise _invalid(
-            "invalid_filters", f"op {op!r} requires a value", path=f"{path}.value"
-        )
+        raise _invalid("invalid_filters", f"op {op!r} requires a value", path=f"{path}.value")
     if op in _LIST_OPS:
         if not isinstance(value, list) or not value:
             raise _invalid(
@@ -243,14 +233,10 @@ def _validate_op(condition: dict, *, field: str, path: str) -> None:
                 path=f"{path}.value",
             )
         if not all(_is_scalar_json(item) for item in value):
-            raise _invalid(
-                "invalid_filters", "list values must be scalars", path=f"{path}.value"
-            )
+            raise _invalid("invalid_filters", "list values must be scalars", path=f"{path}.value")
         return
     if not _is_scalar_json(value):
-        raise _invalid(
-            "invalid_filters", "value must be a scalar", path=f"{path}.value"
-        )
+        raise _invalid("invalid_filters", "value must be a scalar", path=f"{path}.value")
 
 
 def validate_filters(value: Any) -> dict:
@@ -272,9 +258,7 @@ def validate_filters(value: Any) -> dict:
     if operator not in ("AND", "OR"):
         raise _invalid("invalid_filters", "operator must be AND or OR", path="$.operator")
     if not isinstance(conditions, list) or not conditions:
-        raise _invalid(
-            "invalid_filters", "conditions must be a non-empty array", path="$.conditions"
-        )
+        raise _invalid("invalid_filters", "conditions must be a non-empty array", path="$.conditions")
     if _count_conditions(conditions) > FILTER_MAX_CONDITIONS:
         raise ValidationError(
             "filter has too many conditions",
@@ -303,9 +287,7 @@ def validate_sort(value: Any) -> list[dict]:
         if rule.get("field_kind") == "custom_field" or "field_def_id" in rule:
             extra = set(rule) - {"field_kind", "field_def_id", "order"}
             if extra:
-                raise _invalid(
-                    "invalid_sort", "unknown keys in sort rule", path=path, keys=sorted(extra)
-                )
+                raise _invalid("invalid_sort", "unknown keys in sort rule", path=path, keys=sorted(extra))
             field_def_id = rule.get("field_def_id")
             if not isinstance(field_def_id, str) or not field_def_id:
                 raise _invalid(
@@ -316,14 +298,10 @@ def validate_sort(value: Any) -> list[dict]:
             continue
         extra = set(rule) - {"field", "order"}
         if extra:
-            raise _invalid(
-                "invalid_sort", "unknown keys in sort rule", path=path, keys=sorted(extra)
-            )
+            raise _invalid("invalid_sort", "unknown keys in sort rule", path=path, keys=sorted(extra))
         field = rule.get("field")
         if not isinstance(field, str) or field not in SORT_FIELDS:
-            raise _invalid(
-                "invalid_sort", "unknown sort field", path=f"{path}.field", field=str(field)
-            )
+            raise _invalid("invalid_sort", "unknown sort field", path=f"{path}.field", field=str(field))
     return value
 
 
@@ -334,9 +312,7 @@ def _validate_wip(wip: Any) -> dict:
     for group_key, rule in wip.items():
         path = f"$.wip[{group_key!r}]"
         if not isinstance(group_key, str) or not group_key:
-            raise _invalid(
-                "invalid_board_settings", "wip group key must be a non-empty string", path=path
-            )
+            raise _invalid("invalid_board_settings", "wip group key must be a non-empty string", path=path)
         if not isinstance(rule, dict):
             raise _invalid("invalid_board_settings", "wip rule must be an object", path=path)
         extra = set(rule) - WIP_LIMIT_KEYS
@@ -390,9 +366,7 @@ def validate_board_settings(value: Any) -> dict:
     for key in _STRING_ARRAY_KEYS:
         if key in value:
             entries = value[key]
-            if not isinstance(entries, list) or not all(
-                isinstance(item, str) and item for item in entries
-            ):
+            if not isinstance(entries, list) or not all(isinstance(item, str) and item for item in entries):
                 raise _invalid(
                     "invalid_board_settings",
                     f"{key} must be an array of non-empty strings",
@@ -417,11 +391,31 @@ def validate_group_by(value: Any) -> str | None:
     return value
 
 
+def validate_group_axes(group_by: str | None, sub_group_by: str | None) -> None:
+    """Reject a two-axis view that resolves both axes to the same field.
+
+    A null primary axis is the board's canonical ``state_category`` default,
+    so ``group_by=None, sub_group_by='state_category'`` is also a duplicate.
+    The check is deliberately shared by create, PATCH and execution paths so
+    legacy/directly-written rows fail closed instead of producing ambiguous
+    cells.
+    """
+    if sub_group_by is None:
+        return
+    effective_group_by = group_by or "state_category"
+    if effective_group_by == sub_group_by:
+        raise ValidationError(
+            "group_by and sub_group_by must be different",
+            details={
+                "group_by": effective_group_by,
+                "sub_group_by": sub_group_by,
+            },
+        )
+
+
 def validate_name(name: Any) -> str:
     """Validate the view name length bounds (kanban §2.2 CHECK)."""
-    if not isinstance(name, str) or not (
-        NAME_MIN_LENGTH <= len(name.strip()) <= NAME_MAX_LENGTH
-    ):
+    if not isinstance(name, str) or not (NAME_MIN_LENGTH <= len(name.strip()) <= NAME_MAX_LENGTH):
         raise ValidationError(
             "view name must be 1-100 characters",
             code="invalid_name",

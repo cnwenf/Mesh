@@ -46,9 +46,7 @@ async def _add_user(session_factory, display_name: str = "User") -> uuid.UUID:
     return user.id
 
 
-async def _add_member(
-    session_factory, workspace: Workspace, *, role: str = "member"
-) -> Member:
+async def _add_member(session_factory, workspace: Workspace, *, role: str = "member") -> Member:
     user_id = await _add_user(session_factory)
     async with session_factory() as session, session.begin():
         member = Member(
@@ -92,9 +90,7 @@ async def _grant_project_access(
 ) -> None:
     async with session_factory() as session, session.begin():
         session.add(
-            ProjectMember(
-                workspace_id=workspace.id, project_id=project.id, member_id=member.id, role=role
-            )
+            ProjectMember(workspace_id=workspace.id, project_id=project.id, member_id=member.id, role=role)
         )
 
 
@@ -109,9 +105,7 @@ async def _outbox_realtime(session_factory) -> list[dict]:
         rows = (
             (
                 await session.execute(
-                    select(OutboxEvent.payload).where(
-                        OutboxEvent.event_type == "realtime.publish"
-                    )
+                    select(OutboxEvent.payload).where(OutboxEvent.event_type == "realtime.publish")
                 )
             )
             .scalars()
@@ -127,9 +121,7 @@ async def _outbox_realtime(session_factory) -> list[dict]:
 
 async def test_create_view_minimal_defaults(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     assert created["name"] == "Sprint Board"
     assert created["layout"] == "board"
     assert created["visibility"] == "private"
@@ -177,12 +169,8 @@ async def test_create_view_full_config_project_scoped(session_factory) -> None:
 
 async def test_create_view_position_increments(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    first = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body(name="One")
-    )
-    second = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body(name="Two")
-    )
+    first = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body(name="One"))
+    second = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body(name="Two"))
     assert first["position"] == 1.0
     assert second["position"] == 2.0
 
@@ -208,23 +196,45 @@ async def test_create_view_position_increments(session_factory) -> None:
         ({"board_settings": {"wip": {"todo": {"limit": 0}}}}, "invalid_board_settings"),
     ],
 )
-async def test_create_view_invalid_config_named_codes(
-    session_factory, overrides, code
-) -> None:
+async def test_create_view_invalid_config_named_codes(session_factory, overrides, code) -> None:
+    workspace, member, service = await _setup(session_factory)
+    with pytest.raises(ValidationError) as excinfo:
+        await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body(**overrides))
+    assert excinfo.value.code == code
+
+
+async def test_create_view_rejects_duplicate_group_axes(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
     with pytest.raises(ValidationError) as excinfo:
         await service.create_view(
-            actor=member, workspace_id=workspace.id, body=_create_body(**overrides)
+            actor=member,
+            workspace_id=workspace.id,
+            body=_create_body(group_by="priority", sub_group_by="priority"),
         )
-    assert excinfo.value.code == code
+    assert excinfo.value.code == "validation_error"
+
+
+async def test_update_view_validates_final_group_axis_pair(session_factory) -> None:
+    workspace, member, service = await _setup(session_factory)
+    created = await service.create_view(
+        actor=member,
+        workspace_id=workspace.id,
+        body=_create_body(group_by="priority", sub_group_by="assignee"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        await service.update_view(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(created["id"]),
+            fields={"group_by": "assignee"},
+        )
+    assert excinfo.value.code == "validation_error"
 
 
 async def test_create_view_guest_forbidden(session_factory) -> None:
     workspace, guest, service = await _setup(session_factory, role="guest")
     with pytest.raises(ForbiddenError):
-        await service.create_view(
-            actor=guest, workspace_id=workspace.id, body=_create_body()
-        )
+        await service.create_view(actor=guest, workspace_id=workspace.id, body=_create_body())
 
 
 async def test_create_view_unknown_project(session_factory) -> None:
@@ -275,9 +285,7 @@ async def test_create_view_duplicate_name_same_scope_conflict(session_factory) -
     workspace, member, service = await _setup(session_factory)
     await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(ConflictError) as excinfo:
-        await service.create_view(
-            actor=member, workspace_id=workspace.id, body=_create_body()
-        )
+        await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     assert excinfo.value.code == "view_name_taken"
 
 
@@ -297,9 +305,7 @@ async def test_create_view_same_name_different_scopes_allowed(session_factory) -
         body=_create_body(project_id=str(project_b.id)),
     )
     async with session_factory() as session:
-        count = len(
-            (await session.execute(select(View).where(View.name == "Sprint Board"))).scalars().all()
-        )
+        count = len((await session.execute(select(View).where(View.name == "Sprint Board"))).scalars().all())
     assert count == 3
 
 
@@ -339,9 +345,7 @@ async def test_default_views_in_different_scopes_coexist(session_factory) -> Non
 
 async def test_get_view_owner(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     fetched = await service.get_view(
         viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(created["id"])
     )
@@ -352,25 +356,17 @@ async def test_get_view_owner(session_factory) -> None:
 async def test_get_view_foreign_private_is_404(session_factory) -> None:
     workspace, owner, service = await _setup(session_factory)
     other = await _add_member(session_factory, workspace)
-    created = await service.create_view(
-        actor=owner, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=owner, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(NotFoundError):
-        await service.get_view(
-            viewer=other, workspace_id=workspace.id, view_id=uuid.UUID(created["id"])
-        )
+        await service.get_view(viewer=other, workspace_id=workspace.id, view_id=uuid.UUID(created["id"]))
 
 
 async def test_get_view_manager_cannot_read_foreign_private(session_factory) -> None:
     workspace, owner, service = await _setup(session_factory)
     admin = await _add_member(session_factory, workspace, role="admin")
-    created = await service.create_view(
-        actor=owner, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=owner, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(NotFoundError):
-        await service.get_view(
-            viewer=admin, workspace_id=workspace.id, view_id=uuid.UUID(created["id"])
-        )
+        await service.get_view(viewer=admin, workspace_id=workspace.id, view_id=uuid.UUID(created["id"]))
 
 
 async def test_get_view_shared_readable_by_member(session_factory) -> None:
@@ -396,9 +392,7 @@ async def test_get_view_private_project_shared_hidden_from_outsider(session_fact
         body=_create_body(visibility="shared", project_id=str(project.id)),
     )
     with pytest.raises(NotFoundError):
-        await service.get_view(
-            viewer=outsider, workspace_id=workspace.id, view_id=uuid.UUID(created["id"])
-        )
+        await service.get_view(viewer=outsider, workspace_id=workspace.id, view_id=uuid.UUID(created["id"]))
     # A project member can read it.
     insider = await _add_member(session_factory, workspace)
     await _grant_project_access(session_factory, workspace, project, insider)
@@ -416,9 +410,7 @@ async def test_get_view_private_project_shared_hidden_from_outsider(session_fact
 async def test_list_views_visibility(session_factory) -> None:
     workspace, owner, service = await _setup(session_factory)
     other = await _add_member(session_factory, workspace)
-    mine = await service.create_view(
-        actor=owner, workspace_id=workspace.id, body=_create_body(name="Mine")
-    )
+    mine = await service.create_view(actor=owner, workspace_id=workspace.id, body=_create_body(name="Mine"))
     other_private = await service.create_view(
         actor=owner, workspace_id=workspace.id, body=_create_body(name="OtherPrivate")
     )
@@ -466,9 +458,7 @@ async def test_list_views_project_filter(session_factory) -> None:
         workspace_id=workspace.id,
         body=_create_body(name="Scoped", project_id=str(project.id)),
     )
-    items, _ = await service.list_views(
-        viewer=member, workspace_id=workspace.id, project_id=project.id
-    )
+    items, _ = await service.list_views(viewer=member, workspace_id=workspace.id, project_id=project.id)
     assert [item["id"] for item in items] == [scoped["id"]]
 
 
@@ -479,9 +469,7 @@ async def test_list_views_project_filter(session_factory) -> None:
 
 async def test_update_view_changes_and_event(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     updated = await service.update_view(
         actor=member,
         workspace_id=workspace.id,
@@ -544,9 +532,7 @@ async def test_update_view_board_settings_shallow_merge(session_factory) -> None
 
 async def test_update_view_if_match_conflict_and_success(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     stale = "2020-01-01T00:00:00Z"
     with pytest.raises(ConflictError) as excinfo:
         await service.update_view(
@@ -569,9 +555,7 @@ async def test_update_view_if_match_conflict_and_success(session_factory) -> Non
 
 async def test_update_view_invalid_config_rejected(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(ValidationError) as excinfo:
         await service.update_view(
             actor=member,
@@ -648,9 +632,7 @@ async def test_update_view_set_default_clears_others(session_factory) -> None:
     first = await service.create_view(
         actor=member, workspace_id=workspace.id, body=_create_body(name="A", is_default=True)
     )
-    second = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body(name="B")
-    )
+    second = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body(name="B"))
     updated = await service.update_view(
         actor=member,
         workspace_id=workspace.id,
@@ -666,9 +648,7 @@ async def test_update_view_set_default_clears_others(session_factory) -> None:
 async def test_update_view_move_to_project_scope(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
     project = await _create_project(session_factory, workspace)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     updated = await service.update_view(
         actor=member,
         workspace_id=workspace.id,
@@ -685,21 +665,13 @@ async def test_update_view_move_to_project_scope(session_factory) -> None:
 
 async def test_delete_view_removes_row_and_emits_marker(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
-    await service.delete_view(
-        actor=member, workspace_id=workspace.id, view_id=uuid.UUID(created["id"])
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
+    await service.delete_view(actor=member, workspace_id=workspace.id, view_id=uuid.UUID(created["id"]))
     async with session_factory() as session:
-        assert (
-            await session.scalar(select(View).where(View.id == uuid.UUID(created["id"])))
-        ) is None
+        assert (await session.scalar(select(View).where(View.id == uuid.UUID(created["id"])))) is None
     events = await _outbox_realtime(session_factory)
     deleted_frames = [
-        row
-        for row in events
-        if row["event"] == "view.updated" and row["data"].get("deleted") is True
+        row for row in events if row["event"] == "view.updated" and row["data"].get("deleted") is True
     ]
     assert len(deleted_frames) == 1
     assert deleted_frames[0]["channel"] == f"workspace:{workspace.id}:views"
@@ -709,13 +681,9 @@ async def test_delete_view_removes_row_and_emits_marker(session_factory) -> None
 async def test_delete_view_foreign_forbidden(session_factory) -> None:
     workspace, owner, service = await _setup(session_factory)
     stranger = await _add_member(session_factory, workspace)
-    created = await service.create_view(
-        actor=owner, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=owner, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(ForbiddenError):
-        await service.delete_view(
-            actor=stranger, workspace_id=workspace.id, view_id=uuid.UUID(created["id"])
-        )
+        await service.delete_view(actor=stranger, workspace_id=workspace.id, view_id=uuid.UUID(created["id"]))
 
 
 # ---------------------------------------------------------------------------
@@ -753,9 +721,7 @@ async def test_duplicate_view(session_factory) -> None:
 async def test_duplicate_private_view_forbidden_for_stranger(session_factory) -> None:
     workspace, owner, service = await _setup(session_factory)
     stranger = await _add_member(session_factory, workspace)
-    source = await service.create_view(
-        actor=owner, workspace_id=workspace.id, body=_create_body()
-    )
+    source = await service.create_view(actor=owner, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(NotFoundError):
         await service.duplicate_view(
             actor=stranger, workspace_id=workspace.id, view_id=uuid.UUID(source["id"])
@@ -769,9 +735,7 @@ async def test_duplicate_private_view_forbidden_for_stranger(session_factory) ->
 
 async def test_patch_wip_set_and_remove(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     view_id = uuid.UUID(created["id"])
     updated = await service.patch_wip(
         actor=member,
@@ -779,9 +743,7 @@ async def test_patch_wip_set_and_remove(session_factory) -> None:
         view_id=view_id,
         body=WipRequest(group_key="in_progress", limit=5, enforcement="block"),
     )
-    assert updated["board_settings"]["wip"] == {
-        "in_progress": {"limit": 5, "enforcement": "block"}
-    }
+    assert updated["board_settings"]["wip"] == {"in_progress": {"limit": 5, "enforcement": "block"}}
     # Sibling keys survive the wip write (shallow merge semantics).
     again = await service.patch_wip(
         actor=member,
@@ -804,9 +766,7 @@ async def test_patch_wip_set_and_remove(session_factory) -> None:
 
 async def test_patch_wip_noop_remove_absent(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     baseline = len(await _outbox_realtime(session_factory))
     result = await service.patch_wip(
         actor=member,
@@ -820,9 +780,7 @@ async def test_patch_wip_noop_remove_absent(session_factory) -> None:
 
 async def test_patch_wip_invalid_enforcement(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(ValidationError) as excinfo:
         await service.patch_wip(
             actor=member,
@@ -856,9 +814,7 @@ async def test_reorder_views_assigns_positions(session_factory) -> None:
 async def test_reorder_views_foreign_private_forbidden(session_factory) -> None:
     workspace, owner, service = await _setup(session_factory)
     stranger = await _add_member(session_factory, workspace)
-    created = await service.create_view(
-        actor=owner, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=owner, workspace_id=workspace.id, body=_create_body())
     with pytest.raises(ForbiddenError):
         await service.reorder_views(
             actor=stranger,
@@ -874,9 +830,7 @@ async def test_reorder_views_foreign_private_forbidden(session_factory) -> None:
 
 async def test_resolve_view_workspace(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     resolved = await service.resolve_view_workspace(uuid.UUID(created["id"]))
     assert resolved == workspace.id
     assert await service.resolve_view_workspace(uuid.uuid4()) is None
@@ -908,14 +862,10 @@ async def test_guest_reads_shared_but_cannot_duplicate(session_factory) -> None:
     shared = await service.create_view(
         actor=owner, workspace_id=workspace.id, body=_create_body(visibility="shared")
     )
-    fetched = await service.get_view(
-        viewer=guest, workspace_id=workspace.id, view_id=uuid.UUID(shared["id"])
-    )
+    fetched = await service.get_view(viewer=guest, workspace_id=workspace.id, view_id=uuid.UUID(shared["id"]))
     assert fetched["can_write"] is False
     with pytest.raises(ForbiddenError):
-        await service.duplicate_view(
-            actor=guest, workspace_id=workspace.id, view_id=uuid.UUID(shared["id"])
-        )
+        await service.duplicate_view(actor=guest, workspace_id=workspace.id, view_id=uuid.UUID(shared["id"]))
 
 
 async def test_guest_with_project_grant_reads_private_project_shared_view(
@@ -964,9 +914,7 @@ async def test_list_views_excludes_invisible_private_project_shared(
 async def test_update_view_rename_to_existing_name_conflict(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
     await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body(name="A"))
-    second = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body(name="B")
-    )
+    second = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body(name="B"))
     with pytest.raises(ConflictError) as excinfo:
         await service.update_view(
             actor=member,
@@ -979,9 +927,7 @@ async def test_update_view_rename_to_existing_name_conflict(session_factory) -> 
 
 async def test_patch_wip_identical_rule_is_noop(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     view_id = uuid.UUID(created["id"])
     await service.patch_wip(
         actor=member,
@@ -1015,9 +961,7 @@ async def test_duplicate_name_collision_uses_numbered_suffix(session_factory) ->
     assert copy["name"] == "Sprint Board (copy 2)"
 
 
-async def test_duplicate_name_suffix_exhaustion_conflict(
-    session_factory, monkeypatch
-) -> None:
+async def test_duplicate_name_suffix_exhaustion_conflict(session_factory, monkeypatch) -> None:
     import mesh.views.service as view_service_module
 
     monkeypatch.setattr(view_service_module, "_DUPLICATE_SUFFIX_LIMIT", 1)
@@ -1029,9 +973,7 @@ async def test_duplicate_name_suffix_exhaustion_conflict(
         actor=owner, workspace_id=workspace.id, body=_create_body(name="Sprint Board (copy)")
     )
     with pytest.raises(ConflictError) as excinfo:
-        await service.duplicate_view(
-            actor=owner, workspace_id=workspace.id, view_id=uuid.UUID(source["id"])
-        )
+        await service.duplicate_view(actor=owner, workspace_id=workspace.id, view_id=uuid.UUID(source["id"]))
     assert excinfo.value.code == "view_name_taken"
 
 
@@ -1060,9 +1002,7 @@ async def test_update_view_unset_default(session_factory) -> None:
 
 async def test_update_view_every_config_field(session_factory) -> None:
     workspace, member, service = await _setup(session_factory)
-    created = await service.create_view(
-        actor=member, workspace_id=workspace.id, body=_create_body()
-    )
+    created = await service.create_view(actor=member, workspace_id=workspace.id, body=_create_body())
     updated = await service.update_view(
         actor=member,
         workspace_id=workspace.id,

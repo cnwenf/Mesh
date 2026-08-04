@@ -45,6 +45,7 @@ from mesh.views.config import (
     validate_board_settings,
     validate_display_fields,
     validate_filters,
+    validate_group_axes,
     validate_group_by,
     validate_layout,
     validate_name,
@@ -129,9 +130,7 @@ class ViewService:
     async def resolve_view_workspace(self, view_id: uuid.UUID) -> uuid.UUID | None:
         """Narrow SECURITY DEFINER lookup (migration 0011) — no tenant GUC yet."""
         async with self._factory() as session:
-            return await session.scalar(
-                text("SELECT mesh_view_workspace_id(:id)"), {"id": view_id}
-            )
+            return await session.scalar(text("SELECT mesh_view_workspace_id(:id)"), {"id": view_id})
 
     # ------------------------------------------------------------------
     # loading + authorization (kanban §3.4)
@@ -194,42 +193,26 @@ class ViewService:
             )
         )
 
-    async def _project_readable(
-        self, session: AsyncSession, *, viewer: Member, project: Project
-    ) -> bool:
+    async def _project_readable(self, session: AsyncSession, *, viewer: Member, project: Project) -> bool:
         """Project visibility gate (mirrors project.md §3.4 read matrix)."""
         if self._is_workspace_manager(viewer):
             return True
         if viewer.role == "guest":
             return (
-                await self._guest_permission(
-                    session, project_id=project.id, member_id=viewer.id
-                )
-                is not None
+                await self._guest_permission(session, project_id=project.id, member_id=viewer.id) is not None
             )
         if project.visibility == "public":
             return True
-        return (
-            await self._project_role(
-                session, project_id=project.id, member_id=viewer.id
-            )
-            is not None
-        )
+        return await self._project_role(session, project_id=project.id, member_id=viewer.id) is not None
 
-    async def _is_project_lead(
-        self, session: AsyncSession, *, viewer: Member, project: Project
-    ) -> bool:
+    async def _is_project_lead(self, session: AsyncSession, *, viewer: Member, project: Project) -> bool:
         if self._is_workspace_manager(viewer):
             return True
         if project.lead_member_id == viewer.id:
             return True
-        return (
-            await self._project_role(session, project_id=project.id, member_id=viewer.id)
-        ) == "lead"
+        return (await self._project_role(session, project_id=project.id, member_id=viewer.id)) == "lead"
 
-    async def assert_can_read(
-        self, session: AsyncSession, *, viewer: Member, view: View
-    ) -> None:
+    async def assert_can_read(self, session: AsyncSession, *, viewer: Member, view: View) -> None:
         """Read gate (kanban §3.4): private = owner only (invisible → 404);
         shared = workspace members, project-scoped views also require project
         visibility so private projects don't leak through shared configs."""
@@ -246,14 +229,10 @@ class ViewService:
                 Project.deleted_at.is_(None),
             )
         )
-        if project is None or not await self._project_readable(
-            session, viewer=viewer, project=project
-        ):
+        if project is None or not await self._project_readable(session, viewer=viewer, project=project):
             raise NotFoundError(_VIEW_NOT_FOUND)
 
-    async def assert_can_write(
-        self, session: AsyncSession, *, viewer: Member, view: View
-    ) -> None:
+    async def assert_can_write(self, session: AsyncSession, *, viewer: Member, view: View) -> None:
         """Write gate (kanban §3.4): owner, workspace admin, or project lead
         for project-scoped views. Foreign private views are 403 on writes."""
         if view.owner_member_id == viewer.id:
@@ -268,9 +247,7 @@ class ViewService:
                     Project.deleted_at.is_(None),
                 )
             )
-            if project is not None and await self._is_project_lead(
-                session, viewer=viewer, project=project
-            ):
+            if project is not None and await self._is_project_lead(session, viewer=viewer, project=project):
                 return
         raise ForbiddenError("not allowed to modify this view")
 
@@ -344,16 +321,12 @@ class ViewService:
         workspace_id: uuid.UUID,
         project_id: uuid.UUID,
     ) -> Project:
-        project = await self._project(
-            session, workspace_id=workspace_id, project_id=project_id
-        )
+        project = await self._project(session, workspace_id=workspace_id, project_id=project_id)
         if not await self._project_readable(session, viewer=viewer, project=project):
             raise ForbiddenError("project is not visible to you")
         return project
 
-    async def _next_position(
-        self, session: AsyncSession, *, workspace_id: uuid.UUID
-    ) -> float:
+    async def _next_position(self, session: AsyncSession, *, workspace_id: uuid.UUID) -> float:
         maximum = await session.scalar(
             select(func.max(View.position)).where(View.workspace_id == workspace_id)
         )
@@ -369,11 +342,7 @@ class ViewService:
     ) -> None:
         """Unset every default view in the target scope (same transaction as
         setting the new default — kanban §2.2 / README §6.3 'at least one')."""
-        scope = (
-            View.project_id == project_id
-            if project_id is not None
-            else View.project_id.is_(None)
-        )
+        scope = View.project_id == project_id if project_id is not None else View.project_id.is_(None)
         stmt = (
             update(View)
             .where(View.workspace_id == workspace_id, View.is_default.is_(True), scope)
@@ -457,6 +426,7 @@ class ViewService:
         visibility = validate_visibility(body.visibility)
         group_by = validate_group_by(body.group_by)
         sub_group_by = validate_group_by(body.sub_group_by)
+        validate_group_axes(group_by, sub_group_by)
         filters = validate_filters(body.filters)
         sort = validate_sort(body.sort)
         display_fields = validate_display_fields(body.display_fields)
@@ -474,9 +444,7 @@ class ViewService:
                     session, viewer=actor, workspace_id=workspace_id, project_id=project_id
                 )
             if body.is_default:
-                await self._clear_scope_defaults(
-                    session, workspace_id=workspace_id, project_id=project_id
-                )
+                await self._clear_scope_defaults(session, workspace_id=workspace_id, project_id=project_id)
             view = await self._insert_view(
                 session,
                 workspace_id=workspace_id,
@@ -569,9 +537,7 @@ class ViewService:
             ]
             return items, page.next_cursor
 
-    async def _can_write_quick(
-        self, session: AsyncSession, *, viewer: Member, view: View
-    ) -> bool:
+    async def _can_write_quick(self, session: AsyncSession, *, viewer: Member, view: View) -> bool:
         if view.owner_member_id == viewer.id:
             return True
         if self._is_workspace_manager(viewer):
@@ -617,9 +583,7 @@ class ViewService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            view = await self._load_view(
-                session, workspace_id=workspace_id, view_id=view_id, for_update=True
-            )
+            view = await self._load_view(session, workspace_id=workspace_id, view_id=view_id, for_update=True)
             await self.assert_can_write(session, viewer=actor, view=view)
             if if_match is not None and not self._matches_version(view, if_match):
                 raise ConflictError(
@@ -649,6 +613,10 @@ class ViewService:
                 sub_group_by = validate_group_by(fields["sub_group_by"])
                 if sub_group_by != view.sub_group_by:
                     changes["sub_group_by"] = sub_group_by
+            validate_group_axes(
+                changes.get("group_by", view.group_by),
+                changes.get("sub_group_by", view.sub_group_by),
+            )
             if "filters" in fields:
                 filters = validate_filters(fields["filters"])
                 if filters != view.filters:
@@ -750,9 +718,7 @@ class ViewService:
     ) -> None:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            view = await self._load_view(
-                session, workspace_id=workspace_id, view_id=view_id, for_update=True
-            )
+            view = await self._load_view(session, workspace_id=workspace_id, view_id=view_id, for_update=True)
             await self.assert_can_write(session, viewer=actor, view=view)
             payload = {
                 "id": str(view.id),
@@ -793,9 +759,7 @@ class ViewService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            source = await self._load_view(
-                session, workspace_id=workspace_id, view_id=view_id
-            )
+            source = await self._load_view(session, workspace_id=workspace_id, view_id=view_id)
             await self.assert_can_read(session, viewer=actor, view=source)
             if actor.role == "guest":
                 raise ForbiddenError("guests cannot create views")
@@ -841,9 +805,7 @@ class ViewService:
         candidate = f"{source.name} (copy)"
         for suffix in range(2, _DUPLICATE_SUFFIX_LIMIT + 1):
             taken = await session.scalar(
-                select(View.id).where(
-                    View.workspace_id == source.workspace_id, scope, View.name == candidate
-                )
+                select(View.id).where(View.workspace_id == source.workspace_id, scope, View.name == candidate)
             )
             if taken is None:
                 return candidate
@@ -872,9 +834,7 @@ class ViewService:
             )
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            view = await self._load_view(
-                session, workspace_id=workspace_id, view_id=view_id, for_update=True
-            )
+            view = await self._load_view(session, workspace_id=workspace_id, view_id=view_id, for_update=True)
             await self.assert_can_write(session, viewer=actor, view=view)
             board_settings = dict(view.board_settings or {})
             wip = dict(board_settings.get("wip") or {})
@@ -899,9 +859,7 @@ class ViewService:
             rendered = self.render_view(
                 view, can_write=await self._can_write_quick(session, viewer=actor, view=view)
             )
-            await self._emit_view_event(
-                session, view=view, data={**rendered, "changes": ["board_settings"]}
-            )
+            await self._emit_view_event(session, view=view, data={**rendered, "changes": ["board_settings"]})
             await self._audit(
                 session,
                 workspace_id=workspace_id,

@@ -12,18 +12,18 @@ timeline/table layouts, and filter_too_complex on over-limit stored config.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
 
-from mesh.db.models.issue import IssueStatus
+from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.db.models.view import View
 from mesh.db.models.view_position import ViewIssuePosition
 from mesh.db.models.workspace import Workspace
-from mesh.errors import ValidationError
+from mesh.errors import ConflictError, ValidationError
 from mesh.issue.schemas import CreateIssueRequest
 from mesh.issue.service import IssueService
 from mesh.issue.statuses import seed_default_statuses
@@ -118,9 +118,7 @@ async def test_execute_view_groups_by_state_category(session_factory) -> None:
     await _mk_issue(
         issue_service, actor=member, workspace=workspace, category="in_progress", status_map=status_map
     )
-    await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="done", status_map=status_map
-    )
+    await _mk_issue(issue_service, actor=member, workspace=workspace, category="done", status_map=status_map)
 
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="state_category")
     result = await projection.execute_view(
@@ -146,9 +144,19 @@ async def test_execute_view_groups_by_state_category(session_factory) -> None:
 
 
 async def test_execute_view_column_target_status_maps_category_default(session_factory) -> None:
+    from tests.unit.test_view_service import _create_project, _grant_project_access
+
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
     status_map = await _statuses(session_factory, workspace)
-    view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="state_category")
+    project = await _create_project(session_factory, workspace, visibility="public")
+    await _grant_project_access(session_factory, workspace, project, member)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        project_id=str(project.id),
+        group_by="state_category",
+    )
     result = await projection.execute_view(
         viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
     )
@@ -156,6 +164,17 @@ async def test_execute_view_column_target_status_maps_category_default(session_f
     assert mapping["todo"] == str(status_map["todo"])
     assert mapping["in_progress"] == str(status_map["in_progress"])
     assert mapping["done"] == str(status_map["done"])
+
+
+async def test_workspace_wide_category_view_omits_ambiguous_target_status(
+    session_factory,
+) -> None:
+    workspace, member, _issue_service, view_service, projection = await _setup(session_factory)
+    view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="state_category")
+    result = await projection.execute_view(
+        viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
+    )
+    assert "column_target_status" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +212,9 @@ async def test_execute_view_overall_cursor_pagination(session_factory) -> None:
     todo3 = next(g for g in page3["groups"] if g["key"] == "todo")
     assert page3["next_cursor"] is None
 
-    seen = {c["id"] for c in todo1["data"]} | {c["id"] for c in todo2["data"]} | {
-        c["id"] for c in todo3["data"]
-    }
+    seen = (
+        {c["id"] for c in todo1["data"]} | {c["id"] for c in todo2["data"]} | {c["id"] for c in todo3["data"]}
+    )
     assert seen == created_ids
 
 
@@ -208,11 +227,19 @@ async def test_execute_view_applies_view_filters(session_factory) -> None:
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
     status_map = await _statuses(session_factory, workspace)
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map,
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
         priority="high",
     )
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map,
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
         priority="low",
     )
 
@@ -258,9 +285,7 @@ async def test_execute_view_visibility_trims_private_project(session_factory) ->
     outsider = await _add_member(session_factory, workspace)
 
     # Outsider (not a project member): the private-project issue is trimmed.
-    result = await projection.execute_view(
-        viewer=outsider, workspace_id=workspace.id, view_id=view_id
-    )
+    result = await projection.execute_view(viewer=outsider, workspace_id=workspace.id, view_id=view_id)
     todo = next(g for g in result["groups"] if g["key"] == "todo")
     assert all(card["id"] != issue["id"] for card in todo["data"])
 
@@ -279,11 +304,19 @@ async def test_execute_view_group_by_priority(session_factory) -> None:
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
     status_map = await _statuses(session_factory, workspace)
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map,
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
         priority="high",
     )
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map,
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
         priority="urgent",
     )
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="priority")
@@ -307,8 +340,7 @@ async def test_execute_view_group_by_status(session_factory) -> None:
     )
     keys = {g["key"] for g in result["groups"]}
     assert str(status_map["todo"]) in keys
-    # column_target_status is the identity map for status grouping.
-    assert result["column_target_status"][str(status_map["todo"])] == str(status_map["todo"])
+    assert "column_target_status" not in result
 
 
 async def test_execute_view_group_by_assignee_uses_none_key(session_factory) -> None:
@@ -341,11 +373,19 @@ async def test_execute_view_per_view_position_ordering_and_isolation(session_fac
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
     status_map = await _statuses(session_factory, workspace)
     a = await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map,
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
         position=1.0,
     )
     b = await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map,
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
         position=2.0,
     )
 
@@ -413,9 +453,7 @@ async def test_execute_view_group_by_label_is_gated(session_factory) -> None:
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="label")
     with pytest.raises(ValidationError) as exc:
-        await projection.execute_view(
-            viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
-        )
+        await projection.execute_view(viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"]))
     assert exc.value.code == PROJECTION_FIELD_PENDING
 
 
@@ -425,9 +463,7 @@ async def test_execute_view_timeline_layout_is_501(session_factory) -> None:
     from mesh.views.projection import NotImplementedLayout
 
     with pytest.raises(NotImplementedLayout):
-        await projection.execute_view(
-            viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
-        )
+        await projection.execute_view(viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"]))
 
 
 async def test_execute_view_not_found(session_factory) -> None:
@@ -435,9 +471,7 @@ async def test_execute_view_not_found(session_factory) -> None:
     from mesh.errors import NotFoundError
 
     with pytest.raises(NotFoundError):
-        await projection.execute_view(
-            viewer=member, workspace_id=workspace.id, view_id=uuid.uuid4()
-        )
+        await projection.execute_view(viewer=member, workspace_id=workspace.id, view_id=uuid.uuid4())
 
 
 async def test_execute_view_private_view_hidden_from_others(session_factory) -> None:
@@ -448,9 +482,7 @@ async def test_execute_view_private_view_hidden_from_others(session_factory) -> 
     view = await _mk_view(view_service, actor=member, workspace=workspace, visibility="private")
     other = await _add_member(session_factory, workspace)
     with pytest.raises(NotFoundError):
-        await projection.execute_view(
-            viewer=other, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
-        )
+        await projection.execute_view(viewer=other, workspace_id=workspace.id, view_id=uuid.UUID(view["id"]))
 
 
 async def test_execute_view_filter_too_complex_on_stored_config(session_factory) -> None:
@@ -467,9 +499,7 @@ async def test_execute_view_filter_too_complex_on_stored_config(session_factory)
                         "conditions": [
                             {
                                 "operator": "OR",
-                                "conditions": [
-                                    {"field": "priority", "op": "eq", "value": "high"}
-                                ],
+                                "conditions": [{"field": "priority", "op": "eq", "value": "high"}],
                             }
                         ],
                     }
@@ -516,15 +546,20 @@ async def test_execute_view_project_scoped_limits_to_project(session_factory) ->
     project = await _create_project(session_factory, workspace, visibility="public")
     await _grant_project_access(session_factory, workspace, project, member)
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, project_id=str(project.id),
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        project_id=str(project.id),
     )
-    await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map
-    )
+    await _mk_issue(issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map)
     # Project-scoped view sees only that project's issue.
     view = await _mk_view(
-        view_service, actor=member, workspace=workspace, group_by="state_category",
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
         project_id=str(project.id),
     )
     result = await projection.execute_view(
@@ -542,12 +577,14 @@ async def test_execute_view_group_by_project_labels(session_factory) -> None:
     project = await _create_project(session_factory, workspace, visibility="public")
     await _grant_project_access(session_factory, workspace, project, member)
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, project_id=str(project.id),
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        project_id=str(project.id),
     )
-    await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map
-    )
+    await _mk_issue(issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map)
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="project")
     result = await projection.execute_view(
         viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
@@ -555,21 +592,22 @@ async def test_execute_view_group_by_project_labels(session_factory) -> None:
     labels = {g["key"]: g["label"] for g in result["groups"]}
     assert labels[str(project.id)] == project.name
     assert labels["__none__"] == "No project"
-    # No column_target_status for project grouping.
-    assert result["column_target_status"] == {}
+    assert "column_target_status" not in result
 
 
 async def test_execute_view_group_by_assignee_labels(session_factory) -> None:
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
     status_map = await _statuses(session_factory, workspace)
     await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo",
-        status_map=status_map, assignee_id=str(member.id),
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        assignee_id=str(member.id),
     )
     # An unassigned issue produces the "__none__" column.
-    await _mk_issue(
-        issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map
-    )
+    await _mk_issue(issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map)
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="assignee")
     result = await projection.execute_view(
         viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
@@ -577,3 +615,288 @@ async def test_execute_view_group_by_assignee_labels(session_factory) -> None:
     labels = {g["key"]: g["label"] for g in result["groups"]}
     assert labels[str(member.id)] == "Boarder"
     assert labels["__none__"] == "No assignee"
+
+
+# ---------------------------------------------------------------------------
+# two-dimensional swimlane projection (kanban §2.4/§3.2)
+# ---------------------------------------------------------------------------
+
+
+async def test_execute_view_projects_two_dimensional_swimlanes(session_factory) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    status_map = await _statuses(session_factory, workspace)
+    created = [
+        await _mk_issue(
+            issue_service,
+            actor=member,
+            workspace=workspace,
+            category="todo",
+            status_map=status_map,
+            priority="high",
+        ),
+        await _mk_issue(
+            issue_service,
+            actor=member,
+            workspace=workspace,
+            category="todo",
+            status_map=status_map,
+            priority="low",
+        ),
+        await _mk_issue(
+            issue_service,
+            actor=member,
+            workspace=workspace,
+            category="in_progress",
+            status_map=status_map,
+            priority="high",
+        ),
+    ]
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+        board_settings={"wip": {"todo": {"limit": 4, "enforcement": "warn"}}},
+    )
+
+    result = await projection.execute_view(
+        viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
+    )
+
+    assert result["group_by"] == "state_category"
+    assert result["sub_group_by"] == "priority"
+    assert "groups" not in result
+    columns = {column["key"]: column for column in result["columns"]}
+    assert columns["todo"] == {
+        "key": "todo",
+        "label": "Todo",
+        "count": 2,
+        "wip": {"limit": 4, "enforcement": "warn"},
+    }
+    assert columns["in_progress"]["count"] == 1
+    lanes = {lane["key"]: lane for lane in result["lanes"]}
+    assert list(lanes) == ["urgent", "high", "medium", "low", "none"]
+    assert lanes["high"]["count"] == 2
+    high_cells = {cell["key"]: cell for cell in lanes["high"]["groups"]}
+    assert high_cells["todo"]["count"] == 1
+    assert high_cells["in_progress"]["count"] == 1
+    assert {card["id"] for card in high_cells["todo"]["data"]} == {created[0]["id"]}
+    assert {card["id"] for card in high_cells["in_progress"]["data"]} == {created[2]["id"]}
+    low_cells = {cell["key"]: cell for cell in lanes["low"]["groups"]}
+    assert {card["id"] for card in low_cells["todo"]["data"]} == {created[1]["id"]}
+    assert all("cursor" not in lane for lane in result["lanes"])
+    assert all("cursor" not in cell for lane in result["lanes"] for cell in lane["groups"])
+
+
+async def test_execute_swimlane_uses_one_cursor_across_cell_boundaries(session_factory) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    status_map = await _statuses(session_factory, workspace)
+    created_ids: set[str] = set()
+    for priority, category in (("high", "todo"), ("high", "in_progress"), ("low", "todo")):
+        issue = await _mk_issue(
+            issue_service,
+            actor=member,
+            workspace=workspace,
+            category=category,
+            status_map=status_map,
+            priority=priority,
+        )
+        created_ids.add(issue["id"])
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    view_id = uuid.UUID(view["id"])
+
+    page1 = await projection.execute_view(viewer=member, workspace_id=workspace.id, view_id=view_id, limit=2)
+    page2 = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=view_id,
+        limit=2,
+        cursor=page1["next_cursor"],
+    )
+
+    assert page1["next_cursor"] is not None
+    assert page2["next_cursor"] is None
+    assert [column["count"] for column in page1["columns"]] == [
+        column["count"] for column in page2["columns"]
+    ]
+    seen = {
+        card["id"]
+        for page in (page1, page2)
+        for lane in page["lanes"]
+        for cell in lane["groups"]
+        for card in cell["data"]
+    }
+    assert seen == created_ids
+
+
+async def test_project_swimlanes_omit_ambiguous_column_target_status(session_factory) -> None:
+    workspace, member, _issue_service, view_service, projection = await _setup(session_factory)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="project",
+    )
+    result = await projection.execute_view(
+        viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"])
+    )
+    assert "column_target_status" not in result
+
+
+async def test_one_dimensional_stale_position_does_not_leak_into_new_group(
+    session_factory,
+) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    status_map = await _statuses(session_factory, workspace)
+    moved = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=status_map,
+        position=50.0,
+    )
+    first = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="in_progress",
+        status_map=status_map,
+        position=1.0,
+    )
+    view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="state_category")
+    view_id = uuid.UUID(view["id"])
+    async with session_factory() as session, session.begin():
+        issue = await session.get(Issue, uuid.UUID(moved["id"]))
+        issue.status_id = status_map["in_progress"]
+        issue.state_category = "in_progress"
+        session.add(
+            ViewIssuePosition(
+                workspace_id=workspace.id,
+                view_id=view_id,
+                issue_id=issue.id,
+                group_key="todo",
+                sub_group_key="",
+                position=-100.0,
+            )
+        )
+
+    result = await projection.execute_view(viewer=member, workspace_id=workspace.id, view_id=view_id)
+    in_progress = next(group for group in result["groups"] if group["key"] == "in_progress")
+    assert [card["id"] for card in in_progress["data"]] == [first["id"], moved["id"]]
+
+
+async def test_swimlane_cursor_is_bound_to_snapshot_and_view(session_factory) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    status_map = await _statuses(session_factory, workspace)
+    created = []
+    for _ in range(3):
+        created.append(
+            await _mk_issue(
+                issue_service,
+                actor=member,
+                workspace=workspace,
+                category="todo",
+                status_map=status_map,
+                priority="high",
+            )
+        )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    other_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    page = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        limit=1,
+    )
+    cursor = page["next_cursor"]
+    assert cursor is not None
+
+    with pytest.raises(ConflictError) as cross_view:
+        await projection.execute_view(
+            viewer=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(other_view["id"]),
+            limit=1,
+            cursor=cursor,
+        )
+    assert cross_view.value.code == "cursor_invalidated"
+
+    async with session_factory() as session, session.begin():
+        issue = await session.get(Issue, uuid.UUID(created[-1]["id"]))
+        issue.updated_at = FIXED_NOW + timedelta(seconds=1)
+    with pytest.raises(ConflictError) as changed_snapshot:
+        await projection.execute_view(
+            viewer=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            limit=1,
+            cursor=cursor,
+        )
+    assert changed_snapshot.value.code == "cursor_invalidated"
+
+
+async def test_swimlane_cursor_expires_fail_closed(session_factory) -> None:
+    workspace, member, issue_service, view_service, _projection = await _setup(session_factory)
+    status_map = await _statuses(session_factory, workspace)
+    for _ in range(2):
+        await _mk_issue(
+            issue_service,
+            actor=member,
+            workspace=workspace,
+            category="todo",
+            status_map=status_map,
+            priority="high",
+        )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    current = [FIXED_NOW]
+    projection = ProjectionService(
+        session_factory,
+        issue_service,
+        view_service,
+        clock=lambda: current[0],
+        cursor_secret="expiry-test-secret",
+    )
+    first = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        limit=1,
+    )
+    assert first["next_cursor"] is not None
+    current[0] = FIXED_NOW + timedelta(minutes=16)
+    with pytest.raises(ConflictError) as expired:
+        await projection.execute_view(
+            viewer=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            limit=1,
+            cursor=first["next_cursor"],
+        )
+    assert expired.value.code == "cursor_invalidated"

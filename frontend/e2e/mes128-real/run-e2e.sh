@@ -98,3 +98,9 @@ MES128_FRONTEND_PORT="" \
 MES161_FRONTEND_PORT="${FRONTEND_PORT}" \
 MES161_PG_CONTAINER="${PROJECT}-postgres-1" \
   npx playwright test --config playwright.mes161.config.ts
+
+# MES-130: reuse the same production-auth stack for the two-dimensional board
+# journey. The test deletes its workspace, and stack teardown removes its account.
+MES130_BASE_URL="http://127.0.0.1:${FRONTEND_PORT}" \
+MES130_API_BASE_URL="http://127.0.0.1:${FRONTEND_PORT}" \
+  npx playwright test --config playwright.mes130.config.ts

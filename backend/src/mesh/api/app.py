@@ -110,6 +110,7 @@ from mesh.runtime.daemon_routes import router as runtime_daemon_router
 from mesh.runtime.routes import router as runtime_router
 from mesh.runtime.service import RuntimeService
 from mesh.runtime.task_routes import router as task_router
+from mesh.search.cursor import resolve_cursor_secret
 from mesh.search.routes import router as search_router
 from mesh.search.service import SearchService
 from mesh.skill.bindings import BindingService
@@ -256,7 +257,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.field_value_service = FieldValueService(app.state.issue_service)
     app.state.view_service = ViewService(session_factory)
     app.state.projection_service = ProjectionService(
-        session_factory, app.state.issue_service, app.state.view_service
+        session_factory,
+        app.state.issue_service,
+        app.state.view_service,
+        cursor_secret=resolve_cursor_secret(settings),
     )
     app.state.board_move_service = BoardMoveService(
         session_factory,

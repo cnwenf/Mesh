@@ -26,6 +26,7 @@ from mesh.errors import NotFoundError, ValidationError
 from mesh.views.schemas import (
     CreateViewRequest,
     MoveRequest,
+    QuickCreateIssueRequest,
     ReorderCardsRequest,
     ReorderViewsRequest,
     UpdateViewRequest,
@@ -63,9 +64,7 @@ def _client_meta(request: Request) -> dict:
     }
 
 
-async def _rate_limit_write(
-    request: Request, principal: AuthenticatedPrincipal, response: Response
-) -> None:
+async def _rate_limit_write(request: Request, principal: AuthenticatedPrincipal, response: Response) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
@@ -78,9 +77,7 @@ async def _rate_limit_write(
     response.headers["X-RateLimit-Reset"] = str(reset_in)
 
 
-async def _rate_limit_read(
-    request: Request, principal: AuthenticatedPrincipal, response: Response
-) -> None:
+async def _rate_limit_read(request: Request, principal: AuthenticatedPrincipal, response: Response) -> None:
     """Rate-limit view execution reads (kanban.md §5.3 → 429 rate_limited)."""
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
@@ -321,6 +318,32 @@ async def patch_view_wip(
 # ----------------------------------------------------------------------
 
 
+@router.post("/views/{view_id}/issues", status_code=201)
+async def quick_create_view_issue(
+    body: QuickCreateIssueRequest,
+    request: Request,
+    response: Response,
+    view_id: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Atomically create an issue in one locked board projection cell."""
+    await _rate_limit_write(request, principal, response)
+    parsed = _path_uuid(view_id)
+    context = await _resolve_context(request, principal, session, parsed)
+    data = await _board_move_service(request).quick_create(
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        view_id=parsed,
+        title=body.title,
+        group_key=body.group_key,
+        sub_group_key=body.sub_group_key,
+        idempotency_key=idempotency_key,
+    )
+    return {"data": data}
+
+
 @router.get("/views/{view_id}/issues")
 async def list_view_issues(
     request: Request,
@@ -371,6 +394,7 @@ async def move_view_card(
         view_id=parsed,
         issue_id=_query_uuid(body.issue_id, field="issue_id"),
         to_group_key=body.to_group_key,
+        to_sub_group_key=body.to_sub_group_key,
         position=body.position,
         version=body.version,
         confirm=body.confirm,
@@ -398,6 +422,7 @@ async def reorder_view_cards(
         view_id=parsed,
         issue_id=_query_uuid(body.issue_id, field="issue_id"),
         to_group_key=body.to_group_key,
+        sub_group_key=body.sub_group_key,
         position=body.position,
     )
     return {"data": data}
