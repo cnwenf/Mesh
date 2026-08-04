@@ -28,29 +28,30 @@ function WorkspaceOverview(): React.JSX.Element {
       ? workspace.settings.default_locale
       : 'en';
   const roleLabel = t(`roles.${workspace.my_role}`);
+  const workspacePath = `/w/${encodeURIComponent(workspace.slug)}`;
   const quickLinks: ReadonlyArray<{ label: string; path: string; icon: IconName; testId: string }> =
     [
       {
         label: t('nav.projects'),
-        path: `/w/${workspace.slug}/projects`,
+        path: `${workspacePath}/projects`,
         icon: 'folder',
         testId: 'ws-quick-projects',
       },
       {
         label: t('nav.issues'),
-        path: `/w/${workspace.slug}/issues`,
+        path: `${workspacePath}/issues`,
         icon: 'issues',
         testId: 'ws-quick-issues',
       },
       {
         label: t('nav.board'),
-        path: `/w/${workspace.slug}/board`,
+        path: `${workspacePath}/board`,
         icon: 'board',
         testId: 'ws-quick-board',
       },
       {
         label: t('nav.members'),
-        path: `/w/${workspace.slug}/members`,
+        path: `${workspacePath}/members`,
         icon: 'user',
         testId: 'ws-quick-members',
       },
@@ -108,7 +109,7 @@ function WorkspaceOverview(): React.JSX.Element {
 
       {isAdmin ? (
         <Link
-          to={`/w/${workspace.slug}/settings`}
+          to={`${workspacePath}/settings`}
           className={buttonClasses('secondary', 'md', 'mesh-ws-home__settings-link')}
           data-testid="ws-settings-link"
         >

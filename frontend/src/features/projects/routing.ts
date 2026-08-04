@@ -13,11 +13,11 @@ export function resolveProjectWorkspace(
 }
 
 export function projectsRoute(workspaceSlug: string): string {
-  return `/w/${workspaceSlug}/projects`;
+  return `/w/${encodeURIComponent(workspaceSlug)}/projects`;
 }
 
 export function projectRoute(workspaceSlug: string, projectId: string): string {
-  return `${projectsRoute(workspaceSlug)}/${projectId}`;
+  return `${projectsRoute(workspaceSlug)}/${encodeURIComponent(projectId)}`;
 }
 
 export function projectSettingsRoute(workspaceSlug: string, projectId: string): string {

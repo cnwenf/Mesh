@@ -773,7 +773,7 @@ Issue 详情(全屏或右侧抽屉)
 - **依赖区**:列出 blocks / blocked_by,点击跳转;阻塞项未完成时给出视觉提示("还差 2 个前置")。
 - **批量操作工具条**:勾选后浮出底栏(改状态/优先级/assignee/标签/删除/取消选),提交后展示成功/失败计数。
 
-issue 列表、快速创建与详情遵循 design-quality.md §11 的 Mesh 适配层边界：搜索/排序、选择、标题/描述、依赖目标、属性编辑、批量动作、评论与附件反馈统一复用共享设计组件；feature 不直接依赖底层组件库。迁移不得改变 `/w/:workspaceSlug/issues...` 深链、URL 筛选/排序参数、API/Realtime 数据流、乐观更新、权限或键盘语义。
+issue 列表、快速创建与详情遵循 design-quality.md §11 的 Mesh 适配层边界：搜索/排序、选择、标题/描述、依赖目标、属性编辑、批量动作、评论与附件反馈统一复用共享设计组件；feature 不直接依赖底层组件库。迁移不得改变 `/w/:workspaceSlug/issues...` 深链、URL 筛选/排序参数、API/Realtime 数据流、乐观更新、权限或键盘语义。列表、状态、名册、快速创建、Realtime 频道与行内深链只使用路由下 `WorkspaceProvider` 的当前工作区；有 slug 时严禁回退 `memberships[0]`。Realtime 列表只接收当前工作区频道且载荷 `workspace_id` 必须一致；切换工作区后的旧列表、分页成功或失败写回必须丢弃。
 
 ### 4.3 关键交互流程
 

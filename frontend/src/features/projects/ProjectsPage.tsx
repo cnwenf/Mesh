@@ -20,6 +20,7 @@ import {
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import { fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
 import { EmptyFolder } from '../onboarding/illustrations';
@@ -111,14 +112,34 @@ export function ProjectsPage(): React.JSX.Element {
   const { workspaceSlug } = useParams<{ workspaceSlug?: string }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  const workspaceContext = useOptionalWorkspace();
+  const hasWorkspaceContext = workspaceContext !== null;
+  const workspaceContextStatus = workspaceContext?.status ?? null;
+  const contextWorkspace = workspaceContext?.workspace ?? null;
+
+  const providerWorkspace = useMemo<Membership | null>(() => {
+    if (workspaceContextStatus !== 'ready' || contextWorkspace === null) return null;
+    return {
+      workspace_id: contextWorkspace.id,
+      workspace_name: contextWorkspace.name,
+      workspace_slug: contextWorkspace.slug,
+      role: contextWorkspace.my_role,
+      status: 'active',
+      joined_at: null,
+    };
+  }, [workspaceContextStatus, contextWorkspace]);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFilter = searchParams.get('status') ?? STATUS_ALL;
   const showArchived = searchParams.get('archived') === 'true';
   const mineOnly = searchParams.get('mine') === 'true';
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
-  const [workspaceResolved, setWorkspaceResolved] = useState(false);
+  const [standaloneWorkspace, setStandaloneWorkspace] = useState<Membership | null>(null);
+  const [standaloneWorkspaceResolved, setStandaloneWorkspaceResolved] = useState(false);
+  const workspace = hasWorkspaceContext ? providerWorkspace : standaloneWorkspace;
+  const workspaceResolved = hasWorkspaceContext
+    ? workspaceContextStatus !== 'loading'
+    : standaloneWorkspaceResolved;
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -128,32 +149,49 @@ export function ProjectsPage(): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
   /** 列表卡片健康度灯点击 → 页面级更新对话框的目标项目(§4.2 点击更新) */
   const [healthTarget, setHealthTarget] = useState<ProjectSummary | null>(null);
+  /** workspace / 筛选切换时单调递增,拒绝旧列表及分页响应回写当前视图。 */
+  const listGenerationRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
-    setWorkspace(null);
-    setWorkspaceResolved(false);
+    listGenerationRef.current += 1;
+    setStandaloneWorkspace(null);
+    setStandaloneWorkspaceResolved(false);
     setProjects([]);
     setNextCursor(null);
-    setIsLoading(true);
+    setIsLoading(!hasWorkspaceContext || workspaceContextStatus === 'loading');
+    setIsFetchingMore(false);
     setError(null);
+    setCreateOpen(false);
+    setHealthTarget(null);
+    if (hasWorkspaceContext) {
+      return () => {
+        cancelled = true;
+        listGenerationRef.current += 1;
+      };
+    }
     fetchMe(client)
       .then((me) => {
-        if (!cancelled) setWorkspace(resolveProjectWorkspace(me.memberships, workspaceSlug));
+        if (!cancelled) {
+          setStandaloneWorkspace(resolveProjectWorkspace(me.memberships, workspaceSlug));
+        }
       })
       .catch(() => {
         if (!cancelled) setError(t('state.errorDescription'));
       })
       .finally(() => {
-        if (!cancelled) setWorkspaceResolved(true);
+        if (!cancelled) setStandaloneWorkspaceResolved(true);
       });
     return () => {
       cancelled = true;
+      listGenerationRef.current += 1;
     };
-  }, [client, t, workspaceSlug]);
+  }, [client, t, workspaceSlug, hasWorkspaceContext, workspaceContextStatus, contextWorkspace?.id]);
 
   const loadProjects = useCallback(() => {
     if (!workspaceResolved) return;
+    const generation = ++listGenerationRef.current;
+    setIsFetchingMore(false);
     if (workspace === null) {
       setIsLoading(false);
       return;
@@ -167,26 +205,36 @@ export function ProjectsPage(): React.JSX.Element {
       limit: PAGE_LIMIT,
     })
       .then((page) => {
+        if (listGenerationRef.current !== generation) return;
         setProjects([...page.data]);
         setNextCursor(page.nextCursor);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : t('state.errorDescription')))
-      .finally(() => setIsLoading(false));
+      .catch((err) => {
+        if (listGenerationRef.current !== generation) return;
+        setError(err instanceof Error ? err.message : t('state.errorDescription'));
+      })
+      .finally(() => {
+        if (listGenerationRef.current === generation) setIsLoading(false);
+      });
   }, [client, workspace, workspaceResolved, statusFilter, showArchived, mineOnly, t]);
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects, reloadKey]);
 
-  // 实时合并:belongs 按当前筛选判定可见性水位;ref 避免随筛选重订阅
+  // 实时合并:belongs 同时校验当前工作区与筛选水位;ref 避免随筛选重订阅。
   const belongsRef = useRef<(project: ProjectSummary) => boolean>(() => true);
-  belongsRef.current = (project) => matchesListFilters(project, statusFilter, showArchived);
+  belongsRef.current = (project) =>
+    workspace !== null &&
+    project.workspace_id === workspace.workspace_id &&
+    matchesListFilters(project, statusFilter, showArchived);
 
   useEffect(() => {
     if (realtime === null || workspace === null) return;
     const channel = workspaceProjectsChannel(workspace.workspace_id);
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
+      if (frame.channel !== channel) return;
       setProjects((prev) => applyProjectListFrame(prev, frame, belongsRef.current));
     });
     return () => {
@@ -197,6 +245,7 @@ export function ProjectsPage(): React.JSX.Element {
 
   const handleLoadMore = (): void => {
     if (workspace === null || nextCursor === null || isFetchingMore) return;
+    const generation = listGenerationRef.current;
     setIsFetchingMore(true);
     listProjects(client, workspace.workspace_id, {
       status: statusFilter === STATUS_ALL ? undefined : (statusFilter as ProjectStatus),
@@ -206,13 +255,17 @@ export function ProjectsPage(): React.JSX.Element {
       cursor: nextCursor,
     })
       .then((page) => {
+        if (listGenerationRef.current !== generation) return;
         setProjects((prev) => [...prev, ...page.data]);
         setNextCursor(page.nextCursor);
       })
       .catch(() => {
+        if (listGenerationRef.current !== generation) return;
         toast.addToast(t('common.unknownError'), { tone: 'danger', closeLabel: t('common.close') });
       })
-      .finally(() => setIsFetchingMore(false));
+      .finally(() => {
+        if (listGenerationRef.current === generation) setIsFetchingMore(false);
+      });
   };
 
   const updateParam = (key: string, value: string | null): void => {
@@ -221,6 +274,8 @@ export function ProjectsPage(): React.JSX.Element {
     else params.set(key, value);
     setSearchParams(params, { replace: true });
   };
+
+  const displayError = workspaceContextStatus === 'error' ? t('state.errorDescription') : error;
 
   return (
     <div className="mesh-projects">
@@ -275,7 +330,7 @@ export function ProjectsPage(): React.JSX.Element {
           </div>
         }
         footer={
-          !isLoading && error === null && projects.length > 0 && nextCursor !== null ? (
+          !isLoading && displayError === null && projects.length > 0 && nextCursor !== null ? (
             <Button
               variant="secondary"
               data-testid="projects-load-more"
@@ -287,14 +342,17 @@ export function ProjectsPage(): React.JSX.Element {
           ) : undefined
         }
       >
-        {workspace === null && workspaceResolved && error === null ? (
+        {workspace === null && workspaceResolved && displayError === null ? (
           <EmptyState title={t('state.emptyTitle')} description={t('projects.noWorkspace')} />
-        ) : error !== null ? (
+        ) : displayError !== null ? (
           <ErrorState
             title={t('state.errorTitle')}
-            description={error}
+            description={displayError}
             retryLabel={t('common.retry')}
-            onRetry={() => setReloadKey((key) => key + 1)}
+            onRetry={() => {
+              if (workspaceContext?.status === 'error') void workspaceContext.refresh();
+              else setReloadKey((key) => key + 1);
+            }}
           />
         ) : isLoading ? (
           <Skeleton loadingLabel={t('common.loading')} />
@@ -340,7 +398,9 @@ export function ProjectsPage(): React.JSX.Element {
         />
       ) : null}
 
-      {workspace !== null && healthTarget !== null ? (
+      {workspace !== null &&
+      healthTarget !== null &&
+      healthTarget.workspace_id === workspace.workspace_id ? (
         <HealthUpdateDialog
           open
           onClose={() => setHealthTarget(null)}

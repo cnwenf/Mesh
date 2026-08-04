@@ -5,10 +5,16 @@
  * 项目详情、健康度更新和页签均由真实 UI 操作，最终直查容器内 PostgreSQL。
  */
 import { execFileSync } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
 const PG_CONTAINER = process.env.MES128_PG_CONTAINER ?? 'mes128-real-postgres-1';
 const RESPONSE_TIMEOUT = 30_000;
+const EVIDENCE_DIR =
+  process.env.MES128_EVIDENCE_DIR ??
+  join(dirname(fileURLToPath(import.meta.url)), 'evidence', 'mes111-b5-real');
 
 interface Envelope<T> {
   readonly data: T;
@@ -168,6 +174,9 @@ test('工作区首页→项目创建→详情状态与页签，API 和 PostgreSQ
   await expect(page.getByTestId('tab-updates')).toHaveAttribute('aria-selected', 'true');
 
   const screenshot = await page.screenshot({ fullPage: true });
+  const screenshotFile = `${testInfo.project.name}-mes159-project-detail.png`;
+  await mkdir(EVIDENCE_DIR, { recursive: true });
+  await writeFile(join(EVIDENCE_DIR, screenshotFile), screenshot);
   await testInfo.attach('mes159-project-detail', {
     body: screenshot,
     contentType: 'image/png',
@@ -208,5 +217,27 @@ test('工作区首页→项目创建→详情状态与页签，API 和 PostgreSQ
     project_count: 1,
     health: 'at_risk',
     update_count: 1,
+  });
+
+  const databaseFile = `${testInfo.project.name}-mes159-project-database.json`;
+  const evidenceBody = `${JSON.stringify(
+    {
+      schema_version: 1,
+      viewport: testInfo.project.name,
+      project: {
+        id: project.id,
+        workspace_id: workspace.id,
+        name: projectName,
+        key: projectKey,
+      },
+      database,
+    },
+    null,
+    2,
+  )}\n`;
+  await writeFile(join(EVIDENCE_DIR, databaseFile), evidenceBody, 'utf8');
+  await testInfo.attach('mes159-project-database', {
+    body: Buffer.from(evidenceBody),
+    contentType: 'application/json',
   });
 });

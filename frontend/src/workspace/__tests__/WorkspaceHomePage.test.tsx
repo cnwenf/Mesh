@@ -119,6 +119,36 @@ describe('WorkspaceHomePage(工作区概览,§4.1)', () => {
     );
   });
 
+  it('快速入口逐段编码 workspace slug 中的保留字符', async () => {
+    const { client } = stubClient({
+      status: 200,
+      body: { data: { ...DETAIL, slug: 'blue team/ops' } },
+    });
+    renderHome(client);
+
+    await screen.findByTestId('ws-home-name');
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/projects',
+    );
+    expect(screen.getByRole('link', { name: 'Issues' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/issues',
+    );
+    expect(screen.getByRole('link', { name: 'Board' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/board',
+    );
+    expect(screen.getByRole('link', { name: 'Members' })).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/members',
+    );
+    expect(screen.getByTestId('ws-settings-link')).toHaveAttribute(
+      'href',
+      '/w/blue%20team%2Fops/settings',
+    );
+  });
+
   it('member 视角:设置入口隐藏,提示可见性', async () => {
     const { client } = stubClient({
       status: 200,

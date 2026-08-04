@@ -42,4 +42,14 @@ describe('project workspace routing', () => {
     expect(projectRoute('beta', 'prj-1')).toBe('/w/beta/projects/prj-1');
     expect(projectSettingsRoute('beta', 'prj-1')).toBe('/w/beta/projects/prj-1/settings');
   });
+
+  it('逐段编码 workspace slug 与 project id,避免保留字符改变路由结构', () => {
+    expect(projectsRoute('blue team/ops')).toBe('/w/blue%20team%2Fops/projects');
+    expect(projectRoute('blue team/ops', 'prj/1?#')).toBe(
+      '/w/blue%20team%2Fops/projects/prj%2F1%3F%23',
+    );
+    expect(projectSettingsRoute('blue team/ops', 'prj/1?#')).toBe(
+      '/w/blue%20team%2Fops/projects/prj%2F1%3F%23/settings',
+    );
+  });
 });

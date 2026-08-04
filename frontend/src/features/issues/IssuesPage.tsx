@@ -8,7 +8,7 @@
  * 状态渲染序:无工作区空态 → 错误态(可重试)→ DataView(骨架/空态/内容)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import {
   Button,
@@ -27,7 +27,8 @@ import type { FilterChip } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { activeWorkspace, fetchMe, listMembers } from '../members/api';
+import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
+import { fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
 import { listIssues, listStatuses, workspaceIssuesChannel } from './api';
 import { requestOptimisticStepComplete } from '../onboarding/notify';
@@ -86,6 +87,11 @@ export function IssuesPage(): React.JSX.Element {
   const navigate = useNavigate();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  const workspaceContext = useOptionalWorkspace();
+  const hasWorkspaceContext = workspaceContext !== null;
+  const workspaceContextStatus = workspaceContext?.status ?? null;
+  const contextWorkspace = workspaceContext?.workspace ?? null;
+  const { workspaceSlug: routeWorkspaceSlug } = useParams<{ workspaceSlug: string }>();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const qFilter = searchParams.get('q') ?? '';
@@ -114,8 +120,24 @@ export function IssuesPage(): React.JSX.Element {
   // M12:`?create=1` 展开快速创建(快捷键 `c` 入口)
   const createParam = searchParams.get('create');
 
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
+  // 工作区路由内只认 WorkspaceProvider 已按 /w/:workspaceSlug 解析出的当前工作区。
+  // Provider 外仅保留独立测试/嵌入渲染兼容:按显式路由 slug 精确匹配,绝不取首项。
+  const providerMembership = useMemo<Membership | null>(() => {
+    if (workspaceContextStatus !== 'ready' || contextWorkspace === null) return null;
+    const current = contextWorkspace;
+    return {
+      workspace_id: current.id,
+      workspace_name: current.name,
+      workspace_slug: current.slug,
+      role: current.my_role,
+      status: 'active',
+      joined_at: null,
+    };
+  }, [workspaceContextStatus, contextWorkspace]);
+  const [standaloneWorkspace, setStandaloneWorkspace] = useState<Membership | null>(null);
+  const workspace = hasWorkspaceContext ? providerMembership : standaloneWorkspace;
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null);
+  const [memberContextWorkspaceId, setMemberContextWorkspaceId] = useState<string | null>(null);
   const [roster, setRoster] = useState<MemberSummary[]>([]);
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
@@ -142,40 +164,73 @@ export function IssuesPage(): React.JSX.Element {
   // 请求序号闸:乱序到达的旧响应不得覆盖新结果(过滤切换竞态防护)
   const loadSeqRef = useRef(0);
 
-  // 解析工作区 + 本人 member id(经名册邮箱匹配;assignee=我过滤需要,§4.1 我的任务视角)
+  // 解析本人 member id(经当前路由工作区名册邮箱匹配;assignee=我过滤需要)。
+  // /users/me 只提供本人邮箱;不得再参与工作区选择。
   useEffect(() => {
+    if (hasWorkspaceContext && providerMembership === null) {
+      setRoster([]);
+      setCurrentMemberId(null);
+      setMemberContextWorkspaceId(null);
+      return;
+    }
+    setMemberContextWorkspaceId(null);
     let cancelled = false;
     void (async () => {
       const me = await fetchMe(client);
-      const ws = activeWorkspace(me.memberships);
+      const ws = hasWorkspaceContext
+        ? providerMembership
+        : (me.memberships.find((membership) => membership.workspace_slug === routeWorkspaceSlug) ??
+          null);
       if (cancelled) return;
-      setWorkspace(ws);
-      if (ws !== null) {
-        const roster = await listMembers(client, ws.workspace_id, { limit: 100 });
-        setRoster(roster.data);
-        if (cancelled) return;
-        const mine = roster.data.find(
-          (m) =>
-            m.member_type === 'human' &&
-            m.profile !== null &&
-            'email' in m.profile &&
-            m.profile.email === me.user.email,
-        );
-        setCurrentMemberId(mine?.id ?? null);
+      if (!hasWorkspaceContext) setStandaloneWorkspace(ws);
+      if (ws === null) {
+        setRoster([]);
+        setCurrentMemberId(null);
+        setMemberContextWorkspaceId(null);
+        return;
       }
+      setRoster([]);
+      setCurrentMemberId(null);
+      const rosterPage = await listMembers(client, ws.workspace_id, { limit: 100 });
+      if (cancelled) return;
+      setRoster(rosterPage.data);
+      const mine = rosterPage.data.find(
+        (m) =>
+          m.member_type === 'human' &&
+          m.profile !== null &&
+          'email' in m.profile &&
+          m.profile.email === me.user.email,
+      );
+      setCurrentMemberId(mine?.id ?? null);
+      setMemberContextWorkspaceId(ws.workspace_id);
     })();
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, hasWorkspaceContext, providerMembership, routeWorkspaceSlug]);
 
+  // A→B 切换立即清掉 A 的可见状态并使其所有在途列表响应失效。
+  const workspaceId = workspace?.workspace_id ?? null;
+  useEffect(() => {
+    loadSeqRef.current += 1;
+    setIssues([]);
+    setStatuses([]);
+    setNextCursor(null);
+    setSelected(new Set());
+    setHasLoaded(false);
+    setIsLoading(workspaceId !== null || workspaceContextStatus === 'loading');
+  }, [workspaceId, workspaceContextStatus]);
+
+  const mineMemberId = mineOnly ? currentMemberId : null;
   const load = useCallback(async (): Promise<void> => {
     if (workspace === null) {
       setIsLoading(false);
       return;
     }
+    // 名册/本人身份必须与当前 workspace 同代；A→B 切换时不可沿用 A 的 ready。
+    if (memberContextWorkspaceId !== workspace.workspace_id) return;
     // B4:mine 过滤需等本人 member id 解析完成,否则首载显示全量
-    if (mineOnly && currentMemberId === null) return;
+    if (mineOnly && mineMemberId === null) return;
     setIsLoading(true);
     setError(null);
     const seq = ++loadSeqRef.current;
@@ -209,16 +264,15 @@ export function IssuesPage(): React.JSX.Element {
         setHasLoaded(true);
       }
     }
-    // currentMemberId 仅在 mine 过滤时影响结果,避免无关的重拉(首载竞态 B4)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     client,
     workspace,
+    memberContextWorkspaceId,
     qFilter,
     categoryFilter,
     priorityFilter,
     mineOnly,
-    mineOnly ? currentMemberId : null,
+    mineMemberId,
   ]);
 
   useEffect(() => {
@@ -231,9 +285,21 @@ export function IssuesPage(): React.JSX.Element {
     const channel = workspaceIssuesChannel(workspace.workspace_id);
     realtime.client.subscribe(channel);
     const off = realtime.client.onFrame((frame) => {
+      if (frame.channel !== channel) return;
       setIssues((prev) =>
-        applyIssueListFrame(prev, frame, (issue) =>
-          matchesFilters(issue, categoryFilter, priorityFilter, mineOnly, currentMemberId, qFilter),
+        applyIssueListFrame(
+          prev,
+          frame,
+          (issue) =>
+            issue.workspace_id === workspace.workspace_id &&
+            matchesFilters(
+              issue,
+              categoryFilter,
+              priorityFilter,
+              mineOnly,
+              currentMemberId,
+              qFilter,
+            ),
         ),
       );
     });
@@ -265,6 +331,7 @@ export function IssuesPage(): React.JSX.Element {
       });
       setNextCursor(page.nextCursor);
     } catch (err: unknown) {
+      if (seq !== loadSeqRef.current) return;
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
       toast.addToast(tRef.current(key), {
         tone: 'danger',
@@ -425,6 +492,24 @@ export function IssuesPage(): React.JSX.Element {
     setParams({ q: null, category: null, priority: null, mine: null });
   }, [setParams]);
 
+  if (workspaceContext?.status === 'loading') {
+    return (
+      <div className="mesh-issues__skeleton" role="status" data-testid="issues-skeleton">
+        <span className="sr-only">{t('common.loading')}</span>
+      </div>
+    );
+  }
+  if (workspaceContext?.status === 'error') {
+    return (
+      <ErrorState
+        title={t('state.errorTitle')}
+        description={t('state.errorDescription')}
+        impact={t('issues.errorImpact')}
+        retryLabel={t('common.retry')}
+        onRetry={() => void workspaceContext.refresh()}
+      />
+    );
+  }
   if (workspace === null && !isLoading && error === null) {
     return <EmptyState title={t('state.emptyTitle')} description={t('issues.noWorkspace')} />;
   }

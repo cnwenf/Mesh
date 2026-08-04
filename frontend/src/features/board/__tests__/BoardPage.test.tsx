@@ -4,12 +4,40 @@
  * 空态(无视图 → 主操作)。
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import type { RecordedCall } from '../../../api/__tests__/fetchStub';
+import { RealtimeContext } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import { BoardPage } from '../BoardPage';
 import type { View } from '../types';
+
+const workspaceContextState = vi.hoisted(() => ({
+  workspace: {
+    id: 'ws-1',
+    name: 'Team',
+    slug: 'team',
+    logo_url: null,
+    timezone: 'UTC',
+    settings: {},
+    my_role: 'owner' as const,
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+  },
+}));
+
+vi.mock('../../../workspace/WorkspaceProvider', () => ({
+  useOptionalWorkspace: () => ({
+    status: 'ready',
+    workspace: workspaceContextState.workspace,
+    error: null,
+    isAdmin: true,
+    isOwner: true,
+    refresh: vi.fn(async () => undefined),
+    patch: vi.fn(async () => workspaceContextState.workspace),
+  }),
+}));
 
 const ME = {
   user: { id: 'usr-owner', email: 'owner@acme.com', display_name: 'Owner' },
@@ -79,7 +107,10 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
     if (method === 'GET' && url.includes('/views')) {
       if (options.failListOnce === true && !listFailed) {
         listFailed = true;
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       return fakeResponse({ body: { data: views, next_cursor: null } });
     }
@@ -91,7 +122,12 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
       });
     }
     if (method === 'POST' && url.endsWith('/duplicate')) {
-      return fakeResponse({ status: 201, body: { data: makeView({ id: 'view-copy', name: 'Sprint Board (copy)', is_default: false }) } });
+      return fakeResponse({
+        status: 201,
+        body: {
+          data: makeView({ id: 'view-copy', name: 'Sprint Board (copy)', is_default: false }),
+        },
+      });
     }
     if (method === 'PATCH' && url.endsWith('/wip')) {
       return fakeResponse({ body: { data: makeView() } });
@@ -109,15 +145,214 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
 }
 
 describe('BoardPage', () => {
-  beforeEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    workspaceContextState.workspace = {
+      id: 'ws-1',
+      name: 'Team',
+      slug: 'team',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner',
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+  });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('uses the routed WorkspaceProvider workspace for views, quick create and realtime', async () => {
+    workspaceContextState.workspace = {
+      id: 'ws-2',
+      name: 'Second',
+      slug: 'second',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner',
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    const secondView = makeView({
+      id: 'view-second',
+      workspace_id: 'ws-2',
+      name: 'Second board',
+    });
+    const firstView = makeView({ id: 'view-first', name: 'First board' });
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method });
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: {
+            data: {
+              ...ME,
+              memberships: [
+                ME.memberships[0],
+                {
+                  workspace_id: 'ws-2',
+                  workspace_name: 'Second',
+                  workspace_slug: 'second',
+                  role: 'owner',
+                  status: 'active',
+                  joined_at: null,
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (method === 'GET' && url.includes('/workspaces/ws-2/views')) {
+        return fakeResponse({ body: { data: [secondView], next_cursor: null } });
+      }
+      if (method === 'GET' && url.includes('/workspaces/ws-1/views')) {
+        return fakeResponse({ body: { data: [firstView], next_cursor: null } });
+      }
+      if (method === 'GET' && url.includes('/views/') && url.includes('/issues')) {
+        return fakeResponse({
+          body: {
+            layout: 'board',
+            group_by: 'state_category',
+            column_target_status: { todo: 'st-todo' },
+            groups: [],
+            next_cursor: null,
+          },
+        });
+      }
+      if (method === 'POST' && url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({
+          status: 201,
+          body: { data: { id: 'iss-created', title: 'Created in second' } },
+        });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+    const realtimeClient = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(),
+      onFrame: vi.fn(() => () => undefined),
+      onState: vi.fn(() => () => undefined),
+    };
+
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: realtimeClient as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/w/second/board' },
+    );
+
+    await screen.findByText('Second board');
+    await screen.findByTestId('board-columns');
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-2/views'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-1/views'))).toBe(false);
+    expect(realtimeClient.subscribe).toHaveBeenCalledWith('workspace:ws-2:issues');
+
+    const input = screen.getByTestId('quick-add-todo');
+    fireEvent.change(input, { target: { value: 'Created in second' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (call) => call.method === 'POST' && call.url.includes('/workspaces/ws-2/issues'),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('keeps list-view issue deep links under the routed workspace slug', async () => {
+    workspaceContextState.workspace = {
+      id: 'ws-2',
+      name: 'Second',
+      slug: 'second',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner',
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    const secondView = makeView({
+      id: 'view-second',
+      workspace_id: 'ws-2',
+      name: 'Second list',
+      layout: 'list',
+      can_write: false,
+    });
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/workspaces/ws-2/views')) {
+        return fakeResponse({ body: { data: [secondView], next_cursor: null } });
+      }
+      if (url.includes('/views/view-second/issues')) {
+        return fakeResponse({
+          body: {
+            layout: 'list',
+            group_by: 'state_category',
+            column_target_status: { todo: 'st-todo' },
+            groups: [
+              {
+                key: 'todo',
+                label: 'Todo',
+                count: 1,
+                wip: null,
+                data: [
+                  {
+                    id: 'iss-second',
+                    identifier: 'SECOND-1',
+                    title: 'Second list issue',
+                    state_category: 'todo',
+                    status: { id: 'st-todo', name: 'Todo', category: 'todo' },
+                    status_id: 'st-todo',
+                    priority: 'high',
+                    assignee: null,
+                    assignee_id: null,
+                    project_id: null,
+                    position: 1,
+                    version: 1,
+                    updated_at: '2026-07-26T10:00:00Z',
+                  },
+                ],
+              },
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceSlug/board" element={<BoardPage />} />
+        <Route
+          path="/w/:workspaceSlug/issues/:issueId"
+          element={<div data-testid="workspace-issue-detail" />}
+        />
+      </Routes>,
+      { route: '/w/second/board' },
+    );
+
+    const titleButtons = await screen.findAllByRole('button', { name: 'Second list issue' });
+    fireEvent.click(titleButtons[0]!);
+    expect(await screen.findByTestId('workspace-issue-detail')).toBeInTheDocument();
+  });
 
   it('默认视图渲染 7 个状态类别列 + 视图切换器', async () => {
     stubFetchByRoute();
     renderWithProviders(<BoardPage />, { route: '/board' });
 
     await screen.findByTestId('board-columns');
-    for (const key of ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled']) {
+    for (const key of [
+      'backlog',
+      'todo',
+      'in_progress',
+      'in_review',
+      'blocked',
+      'done',
+      'cancelled',
+    ]) {
       expect(screen.getByTestId(`board-column-${key}`)).toBeInTheDocument();
     }
     expect(screen.getByTestId('board-title')).toHaveTextContent('Sprint Board');
@@ -222,7 +457,11 @@ describe('BoardPage', () => {
         (c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/views'),
       );
       expect(post).toBeDefined();
-      expect(JSON.parse(String(post?.init?.body))).toMatchObject({ name: 'My Board', layout: 'board', visibility: 'private' });
+      expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+        name: 'My Board',
+        layout: 'board',
+        visibility: 'private',
+      });
     });
   });
 

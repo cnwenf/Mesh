@@ -4,7 +4,8 @@
  * 不安装 route/mock handler：所有读写均经 Compose nginx → FastAPI → PostgreSQL，
  * 实时链路由 gateway/worker 承担。每个视口完整执行：
  * 登录 → `c` 建 issue → `g b` 进看板并用方向键移动 → Ctrl+Enter 评论 →
- * 键盘切换工作区 → `/` 搜索，并逐步断言 HTTP 响应与数据库真值。
+ * 键盘切换工作区 → 路由 slug 隔离列表/创建/看板 → `/` 搜索，并逐步断言
+ * HTTP 响应与数据库真值。
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -16,6 +17,7 @@ import type { APIRequestContext, Locator, Page, TestInfo } from '@playwright/tes
 
 const PG_CONTAINER = process.env.MES128_PG_CONTAINER ?? 'mes128-real-postgres-1';
 const RESPONSE_TIMEOUT = 30_000;
+const FRONTEND_PORT = process.env.MES128_FRONTEND_PORT ?? '18430';
 const EVIDENCE_DIR =
   process.env.MES128_EVIDENCE_DIR ??
   join(dirname(fileURLToPath(import.meta.url)), 'evidence', 'mes111-b5-real');
@@ -68,6 +70,8 @@ interface DbEvidence {
   readonly first_issue: DbIssue;
   readonly comment_count: number;
   readonly second_issue_count: number;
+  readonly second_created_issue: DbIssue;
+  readonly second_created_issue_in_first_workspace_count: number;
 }
 
 interface ProjectEvidence {
@@ -87,7 +91,7 @@ interface EvidenceManifest {
     readonly browser_entrypoint: 'frontend-loopback-only';
     readonly mocked_routes: 0;
     readonly database: 'PostgreSQL';
-    readonly host_published_ports: readonly ['127.0.0.1:18430->frontend:80/tcp'];
+    readonly host_published_ports: readonly [string];
     readonly private_services: readonly ['PostgreSQL', 'Redis', 'MinIO', 'API', 'gateway'];
   };
   readonly projects: Readonly<Record<string, ProjectEvidence>>;
@@ -192,7 +196,7 @@ async function persistEvidence(
       browser_entrypoint: 'frontend-loopback-only',
       mocked_routes: 0,
       database: 'PostgreSQL',
-      host_published_ports: ['127.0.0.1:18430->frontend:80/tcp'],
+      host_published_ports: [`127.0.0.1:${FRONTEND_PORT}->frontend:80/tcp`],
       private_services: ['PostgreSQL', 'Redis', 'MinIO', 'API', 'gateway'],
     },
     projects: { ...projects, [project]: evidence },
@@ -211,6 +215,7 @@ function dbEvidence(
   commentBody: string,
   secondWorkspaceId: string,
   secondIssueId: string,
+  secondCreatedIssueId: string,
 ): DbEvidence {
   return psqlJson<DbEvidence>(`
     SELECT json_build_object(
@@ -254,6 +259,22 @@ function dbEvidence(
         WHERE i.id = ${sqlLiteral(secondIssueId)}::uuid
           AND i.workspace_id = ${sqlLiteral(secondWorkspaceId)}::uuid
           AND i.deleted_at IS NULL
+      ),
+      'second_created_issue', (
+        SELECT json_build_object(
+          'id', i.id,
+          'workspace_id', i.workspace_id,
+          'title', i.title,
+          'state_category', i.state_category,
+          'version', i.version
+        )
+        FROM issues i WHERE i.id = ${sqlLiteral(secondCreatedIssueId)}::uuid
+      ),
+      'second_created_issue_in_first_workspace_count', (
+        SELECT count(*) FROM issues i
+        WHERE i.id = ${sqlLiteral(secondCreatedIssueId)}::uuid
+          AND i.workspace_id = ${sqlLiteral(firstWorkspaceId)}::uuid
+          AND i.deleted_at IS NULL
       )
     );
   `);
@@ -261,7 +282,7 @@ function dbEvidence(
 
 test.describe.configure({ mode: 'serial' });
 
-test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API 与 PostgreSQL 一致', async ({
+test('登录→建 issue→键盘移卡→评论→切工作区→slug 隔离→搜索，API 与 PostgreSQL 一致', async ({
   page,
   request,
 }, testInfo) => {
@@ -272,7 +293,12 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   const firstSlug = `m128a-${suffix}`.slice(0, 48);
   const secondSlug = `m128b-${suffix}`.slice(0, 48);
   const firstIssueTitle = `Keyboard issue ${suffix}`;
-  const secondIssueTitle = `Search target ${suffix}`;
+  // Keep the search term exclusive to this issue. The backend intentionally
+  // performs token search, so reusing the journey suffix in every title would
+  // produce several valid candidates and make one ArrowDown select a sibling.
+  const searchTerm = `target${Date.now().toString(36)}${Math.random().toString(36).slice(2, 9)}`;
+  const secondIssueTitle = `Search target ${searchTerm}`;
+  const secondCreatedIssueTitle = `Routed B issue ${suffix}`;
   const commentBody = `Keyboard comment ${suffix}`;
   const apiResponses: ApiResponseEvidence[] = [];
   const screenshots: ScreenshotEvidence[] = [];
@@ -409,6 +435,19 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
     token,
     {
       name: `Keyboard board ${suffix}`,
+      layout: 'board',
+      visibility: 'shared',
+      group_by: 'state_category',
+      is_default: true,
+    },
+    apiResponses,
+  );
+  const secondView = await postData<{ id: string }>(
+    request,
+    `/api/v1/workspaces/${secondWorkspace.id}/views`,
+    token,
+    {
+      name: `Keyboard B board ${suffix}`,
       layout: 'board',
       visibility: 'shared',
       group_by: 'state_category',
@@ -598,6 +637,135 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   await expect(page.getByTestId('ws-home-name')).toContainText(`Keyboard B ${suffix}`);
   screenshots.push(await screenshot(page, testInfo, '05-workspace-switched'));
 
+  // 路由 slug 是列表与创建作用域的唯一来源。完整导航让 AppShell 与页面重新
+  // 解析 B；同时等待 by-slug、issues、statuses 三条真实读请求并核对响应/UI。
+  const secondIssuesLoadedPromise = Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === `/api/v1/workspaces/by-slug/${secondSlug}`,
+      { timeout: RESPONSE_TIMEOUT },
+    ),
+    page.waitForResponse(
+      (response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === 'GET' &&
+          url.pathname === `/api/v1/workspaces/${secondWorkspace.id}/issues` &&
+          url.searchParams.get('limit') === '25'
+        );
+      },
+      { timeout: RESPONSE_TIMEOUT },
+    ),
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === `/api/v1/workspaces/${secondWorkspace.id}/statuses`,
+      { timeout: RESPONSE_TIMEOUT },
+    ),
+  ]);
+  await page.goto(`/w/${secondSlug}/issues`);
+  const [secondWorkspaceResponse, secondIssuesResponse, secondStatusesResponse] =
+    await secondIssuesLoadedPromise;
+  expect(secondWorkspaceResponse.status()).toBe(200);
+  expect(secondIssuesResponse.status()).toBe(200);
+  expect(secondStatusesResponse.status()).toBe(200);
+  const secondWorkspaceIssues = await dataOf<IssueData[]>(secondIssuesResponse);
+  expect(secondWorkspaceIssues.map((issue) => issue.id)).toContain(secondIssue.id);
+  expect(secondWorkspaceIssues.map((issue) => issue.id)).not.toContain(firstIssue.id);
+  await expect(page.getByTestId('issues-skeleton')).toBeHidden();
+  const secondIssueRow = page.getByTestId(`issue-row-${secondIssue.identifier}`);
+  await expect(secondIssueRow).toContainText(secondIssueTitle);
+  await expect(secondIssueRow.getByRole('link', { name: secondIssueTitle })).toHaveAttribute(
+    'href',
+    `/w/${secondSlug}/issues/by-identifier/${secondIssue.identifier}`,
+  );
+  // Issue identifiers are workspace-scoped, so A and B may both legitimately
+  // allocate (for example) WS-1. Prove isolation with the unique A title/id,
+  // rather than treating an identifier collision as a leaked row.
+  await expect(page.getByTestId('issue-table')).not.toContainText(firstIssueTitle);
+
+  await page.getByTestId('issue-open-create').click();
+  const secondCreateTitle = page.getByTestId('issue-create-title');
+  await typeWithKeyboard(page, secondCreateTitle, secondCreatedIssueTitle);
+  const secondCreateResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === `/api/v1/workspaces/${secondWorkspace.id}/issues`,
+    { timeout: RESPONSE_TIMEOUT },
+  );
+  await page.keyboard.press('Enter');
+  const secondCreateResponse = await secondCreateResponsePromise;
+  expect(secondCreateResponse.status()).toBe(201);
+  const secondCreatedIssue = await dataOf<IssueData>(secondCreateResponse);
+  expect(secondCreatedIssue).toMatchObject({
+    workspace_id: secondWorkspace.id,
+    title: secondCreatedIssueTitle,
+    state_category: 'todo',
+  });
+  const secondCreatedDatabase = psqlJson<DbIssue>(`
+    SELECT json_build_object(
+      'id', i.id,
+      'workspace_id', i.workspace_id,
+      'title', i.title,
+      'state_category', i.state_category,
+      'version', i.version
+    )
+    FROM issues i WHERE i.id = ${sqlLiteral(secondCreatedIssue.id)}::uuid;
+  `);
+  expect(secondCreatedDatabase).toMatchObject({
+    id: secondCreatedIssue.id,
+    workspace_id: secondWorkspace.id,
+    title: secondCreatedIssueTitle,
+  });
+  await expect(page.getByTestId(`issue-row-${secondCreatedIssue.identifier}`)).toContainText(
+    secondCreatedIssueTitle,
+  );
+  screenshots.push(await screenshot(page, testInfo, '06-second-workspace-issues'));
+
+  // B 的默认 view 必须由 B 的 views 端点解析；投影只渲染 B 卡，A 卡不能泄漏。
+  const secondBoardLoadedPromise = Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === `/api/v1/workspaces/by-slug/${secondSlug}`,
+      { timeout: RESPONSE_TIMEOUT },
+    ),
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === `/api/v1/workspaces/${secondWorkspace.id}/views`,
+      { timeout: RESPONSE_TIMEOUT },
+    ),
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === `/api/v1/views/${secondView.id}/issues`,
+      { timeout: RESPONSE_TIMEOUT },
+    ),
+  ]);
+  await page.goto(`/w/${secondSlug}/board`);
+  const [secondBoardWorkspaceResponse, secondViewsResponse, secondProjectionResponse] =
+    await secondBoardLoadedPromise;
+  expect(secondBoardWorkspaceResponse.status()).toBe(200);
+  expect(secondViewsResponse.status()).toBe(200);
+  expect(secondProjectionResponse.status()).toBe(200);
+  if (compactBoard) {
+    const secondTodoChip = page.getByTestId('compact-chip-todo');
+    await expect(secondTodoChip).toBeVisible({ timeout: 30_000 });
+    await secondTodoChip.focus();
+    await page.keyboard.press('Enter');
+    await expect(secondTodoChip).toHaveAttribute('aria-selected', 'true');
+  }
+  await expect(page.getByTestId(`board-card-${secondIssue.id}`)).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId(`board-card-${secondCreatedIssue.id}`)).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId(`board-card-${firstIssue.id}`)).toHaveCount(0);
+  screenshots.push(await screenshot(page, testInfo, '07-second-workspace-board'));
+
   // `/` 聚焦真实全局搜索；等待工作区作用域 search 响应后用 Enter 打开结果。
   await page.keyboard.press('/');
   const searchInput = page.getByTestId('topbar-search');
@@ -608,18 +776,18 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
       return (
         response.request().method() === 'GET' &&
         url.pathname === `/api/v1/workspaces/${secondWorkspace.id}/search` &&
-        url.searchParams.get('q') === secondIssueTitle
+        url.searchParams.get('q') === searchTerm
       );
     },
     { timeout: RESPONSE_TIMEOUT },
   );
-  // 首字符触发顶栏 → 命令面板的异步焦点交接；确认交接完成后再继续键入，
-  // 避免真实浏览器把后续字符仍投递给正在卸载的顶栏控件。
-  await page.keyboard.type(secondIssueTitle.slice(0, 1));
+  // Type through the focused control so the first character can transfer
+  // focus/state to the command palette before the remaining characters land.
+  await searchInput.pressSequentially(searchTerm, { delay: 30 });
+  // 产品模式在首字符后把查询与焦点交接给完整命令面板；后续键盘导航
+  // 应断言面板内 combobox，而非已清空的顶栏入口。
   const paletteInput = page.getByRole('dialog').getByRole('combobox');
   await expect(paletteInput).toBeFocused();
-  await expect(paletteInput).toHaveValue(secondIssueTitle.slice(0, 1));
-  await page.keyboard.type(secondIssueTitle.slice(1));
   const searchResponse = await searchResponsePromise;
   expect(searchResponse.status()).toBe(200);
   const searchData =
@@ -641,7 +809,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/issues/${secondIssue.id}$`), { timeout: 30_000 });
   await expect(page.getByTestId('issue-detail-title')).toHaveValue(secondIssueTitle);
-  screenshots.push(await screenshot(page, testInfo, '06-search-opened'));
+  screenshots.push(await screenshot(page, testInfo, '08-search-opened'));
 
   const database = dbEvidence(
     email,
@@ -650,6 +818,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
     commentBody,
     secondWorkspace.id,
     secondIssue.id,
+    secondCreatedIssue.id,
   );
   expect(database).toMatchObject({
     user_count: 1,
@@ -657,6 +826,14 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
     autopilot_enabled: false,
     comment_count: 1,
     second_issue_count: 1,
+    second_created_issue_in_first_workspace_count: 0,
+    second_created_issue: {
+      id: secondCreatedIssue.id,
+      workspace_id: secondWorkspace.id,
+      title: secondCreatedIssueTitle,
+      state_category: 'todo',
+      version: secondCreatedIssue.version,
+    },
     first_issue: {
       id: firstIssue.id,
       workspace_id: firstWorkspace.id,
@@ -667,7 +844,7 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
   });
   // 注册前置会话在随后登录时被轮换；数据库应只保留一个未撤销会话。
   expect(database.session_count).toBe(1);
-  expect(screenshots).toHaveLength(7);
+  expect(screenshots).toHaveLength(9);
 
   const viewportSize = page.viewportSize();
   if (viewportSize === null) throw new Error('MES-128 evidence requires an explicit viewport');
@@ -680,6 +857,8 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
       'arrow-key non-drag board move',
       'Ctrl+Enter comment',
       'keyboard workspace switch',
+      'route-slug-scoped issue list and quick create in the second workspace',
+      'route-slug-scoped default board in the second workspace',
       'slash search, ArrowDown selection, Enter activation',
     ],
     api_responses: apiResponses,
@@ -692,6 +871,8 @@ test('登录→建 issue→键盘移卡→评论→切工作区→搜索，API �
       first_issue_state: 'equals in_progress with version incremented by 1',
       exact_comment_count: 'equals 1 for the submitted body',
       second_workspace_search_issue: 'exists exactly once in the second workspace',
+      second_workspace_created_issue: 'belongs to the second workspace and never the first',
+      second_workspace_board_projection: 'contains only cards from the second workspace',
     },
     screenshots,
   };

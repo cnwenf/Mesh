@@ -71,6 +71,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Verify real-stack harness contracts
+        run: npm run test:e2e:mes128-contracts
+
       - name: Unit & component tests (coverage >= 90% gate)
         run: npm run test:coverage
         env:
@@ -227,6 +230,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: quality
+    env:
+      # Exercise the public port knob in CI instead of silently accepting its default.
+      MES128_FRONTEND_PORT: 28430
     steps:
       - uses: actions/checkout@v4
 
@@ -245,7 +251,7 @@ jobs:
       - name: Generate isolated strong credentials
         run: ./e2e/mes128-real/gen-stack-env.sh --force
 
-      - name: Run desktop/mobile real-stack keyboard and theme journeys
+      - name: Run desktop/mobile real-stack keyboard, theme, and project journeys
         run: ./e2e/mes128-real/run-e2e.sh
 
       - name: Upload redacted journey evidence

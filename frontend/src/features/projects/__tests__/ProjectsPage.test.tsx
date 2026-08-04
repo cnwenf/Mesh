@@ -6,7 +6,7 @@
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
@@ -19,6 +19,7 @@ import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import { WorkspaceProvider } from '../../../workspace/WorkspaceProvider';
 import { CreateProjectDialog } from '../CreateProjectDialog';
 import { ProjectsPage } from '../ProjectsPage';
 
@@ -174,6 +175,17 @@ function stub(projects: readonly ListProjectsProject[], opts: FetchOptions = {})
 const listCalls = (calls: RecordedCall[]): RecordedCall[] =>
   calls.filter((c) => (c.init?.method ?? 'GET') === 'GET' && c.url.includes('/projects'));
 
+function deferredResponse(): {
+  readonly promise: Promise<Response>;
+  readonly resolve: (response: Response) => void;
+} {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
 /** ToastProvider 需要经 useT 提供 regionLabel(render.tsx 同款)。 */
@@ -277,6 +289,53 @@ describe('ProjectsPage', () => {
     );
   });
 
+  it('生产 /w 路由只使用 WorkspaceProvider 当前工作区,不再读取 memberships', async () => {
+    const detail = {
+      id: 'ws-2',
+      name: 'Beta',
+      slug: 'beta',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner' as const,
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    const providerClient = {
+      request: vi.fn(async () => detail),
+    };
+    const betaProject = { ...PROJECT_B, workspace_id: 'ws-2' };
+    const calls: RecordedCall[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/workspaces/ws-2/projects')) {
+        return fakeResponse({ body: { data: [betaProject], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    renderWithProviders(
+      <WorkspaceProvider slug="beta" client={providerClient as never}>
+        <Routes>
+          <Route path="/w/:workspaceSlug/projects" element={<ProjectsPage />} />
+        </Routes>
+      </WorkspaceProvider>,
+      { route: '/w/beta/projects' },
+    );
+
+    const card = await screen.findByTestId('project-card-prj-2');
+    expect(within(card).getByRole('link', { name: 'Borealis' })).toHaveAttribute(
+      'href',
+      '/w/beta/projects/prj-2',
+    );
+    expect(calls.some((call) => call.url.includes('/users/me'))).toBe(false);
+    expect(listCalls(calls).every((call) => call.url.includes('/workspaces/ws-2/projects'))).toBe(
+      true,
+    );
+  });
+
   it('route slug 无对应 membership 时不误读其他工作区项目', async () => {
     const calls = stub([PROJECT_A]);
     renderWithProviders(
@@ -290,6 +349,82 @@ describe('ProjectsPage', () => {
       await screen.findByText('You are not a member of any workspace yet.'),
     ).toBeInTheDocument();
     expect(listCalls(calls)).toHaveLength(0);
+  });
+
+  it('切换 route slug 后忽略旧工作区迟到的首屏,不覆盖新网格/游标/加载态', async () => {
+    const user = userEvent.setup();
+    const alphaPage = deferredResponse();
+    const betaPage = deferredResponse();
+    let betaRequested = false;
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: { data: { ...ME, memberships: [ME.memberships[0], betaMembership] } },
+        });
+      }
+      if (url.includes('/workspaces/ws-1/projects')) return alphaPage.promise;
+      if (url.includes('/workspaces/ws-2/projects')) {
+        betaRequested = true;
+        return betaPage.promise;
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/w/:workspaceSlug/projects"
+          element={
+            <>
+              <Link to="/w/beta/projects">Switch to Beta</Link>
+              <ProjectsPage />
+            </>
+          }
+        />
+      </Routes>,
+      { route: '/w/team/projects' },
+    );
+
+    await waitFor(() => expect(screen.getByText('Loading…')).toBeInTheDocument());
+    await user.click(screen.getByRole('link', { name: 'Switch to Beta' }));
+    await waitFor(() => expect(betaRequested).toBe(true));
+
+    await act(async () => {
+      alphaPage.resolve(fakeResponse({ body: { data: [PROJECT_A], next_cursor: 'alpha-cursor' } }));
+      await alphaPage.promise;
+    });
+
+    expect(screen.queryByText('Apollo')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.queryByTestId('projects-load-more')).not.toBeInTheDocument();
+
+    await act(async () => {
+      betaPage.resolve(
+        fakeResponse({
+          body: {
+            data: [{ ...PROJECT_B, workspace_id: 'ws-2' }],
+            next_cursor: null,
+          },
+        }),
+      );
+      await betaPage.promise;
+    });
+
+    const betaCard = await screen.findByTestId('project-card-prj-2');
+    expect(within(betaCard).getByRole('link', { name: 'Borealis' })).toHaveAttribute(
+      'href',
+      '/w/beta/projects/prj-2',
+    );
+    expect(screen.queryByText('Apollo')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('projects-load-more')).not.toBeInTheDocument();
   });
 
   it('创建成功后进入同一工作区的规范项目详情深链', async () => {
@@ -345,6 +480,19 @@ describe('ProjectsPage', () => {
     renderWithProviders(<ProjectsPage />, { route: '/projects' });
     expect(
       await screen.findByText('You are not a member of any workspace yet.'),
+    ).toBeInTheDocument();
+  });
+
+  it('读取本人工作区失败时显示可重试错误态', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.reject(new TypeError('network down'))),
+    );
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+    expect(
+      screen.getByText('We could not load this content. Please try again.'),
     ).toBeInTheDocument();
   });
 
@@ -430,6 +578,176 @@ describe('ProjectsPage', () => {
     expect(screen.queryByTestId('projects-load-more')).not.toBeInTheDocument();
   });
 
+  it('切换 route slug 后忽略旧工作区迟到的 Load more,并释放新工作区分页态', async () => {
+    const user = userEvent.setup();
+    const alphaMore = deferredResponse();
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    const staleAlphaProject = { ...PROJECT_A, id: 'prj-alpha-more', name: 'Alpha more' };
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: { data: { ...ME, memberships: [ME.memberships[0], betaMembership] } },
+        });
+      }
+      if (url.includes('/workspaces/ws-1/projects') && url.includes('cursor=alpha-cursor')) {
+        return alphaMore.promise;
+      }
+      if (url.includes('/workspaces/ws-1/projects')) {
+        return fakeResponse({ body: { data: [PROJECT_A], next_cursor: 'alpha-cursor' } });
+      }
+      if (url.includes('/workspaces/ws-2/projects')) {
+        return fakeResponse({
+          body: {
+            data: [{ ...PROJECT_B, workspace_id: 'ws-2' }],
+            next_cursor: 'beta-cursor',
+          },
+        });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/w/:workspaceSlug/projects"
+          element={
+            <>
+              <Link to="/w/beta/projects">Switch to Beta</Link>
+              <ProjectsPage />
+            </>
+          }
+        />
+      </Routes>,
+      { route: '/w/team/projects' },
+    );
+
+    await screen.findByText('Apollo');
+    await user.click(screen.getByTestId('projects-load-more'));
+    await user.click(screen.getByRole('link', { name: 'Switch to Beta' }));
+
+    expect(await screen.findByText('Borealis')).toBeInTheDocument();
+    expect(screen.getByTestId('projects-load-more')).toBeEnabled();
+
+    await act(async () => {
+      alphaMore.resolve(fakeResponse({ body: { data: [staleAlphaProject], next_cursor: null } }));
+      await alphaMore.promise;
+    });
+
+    expect(screen.queryByText('Alpha more')).not.toBeInTheDocument();
+    expect(screen.getByText('Borealis')).toBeInTheDocument();
+    expect(screen.getByTestId('projects-load-more')).toBeEnabled();
+  });
+
+  it('A→B 切换后健康度弹窗保持关闭且不会向 A 项目提交', async () => {
+    const user = userEvent.setup();
+    const calls: RecordedCall[] = [];
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: { data: { ...ME, memberships: [ME.memberships[0], betaMembership] } },
+        });
+      }
+      if (url.includes('/workspaces/ws-1/projects')) {
+        return fakeResponse({ body: { data: [PROJECT_A], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-2/projects')) {
+        return fakeResponse({
+          body: { data: [{ ...PROJECT_B, workspace_id: 'ws-2' }], next_cursor: null },
+        });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/w/:workspaceSlug/projects"
+          element={
+            <>
+              <Link to="/w/beta/projects">Switch to Beta</Link>
+              <ProjectsPage />
+            </>
+          }
+        />
+      </Routes>,
+      { route: '/w/team/projects' },
+    );
+
+    const alphaCard = await screen.findByTestId('project-card-prj-1');
+    await user.click(within(alphaCard).getByRole('button', { name: 'Update status' }));
+    expect(await screen.findByTestId('health-update-form')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('link', { name: 'Switch to Beta' }));
+    expect(await screen.findByTestId('project-card-prj-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('health-update-form')).not.toBeInTheDocument();
+    expect(calls.some((call) => (call.init?.method ?? 'GET') === 'POST')).toBe(false);
+  });
+
+  it('A→B 切换后新建项目弹窗不会在 B 工作区重开', async () => {
+    const user = userEvent.setup();
+    const betaMembership = {
+      ...ME.memberships[0],
+      workspace_id: 'ws-2',
+      workspace_name: 'Beta',
+      workspace_slug: 'beta',
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: { data: { ...ME, memberships: [ME.memberships[0], betaMembership] } },
+        });
+      }
+      if (url.includes('/workspaces/ws-1/projects')) {
+        return fakeResponse({ body: { data: [PROJECT_A], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-2/projects')) {
+        return fakeResponse({
+          body: { data: [{ ...PROJECT_B, workspace_id: 'ws-2' }], next_cursor: null },
+        });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/w/:workspaceSlug/projects"
+          element={
+            <>
+              <Link to="/w/beta/projects">Switch to Beta</Link>
+              <ProjectsPage />
+            </>
+          }
+        />
+      </Routes>,
+      { route: '/w/team/projects' },
+    );
+
+    await screen.findByTestId('project-card-prj-1');
+    await user.click(screen.getByTestId('new-project-button'));
+    expect(await screen.findByRole('dialog', { name: 'New project' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('link', { name: 'Switch to Beta' }));
+    expect(await screen.findByTestId('project-card-prj-2')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'New project' })).not.toBeInTheDocument();
+  });
+
   it('Load more 失败时提示错误 toast', async () => {
     const user = userEvent.setup();
     const impl = (async (input: RequestInfo | URL, _init?: RequestInit) => {
@@ -487,6 +805,64 @@ describe('ProjectsPage', () => {
     });
 
     expect(await screen.findByText('Realtime Project')).toBeInTheDocument();
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:projects',
+        seq: 2,
+        event: 'project.created',
+        payload: { project: PROJECT_ARCHIVED },
+      });
+    });
+    expect(screen.queryByText('Ceres')).not.toBeInTheDocument();
+  });
+
+  it('实时列表忽略 foreign channel 与当前频道中的 foreign workspace payload', async () => {
+    stub([PROJECT_A]);
+    const realtime = makeFakeRealtime();
+    render(
+      <MemoryRouter initialEntries={['/projects']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={realtime.value}>
+                <ProjectsPage />
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Apollo');
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-2:projects',
+        seq: 1,
+        event: 'project.created',
+        payload: { project: { ...PROJECT_B, id: 'foreign-channel', name: 'Foreign channel' } },
+      });
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:projects',
+        seq: 2,
+        event: 'project.created',
+        payload: {
+          project: {
+            ...PROJECT_B,
+            id: 'foreign-workspace',
+            workspace_id: 'ws-2',
+            name: 'Foreign workspace',
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText('Foreign channel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Foreign workspace')).not.toBeInTheDocument();
+    expect(screen.getByText('Apollo')).toBeInTheDocument();
   });
 });
 

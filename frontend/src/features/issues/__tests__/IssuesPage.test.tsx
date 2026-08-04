@@ -5,7 +5,7 @@
  * fetch 桩按调用序驱动:users/me → members → issues → statuses。
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -19,6 +19,49 @@ import type { RealtimeEventFrame } from '../../../types/realtime';
 import { requestOptimisticStepComplete } from '../../onboarding/notify';
 import { SAVED_VIEWS_STORAGE_KEY } from '../issuesSavedViews';
 import { IssuesPage } from '../IssuesPage';
+
+const workspaceContextState = vi.hoisted(() => ({
+  enabled: true,
+  status: 'ready' as 'loading' | 'ready' | 'not_found' | 'error',
+  workspace: {
+    id: 'ws-1',
+    name: 'Team',
+    slug: 'team',
+    logo_url: null,
+    timezone: 'UTC',
+    settings: {},
+    my_role: 'owner' as const,
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+  } as {
+    id: string;
+    name: string;
+    slug: string;
+    logo_url: null;
+    timezone: string;
+    settings: Record<string, unknown>;
+    my_role: 'owner';
+    created_at: string;
+    updated_at: string;
+  } | null,
+}));
+
+const refreshWorkspace = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock('../../../workspace/WorkspaceProvider', () => ({
+  useOptionalWorkspace: () =>
+    workspaceContextState.enabled
+      ? {
+          status: workspaceContextState.status,
+          workspace: workspaceContextState.workspace,
+          error: null,
+          isAdmin: true,
+          isOwner: true,
+          refresh: refreshWorkspace,
+          patch: vi.fn(async () => workspaceContextState.workspace),
+        }
+      : null,
+}));
 
 vi.mock('../../onboarding/notify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../onboarding/notify')>();
@@ -215,7 +258,21 @@ function queueInitialLoad(...extra: ReturnType<typeof fakeResponse>[]): FetchStu
 beforeEach(() => {
   vi.unstubAllGlobals();
   vi.mocked(requestOptimisticStepComplete).mockClear();
+  refreshWorkspace.mockClear();
   window.localStorage.clear();
+  workspaceContextState.enabled = true;
+  workspaceContextState.status = 'ready';
+  workspaceContextState.workspace = {
+    id: 'ws-1',
+    name: 'Team',
+    slug: 'team',
+    logo_url: null,
+    timezone: 'UTC',
+    settings: {},
+    my_role: 'owner',
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+  };
 });
 
 afterEach(() => {
@@ -223,6 +280,88 @@ afterEach(() => {
 });
 
 describe('IssuesPage', () => {
+  it('uses the routed WorkspaceProvider workspace for list, create, deep links and realtime', async () => {
+    workspaceContextState.workspace = {
+      id: 'ws-2',
+      name: 'Second',
+      slug: 'second',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner',
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    const secondIssue = {
+      ...issueFixture('iss-second', 'SECOND-1', 'Second workspace issue'),
+      workspace_id: 'ws-2',
+    };
+    const firstWorkspaceMe = {
+      ...ME,
+      memberships: [
+        ME.memberships[0],
+        {
+          workspace_id: 'ws-2',
+          workspace_name: 'Second',
+          workspace_slug: 'second',
+          role: 'owner',
+          status: 'active',
+          joined_at: null,
+        },
+      ],
+    };
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: firstWorkspaceMe } });
+      if (url.includes('/workspaces/ws-2/members')) return fakeResponse({ body: MEMBERS });
+      if (method === 'POST' && url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ status: 201, body: { data: secondIssue } });
+      }
+      if (method === 'GET' && url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ body: { data: [secondIssue], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-2/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-1/members')) return fakeResponse({ body: MEMBERS });
+      if (url.includes('/workspaces/ws-1/issues')) {
+        return fakeResponse({ body: { data: [ISSUE_1], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-1/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    const rt = makeFakeRealtime();
+    renderPage(rt.value, '/w/second/issues');
+
+    expect(await screen.findByText('SECOND-1')).toBeTruthy();
+    expect(screen.queryByText('WS-1')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Second workspace issue' })).toHaveAttribute(
+      'href',
+      '/w/second/issues/by-identifier/SECOND-1',
+    );
+    expect(rt.subscribe).toHaveBeenCalledWith('workspace:ws-2:issues');
+
+    fireEvent.click(screen.getByTestId('issue-open-create'));
+    fireEvent.change(screen.getByTestId('issue-create-title'), {
+      target: { value: 'Created in second' },
+    });
+    fireEvent.submit(screen.getByTestId('issue-create-form'));
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (call) => call.method === 'POST' && call.url.includes('/workspaces/ws-2/issues'),
+        ),
+      ).toBe(true);
+    });
+    expect(calls.some((call) => call.url.includes('/workspaces/ws-1/issues'))).toBe(false);
+  });
+
   it('renders issue rows after loading (identifier / title / status / assignee)', async () => {
     queueInitialLoad();
     const rt = makeFakeRealtime();
@@ -467,6 +606,39 @@ describe('IssuesPage', () => {
     await waitFor(() => {
       expect(screen.queryByText('WS-9')).toBeNull();
     });
+  });
+
+  it('ignores foreign-workspace realtime channels and payloads after routing', async () => {
+    queueInitialLoad();
+    const rt = makeFakeRealtime();
+    renderPage(rt.value);
+    await screen.findByText('WS-1');
+
+    const foreignIssue = {
+      ...issueFixture('iss-foreign', 'OTHER-1', 'Foreign workspace issue'),
+      workspace_id: 'ws-2',
+    };
+    await act(async () => {
+      // A listener registered by the shared realtime client sees every frame;
+      // a queued frame from another workspace must not enter this route.
+      rt.emit({
+        op: 'event',
+        channel: 'workspace:ws-2:issues',
+        seq: 4,
+        event: 'issue.created',
+        payload: { issue: foreignIssue },
+      } as RealtimeEventFrame);
+      // Defend against an incorrectly routed payload on the active channel too.
+      rt.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:issues',
+        seq: 5,
+        event: 'issue.created',
+        payload: { issue: { ...foreignIssue, id: 'iss-foreign-active-channel' } },
+      } as RealtimeEventFrame);
+    });
+
+    expect(screen.queryByText('Foreign workspace issue')).toBeNull();
   });
 
   it('does not re-insert filtered-out issues via realtime frames (§3.6 水位含 q)', async () => {
@@ -1163,6 +1335,89 @@ describe('IssuesPage', () => {
     expect(String(lastCall?.url)).toContain('assignee_id=mem-1');
   });
 
+  it('drops a stale load-more failure after the provider route switches workspace', async () => {
+    let rejectAlphaMore!: (reason: unknown) => void;
+    const alphaMore = new Promise<Response>((_resolve, reject) => {
+      rejectAlphaMore = reject;
+    });
+    const betaIssue = {
+      ...issueFixture('iss-beta', 'BETA-1', 'Beta issue'),
+      workspace_id: 'ws-2',
+    };
+    const betaWorkspace = {
+      id: 'ws-2',
+      name: 'Beta',
+      slug: 'beta',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: {},
+      my_role: 'owner' as const,
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/members')) return fakeResponse({ body: MEMBERS });
+      if (url.includes('/workspaces/ws-1/issues') && url.includes('cursor=alpha-more')) {
+        return alphaMore;
+      }
+      if (url.includes('/workspaces/ws-1/issues')) {
+        return fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'alpha-more' } });
+      }
+      if (url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ body: { data: [betaIssue], next_cursor: null } });
+      }
+      if (url.includes('/statuses')) {
+        return fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch);
+
+    const rt = makeFakeRealtime();
+    render(
+      <MemoryRouter initialEntries={['/w/team/issues']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={rt.value}>
+                <Routes>
+                  <Route
+                    path="/w/:workspaceSlug/issues"
+                    element={
+                      <>
+                        <Link
+                          to="/w/beta/issues"
+                          onClick={() => {
+                            workspaceContextState.workspace = betaWorkspace;
+                          }}
+                        >
+                          Switch to Beta
+                        </Link>
+                        <IssuesPage />
+                      </>
+                    }
+                  />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByText('Load more'));
+    fireEvent.click(screen.getByRole('link', { name: 'Switch to Beta' }));
+    await screen.findByText('BETA-1');
+
+    await act(async () => {
+      rejectAlphaMore(new TypeError('alpha pagination failed late'));
+      await alphaMore.catch(() => undefined);
+    });
+    expect(document.querySelector('.mesh-toast--danger')).toBeNull();
+  });
+
   it('loads an unfiltered next page and supports deselect-all branches', async () => {
     const stub = stubFetch(
       fakeResponse({ body: { data: ME } }),
@@ -1192,11 +1447,64 @@ describe('IssuesPage', () => {
   });
 
   it('renders the no-workspace empty state without issuing scoped list requests', async () => {
-    const noWorkspaceMe = { ...ME, memberships: [] };
-    const stub = stubFetch(fakeResponse({ body: { data: noWorkspaceMe } }));
+    workspaceContextState.status = 'not_found';
+    workspaceContextState.workspace = null;
+    const stub = stubFetch();
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderPage(makeFakeRealtime().value);
     await screen.findByText('No active workspace — create or join one to manage issues.');
     expect(stub.calls.some((call) => String(call.url).includes('/issues?'))).toBe(false);
+  });
+
+  it('renders WorkspaceProvider loading and error states and retries provider resolution', async () => {
+    workspaceContextState.status = 'loading';
+    workspaceContextState.workspace = null;
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/w/team/issues']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <Routes>
+                  <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId('issues-skeleton')).toBeTruthy();
+
+    workspaceContextState.status = 'error';
+    rerender(
+      <MemoryRouter initialEntries={['/w/team/issues']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <Routes>
+                  <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(refreshWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps standalone route compatibility by matching the explicit workspace slug', async () => {
+    workspaceContextState.enabled = false;
+    queueInitialLoad();
+    renderPage(makeFakeRealtime().value);
+
+    expect(await screen.findByText('WS-1')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Fix the login bug' })).toHaveAttribute(
+      'href',
+      '/w/team/issues/by-identifier/WS-1',
+    );
   });
 });

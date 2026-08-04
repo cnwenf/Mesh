@@ -52,3 +52,20 @@ realtime, routing, accessibility, and optimistic-interaction contracts.
   drag, keyboard-move, touch-move, switch theme, and verify phone/desktop layout.
 - Run backend unit, coverage, and real e2e gates plus specification and source
   provenance checks before handoff.
+
+## Review remediation
+
+- Treat the `WorkspaceProvider` resolved from `/w/:workspaceSlug/*` as the only
+  workspace source for the migrated project, issue, and board families. A page
+  must never fall back to the first membership when a route slug is present.
+- Cover an in-place A-to-B route change with delayed A responses. Each list,
+  cursor, loading, and error write must be guarded by the current request
+  generation so stale data cannot replace the B workspace state.
+- Keep `MES128_FRONTEND_PORT` as the real-stack runner's single public-port
+  input and pass the same value to Compose, Playwright, generated URLs, and the
+  evidence manifest. Successful production-stack journeys must persist their
+  evidence under `MES128_EVIDENCE_DIR`, not only attach it to a transient test
+  report.
+- Encode every dynamic workspace, project, issue, and view route segment before
+  navigation, and keep component tests mounted through the same route/provider
+  shape used by production.

@@ -74,8 +74,7 @@ describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
     expect(onChange).toHaveBeenLastCalledWith('issues');
   });
 
-  it('Home/End 跳首末可用页签', async () => {
-    const user = userEvent.setup();
+  it('Home/End 跳首末可用页签', () => {
     render(<Tabs items={ITEMS} label="t" />);
     const overview = screen.getByRole('tab', { name: '概览' });
     overview.focus();

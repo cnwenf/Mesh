@@ -17,6 +17,7 @@ import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { useSettingsStore } from '../../../state/settingsStore';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import { IssueByIdRedirect } from '../IssueByIdRedirect';
 import { IssueDetailPage, categoryTone } from '../IssueDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
@@ -548,15 +549,15 @@ describe('IssueDetailPage', () => {
     expect(screen.getByText('No activity yet.')).toBeTruthy();
   });
 
-  it('derives the canonical workspace slug from membership on the legacy UUID route', async () => {
+  it('生产 UUID 深链经 IssueByIdRedirect 挂载详情并保留 workspace slug', async () => {
     queue();
     render(
-      <MemoryRouter initialEntries={['/issues/iss-1']}>
+      <MemoryRouter initialEntries={['/w/ws/issues/550e8400-e29b-41d4-a716-446655440000']}>
         <ThemeProvider>
           <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
             <ToastLayer>
               <Routes>
-                <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+                <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueByIdRedirect />} />
               </Routes>
             </ToastLayer>
           </I18nProvider>

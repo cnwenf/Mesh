@@ -130,16 +130,27 @@ npx playwright test --config playwright.mes90.config.ts
 MES-159 将工作区首页、项目列表/详情、issue 列表/详情与看板收敛到
 Mesh `design/components` 适配层。页面不得直接导入底层组件库；Input、
 Textarea、Button、DataTable 与 Tabs 的 Appica 渲染契约由组件测试中的
-`data-slot` 断言守护。项目与 issue 导航统一使用
-`/w/:workspaceSlug/...`，多工作区数据作用域按路由 slug 解析；看板桌面拖拽、
-键盘移动、触控移动和取消回滚仍走同一原子 move 数据流。
+`data-slot` 断言守护。项目、issue 与看板导航统一使用
+`/w/:workspaceSlug/...`，页面只消费该路由下 `WorkspaceProvider` 已解析的工作区；
+不得回退到首个 membership。原位从工作区 A 切到 B 时，旧工作区的在途列表、
+游标、错误与加载态响应均由请求代次守卫丢弃，旧工作区 Realtime 帧和项目级
+对话框目标也不得进入新工作区。看板桌面拖拽、键盘移动、触控移动和取消回滚
+仍走同一原子 move 数据流。
 当前 Spec 仅声明 `sub_group_by` 配置字段，未定义二维泳道投影返回体、
 跨泳道 move 参数/实时事件、位置作用域与 WIP 口径。因此本基线只覆盖
 已定义的单维看板，不把未定义的泳道行为计为已完成。
 
-真实 production 栈验证继续使用 `e2e/mes128-real/run-e2e.sh`。如需避免本地
-复验覆盖仓库内历史截图，可设置 `MES128_EVIDENCE_DIR` 指向运行期目录；CI 默认
-仍生成并上传标准 evidence 目录。
+真实 production 栈验证继续使用 `e2e/mes128-real/run-e2e.sh`。
+`MES128_FRONTEND_PORT` 是浏览器入口的单一端口输入，runner 会把同一值传给
+Compose 发布端、readyz 探针、Playwright base URL、应用公开 URL 与证据 manifest。
+如需避免本地复验覆盖仓库内历史截图，可设置 `MES128_EVIDENCE_DIR` 指向运行期
+目录；项目和键盘旅程在成功时也会把截图与 manifest 写入该目录，CI 再上传它。
+
+```bash
+MES128_FRONTEND_PORT=19430 \
+MES128_EVIDENCE_DIR=./test-results/mes128-real-evidence \
+./e2e/mes128-real/run-e2e.sh
+```
 
 ```bash
 npm run lint            # ESLint 9(flat config)

@@ -57,6 +57,32 @@ describe('MobileNav(手机底部主导航)', () => {
     expect(board).toHaveAttribute('aria-current', 'page');
   });
 
+  it('已保存视图的规范深链仍把看板标记为当前页', async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({
+        id: 'ws-1',
+        name: 'Acme',
+        slug: 'acme',
+        logo_url: null,
+        timezone: 'UTC',
+        settings: {},
+        my_role: 'owner',
+        created_at: '2026-07-25T00:00:00Z',
+        updated_at: '2026-07-25T00:00:00Z',
+      }),
+    };
+    renderWithProviders(
+      <WorkspaceProvider slug="acme" client={client as never}>
+        <MobileNav onOpenMore={vi.fn()} />
+      </WorkspaceProvider>,
+      { route: '/w/acme/views/view-1' },
+    );
+
+    const board = screen.getByTestId('mobile-nav-board');
+    await waitFor(() => expect(board).toHaveAttribute('href', '/w/acme/board'));
+    expect(board).toHaveAttribute('aria-current', 'page');
+  });
+
   it('「更多」触发 onOpenMore 回调', () => {
     const onOpenMore = vi.fn();
     renderNav('/', onOpenMore);
