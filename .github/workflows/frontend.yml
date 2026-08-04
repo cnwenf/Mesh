@@ -262,7 +262,7 @@ jobs:
       - name: Generate isolated strong credentials
         run: ./e2e/mes128-real/gen-stack-env.sh --force
 
-      - name: Run desktop/mobile real-stack keyboard, theme, project, and board journeys
+      - name: Run desktop/mobile real-stack keyboard, theme, and project journeys
         run: ./e2e/mes128-real/run-e2e.sh
 
       - name: Upload redacted journey evidence
