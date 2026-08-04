@@ -72,6 +72,7 @@ class MoveRequest(BaseModel):
 
     issue_id: str
     to_group_key: str = Field(min_length=1, max_length=120)
+    to_sub_group_key: str | None = Field(default=None, min_length=1, max_length=120)
     position: float = 0.0
     version: int | None = None
     confirm: bool = False
@@ -86,4 +87,13 @@ class ReorderCardsRequest(BaseModel):
 
     issue_id: str
     to_group_key: str = Field(min_length=1, max_length=120)
+    sub_group_key: str | None = Field(default=None, min_length=1, max_length=120)
     position: float = 0.0
+
+
+class QuickCreateIssueRequest(BaseModel):
+    """POST /views/{id}/issues — create exactly in the requested board cell."""
+
+    title: str = Field(min_length=1, max_length=255)
+    group_key: str = Field(min_length=1, max_length=120)
+    sub_group_key: str | None = Field(default=None, min_length=1, max_length=120)

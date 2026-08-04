@@ -36,16 +36,12 @@ async def _register_and_login(client, email: str) -> str:
         "/api/v1/auth/register",
         json={"email": email, "password": "a-strong-passw0rd", "display_name": email.split("@")[0]},
     )
-    login = await client.post(
-        "/api/v1/auth/login", json={"email": email, "password": "a-strong-passw0rd"}
-    )
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "a-strong-passw0rd"})
     return login.json()["data"]["access_token"]
 
 
 async def _create_workspace(client, token, slug: str) -> dict:
-    resp = await client.post(
-        "/api/v1/workspaces", json={"name": "Team", "slug": slug}, headers=_auth(token)
-    )
+    resp = await client.post("/api/v1/workspaces", json={"name": "Team", "slug": slug}, headers=_auth(token))
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
 
@@ -63,9 +59,7 @@ async def _create_project(client, token, ws_id: str, key: str) -> dict:
 async def _create_issue(client, token, ws_id: str, **fields) -> dict:
     body = {"title": f"Issue {uuid.uuid4().hex[:6]}"}
     body.update(fields)
-    resp = await client.post(
-        f"/api/v1/workspaces/{ws_id}/issues", json=body, headers=_auth(token)
-    )
+    resp = await client.post(f"/api/v1/workspaces/{ws_id}/issues", json=body, headers=_auth(token))
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
 
@@ -73,9 +67,7 @@ async def _create_issue(client, token, ws_id: str, **fields) -> dict:
 async def _create_view(client, token, ws_id: str, **overrides) -> dict:
     body = {"name": f"Board {uuid.uuid4().hex[:6]}"}
     body.update(overrides)
-    resp = await client.post(
-        f"/api/v1/workspaces/{ws_id}/views", json=body, headers=_auth(token)
-    )
+    resp = await client.post(f"/api/v1/workspaces/{ws_id}/views", json=body, headers=_auth(token))
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
 
@@ -88,13 +80,14 @@ async def _statuses_by_category(client, token, ws_id: str) -> dict:
 async def _outbox_events(session_factory, event_name: str) -> list[dict]:
     async with session_factory() as session:
         rows = (
-            await session.execute(
-                text(
-                    "SELECT payload FROM outbox_events "
-                    "WHERE event_type = 'realtime.publish'"
+            (
+                await session.execute(
+                    text("SELECT payload FROM outbox_events WHERE event_type = 'realtime.publish'")
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     return [row for row in rows if row.get("event") == event_name]
 
 
@@ -103,7 +96,8 @@ async def _position_rows(session_factory, view_id: str) -> list:
         return (
             await session.execute(
                 text(
-                    "SELECT issue_id::text, group_key, position FROM view_issue_positions "
+                    "SELECT issue_id::text, group_key, sub_group_key, position "
+                    "FROM view_issue_positions "
                     "WHERE view_id = :view_id"
                 ),
                 {"view_id": view_id},
@@ -140,9 +134,7 @@ async def test_projection_grouped_durable_and_overall_cursor(api_client, session
     for _ in range(2):
         await _create_issue(api_client, owner, ws["id"], priority="high")
     await _create_issue(api_client, owner, ws["id"], priority="low")
-    view = await _create_view(
-        api_client, owner, ws["id"], visibility="shared", group_by="priority"
-    )
+    view = await _create_view(api_client, owner, ws["id"], visibility="shared", group_by="priority")
     view_id = view["id"]
 
     resp = await api_client.get(f"/api/v1/views/{view_id}/issues", headers=_auth(owner))
@@ -157,9 +149,7 @@ async def test_projection_grouped_durable_and_overall_cursor(api_client, session
         assert "cursor" not in group  # no per-group cursor
 
     # Overall cursor pagination across a small limit.
-    page1 = await api_client.get(
-        f"/api/v1/views/{view_id}/issues?limit=2", headers=_auth(owner)
-    )
+    page1 = await api_client.get(f"/api/v1/views/{view_id}/issues?limit=2", headers=_auth(owner))
     body1 = page1.json()
     assert body1["next_cursor"] is not None
     page2 = await api_client.get(
@@ -172,13 +162,110 @@ async def test_projection_grouped_durable_and_overall_cursor(api_client, session
     issue = await _create_issue(api_client, owner, ws["id"])
     move = await api_client.post(
         f"/api/v1/views/{view_id}/moves",
-        json={"issue_id": issue["id"], "to_group_key": "urgent", "position": 2.5,
-              "version": issue["version"]},
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": "urgent",
+            "position": 2.5,
+            "version": issue["version"],
+        },
         headers=_auth(owner),
     )
     assert move.status_code == 200, move.text
     rows = await _position_rows(session_factory, view_id)
     assert any(r.issue_id == issue["id"] and r.group_key == "urgent" for r in rows)
+
+
+async def test_swimlane_projection_cell_commands_and_idempotency(api_client, session_factory):
+    owner = await _register_and_login(api_client, "owner-swimlanes@corp.com")
+    ws = await _create_workspace(api_client, owner, "e2e-swimlanes")
+    view = await _create_view(
+        api_client,
+        owner,
+        ws["id"],
+        visibility="shared",
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    url = f"/api/v1/views/{view['id']}/issues"
+    headers = {**_auth(owner), "Idempotency-Key": "e2e-swimlane-create-1"}
+    first = await api_client.post(
+        url,
+        json={
+            "title": "Created in a swimlane cell",
+            "group_key": "todo",
+            "sub_group_key": "low",
+        },
+        headers=headers,
+    )
+    replay = await api_client.post(
+        url,
+        json={
+            "title": "Retry body must not win",
+            "group_key": "done",
+            "sub_group_key": "urgent",
+        },
+        headers=headers,
+    )
+    assert first.status_code == replay.status_code == 201
+    issue = first.json()["data"]
+    assert replay.json()["data"]["id"] == issue["id"]
+    assert replay.json()["data"]["title"] == "Created in a swimlane cell"
+
+    moved = await api_client.post(
+        f"/api/v1/views/{view['id']}/moves",
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": "in_progress",
+            "to_sub_group_key": "high",
+            "position": 2.5,
+            "version": issue["version"],
+        },
+        headers=_auth(owner),
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["data"]["state_category"] == "in_progress"
+    assert moved.json()["data"]["priority"] == "high"
+
+    reordered = await api_client.post(
+        f"/api/v1/views/{view['id']}/reorder",
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": "in_progress",
+            "sub_group_key": "high",
+            "position": 1.25,
+        },
+        headers=_auth(owner),
+    )
+    assert reordered.status_code == 200, reordered.text
+    assert reordered.json()["data"]["sub_group_key"] == "high"
+
+    projection = await api_client.get(f"{url}?limit=1", headers=_auth(owner))
+    assert projection.status_code == 200, projection.text
+    payload = projection.json()
+    assert "groups" not in payload
+    assert payload["columns"] and payload["lanes"]
+    assert sum(len(group["data"]) for lane in payload["lanes"] for group in lane["groups"]) == 1
+    high_lane = next(lane for lane in payload["lanes"] if lane["key"] == "high")
+    in_progress = next(group for group in high_lane["groups"] if group["key"] == "in_progress")
+    assert in_progress["count"] == 1
+    assert in_progress["data"][0]["id"] == issue["id"]
+
+    rows = await _position_rows(session_factory, view["id"])
+    matching = [row for row in rows if row.issue_id == issue["id"]]
+    assert len(matching) == 1
+    assert (matching[0].group_key, matching[0].sub_group_key, matching[0].position) == (
+        "in_progress",
+        "high",
+        1.25,
+    )
+    created = await _outbox_events(session_factory, "issue.created")
+    detail_events = [frame for frame in created if frame["channel"] == f"issue:{issue['id']}"]
+    assert len(detail_events) == 1
+    move_events = await _outbox_events(session_factory, "issue.moved")
+    assert any(
+        frame["data"].get("from_sub_group") == "low" and frame["data"].get("to_sub_group") == "high"
+        for frame in move_events
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +290,12 @@ async def test_move_wip_block_rejected_durable(api_client, session_factory):
 
     resp = await api_client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": mover["id"], "to_group_key": "in_progress", "position": 1.0,
-              "version": mover["version"]},
+        json={
+            "issue_id": mover["id"],
+            "to_group_key": "in_progress",
+            "position": 1.0,
+            "version": mover["version"],
+        },
         headers=_auth(owner),
     )
     assert resp.status_code == 422
@@ -233,8 +324,12 @@ async def test_move_wip_warn_succeeds_and_emits(api_client, session_factory):
 
     resp = await api_client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": mover["id"], "to_group_key": "in_progress", "position": 1.0,
-              "version": mover["version"]},
+        json={
+            "issue_id": mover["id"],
+            "to_group_key": "in_progress",
+            "position": 1.0,
+            "version": mover["version"],
+        },
         headers=_auth(owner),
     )
     assert resp.status_code == 200, resp.text
@@ -252,15 +347,17 @@ async def test_t9_concurrent_drag_exactly_one_conflict(api_client, session_facto
     owner = await _register_and_login(api_client, "owner-t9@corp.com")
     ws = await _create_workspace(api_client, owner, "e2e-t9")
     issue = await _create_issue(api_client, owner, ws["id"])
-    view = await _create_view(
-        api_client, owner, ws["id"], visibility="shared", group_by="state_category"
-    )
+    view = await _create_view(api_client, owner, ws["id"], visibility="shared", group_by="state_category")
 
     async def _move(to_group_key: str):
         return await api_client.post(
             f"/api/v1/views/{view['id']}/moves",
-            json={"issue_id": issue["id"], "to_group_key": to_group_key, "position": 1.0,
-                  "version": issue["version"]},
+            json={
+                "issue_id": issue["id"],
+                "to_group_key": to_group_key,
+                "position": 1.0,
+                "version": issue["version"],
+            },
             headers=_auth(owner),
         )
 
@@ -295,16 +392,19 @@ async def test_wip_concurrency_block_no_overshoot(api_client, session_factory):
     async def _move(issue):
         return await api_client.post(
             f"/api/v1/views/{view['id']}/moves",
-            json={"issue_id": issue["id"], "to_group_key": "in_progress", "position": 1.0,
-                  "version": issue["version"]},
+            json={
+                "issue_id": issue["id"],
+                "to_group_key": "in_progress",
+                "position": 1.0,
+                "version": issue["version"],
+            },
             headers=_auth(owner),
         )
 
     responses = await asyncio.gather(*[_move(issue) for issue in movers])
     successes = sum(1 for r in responses if r.status_code == 200)
     rejected = sum(
-        1 for r in responses
-        if r.status_code == 422 and r.json()["error"]["code"] == "wip_limit_exceeded"
+        1 for r in responses if r.status_code == 422 and r.json()["error"]["code"] == "wip_limit_exceeded"
     )
     assert successes == 2
     assert rejected == 3
@@ -323,15 +423,17 @@ async def test_t22_cross_project_move_contract(api_client, session_factory):
     src = await _create_project(api_client, owner, ws["id"], "SRC")
     dst = await _create_project(api_client, owner, ws["id"], "DST")
     issue = await _create_issue(api_client, owner, ws["id"], project_id=src["id"])
-    view = await _create_view(
-        api_client, owner, ws["id"], visibility="shared", group_by="project"
-    )
+    view = await _create_view(api_client, owner, ws["id"], visibility="shared", group_by="project")
 
     # Unconfirmed → 422 with preview.
     unconfirmed = await api_client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": issue["id"], "to_group_key": dst["id"], "position": 1.0,
-              "version": issue["version"]},
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": dst["id"],
+            "position": 1.0,
+            "version": issue["version"],
+        },
         headers=_auth(owner),
     )
     assert unconfirmed.status_code == 422
@@ -341,8 +443,13 @@ async def test_t22_cross_project_move_contract(api_client, session_factory):
     # dry_run → preview only (no write).
     dry = await api_client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": issue["id"], "to_group_key": dst["id"], "position": 1.0,
-              "version": issue["version"], "dry_run": True},
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": dst["id"],
+            "position": 1.0,
+            "version": issue["version"],
+            "dry_run": True,
+        },
         headers=_auth(owner),
     )
     assert dry.status_code == 200
@@ -351,8 +458,13 @@ async def test_t22_cross_project_move_contract(api_client, session_factory):
     # Confirmed → single-transaction migration.
     confirmed = await api_client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": issue["id"], "to_group_key": dst["id"], "position": 1.5,
-              "version": issue["version"], "confirm": True},
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": dst["id"],
+            "position": 1.5,
+            "version": issue["version"],
+            "confirm": True,
+        },
         headers=_auth(owner),
     )
     assert confirmed.status_code == 200, confirmed.text
@@ -415,15 +527,11 @@ async def test_t1_cross_tenant_isolation(api_client, session_factory):
 # ---------------------------------------------------------------------------
 
 
-async def test_t6_resync_then_board_converges(
-    api_client, gateway_server, session_factory, redis_client
-):
+async def test_t6_resync_then_board_converges(api_client, gateway_server, session_factory, redis_client):
     owner = await _register_and_login(api_client, "owner-t6@corp.com")
     ws = await _create_workspace(api_client, owner, "e2e-t6")
     await _create_issue(api_client, owner, ws["id"], priority="high")
-    view = await _create_view(
-        api_client, owner, ws["id"], visibility="shared", group_by="priority"
-    )
+    view = await _create_view(api_client, owner, ws["id"], visibility="shared", group_by="priority")
     channel = f"view:{view['id']}"
     token = f"mesh-dev:{ws['id']}"
 
@@ -432,8 +540,11 @@ async def test_t6_resync_then_board_converges(
     async def _publish(data):
         async with session_factory() as session, session.begin():
             await emit_realtime(
-                session, workspace_id=uuid.UUID(ws["id"]), channel=channel,
-                event="view.updated", data=data,
+                session,
+                workspace_id=uuid.UUID(ws["id"]),
+                channel=channel,
+                event="view.updated",
+                data=data,
             )
         relay = OutboxRelay(
             session_factory,
@@ -502,9 +613,7 @@ async def test_view_presence_broadcast_on_subscribe(
 ):
     owner = await _register_and_login(api_client, "owner-presence@corp.com")
     ws = await _create_workspace(api_client, owner, "e2e-presence")
-    view = await _create_view(
-        api_client, owner, ws["id"], visibility="shared", group_by="state_category"
-    )
+    view = await _create_view(api_client, owner, ws["id"], visibility="shared", group_by="state_category")
     channel = f"view:{view['id']}"
     token = f"mesh-dev:{ws['id']}"
 
@@ -512,8 +621,11 @@ async def test_view_presence_broadcast_on_subscribe(
     # the projector has run at least once for this channel).
     async with session_factory() as session, session.begin():
         await emit_realtime(
-            session, workspace_id=uuid.UUID(ws["id"]), channel=channel,
-            event="view.updated", data={"seed": True},
+            session,
+            workspace_id=uuid.UUID(ws["id"]),
+            channel=channel,
+            event="view.updated",
+            data={"seed": True},
         )
     relay = OutboxRelay(
         session_factory,

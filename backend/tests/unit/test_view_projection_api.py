@@ -64,9 +64,7 @@ async def _register_and_login(client, email: str) -> str:
 
 
 async def _create_workspace(client, token, slug: str) -> dict:
-    resp = await client.post(
-        "/api/v1/workspaces", json={"name": "Team", "slug": slug}, headers=_auth(token)
-    )
+    resp = await client.post("/api/v1/workspaces", json={"name": "Team", "slug": slug}, headers=_auth(token))
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
 
@@ -74,8 +72,16 @@ async def _create_workspace(client, token, slug: str) -> dict:
 async def _create_view(client, token, ws_id, **overrides) -> dict:
     body = {"name": "Board"}
     body.update(overrides)
+    resp = await client.post(f"/api/v1/workspaces/{ws_id}/views", json=body, headers=_auth(token))
+    assert resp.status_code == 201, resp.text
+    return resp.json()["data"]
+
+
+async def _create_project(client, token, ws_id) -> dict:
     resp = await client.post(
-        f"/api/v1/workspaces/{ws_id}/views", json=body, headers=_auth(token)
+        f"/api/v1/workspaces/{ws_id}/projects",
+        json={"name": "Projection Project", "key": f"P{uuid.uuid4().hex[:5].upper()}"},
+        headers=_auth(token),
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
@@ -84,9 +90,7 @@ async def _create_view(client, token, ws_id, **overrides) -> dict:
 async def _create_issue(client, token, ws_id, **overrides) -> dict:
     body = {"title": f"Issue {uuid.uuid4().hex[:6]}"}
     body.update(overrides)
-    resp = await client.post(
-        f"/api/v1/workspaces/{ws_id}/issues", json=body, headers=_auth(token)
-    )
+    resp = await client.post(f"/api/v1/workspaces/{ws_id}/issues", json=body, headers=_auth(token))
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
 
@@ -118,8 +122,16 @@ async def test_get_view_issues_grouped_envelope(client) -> None:
 async def test_get_view_issues_state_category_column_target_status(client) -> None:
     token = await _register_and_login(client, "owner-cts@corp.com")
     ws = await _create_workspace(client, token, "proj-cts")
-    issue = await _create_issue(client, token, ws["id"])
-    view = await _create_view(client, token, ws["id"], visibility="shared", group_by="state_category")
+    project = await _create_project(client, token, ws["id"])
+    issue = await _create_issue(client, token, ws["id"], project_id=project["id"])
+    view = await _create_view(
+        client,
+        token,
+        ws["id"],
+        visibility="shared",
+        project_id=project["id"],
+        group_by="state_category",
+    )
 
     resp = await client.get(f"/api/v1/views/{view['id']}/issues", headers=_auth(token))
     payload = resp.json()
@@ -131,6 +143,15 @@ async def test_get_view_issues_state_category_column_target_status(client) -> No
     assert any(card["id"] == issue["id"] for card in todo["data"])
 
 
+async def test_workspace_wide_view_omits_ambiguous_column_target_status(client) -> None:
+    token = await _register_and_login(client, "owner-cts-wide@corp.com")
+    ws = await _create_workspace(client, token, "proj-cts-wide")
+    view = await _create_view(client, token, ws["id"], visibility="shared", group_by="state_category")
+    resp = await client.get(f"/api/v1/views/{view['id']}/issues", headers=_auth(token))
+    assert resp.status_code == 200, resp.text
+    assert "column_target_status" not in resp.json()
+
+
 async def test_get_view_issues_pagination_overall_cursor(client) -> None:
     token = await _register_and_login(client, "owner-page@corp.com")
     ws = await _create_workspace(client, token, "proj-page")
@@ -138,9 +159,7 @@ async def test_get_view_issues_pagination_overall_cursor(client) -> None:
         await _create_issue(client, token, ws["id"])
     view = await _create_view(client, token, ws["id"], visibility="shared", group_by="state_category")
 
-    page1 = await client.get(
-        f"/api/v1/views/{view['id']}/issues?limit=2", headers=_auth(token)
-    )
+    page1 = await client.get(f"/api/v1/views/{view['id']}/issues?limit=2", headers=_auth(token))
     payload1 = page1.json()
     assert payload1["next_cursor"] is not None
     page2 = await client.get(
@@ -187,6 +206,50 @@ async def test_get_view_issues_timeline_layout_501(client) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_quick_create_cell_is_idempotent_over_http(client) -> None:
+    token = await _register_and_login(client, "owner-quick-create@corp.com")
+    ws = await _create_workspace(client, token, "proj-quick-create")
+    view = await _create_view(
+        client,
+        token,
+        ws["id"],
+        visibility="shared",
+        group_by="state_category",
+        sub_group_by="priority",
+    )
+    headers = {
+        **_auth(token),
+        "Idempotency-Key": "api-quick-create-retry-1",
+    }
+    url = f"/api/v1/views/{view['id']}/issues"
+    first = await client.post(
+        url,
+        json={
+            "title": "Created from the board cell",
+            "group_key": "in_progress",
+            "sub_group_key": "urgent",
+        },
+        headers=headers,
+    )
+    replay = await client.post(
+        url,
+        json={
+            "title": "Changed retry body",
+            "group_key": "todo",
+            "sub_group_key": "low",
+        },
+        headers=headers,
+    )
+    assert first.status_code == replay.status_code == 201
+    assert replay.json()["data"]["id"] == first.json()["data"]["id"]
+    assert replay.json()["data"]["title"] == "Created from the board cell"
+
+    board = await client.get(url, headers=_auth(token))
+    payload = board.json()
+    cards = [card for lane in payload["lanes"] for group in lane["groups"] for card in group["data"]]
+    assert [card["id"] for card in cards].count(first.json()["data"]["id"]) == 1
+
+
 async def test_move_card_cross_column(client) -> None:
     token = await _register_and_login(client, "owner-move@corp.com")
     ws = await _create_workspace(client, token, "proj-move")
@@ -195,8 +258,12 @@ async def test_move_card_cross_column(client) -> None:
 
     resp = await client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": issue["id"], "to_group_key": "in_progress", "position": 1.0,
-              "version": issue["version"]},
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": "in_progress",
+            "position": 1.0,
+            "version": issue["version"],
+        },
         headers=_auth(token),
     )
     assert resp.status_code == 200, resp.text
@@ -213,8 +280,12 @@ async def test_move_card_stale_version_409(client) -> None:
 
     resp = await client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": issue["id"], "to_group_key": "in_progress", "position": 1.0,
-              "version": issue["version"] + 5},
+        json={
+            "issue_id": issue["id"],
+            "to_group_key": "in_progress",
+            "position": 1.0,
+            "version": issue["version"] + 5,
+        },
         headers=_auth(token),
     )
     assert resp.status_code == 409
@@ -226,9 +297,7 @@ async def test_move_card_wip_block_422(client) -> None:
     ws = await _create_workspace(client, token, "proj-wip")
     # Fill the in_progress column to its limit of 1 (block).
     statuses = await client.get(f"/api/v1/workspaces/{ws['id']}/statuses", headers=_auth(token))
-    by_category = {
-        s["category"]: s["id"] for s in statuses.json()["data"]
-    }
+    by_category = {s["category"]: s["id"] for s in statuses.json()["data"]}
     await _create_issue(client, token, ws["id"], status_id=by_category["in_progress"])
     mover = await _create_issue(client, token, ws["id"])
     view = await _create_view(
@@ -241,8 +310,12 @@ async def test_move_card_wip_block_422(client) -> None:
     )
     resp = await client.post(
         f"/api/v1/views/{view['id']}/moves",
-        json={"issue_id": mover["id"], "to_group_key": "in_progress", "position": 1.0,
-              "version": mover["version"]},
+        json={
+            "issue_id": mover["id"],
+            "to_group_key": "in_progress",
+            "position": 1.0,
+            "version": mover["version"],
+        },
         headers=_auth(token),
     )
     assert resp.status_code == 422

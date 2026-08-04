@@ -230,6 +230,10 @@ Mesh 由 **24 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 23 | [theme.md](features/theme.md) | 平台能力 | 三态主题与偏好协商链、语义 token + 暗色整组替换、WCAG AA 自证与 CI 门禁、组件硬编码色值禁令 |
 | 24 | [design-quality.md](features/design-quality.md) | 平台能力 | 全局 UI/UX 设计基线、逐页差距清单、令牌/排版/组件、响应式/触控、关键流程与验收门禁 |
 
+前端横切实施细则见
+[interface-design-baseline.md](frontend/interface-design-baseline.md)：冻结当前可执行的精确
+token、排版、间距、组件/页面结构、工作区隔离、HTTPS 与格式门禁，不新增功能模块。
+
 runtime 的 Server 协议与数据模型以
 [runtime.md](features/runtime.md) 为唯一权威；本地执行进程的组件边界、CLI
 适配、任务隔离、预算熔断、部署和真实 LLM E2E 见配套设计

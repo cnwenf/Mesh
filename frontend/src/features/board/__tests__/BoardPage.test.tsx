@@ -221,7 +221,7 @@ describe('BoardPage', () => {
           },
         });
       }
-      if (method === 'POST' && url.includes('/workspaces/ws-2/issues')) {
+      if (method === 'POST' && url.includes('/views/view-second/issues')) {
         return fakeResponse({
           status: 201,
           body: { data: { id: 'iss-created', title: 'Created in second' } },
@@ -255,7 +255,7 @@ describe('BoardPage', () => {
     await waitFor(() => {
       expect(
         calls.some(
-          (call) => call.method === 'POST' && call.url.includes('/workspaces/ws-2/issues'),
+          (call) => call.method === 'POST' && call.url.includes('/views/view-second/issues'),
         ),
       ).toBe(true);
     });

@@ -603,6 +603,101 @@
   overflow: hidden;
 }
 
+/* 二维泳道：桌面端由外层提供唯一横向滚动面，每行复用同一列宽与
+   完整交互。手机端先选 lane，再由 BoardCompact 选当前列。 */
+.mesh-board__swimlanes {
+  margin-top: var(--space-4);
+  min-inline-size: 0;
+}
+
+.mesh-board__lane-tabs {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-block-end: var(--space-2);
+}
+
+.mesh-board__swimlane-grid {
+  display: grid;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-block-end: var(--space-3);
+}
+
+.mesh-board__swimlane {
+  display: grid;
+  grid-template-columns: minmax(9rem, 12rem) max-content;
+  gap: var(--space-3);
+  align-items: stretch;
+  min-inline-size: max-content;
+}
+
+.mesh-board__swimlane-head {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.mesh-board__swimlane-head h2 {
+  margin: 0;
+  font-size: var(--font-size-body);
+}
+
+.mesh-board__swimlane-head span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-board__swimlane .mesh-board__columns-wrap {
+  margin-top: 0;
+  max-inline-size: none;
+  overflow: visible;
+}
+
+.mesh-board__swimlane .mesh-board__columns {
+  inline-size: max-content;
+  min-inline-size: max-content;
+  max-inline-size: none;
+
+  /* The base board uses inline-size/paint containment to own its scrollport.
+     Swimlanes deliberately move that responsibility to the shared outer
+     scrollport; retaining size containment here collapses the max-content
+     track and paint containment clips every column. */
+  contain: layout;
+  overflow: visible;
+  height: min(32rem, calc(100dvh - 16rem));
+}
+
+@media (max-width: 599px) {
+  .mesh-board__swimlane-grid {
+    overflow-x: hidden;
+  }
+
+  .mesh-board__swimlane {
+    display: block;
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+
+  .mesh-board__swimlane-head {
+    position: static;
+    margin-block-end: var(--space-2);
+  }
+
+  .mesh-board__swimlane .mesh-board__columns-wrap {
+    max-inline-size: 100%;
+    overflow: hidden;
+  }
+}
+
 /* 卡片固定高度(虚拟化前提):72px 卡 + 12px gap(--space-3)= 84px = CARD_HEIGHT。
    与 useVirtualWindow.ts CARD_HEIGHT=84 对齐;标题单行截断保证等高。 */
 .mesh-board__card {

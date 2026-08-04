@@ -4810,6 +4810,48 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/views/{view_id}/issues:
+    post:
+      tags:
+      - views
+      summary: Quick Create View Issue
+      description: Atomically create an issue in one locked board projection cell.
+      operationId: quick_create_view_issue_api_v1_views__view_id__issues_post
+      parameters:
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuickCreateIssueRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Quick Create View Issue Api V1 Views  View Id  Issues Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     get:
       tags:
       - views
@@ -7007,9 +7049,8 @@ paths:
     get:
       tags:
       - search
-      summary: Search Workspace
-      description: Unified object search over the six workspace resource types (§3.2).
-      operationId: search_workspace_api_v1_workspaces__workspace_id__search_get
+      summary: Search
+      operationId: search_api_v1_workspaces__workspace_id__search_get
       parameters:
       - name: workspace_id
         in: path
@@ -7017,38 +7058,6 @@ paths:
         schema:
           type: string
           title: Workspace Id
-      - name: q
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Q
-      - name: types
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Types
-      - name: limit
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Limit
-      - name: cursor
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Cursor
       responses:
         '200':
           description: Successful Response
@@ -7057,7 +7066,7 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
-                title: Response Search Workspace Api V1 Workspaces  Workspace Id  Search Get
+                title: Response Search Api V1 Workspaces  Workspace Id  Search Get
         '422':
           description: Validation Error
           content:
@@ -11986,34 +11995,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /api/v1/workspaces/{workspace_id}/search:
-    get:
-      tags:
-      - search
-      summary: Search
-      operationId: search_api_v1_workspaces__workspace_id__search_get
-      parameters:
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-          title: Workspace Id
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-                title: Response Search Api V1 Workspaces  Workspace Id  Search Get
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/workspaces/{workspace_id}/integrations:
     get:
       tags:
@@ -13457,21 +13438,15 @@ paths:
       description: 'DingTalk HTTP receive mode callback (§3.2 ``receive_mode=''http''``).
 
 
-        Guard order (unauthenticated surface — DoS hardening): the 1 MiB body
+        Guard order (unauthenticated surface — DoS hardening): declared body
 
-        cap in BOTH passes (Content-Length PRE-CHECK before buffering + actual
+        size pre-check; IP-only 120/min silent coarse limit before consuming
 
-        byte-count re-check after reading — §3.2 item 2 "预检 + 复检双道,防
+        the body; bounded streaming actual-size check; then, when the payload
 
-        Content-Length 谎报绕过"), THEN the pre-signature COARSE anti-abuse
+        locates an integration, its separate (integration, IP) 120/min silent
 
-        layer of auth.md §3.6 — keyed by the (integration, IP) tuple (IP-only
-
-        when the integration is unlocatable), 120/min, answering over-limit
-
-        callers with a SILENT 200 indistinguishable from acceptance (non-2xx
-
-        would trigger the platform''s retry amplification), audit + alert only.
+        limit. Unlocatable payloads are charged only once, to the IP window.
 
         The generic per-IP 429 guard is deliberately NOT applied here: §3.6
 
@@ -16045,6 +16020,31 @@ components:
           title: Preferences
       type: object
       title: PutPreferencesRequest
+    QuickCreateIssueRequest:
+      properties:
+        title:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Title
+        group_key:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Group Key
+        sub_group_key:
+          anyOf:
+          - type: string
+            maxLength: 120
+            minLength: 1
+          - type: 'null'
+          title: Sub Group Key
+      type: object
+      required:
+      - title
+      - group_key
+      title: QuickCreateIssueRequest
+      description: POST /views/{id}/issues — create exactly in the requested board cell.
     ReadAllRequest:
       properties:
         filter:
@@ -16188,6 +16188,13 @@ components:
           maxLength: 120
           minLength: 1
           title: To Group Key
+        sub_group_key:
+          anyOf:
+          - type: string
+            maxLength: 120
+            minLength: 1
+          - type: 'null'
+          title: Sub Group Key
         position:
           type: number
           title: Position
@@ -17490,6 +17497,13 @@ components:
           maxLength: 120
           minLength: 1
           title: To Group Key
+        to_sub_group_key:
+          anyOf:
+          - type: string
+            maxLength: 120
+            minLength: 1
+          - type: 'null'
+          title: To Sub Group Key
         position:
           type: number
           title: Position

@@ -20,6 +20,7 @@ from mesh.views.config import (
     validate_board_settings,
     validate_display_fields,
     validate_filters,
+    validate_group_axes,
     validate_group_by,
     validate_layout,
     validate_name,
@@ -89,9 +90,7 @@ def test_filters_depth_four_is_too_complex() -> None:
                         "conditions": [
                             {
                                 "operator": "OR",
-                                "conditions": [
-                                    {"field": "priority", "op": "eq", "value": "urgent"}
-                                ],
+                                "conditions": [{"field": "priority", "op": "eq", "value": "urgent"}],
                             }
                         ],
                     }
@@ -141,9 +140,7 @@ def test_filters_empty_conditions_list_rejected() -> None:
 
 def test_filters_unknown_field_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        validate_filters(
-            {"operator": "AND", "conditions": [{"field": "evil", "op": "eq", "value": "x"}]}
-        )
+        validate_filters({"operator": "AND", "conditions": [{"field": "evil", "op": "eq", "value": "x"}]})
     assert _error_code(excinfo) == "invalid_filters"
 
 
@@ -157,9 +154,7 @@ def test_filters_unknown_op_rejected() -> None:
 
 def test_filters_label_only_in_not_in() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        validate_filters(
-            {"operator": "AND", "conditions": [{"field": "label", "op": "eq", "value": "x"}]}
-        )
+        validate_filters({"operator": "AND", "conditions": [{"field": "label", "op": "eq", "value": "x"}]})
     assert _error_code(excinfo) == "invalid_filters"
 
 
@@ -168,17 +163,13 @@ def test_filters_q_only_contains() -> None:
         {"operator": "AND", "conditions": [{"field": "q", "op": "contains", "value": "web"}]}
     )
     with pytest.raises(ValidationError) as excinfo:
-        validate_filters(
-            {"operator": "AND", "conditions": [{"field": "q", "op": "eq", "value": "web"}]}
-        )
+        validate_filters({"operator": "AND", "conditions": [{"field": "q", "op": "eq", "value": "web"}]})
     assert _error_code(excinfo) == "invalid_filters"
 
 
 def test_filters_in_op_requires_non_empty_list() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        validate_filters(
-            {"operator": "AND", "conditions": [{"field": "priority", "op": "in", "value": []}]}
-        )
+        validate_filters({"operator": "AND", "conditions": [{"field": "priority", "op": "in", "value": []}]})
     assert _error_code(excinfo) == "invalid_filters"
     with pytest.raises(ValidationError) as excinfo:
         validate_filters(
@@ -205,9 +196,7 @@ def test_filters_null_ops_take_no_value() -> None:
 
 def test_filters_scalar_ops_require_value() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        validate_filters(
-            {"operator": "AND", "conditions": [{"field": "priority", "op": "eq"}]}
-        )
+        validate_filters({"operator": "AND", "conditions": [{"field": "priority", "op": "eq"}]})
     assert _error_code(excinfo) == "invalid_filters"
 
 
@@ -216,9 +205,7 @@ def test_filters_unknown_extra_key_rejected() -> None:
         validate_filters(
             {
                 "operator": "AND",
-                "conditions": [
-                    {"field": "priority", "op": "eq", "value": "high", "escape": True}
-                ],
+                "conditions": [{"field": "priority", "op": "eq", "value": "high", "escape": True}],
             }
         )
     assert _error_code(excinfo) == "invalid_filters"
@@ -237,9 +224,7 @@ def test_filters_custom_field_condition() -> None:
         validate_filters(
             {
                 "operator": "AND",
-                "conditions": [
-                    {"field_kind": "custom_field", "op": "eq", "value": "x"}
-                ],
+                "conditions": [{"field_kind": "custom_field", "op": "eq", "value": "x"}],
             }
         )
     assert _error_code(excinfo) == "invalid_filters"
@@ -320,9 +305,7 @@ def test_board_settings_empty_object_ok() -> None:
 
 def test_board_settings_wip_defaults_enforcement() -> None:
     value = {"wip": {"todo": {"limit": 3}}}
-    assert validate_board_settings(value) == {
-        "wip": {"todo": {"limit": 3, "enforcement": "warn"}}
-    }
+    assert validate_board_settings(value) == {"wip": {"todo": {"limit": 3, "enforcement": "warn"}}}
 
 
 @pytest.mark.parametrize(
@@ -368,6 +351,20 @@ def test_group_by_invalid_value() -> None:
     with pytest.raises(ValidationError) as excinfo:
         validate_group_by("severity")
     assert _error_code(excinfo) == "invalid_group_by"
+
+
+def test_group_axes_reject_same_effective_field() -> None:
+    validate_group_axes("state_category", None)
+    validate_group_axes("priority", "assignee")
+    with pytest.raises(ValidationError) as excinfo:
+        validate_group_axes(None, "state_category")
+    assert _error_code(excinfo) == "validation_error"
+    assert excinfo.value.details == {
+        "group_by": "state_category",
+        "sub_group_by": "state_category",
+    }
+    with pytest.raises(ValidationError):
+        validate_group_axes("priority", "priority")
     with pytest.raises(ValidationError) as excinfo:
         validate_group_by("")
     assert _error_code(excinfo) == "invalid_group_by"

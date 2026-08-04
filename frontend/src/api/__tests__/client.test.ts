@@ -256,6 +256,24 @@ describe('grouped():分组整体游标包络(原样,§6.14)', () => {
       code: 'internal_error',
     });
   });
+
+  it('二维投影允许 columns + lanes 代替顶层 groups', async () => {
+    const envelope = {
+      columns: [{ key: 'todo', label: 'Todo', count: 1, wip: null }],
+      lanes: [
+        {
+          key: 'high',
+          label: 'High',
+          count: 1,
+          groups: [{ key: 'todo', count: 1, data: [{ id: '1' }] }],
+        },
+      ],
+      next_cursor: null,
+    };
+    const { fetchImpl } = stubFetch(fakeResponse({ body: envelope }));
+    const result = await makeClient(fetchImpl).grouped<{ id: string }>('/views/board');
+    expect(result).toEqual(envelope);
+  });
 });
 
 describe('错误信封归一(README §6.14)', () => {

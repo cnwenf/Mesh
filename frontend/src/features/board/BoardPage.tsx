@@ -31,8 +31,8 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
-import { createIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
-import type { CreateIssueBody, IssuePriority } from '../issues/types';
+import type { RealtimeEventFrame } from '../../types/realtime';
+import { getIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
 import { fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
 import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
@@ -48,13 +48,27 @@ import {
 } from './api';
 import { BoardColumns, computeDropPosition } from './BoardColumns';
 import { BoardListView } from './BoardListView';
-import { applyBoardFrame, cardBelongsToView, rebucketGroups } from './boardRealtime';
+import { BoardSwimlanes } from './BoardSwimlanes';
+import {
+  applyBoardFrame,
+  applyBoardLaneFrame,
+  cardBelongsToView,
+  rebucketGroups,
+} from './boardRealtime';
 import { columnsForView, deriveColumns, isRenderableLayout } from './columns';
 import { buildBoardGrid, columnKeyOfCard, moveCardSelection, nextColumnKey } from './keyboardNav';
 import type { BoardDirection, BoardGrid } from './keyboardNav';
 import { FilterConfigPanel } from './FilterConfigPanel';
-import { fetchViewIssues, moveCard } from './projection';
-import type { BoardCard, BoardGroup, MovePlan, ViewProjection } from './projection';
+import { fetchViewIssues, moveCard, quickCreateCard, reorderCard } from './projection';
+import type {
+  BoardCard,
+  BoardGroup,
+  BoardLane,
+  BoardLaneGroup,
+  BoardProjectionColumn,
+  MovePlan,
+  ViewProjection,
+} from './projection';
 import { SortConfigPanel } from './SortConfigPanel';
 import { ViewSaveBar } from './ViewSaveBar';
 import { ViewSwitcher } from './ViewSwitcher';
@@ -113,6 +127,45 @@ export async function loadAllGroups(
 ): Promise<ViewProjection> {
   const first = await fetchViewIssues(client, viewId, { limit: 200 });
   if (first.next_cursor === null) return first;
+
+  if (first.sub_group_by !== null) {
+    const lanes = new Map<string, BoardLane>(
+      first.lanes.map((lane) => [
+        lane.key,
+        {
+          ...lane,
+          groups: lane.groups.map((group) => ({ ...group, data: [...group.data] })),
+        },
+      ]),
+    );
+    let cursor: string | null = first.next_cursor;
+    while (cursor !== null) {
+      const page = await fetchViewIssues(client, viewId, { limit: 200, cursor });
+      for (const incomingLane of page.lanes) {
+        const existingLane = lanes.get(incomingLane.key);
+        if (existingLane === undefined) {
+          lanes.set(incomingLane.key, incomingLane);
+          continue;
+        }
+        const groups = new Map<string, BoardLaneGroup>(
+          existingLane.groups.map((group) => [group.key, group]),
+        );
+        for (const incomingGroup of incomingLane.groups) {
+          const existingGroup = groups.get(incomingGroup.key);
+          groups.set(
+            incomingGroup.key,
+            existingGroup === undefined
+              ? incomingGroup
+              : { ...existingGroup, data: [...existingGroup.data, ...incomingGroup.data] },
+          );
+        }
+        lanes.set(incomingLane.key, { ...existingLane, groups: [...groups.values()] });
+      }
+      cursor = page.next_cursor;
+    }
+    return { ...first, lanes: [...lanes.values()] };
+  }
+
   const byKey = new Map<string, BoardGroup>();
   for (const group of first.groups) {
     byKey.set(group.key, group);
@@ -189,6 +242,8 @@ export function BoardPage(): React.JSX.Element {
 
   // 投影层状态:整板分组 + 列目标状态映射 + 加载态。
   const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
+  const [boardLanes, setBoardLanes] = useState<readonly BoardLane[]>([]);
+  const [swimlaneColumns, setSwimlaneColumns] = useState<readonly BoardProjectionColumn[]>([]);
   const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>(
     {},
   );
@@ -198,6 +253,7 @@ export function BoardPage(): React.JSX.Element {
     plan: MovePlan;
     issueId: string;
     toGroupKey: string;
+    toSubGroupKey?: string;
     position: number;
     version: number;
   } | null>(null);
@@ -213,6 +269,11 @@ export function BoardPage(): React.JSX.Element {
 
   const boardGroupsRef = useRef(boardGroups);
   boardGroupsRef.current = boardGroups;
+  const boardLanesRef = useRef(boardLanes);
+  boardLanesRef.current = boardLanes;
+  const swimlaneColumnsRef = useRef(swimlaneColumns);
+  swimlaneColumnsRef.current = swimlaneColumns;
+  const reconcileRequestsRef = useRef<Map<string, symbol>>(new Map());
 
   // —— 键盘流转(§4.3 S10 / 评审 P4):选中态 + 二维网格移动 + 上下文组注册 ——
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -465,13 +526,22 @@ export function BoardPage(): React.JSX.Element {
   // 切换视图时由下方 effect 先清空分组,走骨架屏路径。
   const loadBoard = useCallback(
     async (view: View) => {
+      // 整板权威对账启动后，任何在途单卡对账均不得再写回旧投影。
+      reconcileRequestsRef.current.clear();
       const seq = ++loadSeqRef.current;
-      if (boardGroupsRef.current.length === 0) setBoardStatus('loading');
+      if (boardGroupsRef.current.length === 0 && boardLanesRef.current.length === 0) {
+        setBoardStatus('loading');
+      }
       try {
         const projection = await loadAllGroups(client, view.id);
         // 过期写回防护:加载期间视图已切换或已有更新的加载发起 → 丢弃结果。
         if (seq !== loadSeqRef.current || selectedViewIdRef.current !== view.id) return;
+        boardGroupsRef.current = projection.groups;
+        boardLanesRef.current = projection.lanes;
+        swimlaneColumnsRef.current = projection.columns;
         setBoardGroups(projection.groups);
+        setBoardLanes(projection.lanes);
+        setSwimlaneColumns(projection.columns);
         setColumnTargetStatus(projection.column_target_status);
         setBoardStatus('ready');
       } catch (error) {
@@ -502,12 +572,16 @@ export function BoardPage(): React.JSX.Element {
       if (lastLoadedKeyRef.current === key) return; // 同视图同配置(列表 refetch 换引用):不重载
       lastLoadedKeyRef.current = key;
       setBoardGroups([]);
+      setBoardLanes([]);
+      setSwimlaneColumns([]);
       setBoardStatus('loading');
       void loadBoard(selectedView);
     } else {
       loadSeqRef.current += 1; // 使任何在途加载失效
       lastLoadedKeyRef.current = null;
       setBoardGroups([]);
+      setBoardLanes([]);
+      setSwimlaneColumns([]);
       setBoardStatus('ready');
     }
   }, [selectedView, loadBoard]);
@@ -522,13 +596,79 @@ export function BoardPage(): React.JSX.Element {
     if (!isRenderableLayout(selectedView.layout)) return;
     const wsChannel = workspaceIssuesChannel(membership.workspace_id);
     const vChannel = viewChannel(selectedView.id);
+    const reconcileRequests = reconcileRequestsRef.current;
     realtime.client.subscribe(wsChannel);
     realtime.client.subscribe(vChannel);
+    const reconcilePrefix = `${selectedView.id}:`;
+    const belongsToSelectedView = (card: BoardCard): boolean =>
+      (selectedView.project_id === null || card.project_id === selectedView.project_id) &&
+      cardBelongsToView(card, filtersRef.current);
+    const reconcileIssue = (issueId: string, sourceFrame: RealtimeEventFrame): void => {
+      const requestKey = `${reconcilePrefix}${issueId}`;
+      if (reconcileRequests.has(requestKey)) return;
+      const requestToken = Symbol(requestKey);
+      reconcileRequests.set(requestKey, requestToken);
+      void (async () => {
+        try {
+          const issue = await getIssue(client, issueId);
+          if (
+            reconcileRequests.get(requestKey) !== requestToken ||
+            selectedViewIdRef.current !== selectedView.id ||
+            issue.workspace_id !== membership.workspace_id
+          ) {
+            return;
+          }
+          const createdFrame: RealtimeEventFrame = {
+            ...sourceFrame,
+            event: 'issue.created',
+            payload: { issue },
+          };
+          if (selectedView.sub_group_by !== null) {
+            const result = applyBoardLaneFrame(
+              swimlaneColumnsRef.current,
+              boardLanesRef.current,
+              createdFrame,
+              {
+                groupBy: selectedView.group_by ?? 'state_category',
+                subGroupBy: selectedView.sub_group_by,
+                belongs: belongsToSelectedView,
+              },
+            );
+            swimlaneColumnsRef.current = result.columns;
+            boardLanesRef.current = result.lanes;
+            setSwimlaneColumns(result.columns);
+            setBoardLanes(result.lanes);
+          } else {
+            const result = applyBoardFrame(boardGroupsRef.current, createdFrame, {
+              groupBy: selectedView.group_by ?? 'state_category',
+              belongs: belongsToSelectedView,
+            });
+            boardGroupsRef.current = result.groups;
+            setBoardGroups(result.groups);
+          }
+        } catch {
+          // 404/不可见与瞬时错误均不扩散；后续事件或 resync 会再次权威对账。
+        } finally {
+          if (reconcileRequests.get(requestKey) === requestToken) {
+            reconcileRequests.delete(requestKey);
+          }
+        }
+      })();
+    };
     const offFrame = realtime.client.onFrame((frame) => {
       if (frame.channel !== wsChannel && frame.channel !== vChannel) return;
       // 视图切换后晚到的帧属过期闭包:跳过(新视图订阅随即接管),
       // 杜绝以旧视图 id 发起多余投影请求(验收必修 1 竞态收口)。
       if (selectedViewIdRef.current !== selectedView.id) return;
+      if (frame.event === 'issue.deleted') {
+        const id = (frame.payload as { id?: unknown }).id;
+        if (typeof id === 'string') reconcileRequests.delete(`${reconcilePrefix}${id}`);
+      } else if (frame.event === 'issue.created') {
+        const issue = (frame.payload as { issue?: { id?: unknown } }).issue;
+        if (typeof issue?.id === 'string') {
+          reconcileRequests.delete(`${reconcilePrefix}${issue.id}`);
+        }
+      }
       if (frame.event === 'view.presence') return;
       // §4.4/§5.1: warn 超限放行后,服务端广播 view.wip_exceeded → 顶部 toast
       // (拖拽者本人与同视图协作者均可见),与列头红色徽章并存。
@@ -543,26 +683,58 @@ export function BoardPage(): React.JSX.Element {
           { tone: 'warn', closeLabel: t('common.close') },
         );
       }
+      if (selectedView.sub_group_by !== null) {
+        const result = applyBoardLaneFrame(
+          swimlaneColumnsRef.current,
+          boardLanesRef.current,
+          frame,
+          {
+            groupBy: selectedView.group_by ?? 'state_category',
+            subGroupBy: selectedView.sub_group_by,
+            belongs: belongsToSelectedView,
+          },
+        );
+        if (result.refetch) {
+          void loadBoard(selectedView);
+        } else if (result.reconcileIssueId !== undefined) {
+          reconcileIssue(result.reconcileIssueId, frame);
+        } else {
+          swimlaneColumnsRef.current = result.columns;
+          boardLanesRef.current = result.lanes;
+          setSwimlaneColumns(result.columns);
+          setBoardLanes(result.lanes);
+        }
+        return;
+      }
       const result = applyBoardFrame(boardGroupsRef.current, frame, {
         groupBy: selectedView.group_by ?? 'state_category',
-        belongs: (card) => cardBelongsToView(card, filtersRef.current),
+        belongs: belongsToSelectedView,
       });
       if (result.refetch) {
         void loadBoard(selectedView);
+      } else if (result.reconcileIssueId !== undefined) {
+        reconcileIssue(result.reconcileIssueId, frame);
       } else {
+        boardGroupsRef.current = result.groups;
         setBoardGroups(result.groups);
       }
     });
     const offState = realtime.client.onState((state) => {
       setResyncing(state === 'resyncing' || state === 'reconnecting');
+      if (state === 'resyncing' && selectedViewIdRef.current === selectedView.id) {
+        void loadBoard(selectedView);
+      }
     });
     return () => {
       offFrame();
       offState();
       realtime.client.unsubscribe(wsChannel);
       realtime.client.unsubscribe(vChannel);
+      for (const requestKey of reconcileRequests.keys()) {
+        if (requestKey.startsWith(reconcilePrefix)) reconcileRequests.delete(requestKey);
+      }
     };
-  }, [realtime, selectedView, membership, loadBoard, t]);
+  }, [realtime, selectedView, membership, loadBoard, t, client]);
 
   if (wsStatus === 'loading') {
     return (
@@ -933,66 +1105,181 @@ export function BoardPage(): React.JSX.Element {
     );
   };
 
-  const targetPatchFor = (toGroupKey: string): Partial<BoardCard> => {
-    const groupBy = effectiveGroupBy;
-    if (groupBy === 'status') {
-      return { status_id: toGroupKey };
+  const moveCardInLanes = (
+    lanes: readonly BoardLane[],
+    issueId: string,
+    toGroupKey: string,
+    toSubGroupKey: string,
+    position: number,
+    patch: Partial<BoardCard>,
+  ): BoardLane[] => {
+    let moved: BoardCard | null = null;
+    const stripped = lanes.map((lane) => {
+      let removedFromLane = false;
+      const groups = lane.groups.map((group) => {
+        const card = group.data.find((item) => item.id === issueId);
+        if (card === undefined) return group;
+        moved = card;
+        removedFromLane = true;
+        return {
+          ...group,
+          count: Math.max(0, group.count - 1),
+          data: group.data.filter((item) => item.id !== issueId),
+        };
+      });
+      return removedFromLane ? { ...lane, count: Math.max(0, lane.count - 1), groups } : lane;
+    });
+    if (moved === null) return lanes as BoardLane[];
+    const updated: BoardCard = { ...(moved as BoardCard), ...patch, position };
+    return stripped.map((lane) => {
+      if (lane.key !== toSubGroupKey) return lane;
+      return {
+        ...lane,
+        count: lane.count + 1,
+        groups: lane.groups.map((group) =>
+          group.key === toGroupKey
+            ? { ...group, count: group.count + 1, data: [...group.data, updated] }
+            : group,
+        ),
+      };
+    });
+  };
+
+  const targetPatchForAxis = (axis: string, targetKey: string): Partial<BoardCard> => {
+    if (axis === 'status') {
+      return { status_id: targetKey };
     }
-    if (groupBy === 'assignee') {
-      return { assignee_id: toGroupKey === '__none__' ? null : toGroupKey };
+    if (axis === 'assignee') {
+      return { assignee_id: targetKey === '__none__' ? null : targetKey };
     }
-    if (groupBy === 'priority') {
-      return { priority: toGroupKey };
+    if (axis === 'priority') {
+      return { priority: targetKey };
     }
-    if (groupBy === 'project') {
-      return { project_id: toGroupKey === '__none__' ? null : toGroupKey };
+    if (axis === 'project') {
+      return { project_id: targetKey === '__none__' ? null : targetKey };
     }
-    // state_category:状态改为该列默认 status(§2.4 column_target_status)。
-    const statusId = columnTargetStatus[toGroupKey];
+    // state_category:有唯一列目标状态时同步 status；跨项目泳道等
+    // 二义场景后端会解析正确 status，乐观层只更新 category。
+    const statusId = columnTargetStatus[targetKey];
     return {
-      state_category: toGroupKey,
+      state_category: targetKey,
       status_id: statusId ?? undefined,
       status:
-        statusId !== undefined
-          ? { id: statusId, name: toGroupKey, category: toGroupKey }
-          : undefined,
+        statusId !== undefined ? { id: statusId, name: targetKey, category: targetKey } : undefined,
     };
   };
+
+  const targetPatchFor = (toGroupKey: string, toSubGroupKey?: string): Partial<BoardCard> => ({
+    ...targetPatchForAxis(effectiveGroupBy, toGroupKey),
+    ...(toSubGroupKey !== undefined && selectedView.sub_group_by !== null
+      ? targetPatchForAxis(selectedView.sub_group_by, toSubGroupKey)
+      : {}),
+  });
 
   const handleDropCard = async (
     issueId: string,
     toGroupKey: string,
     position: number,
+    toSubGroupKey?: string,
   ): Promise<void> => {
     if (selectedView === null) return;
-    const snapshot = boardGroupsRef.current;
-    const card = snapshot.flatMap((group) => group.data).find((item) => item.id === issueId);
+    const isSwimlane = selectedView.sub_group_by !== null;
+    if (isSwimlane && toSubGroupKey === undefined) return;
+    const groupsSnapshot = boardGroupsRef.current;
+    const lanesSnapshot = boardLanesRef.current;
+    let sourceGroupKey: string | null = null;
+    let sourceSubGroupKey: string | null = null;
+    let card: BoardCard | undefined;
+    if (isSwimlane) {
+      for (const lane of lanesSnapshot) {
+        for (const group of lane.groups) {
+          const match = group.data.find((item) => item.id === issueId);
+          if (match === undefined) continue;
+          card = match;
+          sourceGroupKey = group.key;
+          sourceSubGroupKey = lane.key;
+          break;
+        }
+        if (card !== undefined) break;
+      }
+    } else {
+      for (const group of groupsSnapshot) {
+        const match = group.data.find((item) => item.id === issueId);
+        if (match === undefined) continue;
+        card = match;
+        sourceGroupKey = group.key;
+        break;
+      }
+    }
     if (card === undefined) return;
+    const isReorder =
+      sourceGroupKey === toGroupKey &&
+      (!isSwimlane || sourceSubGroupKey === (toSubGroupKey ?? null));
 
     // 乐观落位(§4.3)。
-    setBoardGroups(
-      moveCardInGroups(snapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)),
-    );
+    if (isSwimlane) {
+      setBoardLanes(
+        moveCardInLanes(
+          lanesSnapshot,
+          issueId,
+          toGroupKey,
+          toSubGroupKey as string,
+          position,
+          targetPatchFor(toGroupKey, toSubGroupKey),
+        ),
+      );
+    } else {
+      setBoardGroups(
+        moveCardInGroups(groupsSnapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)),
+      );
+    }
 
     try {
+      if (isReorder) {
+        await reorderCard(client, selectedView.id, {
+          issue_id: issueId,
+          to_group_key: toGroupKey,
+          ...(toSubGroupKey === undefined ? {} : { sub_group_key: toSubGroupKey }),
+          position,
+        });
+        return;
+      }
       const result = await moveCard(client, selectedView.id, {
         issue_id: issueId,
         to_group_key: toGroupKey,
+        ...(toSubGroupKey === undefined ? {} : { to_sub_group_key: toSubGroupKey }),
         position,
         version: card.version,
       });
       // 用服务端最新字段/版本收敛。
-      setBoardGroups((current) => moveCardInGroups(current, issueId, toGroupKey, position, result));
+      if (isSwimlane) {
+        setBoardLanes((current) =>
+          moveCardInLanes(current, issueId, toGroupKey, toSubGroupKey as string, position, result),
+        );
+      } else {
+        setBoardGroups((current) =>
+          moveCardInGroups(current, issueId, toGroupKey, position, result),
+        );
+      }
     } catch (error) {
       if (error instanceof MeshApiError && error.code === 'move_confirmation_required') {
         // 跨项目拖拽:弹回 + 展示迁移预览要求确认(§4.3/T22)。
-        setBoardGroups(snapshot);
+        if (isSwimlane) setBoardLanes(lanesSnapshot);
+        else setBoardGroups(groupsSnapshot);
         const plan = (error.details?.preview ?? {}) as MovePlan;
-        setMovePreview({ plan, issueId, toGroupKey, position, version: card.version });
+        setMovePreview({
+          plan,
+          issueId,
+          toGroupKey,
+          toSubGroupKey,
+          position,
+          version: card.version,
+        });
         return;
       }
       // WIP block / 其它失败 → 弹回原列 + 提示(§4.4)。
-      setBoardGroups(snapshot);
+      if (isSwimlane) setBoardLanes(lanesSnapshot);
+      else setBoardGroups(groupsSnapshot);
       if (error instanceof MeshApiError && error.code === 'conflict') {
         // 409 → 拉最新静默收敛(§4.3/§5.2:后到事件覆盖,多人同拖同卡平滑收敛,
         // 不 toast 噪音;浏览器网络层 409 日志属已处理冲突,非应用错误)。
@@ -1005,17 +1292,26 @@ export function BoardPage(): React.JSX.Element {
 
   const confirmMove = async (): Promise<void> => {
     if (movePreview === null || selectedView === null) return;
-    const { issueId, toGroupKey, position, version } = movePreview;
+    const { issueId, toGroupKey, toSubGroupKey, position, version } = movePreview;
     setMovePreview(null);
     try {
       const result = await moveCard(client, selectedView.id, {
         issue_id: issueId,
         to_group_key: toGroupKey,
+        ...(toSubGroupKey === undefined ? {} : { to_sub_group_key: toSubGroupKey }),
         position,
         version,
         confirm: true,
       });
-      setBoardGroups((current) => moveCardInGroups(current, issueId, toGroupKey, position, result));
+      if (toSubGroupKey === undefined) {
+        setBoardGroups((current) =>
+          moveCardInGroups(current, issueId, toGroupKey, position, result),
+        );
+      } else {
+        setBoardLanes((current) =>
+          moveCardInLanes(current, issueId, toGroupKey, toSubGroupKey, position, result),
+        );
+      }
     } catch (error) {
       if (error instanceof MeshApiError && error.code === 'conflict') {
         await loadBoard(selectedView);
@@ -1024,24 +1320,18 @@ export function BoardPage(): React.JSX.Element {
     }
   };
 
-  const handleQuickCreate = async (groupKey: string, title: string): Promise<void> => {
+  const handleQuickCreate = async (
+    groupKey: string,
+    title: string,
+    subGroupKey?: string,
+  ): Promise<void> => {
     if (selectedView === null) return;
-    const groupBy = effectiveGroupBy;
-    // 继承该列分组值(§4.5)。
-    const inherited: Partial<CreateIssueBody> =
-      groupBy === 'status'
-        ? { status_id: groupKey }
-        : groupBy === 'state_category'
-          ? { status_id: columnTargetStatus[groupKey] }
-          : groupBy === 'priority'
-            ? { priority: groupKey as IssuePriority }
-            : groupBy === 'assignee'
-              ? { assignee_id: groupKey === '__none__' ? null : groupKey }
-              : groupBy === 'project'
-                ? { project_id: groupKey === '__none__' ? null : groupKey }
-                : {};
     try {
-      const created = await createIssue(client, workspaceId, { title, ...inherited });
+      const created = await quickCreateCard(client, selectedView.id, {
+        title,
+        group_key: groupKey,
+        ...(subGroupKey === undefined ? {} : { sub_group_key: subGroupKey }),
+      });
       await loadBoard(selectedView);
       flashHighlight(created.id);
     } catch (error) {
@@ -1165,6 +1455,24 @@ export function BoardPage(): React.JSX.Element {
               description={t('state.errorDescription')}
               retryLabel={t('common.retry')}
               onRetry={() => void loadBoard(selectedView)}
+            />
+          ) : selectedView.sub_group_by !== null ? (
+            <BoardSwimlanes
+              columns={swimlaneColumns}
+              lanes={boardLanes}
+              groupBy={effectiveGroupBy}
+              subGroupBy={selectedView.sub_group_by}
+              collapsedColumns={draft.board_settings.collapsed_columns ?? []}
+              canWrite={canWrite}
+              dragEnabled={canWrite && !dirty}
+              onToggleCollapse={toggleCollapse}
+              onDropCard={(issueId, toGroupKey, position, toSubGroupKey) =>
+                void handleDropCard(issueId, toGroupKey, position, toSubGroupKey)
+              }
+              onQuickCreate={(groupKey, title, subGroupKey) =>
+                handleQuickCreate(groupKey, title, subGroupKey)
+              }
+              highlightCardId={highlightCardId}
             />
           ) : (
             <BoardColumns

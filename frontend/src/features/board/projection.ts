@@ -1,12 +1,12 @@
 /**
  * 看板投影层契约(kanban.md §3.2/§4.3,README §6.14 整体游标)。
  *
- * - fetchViewIssues:GET /views/{id}/issues 执行视图配置,返回分组 + 整体游标
- *   包络(`{layout,group_by,column_target_status,groups,next_cursor}`,顶层无
- *   data 包裹);每组 count=组内总数、data=当前页切片、wip=列上限对象。
+ * - fetchViewIssues:GET /views/{id}/issues 执行视图配置：一维返回 groups，
+ *   二维返回共享 columns + lanes[].groups，两者均只有一个顶层游标。
  * - moveCard:POST /views/{id}/moves 原子拖拽(乐观锁 + WIP + 每视图排序);
  *   group_by=project 未确认 → 422 move_confirmation_required(details.preview)。
- * - reorderCard:POST /views/{id}/reorder 仅列内排序。
+ * - reorderCard:POST /views/{id}/reorder 仅 cell 内排序；quickCreateCard 在
+ *   视图 cell 端点原子继承分组轴。
  */
 import type { MeshApiClient } from '../../api';
 import type { GroupedEnvelope } from '../../types/envelopes';
@@ -42,19 +42,46 @@ export interface BoardGroup {
   readonly data: readonly BoardCard[];
 }
 
+/** 二维投影的共享列骨架。count/wip 跨全部泳道聚合。 */
+export interface BoardProjectionColumn {
+  readonly key: string;
+  readonly label: string;
+  readonly count: number;
+  readonly wip: WipLimit | null;
+}
+
+/** 二维投影的一个 lane 内 cell。 */
+export interface BoardLaneGroup {
+  readonly key: string;
+  readonly count: number;
+  readonly data: readonly BoardCard[];
+}
+
+/** 二维投影的泳道。 */
+export interface BoardLane {
+  readonly key: string;
+  readonly label: string;
+  readonly count: number;
+  readonly groups: readonly BoardLaneGroup[];
+}
+
 /** GET /views/{id}/issues 顶层响应(README §6.14 分组整体游标)。 */
 export interface ViewProjection {
   readonly layout: string;
   readonly group_by: string;
+  readonly sub_group_by: string | null;
   /** 拖拽落点(group key)→ 应设置的 status_id(state_category/status 分组)。 */
   readonly column_target_status: Readonly<Record<string, string>>;
   readonly groups: readonly BoardGroup[];
+  readonly columns: readonly BoardProjectionColumn[];
+  readonly lanes: readonly BoardLane[];
   readonly next_cursor: string | null;
 }
 
 export interface MoveBody {
   readonly issue_id: string;
   readonly to_group_key: string;
+  readonly to_sub_group_key?: string;
   readonly position: number;
   readonly version?: number;
   readonly confirm?: boolean;
@@ -105,13 +132,20 @@ export async function fetchViewIssues(
   })) as GroupedEnvelope<BoardCard> & {
     layout?: string;
     group_by?: string;
+    sub_group_by?: string | null;
     column_target_status?: Record<string, string>;
+    columns?: BoardProjectionColumn[];
+    lanes?: BoardLane[];
+    groups?: BoardGroup[];
   };
   return {
     layout: envelope.layout ?? 'board',
     group_by: envelope.group_by ?? 'state_category',
+    sub_group_by: envelope.sub_group_by ?? null,
     column_target_status: envelope.column_target_status ?? {},
-    groups: envelope.groups as unknown as BoardGroup[],
+    groups: Array.isArray(envelope.groups) ? (envelope.groups as unknown as BoardGroup[]) : [],
+    columns: Array.isArray(envelope.columns) ? envelope.columns : [],
+    lanes: Array.isArray(envelope.lanes) ? envelope.lanes : [],
     next_cursor: envelope.next_cursor,
   };
 }
@@ -140,11 +174,27 @@ export async function previewMove(
 export async function reorderCard(
   client: MeshApiClient,
   viewId: string,
-  body: { issue_id: string; to_group_key: string; position: number },
-): Promise<{ id: string; group_key: string; position: number }> {
-  return client.request<{ id: string; group_key: string; position: number }>(
-    'POST',
-    `${viewPath(viewId)}/reorder`,
-    { body },
-  );
+  body: { issue_id: string; to_group_key: string; sub_group_key?: string; position: number },
+): Promise<{ id: string; group_key: string; sub_group_key?: string; position: number }> {
+  return client.request<{
+    id: string;
+    group_key: string;
+    sub_group_key?: string;
+    position: number;
+  }>('POST', `${viewPath(viewId)}/reorder`, { body });
+}
+
+export interface QuickCreateCardBody {
+  readonly title: string;
+  readonly group_key: string;
+  readonly sub_group_key?: string;
+}
+
+/** 在视图 cell 中快速创建，由后端原子继承一轴/两轴与当前过滤器。 */
+export async function quickCreateCard(
+  client: MeshApiClient,
+  viewId: string,
+  body: QuickCreateCardBody,
+): Promise<BoardCard> {
+  return client.request<BoardCard>('POST', viewIssuesPath(viewId), { body });
 }

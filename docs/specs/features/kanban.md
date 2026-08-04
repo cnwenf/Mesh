@@ -6,7 +6,7 @@
 > - `label-property.md`(标签与自定义属性)——提供可作为筛选/分组/排序依据的 `label` 与自定义字段。
 > - `project.md`(项目)、`member.md`(统一成员抽象,含 AI agent)。
 > **文档性质**:可直接指导开发的实现规格;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
-> **实现状态**:`views` 定义层(v0.11.6)+ issue 投影层(v0.12.0:分组投影整体游标 / 原子 move + WIP 强制 / 每视图手工排序 / 实时增量合并 / `view.presence` / 跨项目迁移视图侧入口 / 前端真实数据看板)已落地。**泳道协议**已在本 Spec 定义为兼容的一维/二维投影,当前运行时仍为 `sub_group_by=NULL` 的一维投影,泳道实现待后续切片。**label / 自定义字段的分组与筛选**依赖 `issue_labels` / `issue_custom_field_values` 关联层;关联层合入前,`group_by=label`、`sub_group_by=label`、任一轴的自定义字段与对应筛选均返回 `400 projection_field_pending`,合入后按 §2.4 映射接通——属分阶段交付,非本 Spec 设计缺陷。
+> **实现状态**:`views` 定义层、一维 issue 投影与单值内置轴的二维泳道运行时均已落地。`sub_group_by` 非空时服务端返回完整 `columns/lanes/groups` 网格和签名整体游标；move/reorder/quick-create 以完整单元格为作用域，支持 project-first 状态解析、跨项目确认、主列 WIP、每视图单元格排序和创建幂等；前端提供桌面共享网格、compact 泳道切换、原子乐观写入与单卡实时增量合并。`sub_group_by=NULL` 的既有一维形状保持兼容。**label / 自定义字段的分组与筛选**依赖 `issue_labels` / `issue_custom_field_values` 关联层；关联层接入二维投影前，`group_by=label`、`sub_group_by=label`、任一轴的自定义字段与对应筛选均返回 `400 projection_field_pending`，其多值轴写入与集合差实时协议仍按下文作为后续增量验收项。
 
 ---
 
