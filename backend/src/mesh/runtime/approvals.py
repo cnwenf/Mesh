@@ -17,6 +17,7 @@ means no zombie path and nothing for the reaper to special-case.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -38,7 +39,13 @@ from mesh.errors import (
     ForbiddenError,
     NotFoundError,
 )
+from mesh.issue.execution_observability import (
+    emit_workspace_execution_event,
+    record_issue_execution_phase,
+)
+from mesh.issue.service import IssueService
 from mesh.outbox.service import emit_event, emit_realtime
+from mesh.runtime.agent_presence import emit_agent_presence
 from mesh.runtime.attempts import (
     _assert_lease,
     _load_daemon_attempt,
@@ -53,9 +60,98 @@ from mesh.runtime.credentials import revoke_attempt_envelopes
 # entity stays the single decision entry while the effect is relay-side.
 SQUAD_PLAN_DECIDED_EVENT_TYPE = "squad.plan_decided"
 
+_PUBLIC_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,127}$")
+_PUBLIC_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_PUBLIC_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+_PUBLIC_PARAM_KEYS = frozenset(
+    {
+        "repository",
+        "branch",
+        "operation",
+        "resource",
+        "scope",
+        "method",
+        "target_type",
+        "target_id",
+    }
+)
+_PUBLIC_ID_KEYS = frozenset({"run_id", "autopilot_id", "squad_id"})
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _public_action_summary(value: object) -> dict:
+    """Strict console projection; resume/checkpoint/token/path data stays private."""
+    source = value if isinstance(value, dict) else {}
+    projected: dict = {}
+    for key in ("action", "capability", "permission", "estimated_cost", "plan_digest"):
+        item = source.get(key)
+        if isinstance(item, str) and _PUBLIC_LABEL.fullmatch(item):
+            projected[key] = item
+    count = source.get("subtask_count")
+    if isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= 10_000:
+        projected["subtask_count"] = count
+    for key in ("run_id", "autopilot_id"):
+        item = source.get(key)
+        if isinstance(item, str):
+            try:
+                projected[key] = str(uuid.UUID(item))
+            except ValueError:
+                pass
+
+    params = source.get("params")
+    safe_params: dict = {}
+    if isinstance(params, dict):
+        for key in sorted(_PUBLIC_PARAM_KEYS):
+            item = params.get(key)
+            if isinstance(item, bool) or (
+                isinstance(item, (int, float)) and not isinstance(item, bool)
+            ):
+                safe_params[key] = item
+            elif not isinstance(item, str):
+                continue
+            elif key == "repository" and _PUBLIC_REPOSITORY.fullmatch(item):
+                safe_params[key] = item
+            elif key == "branch" and _PUBLIC_BRANCH.fullmatch(item):
+                safe_params[key] = item
+            elif key not in {"repository", "branch"} and _PUBLIC_LABEL.fullmatch(item):
+                safe_params[key] = item
+    if safe_params:
+        projected["params"] = safe_params
+
+    detail = source.get("detail")
+    safe_detail: dict = {}
+    if isinstance(detail, dict):
+        for key in sorted(_PUBLIC_ID_KEYS):
+            item = detail.get(key)
+            if not isinstance(item, str):
+                continue
+            try:
+                safe_detail[key] = str(uuid.UUID(item))
+            except ValueError:
+                continue
+    if safe_detail:
+        projected["detail"] = safe_detail
+
+    impact = source.get("impact_scope")
+    if isinstance(impact, str) and _PUBLIC_LABEL.fullmatch(impact):
+        projected["impact_scope"] = impact
+    elif isinstance(impact, dict):
+        safe_impact = {
+            key: item
+            for key, item in impact.items()
+            if key in _PUBLIC_PARAM_KEYS
+            and (
+                isinstance(item, bool)
+                or (isinstance(item, (int, float)) and not isinstance(item, bool))
+                or (isinstance(item, str) and _PUBLIC_LABEL.fullmatch(item) is not None)
+            )
+        }
+        if safe_impact:
+            projected["impact_scope"] = safe_impact
+    return projected
 
 
 async def request_tool_approval(
@@ -92,7 +188,9 @@ async def request_tool_approval(
                 code="invalid_state_transition",
                 details={"status": execution.status},
             )
-        attempt = await _load_daemon_attempt(session, attempt_id=attempt_id, runtime=runtime)
+        attempt = await _load_daemon_attempt(
+            session, attempt_id=attempt_id, runtime=runtime
+        )
         if attempt.execution_id != execution.id:
             raise BusinessRuleError(
                 "attempt does not belong to this execution",
@@ -174,18 +272,42 @@ async def request_tool_approval(
         session.add(approval)
         await session.flush()
 
-        await emit_realtime(
+        await emit_workspace_execution_event(
             session,
             workspace_id=workspace_id,
-            channel=f"workspace:{workspace_id}:executions",
+            issue_id=execution.issue_id,
             event="execution.awaiting_approval",
-            data={"execution_id": str(execution.id), "approval_id": str(approval.id)},
+            data={
+                "execution_id": str(execution.id),
+                "approval_id": str(approval.id),
+                "agent_id": str(execution.agent_id) if execution.agent_id else None,
+                "issue_id": str(execution.issue_id) if execution.issue_id else None,
+            },
             idempotency_key=f"execution:{execution.id}:awaiting-approval",
         )
-        await emit_realtime(
+        await record_issue_execution_phase(
             session,
             workspace_id=workspace_id,
-            channel=f"workspace:{workspace_id}:executions",
+            issue_id=execution.issue_id,
+            execution_id=execution.id,
+            agent_id=execution.agent_id,
+            phase="awaiting_approval",
+            attempt_id=attempt.id,
+            runtime_id=attempt.runtime_id,
+            runtime_name=runtime.name,
+            event_key=str(approval.id),
+        )
+        if execution.agent_id is not None:
+            await emit_agent_presence(
+                session,
+                workspace_id=workspace_id,
+                agent_id=execution.agent_id,
+                idempotency_key=f"approval:{approval.id}:presence:pending",
+            )
+        await emit_workspace_execution_event(
+            session,
+            workspace_id=workspace_id,
+            issue_id=execution.issue_id,
             event="approval.created",
             data={
                 "approval_id": str(approval.id),
@@ -204,6 +326,7 @@ async def request_tool_approval(
                 "type": "review_requested",
                 "approval_id": str(approval.id),
                 "execution_id": str(execution.id),
+                "issue_id": str(execution.issue_id) if execution.issue_id else None,
                 "agent_id": str(execution.agent_id) if execution.agent_id else None,
                 "group_key": f"execution:{execution.id}:approval",
             },
@@ -231,23 +354,54 @@ async def decide_approval(
         approval = (
             await session.execute(
                 select(Approval)
-                .where(Approval.id == approval_id, Approval.workspace_id == workspace_id)
+                .where(
+                    Approval.id == approval_id, Approval.workspace_id == workspace_id
+                )
                 .with_for_update()
             )
         ).scalar_one_or_none()
         if approval is None:
             raise NotFoundError("approval not found")
 
-        if approval.status != "pending":
-            execution_status = None
-            if approval.subject_execution_id is not None:
-                execution_status = await session.scalar(
-                    select(TaskExecution.status).where(
+        execution: TaskExecution | None = None
+        if approval.subject_execution_id is not None:
+            execution = (
+                await session.execute(
+                    select(TaskExecution)
+                    .where(
                         TaskExecution.id == approval.subject_execution_id,
                         TaskExecution.workspace_id == workspace_id,
                     )
+                    .with_for_update()
                 )
-            return _approval_response(approval, execution_status=execution_status)  # idempotent
+            ).scalar_one_or_none()
+            if execution is None:
+                raise NotFoundError("approval not found")
+            if execution.issue_id is not None:
+                issue = (
+                    await session.execute(
+                        select(Issue)
+                        .where(
+                            Issue.id == execution.issue_id,
+                            Issue.workspace_id == workspace_id,
+                            Issue.deleted_at.is_(None),
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if issue is None:
+                    raise NotFoundError("approval not found")
+                await IssueService(session_factory).assert_can_view_issue(
+                    session,
+                    viewer=member,
+                    issue=issue,
+                )
+
+        if approval.status != "pending":
+            execution_status = execution.status if execution is not None else None
+            return _approval_response(
+                approval, execution_status=execution_status
+            )  # idempotent
 
         if member.member_type != "human":
             raise ForbiddenError("agents cannot approve")
@@ -260,15 +414,8 @@ async def decide_approval(
         approval.decision_comment = comment
 
         execution_status = None
-        if approval.subject_execution_id is not None:
-            execution = (
-                await session.execute(
-                    select(TaskExecution)
-                    .where(TaskExecution.id == approval.subject_execution_id)
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if execution is not None and execution.status == "awaiting_approval":
+        if execution is not None:
+            if execution.status == "awaiting_approval":
                 if approve:
                     # Back to queued: the next claim builds attempt #N+1 and
                     # resumes from action_summary.resume_context.
@@ -282,12 +429,21 @@ async def decide_approval(
                     # so the new attempt re-receives all seqs (at-least-once;
                     # resume_context is layered on top by the claim path).
                     await reset_context_receipts_tx(session, execution_id=execution.id)
-                    await emit_realtime(
+                    await emit_workspace_execution_event(
                         session,
                         workspace_id=workspace_id,
-                        channel=f"workspace:{workspace_id}:executions",
+                        issue_id=execution.issue_id,
                         event="execution.queued",
-                        data={"execution_id": str(execution.id), "resumed": True},
+                        data={
+                            "execution_id": str(execution.id),
+                            "agent_id": str(execution.agent_id)
+                            if execution.agent_id
+                            else None,
+                            "issue_id": str(execution.issue_id)
+                            if execution.issue_id
+                            else None,
+                            "resumed": True,
+                        },
                         idempotency_key=f"execution:{execution.id}:resume-queued:{approval.id}",
                     )
                 else:
@@ -310,6 +466,25 @@ async def decide_approval(
                     # queue-item terminal write-back and squad observation for
                     # this execution (no compensating sweep exists).
                     await emit_execution_finished(session, execution=execution)
+                await record_issue_execution_phase(
+                    session,
+                    workspace_id=workspace_id,
+                    issue_id=execution.issue_id,
+                    execution_id=execution.id,
+                    agent_id=execution.agent_id,
+                    phase="requeued" if approve else "cancelled",
+                    failure_reason=execution.failure_reason,
+                    event_key=str(approval.id),
+                )
+                if execution.agent_id is not None:
+                    await emit_agent_presence(
+                        session,
+                        workspace_id=workspace_id,
+                        agent_id=execution.agent_id,
+                        idempotency_key=(
+                            f"approval:{approval.id}:presence:{'approved' if approve else 'rejected'}"
+                        ),
+                    )
                 execution_status = execution.status
 
         run_status = None
@@ -317,27 +492,47 @@ async def decide_approval(
             # autopilot_action subject (README §6.10): approve resumes the
             # parked run (waiting_approval → running, executor dispatches);
             # reject cancels it.
-            run_status = await apply_approval_decision(session, approval=approval, approve=approve, now=now)
+            run_status = await apply_approval_decision(
+                session, approval=approval, approve=approve, now=now
+            )
 
-        await emit_realtime(
-            session,
-            workspace_id=workspace_id,
-            channel=f"workspace:{workspace_id}:executions",
-            event="approval.decided",
-            data={
-                "approval_id": str(approval.id),
-                "decision": approval.status,
-                "execution_id": (
-                    str(approval.subject_execution_id) if approval.subject_execution_id else None
-                ),
-                "run_id": (str(approval.subject_run_id) if approval.subject_run_id else None),
-                "run_status": run_status,
-            },
-            idempotency_key=f"approval:{approval.id}:decided",
-        )
+        decision_data = {
+            "approval_id": str(approval.id),
+            "decision": approval.status,
+            "execution_id": (
+                str(approval.subject_execution_id)
+                if approval.subject_execution_id
+                else None
+            ),
+            "run_id": (
+                str(approval.subject_run_id) if approval.subject_run_id else None
+            ),
+            "run_status": run_status,
+        }
+        if execution is not None:
+            await emit_workspace_execution_event(
+                session,
+                workspace_id=workspace_id,
+                issue_id=execution.issue_id,
+                event="approval.decided",
+                data=decision_data,
+                idempotency_key=f"approval:{approval.id}:decided",
+            )
+        else:
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=f"workspace:{workspace_id}:executions",
+                event="approval.decided",
+                data=decision_data,
+                idempotency_key=f"approval:{approval.id}:decided",
+            )
         # squad_plan subjects: the squad module applies the decision onto its
         # root task via the outbox relay (keeps runtime decoupled from squad).
-        if approval.subject_type == "squad_plan" and approval.subject_task_id is not None:
+        if (
+            approval.subject_type == "squad_plan"
+            and approval.subject_task_id is not None
+        ):
             await emit_event(
                 session,
                 workspace_id=workspace_id,
@@ -355,7 +550,9 @@ async def decide_approval(
         return _approval_response(approval, execution_status=execution_status)
 
 
-async def _assert_may_decide(session: AsyncSession, *, approval: Approval, member: Member) -> None:
+async def _assert_may_decide(
+    session: AsyncSession, *, approval: Approval, member: Member
+) -> None:
     """§6.10 permission: human member AND (workspace admin/owner, the subject
     execution's trigger/dispatcher, or the agent's owner). H4: for an
     issue-triggered execution the trigger is the issue REPORTER (the member
@@ -370,7 +567,9 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
     if approval.subject_execution_id is not None:
         execution = (
             await session.execute(
-                select(TaskExecution).where(TaskExecution.id == approval.subject_execution_id)
+                select(TaskExecution).where(
+                    TaskExecution.id == approval.subject_execution_id
+                )
             )
         ).scalar_one_or_none()
         if execution is not None:
@@ -402,7 +601,9 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
         from mesh.db.models.autopilot import Autopilot, AutopilotRun
 
         run = (
-            await session.execute(select(AutopilotRun).where(AutopilotRun.id == approval.subject_run_id))
+            await session.execute(
+                select(AutopilotRun).where(AutopilotRun.id == approval.subject_run_id)
+            )
         ).scalar_one_or_none()
         if run is not None:
             # Trigger path: the member who manually triggered the run, or the
@@ -410,7 +611,9 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
             if run.triggered_by is not None and run.triggered_by == member.id:
                 return
             rule = (
-                await session.execute(select(Autopilot).where(Autopilot.id == run.autopilot_id))
+                await session.execute(
+                    select(Autopilot).where(Autopilot.id == run.autopilot_id)
+                )
             ).scalar_one_or_none()
             if rule is not None:
                 if rule.created_by == member.id:
@@ -431,7 +634,11 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
 
 
 async def cancel_pending_approvals(
-    session: AsyncSession, *, workspace_id: uuid.UUID, execution_id: uuid.UUID, now: datetime
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    now: datetime,
 ) -> int:
     """Execution cancelled while awaiting approval → close the pending row."""
     pending = (
@@ -459,11 +666,15 @@ def _approval_response(approval: Approval, *, execution_status: str | None) -> d
         "id": str(approval.id),
         "subject_type": approval.subject_type,
         "subject_execution_id": (
-            str(approval.subject_execution_id) if approval.subject_execution_id else None
+            str(approval.subject_execution_id)
+            if approval.subject_execution_id
+            else None
         ),
-        "subject_task_id": (str(approval.subject_task_id) if approval.subject_task_id else None),
+        "subject_task_id": (
+            str(approval.subject_task_id) if approval.subject_task_id else None
+        ),
         "status": approval.status,
-        "action_summary": approval.action_summary,
+        "action_summary": _public_action_summary(approval.action_summary),
         "requested_at": approval.requested_at.isoformat(),
         "expires_at": approval.expires_at.isoformat(),
         "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,

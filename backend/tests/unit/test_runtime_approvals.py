@@ -30,7 +30,9 @@ APPROVAL_TTL = timedelta(hours=24)
 
 
 async def _running_execution(session_factory, world):
-    runtime = await make_runtime(session_factory, world["ws_id"], created_by=world["member_id"])
+    runtime = await make_runtime(
+        session_factory, world["ws_id"], created_by=world["member_id"]
+    )
     from tests.unit.runtime_support import make_execution
 
     execution = await make_execution(session_factory, world["ws_id"], world["agent_id"])
@@ -71,6 +73,11 @@ async def test_t21_full_approval_resume_protocol(session_factory):
     )
     assert data["status"] == "pending"
     assert data["execution_status"] == "awaiting_approval"
+    assert data["action_summary"] == {
+        "action": "exec:shell",
+        "capability": "exec:shell",
+    }
+    assert "resume_context" not in data["action_summary"]
 
     async with session_factory() as session:
         attempt = await session.get(ExecutionAttempt, attempt_id)
@@ -143,7 +150,9 @@ async def test_approval_reject_cancels_execution(session_factory):
 
 async def test_approval_request_only_from_running(session_factory):
     world = await seed_world(session_factory)
-    runtime = await make_runtime(session_factory, world["ws_id"], created_by=world["member_id"])
+    runtime = await make_runtime(
+        session_factory, world["ws_id"], created_by=world["member_id"]
+    )
     from tests.unit.runtime_support import make_execution
 
     execution = await make_execution(session_factory, world["ws_id"], world["agent_id"])

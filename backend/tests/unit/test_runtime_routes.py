@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 
 from mesh.db.models.runtime import TaskExecution
 from tests.unit.runtime_support import valid_result_v1
@@ -30,8 +32,12 @@ def _settings_kwargs(db_url: str, redis_url: str, **overrides) -> dict:
         "jwt_secret": "runtime-routes-signing-secret-0000000000",
         "daemon_tls_required": False,
         "runtime_lease_seconds": 120,
-        "storage_endpoint": os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"),
-        "storage_public_endpoint": os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"),
+        "storage_endpoint": os.environ.get(
+            "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"
+        ),
+        "storage_public_endpoint": os.environ.get(
+            "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"
+        ),
         "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
         "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
         "storage_bucket": "mesh-routes-test",
@@ -62,9 +68,15 @@ async def _world(client: httpx.AsyncClient, suffix: str) -> tuple[str, str, str]
     email = f"routes-{suffix}@example.com"
     await client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "Routes-Test-12345", "display_name": "Routes"},
+        json={
+            "email": email,
+            "password": "Routes-Test-12345",
+            "display_name": "Routes",
+        },
     )
-    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Routes-Test-12345"})
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": "Routes-Test-12345"}
+    )
     token = login.json()["data"]["access_token"]
     ws = (
         await client.post(
@@ -86,7 +98,13 @@ async def _world(client: httpx.AsyncClient, suffix: str) -> tuple[str, str, str]
 async def _runtime(client, token, ws_id, name="rt-1", **body):
     resp = await client.post(
         f"/api/v1/workspaces/{ws_id}/runtimes",
-        json={"name": name, "kind": "self_hosted", "labels": {}, "max_concurrent": 2, **body},
+        json={
+            "name": name,
+            "kind": "self_hosted",
+            "labels": {},
+            "max_concurrent": 2,
+            **body,
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 201, resp.text
@@ -105,7 +123,9 @@ async def _daemon_token(client, created: dict) -> str:
     return resp.json()["data"]["runtime_token"]
 
 
-async def _enqueue_direct(session_factory, ws_id, agent_id, **overrides) -> TaskExecution:
+async def _enqueue_direct(
+    session_factory, ws_id, agent_id, **overrides
+) -> TaskExecution:
     """Insert a queued execution directly (relay-independent route tests).
     F7: claimable executions always carry an executor."""
     from mesh.db.models.runtime import TaskExecution as TE
@@ -137,11 +157,14 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
     assert listing.json()["data"][0]["id"] == rid
     assert "queue_depth" in listing.json()
     by_status = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/runtimes?status=pending&kind=self_hosted", headers=auth
+        f"/api/v1/workspaces/{ws_id}/runtimes?status=pending&kind=self_hosted",
+        headers=auth,
     )
     assert len(by_status.json()["data"]) == 1
 
-    detail = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth)
+    detail = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth
+    )
     assert detail.status_code == 200
     assert detail.json()["data"]["recent_heartbeats"] == []
 
@@ -153,20 +176,31 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
     assert patched.json()["data"]["name"] == "renamed"
 
     # 404 on non-UUID / unknown ids.
-    bad = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/not-a-uuid", headers=auth)
+    bad = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/runtimes/not-a-uuid", headers=auth
+    )
     assert bad.status_code == 404
-    unknown = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{uuid.uuid4()}", headers=auth)
+    unknown = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{uuid.uuid4()}", headers=auth
+    )
     assert unknown.status_code == 404
 
     # Activate → pause (token revoked) → resume → rotate → delete.
     daemon_token = await _daemon_token(app_client, created)
     hb = await app_client.post(
         f"/api/v1/daemon/runtimes/{rid}:heartbeat",
-        json={"current_load": 0, "health": "healthy", "metrics": {"cpu": 1}, "inflight": []},
+        json={
+            "current_load": 0,
+            "health": "healthy",
+            "metrics": {"cpu": 1},
+            "inflight": [],
+        },
         headers={"Authorization": f"Bearer {daemon_token}"},
     )
     assert hb.status_code == 200
-    paused = await app_client.post(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}:pause", json={}, headers=auth)
+    paused = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}:pause", json={}, headers=auth
+    )
     assert paused.json()["data"]["status"] == "paused"
     dead_hb = await app_client.post(
         f"/api/v1/daemon/runtimes/{rid}:heartbeat",
@@ -179,16 +213,24 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
     )
     assert resumed.json()["data"]["status"] == "online"
     rotated = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}/tokens:rotate", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}/tokens:rotate",
+        json={},
+        headers=auth,
     )
     new_token = rotated.json()["data"]["runtime_token"]
     assert new_token.startswith("mesh_rt_")
     # Per-runtime execution history endpoint.
-    history = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}/executions", headers=auth)
+    history = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}/executions", headers=auth
+    )
     assert history.status_code == 200
-    deleted = await app_client.delete(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth)
+    deleted = await app_client.delete(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth
+    )
     assert deleted.status_code == 204
-    gone = await app_client.get(f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth)
+    gone = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{rid}", headers=auth
+    )
     assert gone.status_code == 404
 
 
@@ -201,12 +243,16 @@ async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
     rid = created["id"]
 
     # Empty queue → 204.
-    empty = await app_client.post(f"/api/v1/daemon/runtimes/{rid}/executions:claim", json={}, headers=dh)
+    empty = await app_client.post(
+        f"/api/v1/daemon/runtimes/{rid}/executions:claim", json={}, headers=dh
+    )
     assert empty.status_code == 204
 
     execution = await _enqueue_direct(session_factory, ws_id, agent_id)
     claimed = await app_client.post(
-        f"/api/v1/daemon/runtimes/{rid}/executions:claim", json={"diagnostics": {}}, headers=dh
+        f"/api/v1/daemon/runtimes/{rid}/executions:claim",
+        json={"diagnostics": {}},
+        headers=dh,
     )
     assert claimed.status_code == 200
     attempt = claimed.json()["data"]["attempt"]
@@ -221,7 +267,12 @@ async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
     assert started.status_code == 200
     logs = await app_client.post(
         f"/api/v1/daemon/attempts/{attempt['id']}/logs",
-        json={"lease_seq": 1, "stream": "stdout", "start_offset": 0, "lines": ["hello"]},
+        json={
+            "lease_seq": 1,
+            "stream": "stdout",
+            "start_offset": 0,
+            "lines": ["hello"],
+        },
         headers=dh,
     )
     assert logs.status_code == 200
@@ -247,7 +298,8 @@ async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
 
     # REST log read + SSE fallback frames (in-process streaming).
     page = await app_client.get(
-        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}/logs?offset=0", headers=auth
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}/logs?offset=0",
+        headers=auth,
     )
     assert [item["line"] for item in page.json()["data"]["lines"]] == ["hello"]
     frames = []
@@ -292,7 +344,9 @@ async def test_daemon_tls_gate_403(db_url, redis_url, session_factory):
     from mesh.api.app import create_app
     from mesh.config import load_settings
 
-    app = create_app(load_settings(**_settings_kwargs(db_url, redis_url, daemon_tls_required=True)))
+    app = create_app(
+        load_settings(**_settings_kwargs(db_url, redis_url, daemon_tls_required=True))
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -303,7 +357,9 @@ async def test_daemon_tls_gate_403(db_url, redis_url, session_factory):
     assert resp.json()["error"]["code"] == "tls_required"
 
 
-async def test_console_executions_cancel_freeze_credentials_approvals(app_client, session_factory):
+async def test_console_executions_cancel_freeze_credentials_approvals(
+    app_client, session_factory
+):
     token, ws_id, agent_id = await _world(app_client, "exec")
     auth = {"Authorization": f"Bearer {token}"}
     created = await _runtime(app_client, token, ws_id)
@@ -319,14 +375,23 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
     assert bad.status_code == 422
     cred = await app_client.post(
         f"/api/v1/workspaces/{ws_id}/credentials",
-        json={"name": "GOOD", "kind": "env", "value": "good-value-1", "env_name": "GOOD_VAR"},
+        json={
+            "name": "GOOD",
+            "kind": "env",
+            "value": "good-value-1",
+            "env_name": "GOOD_VAR",
+        },
         headers=auth,
     )
     assert cred.status_code == 201
     cred_id = cred.json()["data"]["id"]
-    listing = await app_client.get(f"/api/v1/workspaces/{ws_id}/credentials", headers=auth)
+    listing = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/credentials", headers=auth
+    )
     assert listing.json()["data"][0]["value"] == "***"
-    missing = await app_client.delete(f"/api/v1/workspaces/{ws_id}/credentials/{uuid.uuid4()}", headers=auth)
+    missing = await app_client.delete(
+        f"/api/v1/workspaces/{ws_id}/credentials/{uuid.uuid4()}", headers=auth
+    )
     assert missing.status_code == 404
 
     # Claim an execution that carries the credential; refetch rotates; freeze
@@ -345,7 +410,10 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
         headers=dh,
     )
     assert refetched.status_code == 200
-    assert refetched.json()["data"]["credentials"][0]["envelope"] != attempt["credentials"][0]["envelope"]
+    assert (
+        refetched.json()["data"]["credentials"][0]["envelope"]
+        != attempt["credentials"][0]["envelope"]
+    )
     # Refetch on a terminal/foreign attempt paths.
     stale = await app_client.post(
         f"/api/v1/daemon/attempts/{attempt['id']}/credentials:refetch",
@@ -354,7 +422,9 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
     )
     assert stale.status_code == 409
     froze = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}:freeze", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}:freeze",
+        json={},
+        headers=auth,
     )
     assert froze.json()["data"]["revoked_envelopes"] == 1
     after = await app_client.post(
@@ -369,33 +439,49 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
     execs = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions", headers=auth)
     assert execs.status_code == 200
     assert len(execs.json()["data"]) == 1
-    filtered = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions?status=completed", headers=auth)
+    filtered = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/executions?status=completed", headers=auth
+    )
     assert filtered.json()["data"] == []
-    detail = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions/{execution.id}", headers=auth)
+    detail = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}", headers=auth
+    )
     assert detail.status_code == 200
     assert detail.json()["data"]["credentials"][0]["value"] == "***"
-    missing_exec = await app_client.get(f"/api/v1/workspaces/{ws_id}/executions/{uuid.uuid4()}", headers=auth)
+    missing_exec = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/executions/{uuid.uuid4()}", headers=auth
+    )
     assert missing_exec.status_code == 404
 
     # Cancel a queued execution via console; cancel again → idempotent.
     queued_exec = await _enqueue_direct(session_factory, ws_id, agent_id)
     cancel1 = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/executions/{queued_exec.id}:cancel", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/executions/{queued_exec.id}:cancel",
+        json={},
+        headers=auth,
     )
     assert cancel1.json()["data"]["status"] == "cancelled"
     cancel2 = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/executions/{queued_exec.id}:cancel", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/executions/{queued_exec.id}:cancel",
+        json={},
+        headers=auth,
     )
     assert cancel2.json()["data"]["status"] == "cancelled"
     cancel_missing = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/executions/{uuid.uuid4()}:cancel", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/executions/{uuid.uuid4()}:cancel",
+        json={},
+        headers=auth,
     )
     assert cancel_missing.status_code == 404
 
     # Approvals console surface: list / get / approve 404 / decide flow.
-    empty_inbox = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth)
+    empty_inbox = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth
+    )
     assert empty_inbox.status_code == 200
-    missing_appr = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals/{uuid.uuid4()}", headers=auth)
+    missing_appr = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/approvals/{uuid.uuid4()}", headers=auth
+    )
     assert missing_appr.status_code == 404
 
     # Build a pending approval through the daemon protocol, then approve it.
@@ -414,17 +500,35 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
         json={
             "lease_seq": 1,
             "attempt_id": attempt2["id"],
-            "action_summary": {"action": "exec:shell"},
-            "resume_context": {"checkpoint_ref": "c1"},
+            "action_summary": {
+                "action": "exec:shell",
+                "params": {
+                    "repository": "org/repo",
+                    "branch": "feature/review",
+                    "path": "/private/worktree",
+                    "token": "must-not-leak",
+                },
+            },
+            "resume_context": {"checkpoint_ref": "secret/checkpoint"},
         },
         headers=dh,
     )
     assert appr.status_code == 200, appr.text
+    assert appr.json()["data"]["action_summary"] == {
+        "action": "exec:shell",
+        "params": {"branch": "feature/review", "repository": "org/repo"},
+    }
     approval_id = appr.json()["data"]["id"]
-    inbox = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth)
+    inbox = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/approvals?role=mine", headers=auth
+    )
     assert [a["id"] for a in inbox.json()["data"]] == [approval_id]
     assert inbox.json()["data"][0]["execution_status"] == "awaiting_approval"
-    got = await app_client.get(f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}", headers=auth)
+    assert "must-not-leak" not in str(inbox.json())
+    assert "secret/checkpoint" not in str(inbox.json())
+    got = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}", headers=auth
+    )
     assert got.json()["data"]["status"] == "pending"
     assert got.json()["data"]["execution_status"] == "awaiting_approval"
     approved = await app_client.post(
@@ -435,7 +539,9 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
     assert approved.json()["data"]["execution_status"] == "queued"
     # Idempotent re-decide.
     again = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/reject", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/reject",
+        json={},
+        headers=auth,
     )
     assert again.json()["data"]["status"] == "approved"
     assert again.json()["data"]["execution_status"] == "queued"
@@ -455,6 +561,140 @@ async def test_console_executions_cancel_freeze_credentials_approvals(app_client
     assert appr_malformed.status_code == 404
 
 
+async def test_cancel_private_issue_execution_requires_issue_visibility(
+    app_client, session_factory
+):
+    """agent:trigger is necessary but never bypasses private-project reads."""
+    _owner_token, ws_id, agent_id = await _world(app_client, "cancel-private")
+    viewer_email = f"cancel-private-viewer-{uuid.uuid4().hex[:8]}@example.com"
+    password = "Routes-Test-12345"
+    registered = await app_client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": viewer_email,
+            "password": password,
+            "display_name": "Private viewer",
+        },
+    )
+    assert registered.status_code == 201
+    login = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": viewer_email, "password": password},
+    )
+    assert login.status_code == 200
+    viewer_token = login.json()["data"]["access_token"]
+
+    from mesh.db.models.issue import Issue, IssueStatus
+    from mesh.db.models.member import Member
+    from mesh.db.models.project import Project
+    from mesh.db.models.runtime import Approval
+    from mesh.db.models.user import User
+
+    workspace_id = uuid.UUID(ws_id)
+    async with session_factory() as session, session.begin():
+        viewer_user = await session.scalar(
+            select(User).where(User.email == viewer_email)
+        )
+        assert viewer_user is not None
+        viewer = Member(
+            workspace_id=workspace_id,
+            member_type="human",
+            user_id=viewer_user.id,
+            role="member",
+            status="active",
+        )
+        project = Project(
+            workspace_id=workspace_id,
+            name=f"Cancel private {uuid.uuid4().hex[:8]}",
+            key=f"V{uuid.uuid4().hex[:7].upper()}",
+            visibility="private",
+        )
+        session.add_all([viewer, project])
+        await session.flush()
+        status = IssueStatus(
+            workspace_id=workspace_id,
+            project_id=project.id,
+            name="Todo",
+            category="todo",
+            is_default=True,
+        )
+        session.add(status)
+        await session.flush()
+        issue = Issue(
+            workspace_id=workspace_id,
+            project_id=project.id,
+            identifier_namespace_key=project.key,
+            number=1,
+            identifier=f"{project.key}-1",
+            title="Private cancellation target",
+            status_id=status.id,
+            state_category="todo",
+        )
+        session.add(issue)
+        await session.flush()
+        execution = TaskExecution(
+            workspace_id=workspace_id,
+            agent_id=uuid.UUID(agent_id),
+            issue_id=issue.id,
+            status="queued",
+        )
+        session.add(execution)
+        await session.flush()
+        execution_id = execution.id
+        requester_id = await session.scalar(
+            select(Member.id).where(
+                Member.workspace_id == workspace_id,
+                Member.role.in_(("owner", "admin")),
+            )
+        )
+        assert requester_id is not None
+        approval = Approval(
+            workspace_id=workspace_id,
+            subject_type="tool_call",
+            subject_execution_id=execution.id,
+            requested_by_member_id=requester_id,
+            action_summary={
+                "action": "repo.write",
+                "params": {"repository": "org/private", "token": "never-render"},
+                "resume_context": {"checkpoint_ref": "private/checkpoint"},
+            },
+            status="pending",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        session.add(approval)
+        await session.flush()
+        approval_id = approval.id
+
+    denied = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/executions/{execution_id}:cancel",
+        json={},
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    assert denied.status_code == 403
+    hidden_list = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/approvals",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    assert hidden_list.status_code == 200
+    assert hidden_list.json()["data"] == []
+    hidden_detail = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    assert hidden_detail.status_code == 403
+    hidden_decision = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/approve",
+        json={},
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    assert hidden_decision.status_code == 403
+    async with session_factory() as session:
+        unchanged = await session.get(TaskExecution, execution_id)
+        approval_unchanged = await session.get(Approval, approval_id)
+    assert unchanged is not None and unchanged.status == "queued"
+    assert approval_unchanged is not None and approval_unchanged.status == "pending"
+
+
 async def test_execution_channel_checker(session_factory):
     """execution:{id}[:logs] subscription authorization (README §6.7)."""
     from mesh.realtime.auth import Principal
@@ -463,6 +703,9 @@ async def test_execution_channel_checker(session_factory):
     world_user_id = uuid.uuid4()
     ws_id = uuid.uuid4()
     async with session_factory() as session, session.begin():
+        from mesh.db.models.issue import Issue, IssueStatus
+        from mesh.db.models.member import Member
+        from mesh.db.models.project import Project, ProjectMember
         from mesh.db.models.user import User
         from mesh.db.models.workspace import Workspace
 
@@ -476,18 +719,83 @@ async def test_execution_channel_checker(session_factory):
             )
         )
         await session.flush()
+        viewer = Member(
+            workspace_id=ws_id,
+            member_type="human",
+            user_id=world_user_id,
+            role="member",
+            status="active",
+        )
+        private_project = Project(
+            workspace_id=ws_id,
+            name="Private execution channel",
+            key=f"C{ws_id.hex[:7].upper()}",
+            visibility="private",
+        )
+        session.add_all([viewer, private_project])
+        await session.flush()
+        status = IssueStatus(
+            workspace_id=ws_id,
+            project_id=private_project.id,
+            name="Todo",
+            category="todo",
+            is_default=True,
+        )
+        session.add(status)
+        await session.flush()
+        private_issue = Issue(
+            workspace_id=ws_id,
+            project_id=private_project.id,
+            identifier_namespace_key=private_project.key,
+            number=1,
+            identifier=f"{private_project.key}-1",
+            title="Hidden execution channel",
+            status_id=status.id,
+            state_category="todo",
+        )
+        session.add(private_issue)
+        await session.flush()
         from mesh.db.models.runtime import TaskExecution as TE
 
         execution = TE(workspace_id=ws_id, agent_id=None, status="queued")
-        session.add(execution)
+        private_execution = TE(
+            workspace_id=ws_id,
+            agent_id=None,
+            issue_id=private_issue.id,
+            status="queued",
+        )
+        session.add_all([execution, private_execution])
         await session.flush()
         execution_id = execution.id
+        private_execution_id = private_execution.id
+        private_project_id = private_project.id
+        viewer_id = viewer.id
 
     checker = make_execution_channel_checker(session_factory)
-    member_principal = Principal(subject=str(world_user_id), workspace_ids=frozenset({ws_id}))
-    outsider_principal = Principal(subject=str(world_user_id), workspace_ids=frozenset({uuid.uuid4()}))
+    member_principal = Principal(
+        subject=str(world_user_id), workspace_ids=frozenset({ws_id})
+    )
+    outsider_principal = Principal(
+        subject=str(world_user_id), workspace_ids=frozenset({uuid.uuid4()})
+    )
     assert await checker(member_principal, f"execution:{execution_id}")
     assert await checker(member_principal, f"execution:{execution_id}:logs")
+    assert not await checker(member_principal, f"execution:{private_execution_id}")
+    assert not await checker(member_principal, f"execution:{private_execution_id}:logs")
+
+    # The exact same resource becomes subscribable after an explicit project
+    # membership grant; authorization is re-evaluated on every subscription.
+    async with session_factory() as session, session.begin():
+        session.add(
+            ProjectMember(
+                workspace_id=ws_id,
+                project_id=private_project_id,
+                member_id=viewer_id,
+                role="viewer",
+            )
+        )
+    assert await checker(member_principal, f"execution:{private_execution_id}")
+    assert await checker(member_principal, f"execution:{private_execution_id}:logs")
     # Other workspace's principal: not a member of the execution's workspace.
     assert not await checker(outsider_principal, f"execution:{execution_id}")
     # Garbage channel keys.

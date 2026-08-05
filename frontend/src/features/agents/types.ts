@@ -3,6 +3,7 @@
  * `agents.id` 为 agent 身份键;名册行经 members.agent_id → agents.id 关联(README §6.1)。
  * 时间一律 UTC RFC3339 字符串;id 一律 UUID 字符串。
  */
+import type { AgentCapacitySnapshot } from './runState';
 
 export type AgentLifecycleStatus = 'active' | 'paused' | 'disabled' | 'archived';
 export type AgentVisibility = 'workspace' | 'private';
@@ -43,6 +44,7 @@ export interface AgentSummary {
   readonly visibility: AgentVisibility;
   readonly trigger_on_assign: boolean;
   readonly owner_user_id: string;
+  readonly capacity?: AgentCapacitySnapshot;
   readonly created_at: string;
   readonly updated_at: string;
 }

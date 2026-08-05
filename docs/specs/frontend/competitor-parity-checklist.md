@@ -454,8 +454,8 @@
 - [x] 执行详情页：状态 + 运行时长/超时进度条 + agent[AI]+issue+触发方式+分支；Tab[实时日志][产物/Diff][凭证(已脱敏)]；日志「跟随尾部」+ offset 续传 + 下载完整日志；取消二次确认（依据: runtime.md §4.4）— 现状 ✅
 - [x] 凭证 Tab 仅元信息值恒 `***`（依据: runtime.md §2.4）— 现状 ⬜ 待实机
 - [x] runtime 四态可行动：Online/Degraded（精确列出缺失能力+受影响任务类型+修复命令）/Paused/Isolated；**禁止泛化「运行失败」**（依据: runtime-executor.md §4.1）— 现状 ⬜ 待实机
-- [x] 执行按 attempt 展示：provider/version/model、冻结预算 vs 实际 usage、claim/running/approval/requeue/terminal 时间线、高风险动作「请求—审批人—grant—结果」（依据: runtime-executor.md §4.2）— 现状 ⬜ 待实机
-- [x] issue 详情反查其所有 task_executions（依据: runtime.md §4.5）— 现状 ⬜ 待实机
+- [x] 执行按 attempt 展示：provider/version/model、冻结预算 vs 实际 usage、claim/running/approval/requeue/terminal 真实持久时间线，高风险动作「请求—审批人—grant（无独立记录则 null）—结果」（依据: runtime-executor.md §4.2）— 现状 ⬜ 待实机
+- [x] issue 详情沿 cursor 反查其所有 task_executions；产出评审仅绑定最新有效 completed execution 并持久留痕（依据: runtime.md §4.5）— 现状 ⬜ 待实机
 - [x] 四组合走查：runtime 三页 × 四组合 — 现状 ⬜
 
 ### 2.14 技能

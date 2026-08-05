@@ -142,7 +142,9 @@ function renderPage(
       <Route
         path="/executions/:executionId"
         element={
-          realtime === null ? page : (
+          realtime === null ? (
+            page
+          ) : (
             <RealtimeContext.Provider value={realtime.value}>{page}</RealtimeContext.Provider>
           )
         }
@@ -197,6 +199,174 @@ describe('ExecutionDetailPage 头部与元信息', () => {
       'successfully',
     );
   });
+
+  it('按 attempt 呈现 provider、冻结预算、usage、时间线与安全审批审计', async () => {
+    const user = userEvent.setup();
+    const frozenBudget = {
+      max_cost_usd: '2.500000',
+      max_tokens: 10000,
+      max_turns: 25,
+      max_wall_time_seconds: 1800,
+      max_idle_time_seconds: 300,
+    };
+    setup({
+      ...EXECUTION,
+      status: 'completed',
+      frozen_budget: frozenBudget,
+      attempts: [
+        {
+          id: 'att-1',
+          attempt_number: 1,
+          runtime_name: 'intranet-build-01',
+          status: 'cancelled',
+          claimed_at: '2026-07-27T11:50:01Z',
+          started_at: '2026-07-27T11:50:02Z',
+          finished_at: '2026-07-27T11:51:00Z',
+          working_branch: 'agent/e-1/a1',
+          failure_reason: 'awaiting_approval',
+          provider: null,
+          provider_version: null,
+          model: null,
+          actual_usage: null,
+          frozen_budget: frozenBudget,
+          redaction_hits: 0,
+          timeline: [
+            { event: 'claimed', at: '2026-07-27T11:50:01Z' },
+            { event: 'running', at: '2026-07-27T11:50:02Z' },
+            { event: 'approval_requested', at: '2026-07-27T11:51:00Z' },
+            { event: 'approval_approved', at: '2026-07-27T11:52:00Z' },
+            {
+              event: 'terminal',
+              at: '2026-07-27T11:51:00Z',
+              status: 'cancelled',
+              reason_code: 'awaiting_approval',
+            },
+          ],
+        },
+        {
+          id: 'att-2',
+          attempt_number: 2,
+          runtime_name: 'intranet-build-01',
+          status: 'completed',
+          claimed_at: '2026-07-27T11:53:00Z',
+          started_at: '2026-07-27T11:53:01Z',
+          finished_at: '2026-07-27T11:55:00Z',
+          working_branch: 'agent/e-1/a2',
+          failure_reason: null,
+          provider: 'provider-a',
+          provider_version: '1.2.3',
+          model: 'model-z',
+          actual_usage: {
+            prompt_tokens: 100,
+            completion_tokens: 30,
+            cache_tokens: 20,
+            total_tokens: 150,
+            cost_usd: '1.250000',
+            turns: 4,
+          },
+          frozen_budget: frozenBudget,
+          redaction_hits: 2,
+          timeline: [
+            { event: 'requeued', at: '2026-07-27T11:53:00Z', reason_code: 'awaiting_approval' },
+            { event: 'claimed', at: '2026-07-27T11:53:00Z' },
+            { event: 'running', at: '2026-07-27T11:53:01Z' },
+            { event: 'terminal', at: '2026-07-27T11:55:00Z', status: 'completed' },
+          ],
+        },
+      ],
+      approval_audits: [
+        {
+          id: 'approval-1',
+          source_attempt_id: 'att-1',
+          request: {
+            action: 'repo.write',
+            fields: { repository: 'org/repo', branch: 'feature/audit' },
+          },
+          requested_by_member_id: 'member-agent',
+          requested_at: '2026-07-27T11:51:00Z',
+          decision: {
+            status: 'approved',
+            decided_by_member_id: 'member-owner',
+            decided_at: '2026-07-27T11:52:00Z',
+          },
+          grant: {
+            action: 'repo.write',
+            fields: { repository: 'org/repo', branch: 'feature/audit' },
+          },
+          result: { attempt_id: 'att-2', status: 'completed', termination: 'completed' },
+        },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId('execution-detail-page');
+    await user.click(screen.getByTestId('execution-tab-audit'));
+
+    expect(await screen.findByTestId('execution-attempt-audit-att-1')).toHaveTextContent(
+      'approval_requested',
+    );
+    const completed = screen.getByTestId('execution-attempt-audit-att-2');
+    expect(completed).toHaveTextContent('provider-a');
+    expect(completed).toHaveTextContent('1.2.3');
+    expect(completed).toHaveTextContent('model-z');
+    expect(completed).toHaveTextContent('2.500000');
+    expect(completed).toHaveTextContent('1.250000');
+    expect(completed).toHaveTextContent('requeued');
+    expect(completed).toHaveTextContent('Redacted: 2');
+    const approval = screen.getByTestId('execution-approval-audit-approval-1');
+    expect(approval).toHaveTextContent('repo.write');
+    expect(approval).toHaveTextContent('member-owner');
+    expect(approval).toHaveTextContent('completed');
+    expect(screen.getByTestId('execution-panel-audit').textContent).not.toContain('token');
+    expect(screen.getByTestId('execution-panel-audit').textContent).not.toContain('/srv/');
+    expect(screen.getByTestId('execution-panel-audit').textContent).not.toContain('thinking');
+  });
+
+  it('稀疏 attempt 审计使用安全占位且空审批不报错', async () => {
+    const user = userEvent.setup();
+    setup({
+      ...EXECUTION,
+      approval_audits: [
+        {
+          id: 'approval-sparse',
+          source_attempt_id: 'att-1',
+          request: {
+            action: 'repo.read',
+            fields: { enabled: true, dry_run: false, retries: 2 },
+          },
+          requested_by_member_id: 'member-agent',
+          requested_at: '2026-07-27T11:51:00Z',
+          decision: {
+            status: 'pending',
+            decided_by_member_id: null,
+            decided_at: null,
+          },
+          grant: null,
+          result: null,
+        },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId('execution-detail-page');
+    await user.click(screen.getByTestId('execution-tab-audit'));
+    const attempt = await screen.findByTestId('execution-attempt-audit-att-1');
+    expect(attempt).toHaveTextContent('Redacted: 0');
+    const approval = screen.getByTestId('execution-approval-audit-approval-sparse');
+    expect(approval).toHaveTextContent('true');
+    expect(approval).toHaveTextContent('false');
+    expect(approval).toHaveTextContent('2');
+    expect(approval).toHaveTextContent('—');
+  });
+
+  it('无 attempt 时审计页明确呈现空态', async () => {
+    const user = userEvent.setup();
+    setup({ ...EXECUTION, attempts: [], credentials: [] });
+    renderPage();
+    await screen.findByTestId('execution-detail-page');
+    await user.click(screen.getByTestId('execution-tab-audit'));
+    expect(await screen.findByTestId('execution-panel-audit')).toHaveTextContent(
+      'No attempts recorded.',
+    );
+  });
 });
 
 describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
@@ -233,9 +403,7 @@ describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
     });
     expect(await screen.findByTestId('execution-log-end')).toHaveTextContent('completed');
     await waitFor(() =>
-      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(
-        before,
-      ),
+      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(before),
     );
   });
 
@@ -261,9 +429,7 @@ describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
       payload: { type: 'status', status: 'running' },
     });
     await waitFor(() =>
-      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(
-        before,
-      ),
+      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(before),
     );
   });
 
@@ -282,9 +448,7 @@ describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
       payload: { data: { id: 'e-1' } },
     });
     await waitFor(() =>
-      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(
-        before,
-      ),
+      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(before),
     );
   });
 
@@ -481,7 +645,8 @@ describe('ExecutionDetailPage Tab / 凭证 / 取消', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-      if (url.includes('/logs')) return fakeResponse({ body: { data: { lines: [], next_offset: 0 } } });
+      if (url.includes('/logs'))
+        return fakeResponse({ body: { data: { lines: [], next_offset: 0 } } });
       return fakeResponse({
         status: 404,
         body: { error: { code: 'not_found', message: 'missing' } },

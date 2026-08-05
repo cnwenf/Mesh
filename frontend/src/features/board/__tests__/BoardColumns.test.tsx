@@ -177,6 +177,17 @@ describe('BoardColumns 渲染', () => {
     expect(screen.queryByTestId('issue-label-dot')).not.toBeInTheDocument();
   });
 
+  it('活跃 execution 在对应卡片呈现处理中状态，其他卡片不误报', () => {
+    render({
+      cardsByKey: { todo: [card('a', 1), card('b', 2)] },
+      executionStatusByIssueId: { a: 'running' },
+    });
+
+    expect(screen.getByTestId('board-card-execution-a')).toHaveTextContent('Processing');
+    expect(screen.getByTestId('board-card-execution-a')).toHaveAttribute('role', 'status');
+    expect(screen.queryByTestId('board-card-execution-b')).not.toBeInTheDocument();
+  });
+
   it('卡片可聚焦(键盘移动入口,§10.2)且标注 aria-keyshortcuts', () => {
     render({ cardsByKey: { todo: [card('a', 1)] } });
     const cardA = screen.getByTestId('board-card-a');

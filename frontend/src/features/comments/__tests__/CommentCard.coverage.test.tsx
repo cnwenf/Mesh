@@ -53,6 +53,7 @@ function renderCard(
     onSaveEdit: vi.fn().mockResolvedValue(undefined),
     onDelete: vi.fn(),
     onCopyLink: vi.fn(),
+    onRetrySend: vi.fn(),
     ...overrides,
   };
   return renderWithProviders(<CommentCard {...props} />);

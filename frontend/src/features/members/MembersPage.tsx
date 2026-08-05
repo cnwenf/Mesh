@@ -41,7 +41,8 @@ import { workspaceChannel } from '../../workspace/WorkspaceProvider';
 import { AgentWizard } from '../agents/AgentWizard';
 import { deleteAgent, getAgent, listConfigVersions, transitionAgentLifecycle } from '../agents/api';
 import { useAgentPresenceMap } from '../agents/presence';
-import { presenceToRunState } from '../agents/runState';
+import { capacityToPresence, presenceToRunState } from '../agents/runState';
+import type { PresenceTriple } from '../agents/runState';
 import type { AgentConfigVersion, AgentDetail } from '../agents/types';
 import { listIssues } from '../issues/api';
 import type { IssueSummary } from '../issues/types';
@@ -134,6 +135,15 @@ function agentIdOf(member: MemberSummary): string | null {
   return null;
 }
 
+/** agent roster profile 随 REST 返回的绝对容量快照。 */
+function initialPresenceOf(member: MemberSummary): PresenceTriple | null {
+  const profile = member.profile;
+  if (member.member_type !== 'agent' || profile === null || !('capacity' in profile)) {
+    return null;
+  }
+  return capacityToPresence(profile.capacity);
+}
+
 function agentLifecycleOf(member: MemberSummary): string | null {
   const profile = member.profile;
   if (member.member_type === 'agent' && profile !== null && 'lifecycle_status' in profile) {
@@ -207,12 +217,21 @@ export function MembersPage(): React.JSX.Element {
   /** 管理员重置上手进度的二次确认目标(onboarding.md §4.2;仅人类成员行) */
   const [resetTarget, setResetTarget] = useState<MemberSummary | null>(null);
 
-  // presence 实时帧 → agentId → 容量三元组(shell 外恒空,§9.8 运行态五态)。
+  // REST 快照先填充 agentId → 容量三元组,realtime 绝对帧随后覆盖。
   const agentIds = useMemo(
     () => members.map((member) => agentIdOf(member)).filter((id): id is string => id !== null),
     [members],
   );
-  const presenceMap = useAgentPresenceMap(agentIds);
+  const initialPresenceMap = useMemo(() => {
+    const initial = new Map<string, PresenceTriple>();
+    for (const member of members) {
+      const id = agentIdOf(member);
+      const presence = initialPresenceOf(member);
+      if (id !== null && presence !== null) initial.set(id, presence);
+    }
+    return initial;
+  }, [members]);
+  const presenceMap = useAgentPresenceMap(agentIds, initialPresenceMap);
 
   /** 某 agent 行当前运行态:帧未至 → unknown;三元组 → 五态归一(§9.8)。 */
   const runStateOf = (member: MemberSummary): RunState => {
@@ -650,12 +669,31 @@ export function MembersPage(): React.JSX.Element {
   /** agent 行运行态徽标(§9.8 五态统一语言);人类行渲染空。testid 桌面/卡片分流。 */
   const renderRunState = (member: MemberSummary, isCard: boolean): React.JSX.Element | null => {
     if (member.member_type !== 'agent') return null;
+    const id = agentIdOf(member);
+    const presence = id === null ? null : (presenceMap.get(id) ?? null);
     const state = runStateOf(member);
     return (
       <span
+        className="mesh-members__presence"
         data-testid={isCard ? `card-member-presence-${member.id}` : `member-presence-${member.id}`}
       >
         <RunStateBadge state={state} label={t(`runState.${state}`)} size="sm" />
+        <span
+          className="mesh-members__presence-caption mesh-text-micro mesh-tnum"
+          data-testid={
+            isCard
+              ? `card-member-presence-caption-${member.id}`
+              : `member-presence-caption-${member.id}`
+          }
+        >
+          {presence === null
+            ? t('agents.presence.unknown')
+            : t('agents.presence.triple', {
+                running: presence.running,
+                queued: presence.queued,
+                awaiting: presence.awaiting,
+              })}
+        </span>
       </span>
     );
   };

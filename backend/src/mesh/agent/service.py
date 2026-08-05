@@ -51,6 +51,12 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.outbox.service import emit_realtime
+from mesh.runtime.agent_presence import (
+    AgentPresenceSnapshot,
+    agent_presence_snapshot,
+    agent_presence_snapshots,
+    empty_agent_presence,
+)
 from mesh.search.projection import recompute_for_agent, sync_member_search_name
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
@@ -263,7 +269,12 @@ class AgentService:
 
     # -- serialization ------------------------------------------------------------
 
-    def render_agent(self, agent: Agent, member: Member | None) -> dict:
+    def render_agent(
+        self,
+        agent: Agent,
+        member: Member | None,
+        capacity: AgentPresenceSnapshot | None = None,
+    ) -> dict:
         """Render the §3.2 list/summary shape.
 
         IDs render as strings and timestamps as RFC3339 (§3.0) so the same
@@ -295,15 +306,20 @@ class AgentService:
             "visibility": agent.visibility,
             "trigger_on_assign": agent.trigger_on_assign,
             "owner_user_id": str(agent.owner_user_id),
+            "capacity": capacity if capacity is not None else empty_agent_presence(),
             "created_at": agent.created_at.isoformat(),
             "updated_at": agent.updated_at.isoformat(),
         }
 
     def render_detail(
-        self, agent: Agent, member: Member | None, version: AgentConfigVersion | None
+        self,
+        agent: Agent,
+        member: Member | None,
+        version: AgentConfigVersion | None,
+        capacity: AgentPresenceSnapshot | None = None,
     ) -> dict:
         """Render the detail shape (profile + configuration + version)."""
-        rendered = self.render_agent(agent, member)
+        rendered = self.render_agent(agent, member, capacity)
         rendered.update(
             {
                 "slug": agent.slug,
@@ -460,7 +476,7 @@ class AgentService:
         *,
         actor: Member,
         workspace_id: uuid.UUID,
-        status: str = "all",
+        status: str = "default",
         visibility: str = "all",
         owner_id: uuid.UUID | None = None,
         q: str | None = None,
@@ -496,7 +512,13 @@ class AgentService:
                 )
                 .where(Agent.workspace_id == workspace_id, Agent.deleted_at.is_(None))
             )
-            if status != "all":
+            if status == "default":
+                # The normal roster is the actionable team projection. Keep
+                # paused agents visible (they can be resumed), while disabled
+                # and archived agents remain available only through explicit
+                # lifecycle filters / audit reads.
+                stmt = stmt.where(Agent.lifecycle_status.in_(("active", "paused")))
+            elif status != "all":
                 stmt = stmt.where(Agent.lifecycle_status == status)
             # §3.5 visibility gate applies to EVERY branch (incl. an explicit
             # ``visibility=private`` filter): a non-admin may only see
@@ -523,8 +545,17 @@ class AgentService:
                 Agent.lifecycle_status.asc(), Agent.created_at.asc(), Agent.id.asc()
             ).limit(limit + 1)
             rows = (await session.execute(stmt)).all()
+            page_rows = rows[:limit]
+            capacity_by_agent = await agent_presence_snapshots(
+                session,
+                workspace_id=workspace_id,
+                agent_ids=(agent.id for agent, _ in page_rows),
+            )
 
-        items = [self.render_agent(agent, member) for agent, member in rows[:limit]]
+        items = [
+            self.render_agent(agent, member, capacity_by_agent[agent.id])
+            for agent, member in page_rows
+        ]
         next_cursor = None
         if len(rows) > limit:
             last_agent = rows[limit - 1][0]
@@ -551,7 +582,12 @@ class AgentService:
                         AgentConfigVersion.id == agent.active_config_version_id,
                     )
                 )
-            return self.render_detail(agent, member, version)
+            capacity = await agent_presence_snapshot(
+                session,
+                workspace_id=workspace_id,
+                agent_id=agent.id,
+            )
+            return self.render_detail(agent, member, version, capacity)
 
     # -- profile update -------------------------------------------------------------
 
@@ -604,12 +640,22 @@ class AgentService:
             # §6.9: empty diff → no event, no audit (no-op save).
             if not changed:
                 member = await self._agent_member(session, workspace_id, agent)
-                return self.render_agent(agent, member)
+                capacity = await agent_presence_snapshot(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=agent.id,
+                )
+                return self.render_agent(agent, member, capacity)
 
             agent.updated_at = now
             await session.flush()
             member = await self._agent_member(session, workspace_id, agent)
-            rendered = self.render_agent(agent, member)
+            capacity = await agent_presence_snapshot(
+                session,
+                workspace_id=workspace_id,
+                agent_id=agent.id,
+            )
+            rendered = self.render_agent(agent, member, capacity)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
@@ -691,7 +737,12 @@ class AgentService:
             await session.flush()
 
             member = await self._agent_member(session, workspace_id, agent)
-            rendered = self.render_detail(agent, member, version)
+            capacity = await agent_presence_snapshot(
+                session,
+                workspace_id=workspace_id,
+                agent_id=agent.id,
+            )
+            rendered = self.render_detail(agent, member, version, capacity)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
@@ -821,7 +872,12 @@ class AgentService:
             await session.flush()
 
             member = await self._agent_member(session, workspace_id, agent)
-            rendered = self.render_detail(agent, member, version)
+            capacity = await agent_presence_snapshot(
+                session,
+                workspace_id=workspace_id,
+                agent_id=agent.id,
+            )
+            rendered = self.render_detail(agent, member, version, capacity)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
@@ -893,10 +949,30 @@ class AgentService:
                     member.disabled_at = None
                     member.updated_at = now
 
-            # In-flight policy (pause): runtime consumes it once executions
-            # land — no executions exist yet, so the affected count is 0.
             affected_executions = 0
-            rendered = self.render_agent(agent, member)
+            effective_policy = in_flight_policy or "finish_current"
+            if action == "pause" and effective_policy == "cancel_current":
+                from mesh.runtime.attempts import cancel_in_flight_for_agent
+
+                affected_executions = await cancel_in_flight_for_agent(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=agent.id,
+                    issue_id=None,
+                    failure_reason="agent_paused",
+                )
+                capacity = await agent_presence_snapshot(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=agent.id,
+                )
+            else:
+                capacity = await agent_presence_snapshot(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=agent.id,
+                )
+            rendered = self.render_agent(agent, member, capacity)
             rendered["previous_lifecycle_status"] = previous
             rendered["affected_executions"] = affected_executions
             await emit_realtime(
@@ -911,7 +987,7 @@ class AgentService:
                     "to": target,
                     "action": action,
                     "reason": reason,
-                    "in_flight_policy": in_flight_policy if action == "pause" else None,
+                    "in_flight_policy": effective_policy if action == "pause" else None,
                     "actor_member_id": str(actor.id),
                 },
             )
@@ -927,7 +1003,7 @@ class AgentService:
                     "from": previous,
                     "to": target,
                     "reason": reason,
-                    "in_flight_policy": in_flight_policy if action == "pause" else None,
+                    "in_flight_policy": effective_policy if action == "pause" else None,
                 },
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -1034,7 +1110,12 @@ class AgentService:
             await session.flush()
 
             member = await self._agent_member(session, workspace_id, agent)
-            rendered = self.render_agent(agent, member)
+            capacity = await agent_presence_snapshot(
+                session,
+                workspace_id=workspace_id,
+                agent_id=agent.id,
+            )
+            rendered = self.render_agent(agent, member, capacity)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
@@ -1084,4 +1165,12 @@ class AgentService:
                     .order_by(Agent.created_at.asc(), Agent.id.asc())
                 )
             ).all()
-        return [self.render_agent(agent, member) for agent, member in rows], None
+            capacity_by_agent = await agent_presence_snapshots(
+                session,
+                workspace_id=workspace_id,
+                agent_ids=(agent.id for agent, _ in rows),
+            )
+        return [
+            self.render_agent(agent, member, capacity_by_agent[agent.id])
+            for agent, member in rows
+        ], None

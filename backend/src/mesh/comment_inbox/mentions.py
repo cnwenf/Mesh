@@ -19,10 +19,11 @@ Deterministic, testable semantics implemented here (comment-inbox.md §3.5):
   trigger is silently dropped with an audit record (A↔B @-loop protection).
 
 The enqueue travels through the transactional outbox (README §6.6); the
-relay bridge (``workers/main.py``) consumes ``execution.enqueue`` until
-runtime.md lands ``task_executions``. The outbox event id doubles as the
-skeleton execution id stored on ``comment_mentions.triggered_execution_id``
-and returned as ``triggered_execution_ids``.
+relay bridge (``workers/main.py``) consumes ``execution.enqueue`` and the
+runtime materializer publishes ``execution.queued`` with the resulting
+``task_executions.id``. The enqueue outbox id remains a correlation anchor
+stored on ``comment_mentions.triggered_execution_id`` and returned as
+``triggered_execution_ids``; it is not exposed in a realtime execution frame.
 """
 
 from __future__ import annotations
@@ -42,12 +43,11 @@ from mesh.db.models.agent import Agent
 from mesh.db.models.comment import Comment
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
-from mesh.outbox.service import emit_event, emit_realtime
+from mesh.outbox.service import emit_event
 
 logger = logging.getLogger("mesh.comment_inbox.mentions")
 
 EXECUTION_ENQUEUE_EVENT = "execution.enqueue"
-EXECUTION_QUEUED_REALTIME = "execution.queued"
 CHAIN_DEPTH_AUDIT_ACTION = "agent_trigger_skipped_chain_depth"
 SELF_MENTION_AUDIT_ACTION = "agent_trigger_skipped_self_mention"
 
@@ -93,7 +93,8 @@ async def agent_chain_depth(
 class TriggerResult:
     """The outcome of one comment's agent-mention trigger pass."""
 
-    # agent member id → skeleton execution id (enqueue outbox event id)
+    # agent member id → pending enqueue event id (correlation only; never
+    # rendered as a logical execution id)
     triggered_by_member: dict[uuid.UUID, uuid.UUID]
     skipped_agents: tuple[uuid.UUID, ...] = ()
 
@@ -115,9 +116,9 @@ async def enqueue_agent_executions(
 ) -> TriggerResult:
     """Emit one ``execution.enqueue`` per new agent mention (§6.9).
 
-    Runs inside the business transaction (transactional outbox, §6.6). Each
-    enqueue also publishes ``execution.queued`` on the issue channel so the
-    composer's "running…" placeholder appears in real time (§3.6).
+    Runs inside the business transaction (transactional outbox, §6.6).
+    ``execution.queued`` is published later by the runtime materializer, once
+    the canonical execution id exists.
     """
     if not agent_mentions:
         return TriggerResult(triggered_by_member={})
@@ -221,22 +222,6 @@ async def enqueue_agent_executions(
                 agent_key=agent_key, issue_id=issue_id, trigger_event_id=trigger_event_id
             ),
         )
-        # §3.6: publish execution.queued on the issue channel (the skeleton
-        # execution id is the enqueue outbox event id until runtime.md lands
-        # task_executions — the composite FK on comment_mentions is deferred).
-        await emit_realtime(
-            session,
-            workspace_id=workspace_id,
-            channel=f"issue:{issue_id}",
-            event=EXECUTION_QUEUED_REALTIME,
-            data={
-                "execution_id": str(enqueue_event.id),
-                "agent_member_id": str(agent.id),
-                "comment_id": str(comment.id),
-                "status": "queued",
-                "trigger": "mention",
-            },
-        )
         triggered[agent.id] = enqueue_event.id
 
     if skipped:
@@ -252,7 +237,6 @@ async def enqueue_agent_executions(
 __all__ = [
     "CHAIN_DEPTH_AUDIT_ACTION",
     "EXECUTION_ENQUEUE_EVENT",
-    "EXECUTION_QUEUED_REALTIME",
     "SELF_MENTION_AUDIT_ACTION",
     "TriggerResult",
     "agent_chain_depth",

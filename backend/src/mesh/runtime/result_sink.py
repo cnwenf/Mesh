@@ -39,6 +39,14 @@ def _result_comment_idempotency_key(execution_id: uuid.UUID) -> str:
     return f"execution:{execution_id}:result-comment"
 
 
+def _result_output(result: dict) -> object:
+    """Read the v1 result summary, retaining legacy producer compatibility."""
+    outcome = result.get("outcome")
+    if isinstance(outcome, dict) and outcome.get("summary") is not None:
+        return outcome.get("summary")
+    return result.get("output") or result.get("summary") or ""
+
+
 async def execution_finished_result_sink(
     session: AsyncSession,
     event: OutboxEvent,
@@ -107,7 +115,7 @@ async def execution_finished_result_sink(
     # the agent writes its own summary via task MCP when it has content.
     # This prevents result_sink from polluting notification invariants
     # on issues where the agent posts its own reply comment.
-    output = result.get("output") or result.get("summary") or ""
+    output = _result_output(result)
     if status == "completed" and not (isinstance(output, str) and output.strip()):
         return None
 
@@ -154,7 +162,7 @@ def _build_result_summary(
 ) -> str:
     """Build a human-readable result summary for the issue comment."""
     if status == "completed":
-        output = result.get("output") or result.get("summary") or ""
+        output = _result_output(result)
         if isinstance(output, str) and output:
             return output[:MAX_RESULT_COMMENT_LENGTH]
         return "Task completed successfully."

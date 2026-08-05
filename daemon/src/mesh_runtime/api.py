@@ -242,6 +242,8 @@ class RuntimeApiClient:
         metrics: dict,
         inflight: list[str],
         protocol_version: int | None = None,
+        operational_state: str | None = None,
+        diagnostics: list[dict] | None = None,
     ) -> HeartbeatResponse:
         body: dict = {
             "current_load": current_load,
@@ -251,6 +253,9 @@ class RuntimeApiClient:
         }
         if protocol_version is not None:
             body["protocol_version"] = protocol_version
+        if operational_state is not None:
+            body["operational_state"] = operational_state
+            body["diagnostics"] = diagnostics or []
         data = await self._request(
             "POST",
             f"/api/v1/daemon/runtimes/{runtime_id}:heartbeat",

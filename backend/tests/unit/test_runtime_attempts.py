@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from mesh.db.models.agent import Agent
+from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
 from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 from mesh.runtime.attempts import (
@@ -201,8 +202,25 @@ async def test_cancel_queued_execution_goes_straight_to_cancelled(session_factor
     assert data["status"] == "cancelled"
     async with session_factory() as session:
         stored = await session.get(TaskExecution, execution.id)
+        presence = (
+            await session.execute(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.event_type == "realtime.publish",
+                    OutboxEvent.payload["event"].astext == "agent.presence",
+                )
+                .order_by(OutboxEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
     assert stored.status == "cancelled"
     assert stored.finished_at is not None
+    assert presence.payload["data"] == {
+        "agent_id": str(world["agent_id"]),
+        "running": 0,
+        "queued": 0,
+        "awaiting_approval": 0,
+    }
 
 
 async def test_cancel_running_execution_enters_cancelling(session_factory):

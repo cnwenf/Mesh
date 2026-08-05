@@ -96,6 +96,18 @@ function findById(comments: readonly Comment[], id: string): Comment | undefined
   return undefined;
 }
 
+function sameCreatedEntity(existing: Comment, candidate: Comment): boolean {
+  return (
+    existing.id === candidate.id ||
+    (typeof candidate.client_request_id === 'string' &&
+      existing.client_request_id === candidate.client_request_id)
+  );
+}
+
+function delivered(candidate: Comment): Comment {
+  return { ...candidate, delivery_state: 'sent', suppress_triggers: undefined };
+}
+
 /**
  * 评论列表帧合并(issue:{id} 频道)。
  * - comment.created:顶层(parent_id=null)去重 upsert;回复挂入所属线程根 preview_replies。
@@ -115,18 +127,27 @@ export function applyCommentsFrame(
   if (frame.event === 'comment.created') {
     const candidate = payload.comment ?? payload;
     if (!isComment(candidate)) return comments as Comment[];
+    const canonical = delivered(candidate);
     if (findById(comments, candidate.id) !== undefined) return comments as Comment[];
     if (candidate.parent_id === null) {
-      return [...comments, candidate];
+      const correlated = comments.findIndex((comment) => sameCreatedEntity(comment, candidate));
+      if (correlated === -1) return [...comments, canonical];
+      return comments.map((comment, index) => (index === correlated ? canonical : comment));
     }
     const rootId = candidate.thread_root_id ?? candidate.parent_id;
     const root = comments.find((comment) => comment.id === rootId);
     if (root === undefined) return comments as Comment[];
     const preview = root.preview_replies ?? [];
-    if (preview.some((reply) => reply.id === candidate.id)) return comments as Comment[];
+    const correlated = preview.findIndex((reply) => sameCreatedEntity(reply, candidate));
+    if (correlated !== -1) {
+      return replaceById(comments, root.id, {
+        ...root,
+        preview_replies: preview.map((reply, index) => (index === correlated ? canonical : reply)),
+      });
+    }
     return replaceById(comments, root.id, {
       ...root,
-      preview_replies: [...preview, candidate],
+      preview_replies: [...preview, canonical],
       reply_count: root.reply_count + 1,
     });
   }
@@ -142,6 +163,7 @@ export function applyCommentsFrame(
     return replaceById(comments, id, {
       ...existing,
       deleted_at: deletedAt,
+      updated_at: typeof payload.updated_at === 'string' ? payload.updated_at : existing.updated_at,
       body_markdown: '',
       body_html: '',
       body_text: '',
@@ -190,8 +212,7 @@ export function applyExecutionFrame(
   if (frame.event !== 'execution.queued') return placeholders as ExecutionPlaceholder[];
   const payload = payloadOf(frame);
   const executionId = typeof payload.execution_id === 'string' ? payload.execution_id : undefined;
-  const agentId =
-    typeof payload.agent_member_id === 'string' ? payload.agent_member_id : undefined;
+  const agentId = typeof payload.agent_member_id === 'string' ? payload.agent_member_id : undefined;
   if (executionId === undefined || agentId === undefined) {
     return placeholders as ExecutionPlaceholder[];
   }
@@ -234,7 +255,10 @@ export function applyExecutionLifecycleFrame(
     case 'execution.failed':
     case 'execution.timeout': {
       const reason = typeof payload.failure_reason === 'string' ? payload.failure_reason : null;
-      return patchPlaceholder(placeholders, executionId, { status: 'failed', failure_reason: reason });
+      return patchPlaceholder(placeholders, executionId, {
+        status: 'failed',
+        failure_reason: reason,
+      });
     }
     case 'execution.completed':
     case 'execution.cancelled':
@@ -270,7 +294,8 @@ export function clearPlaceholdersForAgentComment(
   const candidate = payload.comment ?? payload;
   if (!isComment(candidate)) return placeholders as ExecutionPlaceholder[];
   const author = candidate.author;
-  if (author === null || author.member_type !== 'agent') return placeholders as ExecutionPlaceholder[];
+  if (author === null || author.member_type !== 'agent')
+    return placeholders as ExecutionPlaceholder[];
   const next = placeholders.filter((item) => item.agent_id !== author.id);
   return next.length === placeholders.length ? (placeholders as ExecutionPlaceholder[]) : next;
 }

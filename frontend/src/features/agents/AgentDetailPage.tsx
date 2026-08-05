@@ -42,7 +42,8 @@ import {
 } from './api';
 import type { AgentLifecycleVerb } from './api';
 import { AgentWizard } from './AgentWizard';
-import { presenceToRunState } from './runState';
+import { capacityToPresence, presenceToRunState } from './runState';
+import type { PresenceTriple } from './runState';
 import type { AgentConfigVersion, AgentDetail } from './types';
 import { MODEL_TIER_ORDER, PLATFORM_MODELS, REASONING_EFFORT_ORDER } from './types';
 import './agents.css';
@@ -108,13 +109,8 @@ export function AgentDetailPage(): React.JSX.Element {
   // H-F4:历史 Tab 「对比上一版」展开的版本 id。
   const [compareId, setCompareId] = useState<string | null>(null);
 
-  // M-F2:presence 容量三元组(运行中/排队/需审批);数据来自 runtime,延后落地,
-  // 此处订阅脚手架就位,无帧时为 null(渲染「—」)。
-  const [presence, setPresence] = useState<{
-    running: number;
-    queued: number;
-    awaiting: number;
-  } | null>(null);
+  // REST 负责首屏绝对快照,realtime 后续用同形绝对值覆盖。
+  const [presence, setPresence] = useState<PresenceTriple | null>(null);
 
   const loadAgent = useCallback(() => {
     if (membershipState.kind !== 'ready' || workspace === null || agentId === undefined) {
@@ -129,6 +125,7 @@ export function AgentDetailPage(): React.JSX.Element {
     getAgent(client, workspace.workspace_id, agentId)
       .then((detail) => {
         setAgent(detail);
+        setPresence(capacityToPresence(detail.capacity));
         setInstructions(detail.system_instructions ?? '');
         setTemperature(String(detail.model_config.temperature ?? 0.2));
         setTopP(String(detail.model_config.top_p ?? 1));
@@ -186,8 +183,7 @@ export function AgentDetailPage(): React.JSX.Element {
     };
   }, [realtime, workspace, agentId, navigate]);
 
-  // M-F2:presence 容量三元组订阅脚手架(§4.9/§6.12)。runtime 落地 task_executions
-  // 后才会发 agent.presence 帧;在此之前 presence 保持 null,UI 渲染「—」。
+  // 后续 presence 帧携带绝对容量,直接替换 REST 首屏快照而非累加。
   useEffect(() => {
     if (realtime === null || agentId === undefined) return;
     const channel = agentPresenceChannel(agentId);
@@ -411,7 +407,7 @@ export function AgentDetailPage(): React.JSX.Element {
   }
 
   const verbs = VERBS_BY_STATUS[agent.lifecycle_status] ?? [];
-  // 运行态五态归一(§9.8):presence 三元组 → RunState;帧未至(null)→ unknown。
+  // 运行态五态归一(§9.8):绝对容量三元组 → RunState;旧响应缺快照时 unknown。
   const runState = presenceToRunState(presence);
 
   return (
@@ -471,7 +467,7 @@ export function AgentDetailPage(): React.JSX.Element {
         ) : null}
       </div>
 
-      {/* M-F2:容量三元组说明(§4.9/§6.12);帧未至时为「Capacity: —」。 */}
+      {/* 容量三元组说明:REST 首屏 + realtime 绝对覆盖。 */}
       <p
         className="mesh-agents-detail__presence-caption mesh-text-caption mesh-tnum"
         data-testid="agent-detail-presence-caption"

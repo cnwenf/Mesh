@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from mesh.db.models.agent import Agent, AgentConfigVersion
 from mesh.db.models.member import Member
+from mesh.db.models.runtime import TaskExecution
 
 pytestmark = pytest.mark.e2e
 
@@ -103,13 +104,21 @@ async def test_create_agent_over_http_writes_all_three_tables(api_client, sessio
     assert created["active_config_version_id"]
     assert created["member"]["member_type"] == "agent"
     assert created["badge_kind"] == "ai"
+    assert created["capacity"] == {
+        "running": 0,
+        "queued": 0,
+        "awaiting_approval": 0,
+    }
 
     # Appears on the members roster (?member_type=agent is a projection, §4.2).
     roster = await api_client.get(
         f"/api/v1/workspaces/{ws['id']}/members?member_type=agent", headers=_auth(owner)
     )
     assert roster.status_code == 200
-    assert any(m["id"] == created["member"]["id"] for m in roster.json()["data"])
+    roster_agent = next(
+        m for m in roster.json()["data"] if m["id"] == created["member"]["id"]
+    )
+    assert roster_agent["profile"]["capacity"] == created["capacity"]
 
 
 async def test_create_agent_validation_and_scheme_errors(api_client):
@@ -237,17 +246,65 @@ async def test_lifecycle_verbs_and_illegal_transition_over_http(api_client, sess
     agent_id = created["id"]
     member_id = created["member"]["id"]
 
+    async with session_factory() as session, session.begin():
+        session.add_all(
+            [
+                TaskExecution(
+                    workspace_id=uuid.UUID(ws["id"]),
+                    agent_id=uuid.UUID(agent_id),
+                    status="queued",
+                ),
+                TaskExecution(
+                    workspace_id=uuid.UUID(ws["id"]),
+                    agent_id=uuid.UUID(agent_id),
+                    status="running",
+                ),
+            ]
+        )
+
+    detail = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/agents/{agent_id}", headers=_auth(owner)
+    )
+    assert detail.json()["data"]["capacity"] == {
+        "running": 1,
+        "queued": 1,
+        "awaiting_approval": 0,
+    }
+
     paused = await api_client.post(
         f"/api/v1/workspaces/{ws['id']}/agents/{agent_id}:pause",
         json={"reason": "维护", "in_flight_policy": "cancel_current"},
         headers=_auth(owner),
     )
     assert paused.status_code == 200
-    assert paused.json()["data"]["lifecycle_status"] == "paused"
+    paused_data = paused.json()["data"]
+    assert paused_data["lifecycle_status"] == "paused"
+    assert paused_data["affected_executions"] == 2
+    assert paused_data["capacity"] == {
+        "running": 1,
+        "queued": 0,
+        "awaiting_approval": 0,
+    }
 
     # archived → pause is illegal from paused? resume first, archive, then pause.
     await api_client.post(f"/api/v1/workspaces/{ws['id']}/agents/{agent_id}:resume", headers=_auth(owner))
     await api_client.post(f"/api/v1/workspaces/{ws['id']}/agents/{agent_id}:archive", headers=_auth(owner))
+    default_agents = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/agents", headers=_auth(owner)
+    )
+    all_agents = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/agents?status=all", headers=_auth(owner)
+    )
+    default_roster = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/members", headers=_auth(owner)
+    )
+    all_roster = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/members?status=all", headers=_auth(owner)
+    )
+    assert agent_id not in {row["id"] for row in default_agents.json()["data"]}
+    assert agent_id in {row["id"] for row in all_agents.json()["data"]}
+    assert member_id not in {row["id"] for row in default_roster.json()["data"]}
+    assert member_id in {row["id"] for row in all_roster.json()["data"]}
     illegal = await api_client.post(
         f"/api/v1/workspaces/{ws['id']}/agents/{agent_id}:pause", headers=_auth(owner)
     )

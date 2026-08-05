@@ -56,6 +56,7 @@ const AGENT = {
     is_active: true,
     role_tag: '测试工程师',
     lifecycle_status: 'active',
+    capacity: { running: 2, queued: 3, awaiting_approval: 4 },
   },
 };
 
@@ -195,10 +196,21 @@ function makeFetch(members: unknown[], issues: unknown[] = []) {
     if (method === 'GET' && url.includes('/members')) {
       // honour the member_type projection so the same endpoint serves the
       // "agents only" filter (README §6.12).
+      const params = new URL(url, 'http://x').searchParams;
       let requested = url.includes('member_type=agent')
         ? members.filter((m) => (m as { member_type: string }).member_type === 'agent')
         : members;
-      const q = new URL(url, 'http://x').searchParams.get('q');
+      const status = params.get('status');
+      if (status === 'default') {
+        requested = requested.filter((m) => {
+          const member = m as typeof AGENT;
+          if (member.member_type !== 'agent') return member.status !== 'removed';
+          const lifecycle = member.profile?.lifecycle_status;
+          if (lifecycle === undefined) return member.status === 'active';
+          return lifecycle === 'active' || lifecycle === 'paused';
+        });
+      }
+      const q = params.get('q');
       if (q) {
         requested = requested.filter((m) =>
           String((m as { display_name: string }).display_name)
@@ -307,6 +319,41 @@ describe('MembersPage', () => {
     expect(screen.getByTestId('new-agent-button')).toBeInTheDocument();
   });
 
+  it('「仅 Agent」默认投影隐藏 disabled/archived，显式 disabled 标签仍可访问', async () => {
+    const disabledAgent = {
+      ...AGENT,
+      id: 'mem-disabled',
+      status: 'disabled',
+      display_name: 'Disabled Bot',
+      profile: { ...AGENT.profile, id: 'agt-disabled', lifecycle_status: 'disabled' },
+    };
+    const archivedAgent = {
+      ...AGENT,
+      id: 'mem-archived',
+      display_name: 'Archived Bot',
+      profile: { ...AGENT.profile, id: 'agt-archived', lifecycle_status: 'archived' },
+    };
+    const calls = stub([AGENT, disabledAgent, archivedAgent]);
+    renderWithProviders(<MembersPage />, {
+      route: '/members?member_type=agent',
+    });
+
+    let table = await waitForTable();
+    expect(within(table).getByText('Code Bot')).toBeInTheDocument();
+    expect(within(table).queryByText('Disabled Bot')).not.toBeInTheDocument();
+    expect(within(table).queryByText('Archived Bot')).not.toBeInTheDocument();
+    expect(
+      calls.some(
+        (call) => call.url.includes('member_type=agent') && call.url.includes('status=default'),
+      ),
+    ).toBe(true);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('tab-disabled'));
+    table = await waitForTable();
+    expect(await within(table).findByText('Disabled Bot')).toBeInTheDocument();
+  });
+
   it('agent 行展示类型/角色标签/生命周期,并复用工作区角色下拉(owner 禁用)', async () => {
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
@@ -374,7 +421,7 @@ describe('MembersPage', () => {
       profile: { ...AGENT.profile, lifecycle_status: 'disabled' },
     };
     const calls = stub([disabledAgent]);
-    renderWithProviders(<MembersPage />, { route: '/members' });
+    renderWithProviders(<MembersPage />, { route: '/members?status=disabled' });
     await waitForTable();
 
     await openRowMenu(user, 'mem-a');
@@ -1013,7 +1060,7 @@ describe('MembersPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('agent 行运行态:无帧 → unknown;presence 帧 → running(§9.8 data-state)', async () => {
+  it('agent 行运行态:REST 首屏快照后由 realtime 绝对值覆盖', async () => {
     const rt = makeFakeRealtime();
     stub([HUMAN, AGENT]);
     renderWithProviders(
@@ -1026,17 +1073,20 @@ describe('MembersPage', () => {
     await waitForTable();
     // 订阅该 agent 的 presence 频道(profile.id = agt-9)。
     await waitFor(() => expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence'));
-    // 无帧 → unknown 态(表格与卡片一致)。
+    // 无需等待帧:REST 快照立即驱动表格与卡片运行态和 N/M/K 文案。
     expect(
-      screen.getByTestId('member-presence-mem-a').querySelector('[data-state="unknown"]'),
+      screen.getByTestId('member-presence-mem-a').querySelector('[data-state="running"]'),
     ).not.toBeNull();
     expect(
-      screen.getByTestId('card-member-presence-mem-a').querySelector('[data-state="unknown"]'),
+      screen.getByTestId('card-member-presence-mem-a').querySelector('[data-state="running"]'),
     ).not.toBeNull();
+    expect(screen.getByTestId('member-presence-caption-mem-a')).toHaveTextContent(
+      'Running 2 / Queued 3 / Awaiting 4',
+    );
     // 人类行无运行态徽标(presence 单元不渲染)。
     expect(screen.queryByTestId('member-presence-mem-h')).toBeNull();
 
-    // presence 帧到达 → running 态。
+    // presence 帧是绝对快照,覆盖而非累加 REST 值。
     act(() => {
       rt.emit({
         channel: 'agent:agt-9:presence',
@@ -1047,6 +1097,9 @@ describe('MembersPage', () => {
       expect(
         screen.getByTestId('member-presence-mem-a').querySelector('[data-state="running"]'),
       ).not.toBeNull(),
+    );
+    expect(screen.getByTestId('member-presence-caption-mem-a')).toHaveTextContent(
+      'Running 1 / Queued 0 / Awaiting 0',
     );
   });
 

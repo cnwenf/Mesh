@@ -174,9 +174,13 @@ class CommentMention(Base):
     )
     comment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     mentioned_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    # Deferred composite FK → task_executions(workspace_id, id) (runtime.md
-    # increment); stores the execution.enqueue outbox event id meanwhile.
+    # Canonical logical execution only. While the outbox row awaits runtime
+    # materialization, ``pending_trigger_event_id`` carries the correlation;
+    # an outbox id must never masquerade as a TaskExecution id in this field.
     triggered_execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), default=None
+    )
+    pending_trigger_event_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), default=None
     )
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)

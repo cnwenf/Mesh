@@ -44,6 +44,7 @@ import { fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
 import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
 import { EmptyBoardColumns } from '../onboarding/illustrations';
+import { listWorkspaceExecutions, workspaceExecutionsChannel } from '../runtimes/api';
 import {
   createView,
   deleteView,
@@ -68,6 +69,12 @@ import {
   rebucketGroups,
 } from './boardRealtime';
 import { columnsForView, deriveColumns, isRenderableLayout } from './columns';
+import {
+  activeExecutionStatusByIssue,
+  applyExecutionPresenceFrame,
+  executionPresenceFromList,
+} from './executionPresence';
+import type { BoardExecutionPresence } from './executionPresence';
 import { buildBoardGrid, columnKeyOfCard, moveCardSelection, nextColumnKey } from './keyboardNav';
 import type { BoardDirection, BoardGrid } from './keyboardNav';
 import { FilterConfigPanel } from './FilterConfigPanel';
@@ -267,6 +274,7 @@ export function BoardPage(): React.JSX.Element {
   const [boardStatus, setBoardStatus] = useState<LoadStatus>('loading');
   const [multiValueAxis, setMultiValueAxis] = useState(false);
   const [resyncing, setResyncing] = useState(false);
+  const [executionPresence, setExecutionPresence] = useState<BoardExecutionPresence>({});
   const [movePreview, setMovePreview] = useState<{
     plan: MovePlan;
     issueId: string;
@@ -442,6 +450,17 @@ export function BoardPage(): React.JSX.Element {
         : rebucketGroups(boardGroups, effectiveGroupBy),
     [boardGroups, effectiveGroupBy, loadedGroupBy],
   );
+  const executionStatusByIssueId = useMemo(
+    () => activeExecutionStatusByIssue(executionPresence),
+    [executionPresence],
+  );
+  const activeExecutionChannels = useMemo(
+    () =>
+      Object.keys(executionPresence)
+        .map((executionId) => `execution:${executionId}`)
+        .sort(),
+    [executionPresence],
+  );
 
   const toastError = useCallback(
     (error: unknown) => {
@@ -500,6 +519,20 @@ export function BoardPage(): React.JSX.Element {
     [client, toastError],
   );
 
+  const loadExecutionPresence = useCallback(
+    async (workspaceId: string) => {
+      try {
+        const page = await listWorkspaceExecutions(client, workspaceId, { limit: 200 });
+        if (currentWorkspaceIdRef.current !== workspaceId) return;
+        setExecutionPresence(executionPresenceFromList(page.data));
+      } catch {
+        // 此投影只增强卡片；执行 API 暂不可用时仍保留完整看板，后续帧/重连会收敛。
+        if (currentWorkspaceIdRef.current === workspaceId) setExecutionPresence({});
+      }
+    },
+    [client],
+  );
+
   useEffect(() => {
     if (!hasWorkspaceContext) void loadStandaloneWorkspace();
   }, [hasWorkspaceContext, loadStandaloneWorkspace]);
@@ -508,9 +541,13 @@ export function BoardPage(): React.JSX.Element {
   useEffect(() => {
     viewsLoadSeqRef.current += 1;
     setViews([]);
+    setExecutionPresence({});
     membersCacheRef.current = null;
-    if (currentWorkspaceId !== null) void loadViews(currentWorkspaceId);
-  }, [currentWorkspaceId, loadViews]);
+    if (currentWorkspaceId !== null) {
+      void loadViews(currentWorkspaceId);
+      void loadExecutionPresence(currentWorkspaceId);
+    }
+  }, [currentWorkspaceId, loadExecutionPresence, loadViews]);
 
   const scopedViews = useMemo(
     () =>
@@ -657,15 +694,30 @@ export function BoardPage(): React.JSX.Element {
   const filtersRef = useRef<Filters>(selectedView?.filters ?? {});
   filtersRef.current = selectedView?.filters ?? {};
   useEffect(() => {
+    if (realtime === null) return;
+    for (const channel of activeExecutionChannels) realtime.client.subscribe(channel);
+    return () => {
+      for (const channel of activeExecutionChannels) realtime.client.unsubscribe(channel);
+    };
+  }, [activeExecutionChannels, realtime]);
+
+  useEffect(() => {
     if (realtime === null || selectedView === null || membership === null) return;
     // board 与 list 布局均订阅增量合并(§3.5):list 同样是投影视图,
     // issue.* 帧按 filters 重判归属,单卡插入/移动/移除,refetch 帧重拉。
     if (!isRenderableLayout(selectedView.layout)) return;
     const wsChannel = workspaceIssuesChannel(membership.workspace_id);
+    const executionsChannel = workspaceExecutionsChannel(membership.workspace_id);
     const vChannel = viewChannel(selectedView.id);
     const labelsChannel = workspaceLabelsChannel(membership.workspace_id);
     const customFieldsChannel = workspaceCustomFieldsChannel(membership.workspace_id);
-    const channels = new Set([wsChannel, vChannel, labelsChannel, customFieldsChannel]);
+    const channels = new Set([
+      wsChannel,
+      executionsChannel,
+      vChannel,
+      labelsChannel,
+      customFieldsChannel,
+    ]);
     if (selectedView.project_id !== null) channels.add(projectChannel(selectedView.project_id));
     const reconcileRequests = reconcileRequestsRef.current;
     for (const channel of channels) realtime.client.subscribe(channel);
@@ -731,6 +783,14 @@ export function BoardPage(): React.JSX.Element {
       })();
     };
     const offFrame = realtime.client.onFrame((frame) => {
+      if (frame.channel === executionsChannel) {
+        setExecutionPresence((current) => applyExecutionPresenceFrame(current, frame));
+        return;
+      }
+      if (frame.channel.startsWith('execution:') && !frame.channel.endsWith(':logs')) {
+        setExecutionPresence((current) => applyExecutionPresenceFrame(current, frame));
+        return;
+      }
       if (!channels.has(frame.channel)) return;
       // 视图切换后晚到的帧属过期闭包:跳过(新视图订阅随即接管),
       // 杜绝以旧视图 id 发起多余投影请求(验收必修 1 竞态收口)。
@@ -854,6 +914,7 @@ export function BoardPage(): React.JSX.Element {
       setResyncing(state === 'resyncing' || state === 'reconnecting');
       if (state === 'resyncing' && selectedViewIdRef.current === selectedView.id) {
         void loadBoard(selectedView);
+        void loadExecutionPresence(membership.workspace_id);
       }
     });
     return () => {
@@ -864,7 +925,7 @@ export function BoardPage(): React.JSX.Element {
         if (requestKey.startsWith(reconcilePrefix)) reconcileRequests.delete(requestKey);
       }
     };
-  }, [realtime, selectedView, membership, loadBoard, t, client]);
+  }, [realtime, selectedView, membership, loadBoard, loadExecutionPresence, t, client]);
 
   if (wsStatus === 'loading') {
     return (
@@ -1614,6 +1675,7 @@ export function BoardPage(): React.JSX.Element {
                 handleQuickCreate(groupKey, title, subGroupKey)
               }
               highlightCardId={highlightCardId}
+              executionStatusByIssueId={executionStatusByIssueId}
             />
           ) : (
             <BoardColumns
@@ -1629,6 +1691,7 @@ export function BoardPage(): React.JSX.Element {
               }
               onQuickCreate={(groupKey, title) => handleQuickCreate(groupKey, title)}
               highlightCardId={highlightCardId}
+              executionStatusByIssueId={executionStatusByIssueId}
             />
           )
         ) : selectedView.layout === 'list' ? (

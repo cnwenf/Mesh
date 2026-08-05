@@ -87,6 +87,7 @@ function stub(
   issueResponses: IssueResponses = {},
   projectionBodies: readonly ProjectionBody[] = [],
   customFields: readonly CustomFieldDef[] = [],
+  executions: readonly Record<string, unknown>[] = [],
 ) {
   const calls: string[] = [];
   let projectionIndex = 0;
@@ -96,6 +97,9 @@ function stub(
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
     if (url.includes('/custom-fields')) {
       return fakeResponse({ body: { data: customFields, next_cursor: null } });
+    }
+    if (url.includes('/workspaces/ws-1/executions')) {
+      return fakeResponse({ body: { data: executions, next_cursor: null } });
     }
     const issueId = issueIdFromUrl(url);
     if (issueId !== null) return issueResponses[issueId] ?? missingIssueResponse();
@@ -222,7 +226,34 @@ describe('看板实时增量合并接线', () => {
     );
     await screen.findByTestId('board-columns');
     expect(rt.client.subscribe).toHaveBeenCalledWith('workspace:ws-1:issues');
+    expect(rt.client.subscribe).toHaveBeenCalledWith('workspace:ws-1:executions');
     expect(rt.client.subscribe).toHaveBeenCalledWith('view:v1');
+  });
+
+  it('初始执行快照与终态帧驱动卡片处理中标记', async () => {
+    stub(view(), {}, [{ id: 'exec-1', issue_id: 'i1', status: 'running' }]);
+    const rt = makeRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/views/v1' },
+    );
+
+    expect(await screen.findByTestId('board-card-execution-i1')).toHaveTextContent('Processing');
+    expect(rt.client.subscribe).toHaveBeenCalledWith('execution:exec-1');
+    act(() => {
+      rt.emitFrame({
+        op: 'event',
+        channel: 'execution:exec-1',
+        seq: 4,
+        event: 'execution.completed',
+        payload: { execution_id: 'exec-1', issue_id: 'i1' },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('board-card-execution-i1')).not.toBeInTheDocument(),
+    );
   });
 
   it('issue.* 帧单卡合并(插入新卡)', async () => {

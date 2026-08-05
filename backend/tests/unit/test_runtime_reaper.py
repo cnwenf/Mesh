@@ -7,19 +7,29 @@ runtimes flip unavailable; pending approvals expire their executions.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, timedelta
 
 import pytest
 from sqlalchemy import select, text
 
-from mesh.db.models.runtime import Approval, ExecutionAttempt, Runtime, TaskExecution
+from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.runtime import (
+    Approval,
+    ExecutionAttempt,
+    Runtime,
+    TaskExecution,
+    TaskLogSegment,
+)
 from mesh.runtime.reaper import run_reaper_pass
+from mesh.runtime.service import RuntimeService
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     assert_execution_finished_fanout,
     make_execution,
     make_runtime,
+    make_settings,
     seed_world,
 )
 
@@ -65,7 +75,11 @@ async def test_t4_reclaim_requeues_preserving_audit_and_advancing_seq(session_fa
     world = await seed_world(session_factory)
     runtime = await make_runtime(session_factory, world["ws_id"])
     execution = await make_execution(
-        session_factory, world["ws_id"], world["agent_id"], status="running", max_attempts=3
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        status="running",
+        max_attempts=3,
     )
     attempt_id = await _seed_expired_attempt(
         session_factory, world["ws_id"], execution, runtime
@@ -79,6 +93,17 @@ async def test_t4_reclaim_requeues_preserving_audit_and_advancing_seq(session_fa
         attempt = await session.get(ExecutionAttempt, attempt_id)
         stored_exec = await session.get(TaskExecution, execution.id)
         fresh_runtime = await session.get(Runtime, runtime.id)
+        presence = (
+            await session.execute(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.event_type == "realtime.publish",
+                    OutboxEvent.payload["event"].astext == "agent.presence",
+                )
+                .order_by(OutboxEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
     # Audit row preserved + reclaimed, lease_seq advanced (zombie fence).
     assert attempt.status == "reclaimed"
     assert attempt.failure_reason == "lease_expired"
@@ -90,6 +115,8 @@ async def test_t4_reclaim_requeues_preserving_audit_and_advancing_seq(session_fa
     assert stored_exec.status == "queued"
     # Capacity released exactly once.
     assert fresh_runtime.current_load == 0
+    assert presence.payload["data"]["queued"] == 1
+    assert presence.payload["data"]["running"] == 0
 
     # The next claim builds attempt #2; attempt #1 stays intact.
     from mesh.runtime.claim import claim_execution
@@ -105,19 +132,45 @@ async def test_t4_reclaim_requeues_preserving_audit_and_advancing_seq(session_fa
     assert result.attempt["attempt_number"] == 2
     async with session_factory() as session:
         attempts = (
-            await session.execute(
-                select(ExecutionAttempt).order_by(ExecutionAttempt.attempt_number)
+            (
+                await session.execute(
+                    select(ExecutionAttempt).order_by(ExecutionAttempt.attempt_number)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
+        requeue_event = (
+            await session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == "realtime.publish",
+                    OutboxEvent.payload["event"].astext == "execution.requeued",
+                    OutboxEvent.payload["data"]["execution_id"].astext
+                    == str(execution.id),
+                )
+            )
+        ).scalar_one()
     assert [a.attempt_number for a in attempts] == [1, 2]
     assert attempts[0].status == "reclaimed"  # untouched by requeue
+    detail = await RuntimeService(session_factory, make_settings()).get_execution(
+        workspace_id=world["ws_id"], execution_id=execution.id
+    )
+    assert detail["attempts"][1]["timeline"][0] == {
+        "event": "requeued",
+        "at": requeue_event.created_at.isoformat(),
+        "reason_code": "lease_expired",
+    }
 
 
 async def test_reaper_fails_execution_at_max_attempts(session_factory):
     world = await seed_world(session_factory)
     runtime = await make_runtime(session_factory, world["ws_id"])
     execution = await make_execution(
-        session_factory, world["ws_id"], world["agent_id"], status="running", max_attempts=2
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        status="running",
+        max_attempts=2,
     )
     # Two prior attempts already exist (attempt #1 failed, #2 expired).
     async with session_factory() as session, session.begin():
@@ -142,6 +195,67 @@ async def test_reaper_fails_execution_at_max_attempts(session_factory):
     assert stored.status == "failed"
     assert stored.failure_reason == "max_retries"
     assert stored.finished_at is not None
+
+
+async def test_reaper_max_retries_notification_includes_reclaimed_attempt_log_tail(
+    session_factory,
+):
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        status="running",
+        max_attempts=1,
+    )
+    attempt_id = await _seed_expired_attempt(
+        session_factory,
+        world["ws_id"],
+        execution,
+        runtime,
+    )
+    storage_ref = f"logs/{attempt_id}/tail.json"
+    payload = json.dumps(
+        [
+            {"s": "stderr", "o": 0, "l": "provider crashed"},
+            {"s": "stderr", "o": 17, "l": "token=[REDACTED]"},
+        ]
+    ).encode()
+
+    class Storage:
+        async def get_bytes(self, key: str, *, max_bytes: int) -> bytes:
+            assert key == storage_ref
+            assert max_bytes <= 2 * 1024 * 1024
+            return payload
+
+    async with session_factory() as session, session.begin():
+        session.add(
+            TaskLogSegment(
+                workspace_id=world["ws_id"],
+                attempt_id=attempt_id,
+                start_offset=0,
+                end_offset=len(payload),
+                storage_ref=storage_ref,
+                line_count=2,
+                sealed=True,
+            )
+        )
+
+    counts = await run_reaper_pass(session_factory, storage=Storage())
+
+    assert counts["failed_max_retries"] == 1
+    async with session_factory() as session:
+        event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == "notification.fanout",
+                OutboxEvent.payload["execution_id"].astext == str(execution.id),
+            )
+        )
+    assert event is not None
+    assert event.payload["failure_reason"] == "max_retries"
+    assert event.payload["log_summary"] == "provider crashed\ntoken=[REDACTED]"
+    assert "provider crashed" in event.payload["preview"]
 
 
 async def test_reaper_completes_cancelling_execution_as_cancelled(session_factory):
@@ -226,7 +340,9 @@ async def test_reaper_expires_pending_approvals_and_cancels_execution(session_fa
 # ---------------------------------------------------------------------------
 
 
-async def test_finished_fanout_reaper_completes_cancelling_as_cancelled(session_factory):
+async def test_finished_fanout_reaper_completes_cancelling_as_cancelled(
+    session_factory,
+):
     """Daemon died mid-cancel → reaper finishes the cancellation AND fans out."""
     world = await seed_world(session_factory)
     runtime = await make_runtime(session_factory, world["ws_id"])
@@ -253,7 +369,11 @@ async def test_finished_fanout_reaper_max_retries_failure(session_factory):
     world = await seed_world(session_factory)
     runtime = await make_runtime(session_factory, world["ws_id"])
     execution = await make_execution(
-        session_factory, world["ws_id"], world["agent_id"], status="running", max_attempts=2
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        status="running",
+        max_attempts=2,
     )
     async with session_factory() as session, session.begin():
         await session.execute(
@@ -280,7 +400,9 @@ async def test_finished_fanout_reaper_max_retries_failure(session_factory):
     )
 
 
-async def test_finished_fanout_reaper_approval_expiry_cancels_execution(session_factory):
+async def test_finished_fanout_reaper_approval_expiry_cancels_execution(
+    session_factory,
+):
     """Approval expired → awaiting_approval execution cancelled(approval_expired)
     AND fan-out fires (previously emitted realtime only → squad hang)."""
     world = await seed_world(session_factory)

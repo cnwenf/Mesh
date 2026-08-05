@@ -21,6 +21,7 @@ from mesh_runtime.heartbeat import HeartbeatLoop
 from mesh_runtime.inventory import Inventory
 from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
+from mesh_runtime.operational import OperationalGuard
 from mesh_runtime.providers.base import ExecutorAdapter, RunRequest
 from mesh_runtime.reconcile import reconcile_on_startup
 from mesh_runtime.redaction import RedactionPipeline
@@ -160,7 +161,7 @@ class RuntimeApp:
         config: DaemonConfig,
         api: RuntimeApiClient,
         journal: Journal,
-        inventory: Inventory,
+        inventory: Inventory | None,
         adapters: list[ExecutorAdapter],
         *,
         clock: Clock | None = None,
@@ -172,7 +173,7 @@ class RuntimeApp:
         self.config = config
         self._api = api
         self._journal = journal
-        self._inventory = inventory
+        self._inventory = inventory or Inventory([])
         self._adapters = adapters
         self._clock = clock or SystemClock()
         self._metadata = metadata
@@ -184,6 +185,10 @@ class RuntimeApp:
         self._attempt_tasks: dict[str, asyncio.Task] = {}
         self._shutdown = asyncio.Event()
         self._runtime_id: str | None = None
+        self._operational = OperationalGuard(
+            config.state_dir / "operational-state.json",
+            self._inventory,
+        )
         # A3: the pinned provider manifest and administrator-owned provider
         # credentials (§1.4, §5.4.7). Credentials are in-memory only and every
         # value joins the redaction secret set for all egress channels.
@@ -227,12 +232,26 @@ class RuntimeApp:
         await reconcile_on_startup(
             self._journal, self._api, self._runtime_id, paths=residual_paths
         )
+        # A latched incident survives the process that observed it.  A fresh
+        # daemon may recover only after residual reconciliation and the same
+        # complete local checks used by ``mesh-runtime doctor`` pass while no
+        # attempt is in flight.
+        if self._operational.isolated:
+            from mesh_runtime.doctor import run_checks
+
+            report = await run_checks(self.config, self._inventory)
+            self._operational.recover_after_checks(
+                checks_ok=report.all_ok(),
+                inflight=len(self._supervisors),
+            )
 
         heartbeat = HeartbeatLoop(
             self._api,
             self._runtime_id,
             interval_seconds=self.config.heartbeat_interval_seconds,
             inventory=self._inventory,
+            operational_guard=self._operational,
+            on_operational_incident=self._operational.isolate,
             clock=self._clock,
             inflight_source=lambda: list(self._supervisors.keys()),
             on_cancel=self._handle_cancel,
@@ -243,6 +262,10 @@ class RuntimeApp:
             max_concurrent=self.config.max_concurrent,
             clock=self._clock,
             on_claimed=self._spawn_attempt,
+            on_attempt_error=lambda claim, exc: self._operational.isolate(
+                "sandbox_security_failed"
+            ),
+            claim_allowed=self._operational.claim_allowed,
         )
 
         async with asyncio.TaskGroup() as group:
@@ -341,6 +364,7 @@ class RuntimeApp:
             rule_version=self._rule_version,
             security=security,
             redactor=redactor,
+            on_operational_incident=self._operational.isolate,
         )
         self._supervisors[attempt_id] = supervisor
         self._contexts[attempt_id] = ctx

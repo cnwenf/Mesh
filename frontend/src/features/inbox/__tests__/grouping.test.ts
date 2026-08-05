@@ -6,7 +6,12 @@ import { groupNotifications } from '../grouping';
 import { notificationTargetPath } from '../links';
 import type { Notification } from '../types';
 
-function make(id: string, issueId: string | null, createdAt: string, extra: Partial<Notification> = {}): Notification {
+function make(
+  id: string,
+  issueId: string | null,
+  createdAt: string,
+  extra: Partial<Notification> = {},
+): Notification {
   return {
     id,
     type: 'comment_created',
@@ -30,7 +35,9 @@ function make(id: string, issueId: string | null, createdAt: string, extra: Part
 describe('groupNotifications', () => {
   it('groups by issue and orders groups by latest created_at desc', () => {
     const groups = groupNotifications([
-      make('n-1', 'iss-1', '2026-07-01T00:00:00Z', { issue: { id: 'iss-1', identifier: 'WS-1', title: 'One' } }),
+      make('n-1', 'iss-1', '2026-07-01T00:00:00Z', {
+        issue: { id: 'iss-1', identifier: 'WS-1', title: 'One' },
+      }),
       make('n-2', 'iss-2', '2026-07-03T00:00:00Z'),
       make('n-3', 'iss-1', '2026-07-02T00:00:00Z'),
     ]);
@@ -50,15 +57,27 @@ describe('groupNotifications', () => {
 
 describe('notificationTargetPath', () => {
   it('anchors to the latest comment', () => {
-    expect(notificationTargetPath(make('n', 'iss-1', '', { latest_comment_id: 'c-9', comment_id: 'c-1' }))).toBe(
-      '/issues/iss-1#comment-c-9',
-    );
+    expect(
+      notificationTargetPath(
+        make('n', 'iss-1', '', { latest_comment_id: 'c-9', comment_id: 'c-1' }),
+      ),
+    ).toBe('/issues/iss-1#comment-c-9');
   });
   it('falls back to comment_id then plain issue path', () => {
-    expect(notificationTargetPath(make('n', 'iss-1', '', { comment_id: 'c-1' }))).toBe('/issues/iss-1#comment-c-1');
+    expect(notificationTargetPath(make('n', 'iss-1', '', { comment_id: 'c-1' }))).toBe(
+      '/issues/iss-1#comment-c-1',
+    );
     expect(notificationTargetPath(make('n', 'iss-1', ''))).toBe('/issues/iss-1');
   });
   it('returns null without an issue', () => {
     expect(notificationTargetPath(make('n', null, ''))).toBeNull();
+  });
+  it('deep-links an execution notification to its run audit before the issue fallback', () => {
+    const notification = make('n', 'iss-1', '', {
+      type: 'execution_finished',
+      execution_id: 'exec-9',
+    });
+    expect(notificationTargetPath(notification)).toBe('/executions/exec-9');
+    expect(notificationTargetPath(notification, 'acme')).toBe('/w/acme/executions/exec-9');
   });
 });

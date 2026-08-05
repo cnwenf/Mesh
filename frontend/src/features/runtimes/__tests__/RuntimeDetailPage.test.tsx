@@ -39,6 +39,8 @@ const RUNTIME = {
   name: 'intranet-build-01',
   kind: 'self_hosted',
   status: 'online',
+  operational_state: 'online',
+  diagnostics: [],
   labels: { region: 'intranet', gpu: 'false' },
   capabilities: ['version_control', 'python', 'ffmpeg'],
   hostname: 'build-node-7',
@@ -182,6 +184,118 @@ describe('RuntimeDetailPage', () => {
     expect(screen.getByTestId('runtime-detail-version')).toHaveTextContent('v1.4.2');
     expect(screen.getByTestId('runtime-detail-labels')).toHaveTextContent('region=intranet');
     expect(screen.getByTestId('runtime-detail-capabilities')).toHaveTextContent('ffmpeg');
+    expect(screen.getByTestId('runtime-operational-state')).toHaveTextContent('Online');
+    expect(screen.queryByText('运行失败')).toBeNull();
+  });
+
+  it('兼容旧响应时从 lifecycle 推导 operational state', async () => {
+    setup({ ...RUNTIME, operational_state: undefined, diagnostics: undefined });
+    renderPage();
+    expect(await screen.findByTestId('runtime-operational-state')).toHaveTextContent('Online');
+  });
+
+  it('兼容旧响应时把 paused / unavailable 映射为可行动状态', async () => {
+    setup({
+      ...RUNTIME,
+      status: 'paused',
+      operational_state: undefined,
+      diagnostics: undefined,
+    });
+    const first = renderPage();
+    expect(await screen.findByTestId('runtime-operational-state')).toHaveTextContent('Paused');
+    first.unmount();
+
+    setup({
+      ...RUNTIME,
+      status: 'unavailable',
+      operational_state: undefined,
+      diagnostics: undefined,
+    });
+    renderPage();
+    expect(await screen.findByTestId('runtime-operational-state')).toHaveTextContent('Degraded');
+  });
+
+  it('Degraded 精确呈现缺失能力、受影响任务类型与可复制修复命令', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    setup({
+      ...RUNTIME,
+      status: 'unavailable',
+      operational_state: 'degraded',
+      diagnostics: [
+        {
+          reason_code: 'provider_unavailable',
+          missing_capabilities: ['python', 'version_control'],
+          affected_task_types: ['provider:primary'],
+          repair_command: 'mesh-runtime doctor --config <config-file>',
+        },
+        {
+          reason_code: 'capability_missing',
+          missing_capabilities: [],
+          affected_task_types: [],
+          repair_command: 'mesh-runtime inventory --config <config-file>',
+        },
+      ],
+    });
+    renderPage();
+    expect(await screen.findByTestId('runtime-operational-state')).toHaveTextContent('Degraded');
+    const diagnostic = screen.getByTestId('runtime-diagnostic-provider_unavailable');
+    expect(diagnostic).toHaveTextContent('python');
+    expect(diagnostic).toHaveTextContent('provider:primary');
+    expect(diagnostic).toHaveTextContent('mesh-runtime doctor --config <config-file>');
+    expect(screen.getByTestId('runtime-diagnostic-capability_missing')).toHaveTextContent('—');
+    await user.click(screen.getByTestId('runtime-diagnostic-copy-provider_unavailable'));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('mesh-runtime doctor --config <config-file>'),
+    );
+    writeText.mockRejectedValueOnce(new Error('clipboard denied'));
+    await user.click(screen.getByTestId('runtime-diagnostic-copy-provider_unavailable'));
+    expect(screen.getByTestId('runtime-detail-page')).toBeInTheDocument();
+    expect(screen.queryByText('运行失败')).toBeNull();
+  });
+
+  it('Isolated 仅给出脱敏诊断导出与重新注册动作', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const createObjectURL = vi.fn(() => 'blob:runtime-diagnostics');
+    const revokeObjectURL = vi.fn();
+    const NativeURL = URL;
+    class RuntimeTestURL extends NativeURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal('URL', RuntimeTestURL);
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    setup({
+      ...RUNTIME,
+      status: 'unavailable',
+      operational_state: 'isolated',
+      diagnostics: [
+        {
+          reason_code: 'security_anomaly',
+          missing_capabilities: [],
+          affected_task_types: ['all'],
+          repair_command: 'mesh-runtime doctor --config <config-file>',
+        },
+      ],
+    });
+    renderPage();
+    expect(await screen.findByTestId('runtime-operational-state')).toHaveTextContent('Isolated');
+    expect(screen.getByTestId('runtime-export-diagnostics')).toBeInTheDocument();
+    expect(screen.getByTestId('runtime-reregister-command')).toHaveTextContent(
+      'mesh-runtime activate --config <config-file> --activation-code-stdin',
+    );
+    expect(screen.queryByTestId('runtime-detail-pause')).toBeNull();
+    await user.click(screen.getByTestId('runtime-export-diagnostics'));
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(download).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:runtime-diagnostics');
+    await user.click(screen.getByTestId('runtime-reregister-copy'));
+    expect(writeText).toHaveBeenCalledWith(
+      'mesh-runtime activate --config <config-file> --activation-code-stdin',
+    );
   });
 
   it('正在执行列表含取消;历史任务分列', async () => {
@@ -219,10 +333,11 @@ describe('RuntimeDetailPage', () => {
 
   it('paused 状态呈现恢复按钮,POST :resume', async () => {
     const user = userEvent.setup();
-    const calls = setup({ ...RUNTIME, status: 'paused' });
+    const calls = setup({ ...RUNTIME, status: 'paused', operational_state: 'paused' });
     renderPage();
     await screen.findByTestId('runtime-detail-name');
     expect(screen.queryByTestId('runtime-detail-pause')).toBeNull();
+    expect(screen.getByTestId('runtime-operational-state')).toHaveTextContent('Paused');
     await user.click(screen.getByTestId('runtime-detail-resume'));
     await waitFor(() =>
       expect(calls.some((c) => c.url.includes('/runtimes/r-1:resume'))).toBe(true),

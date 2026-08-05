@@ -107,6 +107,14 @@
   opacity: 0.85;
 }
 
+.mesh-comments__card--sending {
+  opacity: 0.72;
+}
+
+.mesh-comments__card--failed {
+  border-color: var(--color-danger-border);
+}
+
 @keyframes mesh-comments-flash {
   from {
     background: var(--color-surface-selected);
@@ -152,6 +160,32 @@
 
 .mesh-comments__resolved-tag {
   color: var(--color-success-fg);
+}
+
+.mesh-comments__delivery,
+.mesh-comments__resolved-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-comments__resolved-meta,
+.mesh-comments__delivery-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mesh-comments__delivery-error {
+  color: var(--color-danger-fg);
+}
+
+.mesh-comments__delivery-error button {
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-bg);
+  color: var(--color-danger-fg);
+  cursor: pointer;
 }
 
 .mesh-comments__body {
@@ -319,6 +353,29 @@
   margin-inline-start: calc(var(--space-3) + 19px);
   padding-inline-start: var(--space-3);
   border-inline-start: 2px solid var(--color-border-subtle);
+}
+
+.mesh-comments__resolved-section,
+.mesh-comments__resolved-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-comments__resolved-section {
+  padding-block-start: var(--space-2);
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.mesh-comments__resolved-toggle {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  padding: var(--space-1) 0;
 }
 
 /* ---- 执行占位卡片(AI 运行五态容器,§9.8) ---- */

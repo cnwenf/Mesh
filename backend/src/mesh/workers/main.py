@@ -546,7 +546,12 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             ),
             TaskSpec(
                 "runtime-reaper",
-                lambda: runtime_reaper_loop(session_factory, settings=settings, stop=stop),
+                lambda: runtime_reaper_loop(
+                    session_factory,
+                    settings=settings,
+                    stop=stop,
+                    storage=storage,
+                ),
             ),
             TaskSpec(
                 "autopilot-scheduler",

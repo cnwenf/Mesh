@@ -61,6 +61,18 @@ async def test_enqueue_inserts_execution_with_frozen_snapshot(session_factory):
 
     async with session_factory() as session:
         execution = (await session.execute(select(TaskExecution))).scalar_one()
+        realtime = list(
+            (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "realtime.publish",
+                        OutboxEvent.payload["event"].astext == "execution.queued",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
         depth = await queue_depth(session, world["ws_id"])
     assert execution.status == "queued"
     assert execution.agent_id == world["agent_id"]
@@ -69,6 +81,9 @@ async def test_enqueue_inserts_execution_with_frozen_snapshot(session_factory):
     assert execution.label_requirements == {}  # normalized
     assert execution.required_capabilities == ["python"]
     assert execution.config_snapshot["capability_grants"] == []
+    assert len(realtime) == 1
+    assert realtime[0].payload["data"]["execution_id"] == str(execution.id)
+    assert realtime[0].payload["data"]["execution_id"] != str(event.id)
     assert depth == 1
 
 

@@ -36,7 +36,12 @@ from mesh.db.models.runtime import (
     TaskExecution,
 )
 from mesh.db.tenant import set_tenant_context
+from mesh.issue.execution_observability import (
+    emit_workspace_execution_event,
+    record_issue_execution_phase,
+)
 from mesh.outbox.service import emit_event, emit_realtime
+from mesh.runtime.agent_presence import emit_agent_presence
 from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
 from mesh.runtime.attempts import (
     _emit_terminal_notification,
@@ -56,6 +61,7 @@ def _now() -> datetime:
 async def run_reaper_pass(
     session_factory: async_sessionmaker[AsyncSession],
     *,
+    storage: object | None = None,
     heartbeat_timeout_multiplier: int = 3,
     heartbeat_retention: timedelta = timedelta(hours=1),
     batch_size: int = REAPER_BATCH_SIZE,
@@ -70,7 +76,12 @@ async def run_reaper_pass(
         "approvals_expired": 0,
         "heartbeats_pruned": 0,
     }
-    counts["reclaimed"] = await _sweep_expired_leases(session_factory, batch_size, counts)
+    counts["reclaimed"] = await _sweep_expired_leases(
+        session_factory,
+        batch_size,
+        counts,
+        storage=storage,
+    )
     counts["offline"] = await _mark_offline_runtimes(
         session_factory, multiplier=heartbeat_timeout_multiplier
     )
@@ -105,13 +116,22 @@ async def _candidate_expired_attempts(
 
 
 async def _sweep_expired_leases(
-    session_factory: async_sessionmaker[AsyncSession], batch_size: int, counts: dict
+    session_factory: async_sessionmaker[AsyncSession],
+    batch_size: int,
+    counts: dict,
+    *,
+    storage: object | None,
 ) -> int:
     candidates = await _candidate_expired_attempts(session_factory, batch_size)
     reclaimed = 0
     for attempt_id, workspace_id in candidates:
         try:
-            outcome = await _reclaim_one(session_factory, attempt_id, workspace_id)
+            outcome = await _reclaim_one(
+                session_factory,
+                attempt_id,
+                workspace_id,
+                storage=storage,
+            )
         except Exception:  # noqa: BLE001 — poison row: skip, next pass retries
             continue
         if outcome is None:
@@ -130,6 +150,8 @@ async def _reclaim_one(
     session_factory: async_sessionmaker[AsyncSession],
     attempt_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    *,
+    storage: object | None,
 ) -> str | None:
     """Reclaim a single expired attempt; returns the execution outcome.
 
@@ -220,6 +242,25 @@ async def _reclaim_one(
             # runtime.md §4.8: terminal single fan-out — the integration queue
             # item write-back (cancelling → cancelled) is driven by this event.
             await emit_execution_finished(session, execution=execution)
+            await session.flush()
+            await record_issue_execution_phase(
+                session,
+                workspace_id=workspace_id,
+                issue_id=execution.issue_id,
+                execution_id=execution.id,
+                agent_id=execution.agent_id,
+                phase="cancelled",
+                attempt_id=attempt.id,
+                runtime_id=attempt.runtime_id,
+                failure_reason="lease_expired",
+            )
+            if execution.agent_id is not None:
+                await emit_agent_presence(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=execution.agent_id,
+                    idempotency_key=f"attempt:{attempt.id}:presence:cancelled",
+                )
             return "cancelled"
 
         if attempt_count < execution.max_attempts:
@@ -245,6 +286,25 @@ async def _reclaim_one(
                 },
                 idempotency_key=f"reclaim:{attempt.id}:requeued",
             )
+            await session.flush()
+            await record_issue_execution_phase(
+                session,
+                workspace_id=workspace_id,
+                issue_id=execution.issue_id,
+                execution_id=execution.id,
+                agent_id=execution.agent_id,
+                phase="requeued",
+                attempt_id=attempt.id,
+                runtime_id=attempt.runtime_id,
+                failure_reason="lease_expired",
+            )
+            if execution.agent_id is not None:
+                await emit_agent_presence(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=execution.agent_id,
+                    idempotency_key=f"attempt:{attempt.id}:presence:requeued",
+                )
             depth = (
                 await session.execute(
                     select(func.count())
@@ -277,7 +337,32 @@ async def _reclaim_one(
             idempotency_key=f"execution:{execution.id}:failed",
         )
         await emit_execution_finished(session, execution=execution)
-        await _emit_terminal_notification(session, workspace_id=workspace_id, execution=execution)
+        await _emit_terminal_notification(
+            session,
+            workspace_id=workspace_id,
+            execution=execution,
+            attempt_id=attempt.id,
+            storage=storage,
+        )
+        await session.flush()
+        await record_issue_execution_phase(
+            session,
+            workspace_id=workspace_id,
+            issue_id=execution.issue_id,
+            execution_id=execution.id,
+            agent_id=execution.agent_id,
+            phase="failed",
+            attempt_id=attempt.id,
+            runtime_id=attempt.runtime_id,
+            failure_reason=execution.failure_reason,
+        )
+        if execution.agent_id is not None:
+            await emit_agent_presence(
+                session,
+                workspace_id=workspace_id,
+                agent_id=execution.agent_id,
+                idempotency_key=f"attempt:{attempt.id}:presence:failed",
+            )
         return "failed_max_retries"
 
 
@@ -370,14 +455,24 @@ async def _expire_approvals(session_factory: async_sessionmaker[AsyncSession]) -
                         .with_for_update()
                     )
                 ).scalar_one_or_none()
-            await emit_realtime(
-                session,
-                workspace_id=workspace_id,
-                channel=f"workspace:{workspace_id}:executions",
-                event="approval.decided",
-                data={"approval_id": str(approval.id), "decision": "expired"},
-                idempotency_key=f"approval:{approval.id}:expired",
-            )
+            if execution is not None:
+                await emit_workspace_execution_event(
+                    session,
+                    workspace_id=workspace_id,
+                    issue_id=execution.issue_id,
+                    event="approval.decided",
+                    data={"approval_id": str(approval.id), "decision": "expired"},
+                    idempotency_key=f"approval:{approval.id}:expired",
+                )
+            else:
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=f"workspace:{workspace_id}:executions",
+                    event="approval.decided",
+                    data={"approval_id": str(approval.id), "decision": "expired"},
+                    idempotency_key=f"approval:{approval.id}:expired",
+                )
             # squad_plan subjects: fail the root task via the squad relay (T8).
             if approval.subject_type == "squad_plan" and approval.subject_task_id is not None:
                 await emit_event(
@@ -410,6 +505,24 @@ async def _expire_approvals(session_factory: async_sessionmaker[AsyncSession]) -
                 # §3.6 single terminal fan-out — an expired-approval cancellation
                 # must notify orchestration same-transaction (no sweep exists).
                 await emit_execution_finished(session, execution=execution)
+                await session.flush()
+                await record_issue_execution_phase(
+                    session,
+                    workspace_id=workspace_id,
+                    issue_id=execution.issue_id,
+                    execution_id=execution.id,
+                    agent_id=execution.agent_id,
+                    phase="cancelled",
+                    failure_reason=execution.failure_reason,
+                    event_key=str(approval.id),
+                )
+                if execution.agent_id is not None:
+                    await emit_agent_presence(
+                        session,
+                        workspace_id=workspace_id,
+                        agent_id=execution.agent_id,
+                        idempotency_key=f"approval:{approval.id}:presence:expired",
+                    )
             if approval.subject_run_id is not None:
                 # autopilot_action subject (README §6.10 / autopilot.md §5.3):
                 # expiry cancels the parked run (approval_expired) + notifies.
@@ -425,6 +538,7 @@ async def runtime_reaper_loop(
     *,
     settings,  # Settings — loose typing keeps the worker import light
     stop,  # asyncio.Event
+    storage: object | None = None,
 ) -> None:
     """Worker task: sweep on the configured interval until stopped."""
     import asyncio
@@ -435,6 +549,7 @@ async def runtime_reaper_loop(
                 session_factory,
                 heartbeat_timeout_multiplier=settings.runtime_heartbeat_timeout_multiplier,
                 heartbeat_retention=settings.runtime_heartbeat_retention,
+                storage=storage,
             )
         except Exception:  # noqa: BLE001 — one bad pass must not kill the loop
             pass

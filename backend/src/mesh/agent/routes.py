@@ -139,7 +139,7 @@ async def create_agent(
 @router.get("/workspaces/{workspace_id}/agents")
 async def list_agents(
     request: Request,
-    status: str = "all",
+    status: str = "default",
     visibility: str = "all",
     owner_id: str | None = None,
     q: str | None = None,

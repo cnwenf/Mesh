@@ -25,7 +25,7 @@ export const workspaceAgentsChannel = (workspaceId: string): string =>
 export const agentPresenceChannel = (agentId: string): string => `agent:${agentId}:presence`;
 
 export interface ListAgentsParams {
-  readonly status?: 'all' | 'active' | 'paused' | 'disabled' | 'archived';
+  readonly status?: 'default' | 'all' | 'active' | 'paused' | 'disabled' | 'archived';
   readonly visibility?: 'all' | AgentVisibility;
   readonly ownerId?: string;
   readonly q?: string;

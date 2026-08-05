@@ -134,6 +134,8 @@ async def heartbeat(
         inflight=body.inflight,
         protocol_version=body.protocol_version,
         context_progress=[entry.model_dump() for entry in body.context_progress],
+        operational_state=body.operational_state,
+        diagnostics=[entry.model_dump() for entry in body.diagnostics],
     )
     return {"data": data}
 
@@ -189,6 +191,7 @@ async def patch_attempt(
         result=body.result,
         failure_reason=body.failure_reason,
         signing_secret=settings.jwt_secret,
+        storage=request.app.state.storage,
     )
     return {"data": data}
 

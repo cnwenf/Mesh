@@ -750,6 +750,7 @@ stateDiagram-v2
 - [ ] 可见性 `workspace`/`private` 生效：private agent 非所有者 / 非 admin 不可见、不可触发。
 - [ ] 生命周期状态机按 4.8 实现；非法迁移返回 `409`；`disable` 时 `members.status` 联动置 `disabled`。
 - [ ] 软删除置 `deleted_at` 后从所有列表 / 候选隐藏；历史评论以「已停用 agent」占位渲染，外键不报错。
+- [x] **名册生命周期投影**：成员名册「仅 Agent」默认只显示 `active/paused`，隐藏 `disabled/archived`；显式生命周期/停用筛选仍可查询审计行。历史评论不依赖主名册可见性，removed agent 作者稳定渲染「已停用 agent」与 AI 身份徽标。
 - [ ] 所有权转移仅所有者 / admin 可操作；转移后 `owner_user_id` 更新并发 `agent.updated`。
 - [ ] **分派即触发**：把 agent 设为 issue 负责人发出 `issue.assigned` → 自动入队一次运行，无需人工点「开始」；`trigger_on_assign=false` 时不触发。
 - [ ] **@提及触发**：评论 @agent 与分派共用同一 `enqueue_agent_run` 入口。

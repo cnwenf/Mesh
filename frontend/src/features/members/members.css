@@ -235,6 +235,18 @@
   white-space: nowrap;
 }
 
+.mesh-members__presence {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.mesh-members__presence-caption {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
 .mesh-members__role-select {
   font: inherit;
   padding: var(--space-1) var(--space-2);

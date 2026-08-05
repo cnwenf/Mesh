@@ -1,0 +1,9 @@
+# Real PostgreSQL/Redis test runner. Compose this after the root stack file;
+# datastore ports remain un-published and credentials stay in the caller's
+# generated env file.
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    command: ["python", "-m", "pytest"]

@@ -54,6 +54,7 @@ function renderCard(
     onSaveEdit: vi.fn().mockResolvedValue(undefined),
     onDelete: vi.fn(),
     onCopyLink: vi.fn(),
+    onRetrySend: vi.fn(),
     ...overrides,
   };
   return renderWithProviders(<CommentCard {...props} />);
@@ -65,6 +66,35 @@ describe('CommentCard', () => {
     expect(screen.getByTestId('comment-author-c-1').textContent).toBe('reviewer');
     expect(screen.getByTestId('agent-badge')).toBeTruthy();
     expect(screen.getByTestId('comment-body-c-1').innerHTML).toContain('<p>hello</p>');
+  });
+
+  it('renders a stable inactive placeholder for a removed agent author', () => {
+    renderCard({
+      comment: {
+        ...COMMENT,
+        author: { ...COMMENT.author!, status: 'removed' } as Comment['author'],
+      },
+    });
+
+    expect(screen.getByTestId('comment-author-c-1')).toHaveTextContent('Inactive agent');
+    expect(screen.getByTestId('agent-badge')).toBeTruthy();
+  });
+
+  it('shows sending state and a retry action for failed optimistic comments', () => {
+    const onRetrySend = vi.fn();
+    const sending = renderCard({
+      comment: { ...COMMENT, id: 'local-sending', delivery_state: 'sending' },
+      onRetrySend,
+    });
+    expect(screen.getByTestId('comment-delivery-sending')).toBeTruthy();
+    sending.unmount();
+
+    renderCard({
+      comment: { ...COMMENT, id: 'local-failed', delivery_state: 'failed' },
+      onRetrySend,
+    });
+    fireEvent.click(screen.getByTestId('comment-delivery-retry'));
+    expect(onRetrySend).toHaveBeenCalledWith(expect.objectContaining({ id: 'local-failed' }));
   });
 
   it('使用共享时间语义：自动刷新且 tooltip 保留本地时区与 UTC 原值', () => {

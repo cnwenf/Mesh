@@ -3,7 +3,7 @@
 Drives ``assign_orchestration_handler`` — the unified entry the outbox
 relay calls for ``issue.assigned`` — against real PostgreSQL: enqueue
 contract (idempotency key §6.5, reproducible snapshot §6.11, strict
-capability typing §6.4, execution.queued §3.6), redelivery idempotence,
+capability typing §6.4, no pre-materialization queued frame), redelivery idempotence,
 the guardrail skip paths (agent.trigger_skipped §3.6), and the
 reassignment supersede cancel (§6.9).
 """
@@ -178,11 +178,10 @@ async def test_enqueue_writes_execution_event_with_snapshot_and_key(session_fact
     assert "UNTRUSTED_DATA_BEGIN" in context["issue"]["title"]
     assert context["notice"]
 
-    # §3.6 step 6: execution.queued on the issue's run channel.
-    queued = await _realtime_events(session_factory, "execution.queued")
-    assert len(queued) == 1
-    assert queued[0].payload["channel"] == f"issue:{issue['id']}:runs"
-    assert queued[0].payload["data"]["agent_id"] == agent["id"]
+    # The producer has no task_executions row/id yet. It must not publish a
+    # placeholder execution.queued frame; the enqueue consumer publishes the
+    # canonical frame only after materializing the final execution id.
+    assert await _realtime_events(session_factory, "execution.queued") == []
 
 
 @pytest.mark.unit

@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from mesh_runtime.providers.base import ExecutorAdapter, ProbeResult
 
 _VERSION_TIMEOUT_SECONDS = 5.0
 _VERSION_OUTPUT_MAX = 4096
+_SAFE_DIAGNOSTIC_NAME = re.compile(r"^[a-z][a-z0-9_.:-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -144,11 +146,55 @@ class Inventory:
     def healthy(self) -> bool:
         return all(s.available for s in self.statuses)
 
+    def security_isolation_failed(self) -> bool:
+        """Whether the real provider fixture proved an isolation breach.
+
+        Other provider failures are capability degradation.  A digest-verified
+        binary that launches but honours a hostile repo fixture is a security
+        boundary failure and must latch the runtime in ``isolated``.
+        """
+        return any(
+            not status.available
+            and isinstance(status.reason, str)
+            and status.reason.startswith("isolation fixture probe failed:")
+            for status in self.statuses
+        )
+
     def capability_keys(self) -> list[str]:
         return sorted({cap for s in self.statuses for cap in s.capabilities})
 
     def degraded_reasons(self) -> list[str]:
         return [s.reason or f"{s.name} unavailable" for s in self.statuses if not s.available]
+
+    def operational_diagnostics(self) -> list[dict]:
+        """Return the safe, structured heartbeat projection for failed probes.
+
+        Probe ``reason`` strings intentionally stay local: they can contain a
+        binary path, host detail, or provider output. The server receives only
+        a fixed reason code and already-declared slug-like capabilities.
+        """
+        diagnostics: list[dict] = []
+        for status in self.statuses:
+            if status.available:
+                continue
+            provider = status.name.lower()
+            if not _SAFE_DIAGNOSTIC_NAME.fullmatch(provider):
+                provider = "unknown"
+            capabilities = sorted(
+                {
+                    capability
+                    for capability in status.capabilities
+                    if _SAFE_DIAGNOSTIC_NAME.fullmatch(capability)
+                }
+            )
+            diagnostics.append(
+                {
+                    "reason_code": "provider_unavailable",
+                    "missing_capabilities": capabilities,
+                    "affected_task_types": [f"provider:{provider}"],
+                }
+            )
+        return diagnostics
 
     def inventory_hash(self) -> str:
         canonical = json.dumps(
