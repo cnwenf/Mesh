@@ -3,8 +3,17 @@
  * auth.md/member.md 只提供 display_name、avatar_url 与 timezone，不虚构 bio 双真源。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MeshApiError } from '../../../api';
 import { getApiClient } from '../../../api/instance';
-import { Avatar, ErrorState, Input, SettingsSection, Skeleton, useToast } from '../../../design';
+import {
+  Avatar,
+  Button,
+  ErrorState,
+  Input,
+  SettingsSection,
+  Skeleton,
+  useToast,
+} from '../../../design';
 import { fetchMe, updateOwnProfile } from '../../../features/members/api';
 import type { MeResponse } from '../../../features/members/types';
 import { useT } from '../../../i18n';
@@ -66,6 +75,10 @@ export function ProfileSettingsSection(): React.JSX.Element {
       closeLabel: t('common.close'),
     });
   };
+  const avatarSaveError = (error: unknown): string =>
+    error instanceof MeshApiError && error.code === 'validation_error'
+      ? t('profile.avatarHttps')
+      : t('profile.saveError');
 
   const saveDisplayName = (): void => {
     const value = displayName.trim();
@@ -108,8 +121,35 @@ export function ProfileSettingsSection(): React.JSX.Element {
         setAvatarUrl((current) => (current.trim() === value ? (next.avatar_url ?? '') : current));
         notifySaved();
       })
-      .catch(() => {
-        if (saveVersion === avatarSaveVersion.current) setAvatarError(t('profile.saveError'));
+      .catch((error: unknown) => {
+        if (saveVersion === avatarSaveVersion.current) setAvatarError(avatarSaveError(error));
+      });
+  };
+
+  const clearAvatar = (): void => {
+    if ((currentProfile.avatar_url ?? '') === '' && avatarUrl === '') return;
+    const previousProfileAvatar = currentProfile.avatar_url ?? null;
+    const previousInput = avatarUrl;
+    const saveVersion = ++avatarSaveVersion.current;
+    setAvatarError(undefined);
+    setProfile((current) => (current === null ? current : { ...current, avatar_url: null }));
+    setAvatarUrl('');
+    void updateOwnProfile(client, { avatar_url: null })
+      .then((next) => {
+        if (saveVersion !== avatarSaveVersion.current) return;
+        setProfile((current) =>
+          current === null ? next : { ...current, avatar_url: next.avatar_url },
+        );
+        setAvatarUrl((current) => (current === '' ? (next.avatar_url ?? '') : current));
+        notifySaved();
+      })
+      .catch((error: unknown) => {
+        if (saveVersion !== avatarSaveVersion.current) return;
+        setProfile((current) =>
+          current === null ? current : { ...current, avatar_url: previousProfileAvatar },
+        );
+        setAvatarUrl((current) => (current === '' ? previousInput : current));
+        setAvatarError(avatarSaveError(error));
       });
   };
 
@@ -143,6 +183,11 @@ export function ProfileSettingsSection(): React.JSX.Element {
           onChange={(event) => setAvatarUrl(event.target.value)}
           onBlur={saveAvatarUrl}
         />
+        {avatarUrl !== '' || currentProfile.avatar_url ? (
+          <Button type="button" variant="secondary" onClick={clearAvatar}>
+            {t('profile.restoreDefaultAvatar')}
+          </Button>
+        ) : null}
       </SettingsSection>
     </>
   );

@@ -88,6 +88,13 @@
   border-color: var(--color-danger);
 }
 
+.mesh-labels__usage {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+
 .mesh-labels__actions {
   margin-left: auto;
   display: flex;
@@ -366,4 +373,26 @@
 
 .mesh-issue-fields__select-dot {
   flex-shrink: 0;
+}
+
+.mesh-label-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.mesh-label-dots__dot {
+  display: inline-block;
+  inline-size: 8px;
+  block-size: 8px;
+  flex: 0 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 50%;
+}
+
+.mesh-label-dots__overflow {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: 1;
 }

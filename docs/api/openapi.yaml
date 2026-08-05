@@ -2075,6 +2075,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/projects/key-availability:
+    get:
+      tags:
+      - project
+      summary: Project Key Availability
+      operationId: project_key_availability_api_v1_workspaces__workspace_id__projects_key_availability_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: key
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Project Key Availability Api V1 Workspaces  Workspace Id  Projects Key
+                  Availability Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/projects/{project_id}:
     get:
       tags:

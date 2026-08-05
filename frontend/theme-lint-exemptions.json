@@ -2,7 +2,7 @@
   "files": {
     "src/features/labels/LabelsPanel.tsx": {
       "reason": "标签数据色板默认值:数据色(theme.md §2.5 合法例外),on-color 经相对亮度阈值自动黑白配对,随对比度门禁抽验",
-      "lines": [39]
+      "lines": [50]
     },
     "src/features/labels/CustomFieldsPanel.tsx": {
       "reason": "自定义字段选项数据色板默认值:数据色(theme.md §2.5 合法例外),与 ColorPicker 预设色板同族",

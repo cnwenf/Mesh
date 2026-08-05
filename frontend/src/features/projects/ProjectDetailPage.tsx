@@ -483,7 +483,7 @@ export function ProjectDetailPage(): React.JSX.Element {
           closeLabel={t('common.close')}
         >
           <p data-testid="delete-confirm-text">
-            {t('projects.detail.deleteConfirm', { name: project.name })}
+            {t('projects.detail.deleteConfirm', { name: project.name, key: project.key })}
           </p>
           <div className="mesh-projects__form-actions">
             <Button variant="secondary" onClick={() => setDeleteOpen(false)}>

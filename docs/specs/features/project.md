@@ -12,6 +12,8 @@
 > - `label-property.md`(标签与自定义字段):标签 / 自定义字段可为项目级作用域(`project_id`)。
 >
 > **技术基准约定(全局锚点)**:PostgreSQL;表名 snake_case 复数;主键 `id UUID` 默认 `gen_random_uuid()`;`created_at`/`updated_at` 为 `TIMESTAMPTZ`;按需软删除(`deleted_at`)。REST 前缀 `/api/v1`,Bearer token,游标分页响应 `{"data","next_cursor"}`,时间一律 RFC3339 UTC,统一错误信封 `{"error":{"code","message","details"}}`。实时走 WebSocket `/ws`,频道订阅 + `seq` + 断线重放,事件命名 `<entity>.<action>`。ORM 采用 SQLAlchemy 2.x 声明式约定(或等价 DDL)。
+>
+> **实现状态(MES-187)**:创建表单已接入项目 key 可用性端点；该端点直接查询永久 `identifier_prefix_registry`，所以软删除后的历史前缀仍显示不可用。可用性结果只是提交前提示，`POST /workspaces/{ws}/projects` 仍在创建事务内登记前缀并以 409 `project_key_taken` 处理竞态，是最终权威。项目删除确认明确披露前缀永久保留，409 更新冲突在设置页回滚并收敛到服务端快照。
 
 ---
 
@@ -362,6 +364,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/workspaces/{ws}/projects` | 创建项目 |
+| GET | `/workspaces/{ws}/projects/key-availability?key={KEY}` | 校验格式后查询永久前缀注册表，返回提交前可用性提示；不替代创建事务的竞态校验 |
 | GET | `/workspaces/{ws}/projects` | 列出项目(过滤 status/archived/visibility) |
 | GET | `/projects/{id}` | 获取项目(含进度聚合) |
 | PATCH | `/projects/{id}` | 更新字段/状态/可见性 |
@@ -387,6 +390,15 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 | POST | `/project-templates/{id}/instantiate` | 由模板创建项目(可携初始里程碑/周期/默认视图) |
 
 ### 3.2 请求/响应示例
+
+**检查项目 key** `GET /api/v1/workspaces/{ws}/projects/key-availability?key=WEB`
+```json
+{
+  "data": { "key": "WEB", "available": false }
+}
+```
+
+该端点复用创建接口的 key 格式校验，并直接读取 `identifier_prefix_registry`；当前项目、已归档/软删除项目、历史收件箱与 retired 前缀都会令 `available=false`。结果不加锁，也不预留 key；两个客户端都读到 `true` 时，仍由下方创建事务的注册表唯一约束决定唯一成功者，失败者收到 409 `project_key_taken`。
 
 **创建项目** `POST /api/v1/workspaces/{ws}/projects`
 ```json
@@ -569,7 +581,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 
 ### 4.3 关键交互流程
 
-**创建项目**:新建 → 填名称(自动建议大写 `key`)→ `key` 实时去重校验(绿勾/红叉)→ 选负责人/目标日/可见性 → 完成,进入空项目页。
+**创建项目**:新建 → 填名称(自动建议大写 `key`)→ 调用 `GET /workspaces/{ws}/projects/key-availability` 做实时校验(绿勾/红叉)→ 选负责人/目标日/可见性 → 提交 `POST /workspaces/{ws}/projects`。可用性检查只改善反馈，提交仍可能因并发抢占收到 409 `project_key_taken`；表单保留输入并在 key 字段就地提示，不把先前绿勾当成写入承诺。
 
 **更新健康度**:项目头 → 点健康度灯 → 选红/黄/绿 + 写说明 → 提交 → 头部灯即时更新,"更新动态"Tab 新增一条留痕。
 
@@ -606,7 +618,7 @@ planning ──启动──► active ──完成──► completed
 
 ### 5.1 功能性
 
-- [ ] 创建项目时 `key` 经实时与服务端双重去重校验;同工作区项目前缀**永久唯一**(含已软删除/归档项目),占用返回 409 `project_key_taken`。
+- [ ] 创建项目时 `key` 经实时与服务端双重去重校验;`GET /workspaces/{ws}/projects/key-availability` 读取永久 `identifier_prefix_registry`，已软删除/归档前缀返回 `available=false`;同工作区项目前缀**永久唯一**，`POST /workspaces/{ws}/projects` 仍是竞态最终权威，占用返回 409 `project_key_taken`。
 - [ ] `key` 格式校验生效:仅大写字母/数字/下划线,2–12 字符,首字符为字母;非法返回 400 `validation_error`。
 - [ ] **前缀永久保留、不可复用(README §6.3)**:`uq_projects_key` 为**普通(非部分)唯一索引** `ON projects(workspace_id, key)`(不带 `WHERE deleted_at IS NULL`);软删除/归档项目后,以同前缀新建项目被数据库拒绝(409 `project_key_taken`)。
 - [ ] **前缀注册表登记(R2,关联 README §9 T19)**:创建项目在同事务内向 `identifier_prefix_registry`(workspace.md owns)登记 `kind='project'`;与任一在册前缀(含已软删除/归档项目、`retired` 历史前缀、当前收件箱前缀)冲突即 409 `project_key_taken`(README §6.3)。

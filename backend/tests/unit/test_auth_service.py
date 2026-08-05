@@ -687,6 +687,24 @@ class TestUserUpdate:
                 user_id=uid, patch=UserUpdate(avatar_url="http://insecure/x.png")
             )
 
+    async def test_update_avatar_can_restore_default_with_explicit_null(self, service):
+        uid = await self._user_id(service)
+        await service.update_user(
+            user_id=uid, patch=UserUpdate(avatar_url="https://cdn.example/avatar.png")
+        )
+        cleared = await service.update_user(user_id=uid, patch=UserUpdate(avatar_url=None))
+        assert cleared["avatar_url"] is None
+
+    async def test_update_avatar_is_unchanged_when_field_is_omitted(self, service):
+        uid = await self._user_id(service)
+        await service.update_user(
+            user_id=uid, patch=UserUpdate(avatar_url="https://cdn.example/avatar.png")
+        )
+        renamed = await service.update_user(
+            user_id=uid, patch=UserUpdate(display_name="Renamed")
+        )
+        assert renamed["avatar_url"] == "https://cdn.example/avatar.png"
+
     async def test_update_invalid_timezone(self, service):
         uid = await self._user_id(service)
         with pytest.raises(BusinessRuleError) as exc:

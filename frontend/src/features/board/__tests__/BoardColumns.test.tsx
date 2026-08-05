@@ -150,6 +150,33 @@ describe('BoardColumns 渲染', () => {
     expect(todo).not.toHaveAttribute('aria-label');
   });
 
+  it('renders compact label colour dots with a +N overflow on cards', () => {
+    const labelled = {
+      ...card('labels', 1),
+      labels: [
+        { id: 'l1', name: 'bug', color: '#e5484d' },
+        { id: 'l2', name: 'frontend', color: '#3e63dd' },
+        { id: 'l3', name: 'customer', color: '#46a758' },
+        { id: 'l4', name: 'urgent', color: '#f5a623' },
+      ],
+    };
+    render({ cardsByKey: { todo: [labelled] }, cardFields: ['labels'] });
+
+    const cardNode = screen.getByTestId('board-card-labels');
+    expect(cardNode.querySelectorAll('[data-testid="issue-label-dot"]')).toHaveLength(3);
+    expect(cardNode.querySelector('[data-testid="issue-label-overflow"]')).toHaveTextContent('+1');
+  });
+
+  it('card_fields 未启用 labels 时隐藏标签点', () => {
+    const labelled = {
+      ...card('labels-hidden', 1),
+      labels: [{ id: 'l1', name: 'bug', color: '#e5484d' }],
+    };
+    render({ cardsByKey: { todo: [labelled] }, cardFields: [] });
+    expect(screen.getByTestId('board-card-labels-hidden')).toBeInTheDocument();
+    expect(screen.queryByTestId('issue-label-dot')).not.toBeInTheDocument();
+  });
+
   it('卡片可聚焦(键盘移动入口,§10.2)且标注 aria-keyshortcuts', () => {
     render({ cardsByKey: { todo: [card('a', 1)] } });
     const cardA = screen.getByTestId('board-card-a');
@@ -411,9 +438,9 @@ describe('BoardColumns 渲染', () => {
     expect(rendered.querySelector('time')).toHaveTextContent('2026/8/6');
   });
 
-  it('groupBy=null 的 __dynamic__ 列回退空分组名(不崩溃)', () => {
-    render({ groupBy: null, columns: [column({ key: '__dynamic__', label: 'x' })] });
-    expect(screen.getByTestId('board-column-__dynamic__')).toBeInTheDocument();
+  it('groupBy=null 的未知真实列 key 回退服务端 label(不崩溃)', () => {
+    render({ groupBy: null, columns: [column({ key: 'server-value', label: 'x' })] });
+    expect(screen.getByTestId('board-column-server-value')).toBeInTheDocument();
   });
 
   it('空列集合渲染为空看板(不崩溃)', () => {
@@ -421,14 +448,9 @@ describe('BoardColumns 渲染', () => {
     expect(screen.getByTestId('board-columns')).toBeInTheDocument();
   });
 
-  it('动态分组列直用服务端 label;__dynamic__ 占位列走 i18n 说明', () => {
+  it('动态分组列直用服务端 label', () => {
     render({ groupBy: 'status', columns: [column({ key: 'st_a', label: 'Status A' })] });
     expect(screen.getByTestId('board-column-st_a')).toHaveTextContent('Status A');
-    render({ groupBy: 'status', columns: [column({ key: '__dynamic__', label: 'x' })] });
-    // __dynamic__ 占位列渲染投影增量说明(插值 groupBy=status)。
-    expect(screen.getAllByTestId('board-column-__dynamic__').at(-1)).toHaveTextContent(
-      'Columns for status',
-    );
   });
 });
 

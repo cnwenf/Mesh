@@ -10,13 +10,27 @@
  */
 import type { MeshApiClient } from '../../api';
 import type { GroupedEnvelope } from '../../types/envelopes';
+import type { CompactLabel } from '../labels/types';
 import type { WipLimit } from './types';
+
+/** 投影/实时帧携带的 EAV 快照；仅动态自定义字段轴需要读取。 */
+export interface BoardCustomFieldValue {
+  readonly field_def_id: string;
+  readonly value_text?: string | null;
+  readonly value_number?: number | null;
+  readonly value_date?: string | null;
+  readonly value_member_id?: string | null;
+  readonly value_boolean?: boolean | null;
+  readonly value_json?: unknown;
+}
 
 /** 看板卡片(投影响应里的 issue 呈现,snake_case 与后端逐字对齐)。 */
 export interface BoardCard {
   readonly id: string;
   readonly identifier: string;
   readonly title: string;
+  readonly labels?: readonly CompactLabel[];
+  readonly custom_field_values?: readonly BoardCustomFieldValue[];
   readonly state_category: string;
   readonly status: {
     readonly id: string;
@@ -80,6 +94,8 @@ export interface ViewProjection {
   readonly groups: readonly BoardGroup[];
   readonly columns: readonly BoardProjectionColumn[];
   readonly lanes: readonly BoardLane[];
+  /** label/multi_select 位于任一轴时为 true；移动与手排入口必须隐藏。 */
+  readonly multi_value_axis: boolean;
   readonly next_cursor: string | null;
 }
 
@@ -142,6 +158,7 @@ export async function fetchViewIssues(
     columns?: BoardProjectionColumn[];
     lanes?: BoardLane[];
     groups?: BoardGroup[];
+    multi_value_axis?: boolean;
   };
   return {
     layout: envelope.layout ?? 'board',
@@ -151,6 +168,7 @@ export async function fetchViewIssues(
     groups: Array.isArray(envelope.groups) ? (envelope.groups as unknown as BoardGroup[]) : [],
     columns: Array.isArray(envelope.columns) ? envelope.columns : [],
     lanes: Array.isArray(envelope.lanes) ? envelope.lanes : [],
+    multi_value_axis: envelope.multi_value_axis ?? false,
     next_cursor: envelope.next_cursor,
   };
 }

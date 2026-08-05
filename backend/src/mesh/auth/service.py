@@ -108,10 +108,17 @@ class MfaRequiredResult:
     mfa_ticket: str
 
 
+class _Unset:
+    """Sentinel distinguishing an omitted profile field from explicit null."""
+
+
+UNSET = _Unset()
+
+
 @dataclass(frozen=True)
 class UserUpdate:
     display_name: str | None = None
-    avatar_url: str | None = None
+    avatar_url: str | None | _Unset = UNSET
     timezone: str | None = None
     settings: dict | None = None
 
@@ -1031,8 +1038,9 @@ class AuthService:
                 # of this identity across all workspaces, same transaction.
                 await session.flush()
                 await recompute_for_user(session, user_id)
-            if patch.avatar_url is not None:
-                _validate_avatar_url(patch.avatar_url)
+            if not isinstance(patch.avatar_url, _Unset):
+                if patch.avatar_url is not None:
+                    _validate_avatar_url(patch.avatar_url)
                 user.avatar_url = patch.avatar_url
             if patch.timezone is not None:
                 _validate_timezone(patch.timezone)

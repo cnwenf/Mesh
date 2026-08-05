@@ -8,7 +8,13 @@ import { applyIssueDetailFrame, applyIssueListFrame } from '../realtime';
 import type { IssueSummary } from '../types';
 
 function frame(event: string, payload: unknown): RealtimeEventFrame {
-  return { op: 'event', channel: 'workspace:ws-1:issues', seq: 1, event, payload } as RealtimeEventFrame;
+  return {
+    op: 'event',
+    channel: 'workspace:ws-1:issues',
+    seq: 1,
+    event,
+    payload,
+  } as RealtimeEventFrame;
 }
 
 const BASE: IssueSummary = {
@@ -41,6 +47,7 @@ const BASE: IssueSummary = {
   version: 1,
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-02T00:00:00Z',
+  labels: [],
 };
 
 const always = (): boolean => true;
@@ -62,7 +69,11 @@ describe('applyIssueListFrame', () => {
 
   it('drops created issues that fail the belongs predicate', () => {
     const created = { ...BASE, id: 'iss-2' };
-    const next = applyIssueListFrame([BASE], frame('issue.created', { issue: created }), () => false);
+    const next = applyIssueListFrame(
+      [BASE],
+      frame('issue.created', { issue: created }),
+      () => false,
+    );
     expect(next).toEqual([BASE]);
   });
 
@@ -132,6 +143,16 @@ describe('applyIssueListFrame', () => {
     expect(next).toEqual([]);
   });
 
+  it('merges issue.labels_changed payloads into the row label cache', () => {
+    const labels = [{ id: 'lbl-1', name: 'bug', color: '#e5484d' }];
+    const next = applyIssueListFrame(
+      [BASE],
+      frame('issue.labels_changed', { issue_id: 'iss-1', labels }),
+      always,
+    );
+    expect(next[0].labels).toEqual(labels);
+  });
+
   it('returns same reference for unknown actions and missing ids', () => {
     const list = [BASE];
     expect(applyIssueListFrame(list, frame('issue.labels_changed', {}), always)).toBe(list);
@@ -139,6 +160,65 @@ describe('applyIssueListFrame', () => {
     expect(
       applyIssueListFrame(list, frame('issue.created', { issue: { title: 'no id' } }), always),
     ).toBe(list);
+  });
+
+  it('ignores malformed creates and events for rows that are not cached', () => {
+    const list = [BASE];
+    expect(applyIssueListFrame(list, frame('issue.created', { issue: null }), always)).toBe(list);
+    expect(applyIssueListFrame(list, frame('issue.created', { issue: 'invalid' }), always)).toBe(
+      list,
+    );
+    expect(applyIssueListFrame(list, frame('issue.deleted', {}), always)).toBe(list);
+    expect(
+      applyIssueListFrame(list, frame('issue.project_changed', { id: 'iss-missing' }), always),
+    ).toBe(list);
+    expect(applyIssueListFrame(list, frame('issue.updated', { id: 'iss-missing' }), always)).toBe(
+      list,
+    );
+    expect(
+      applyIssueListFrame(
+        list,
+        frame('issue.labels_changed', { issue_id: 'iss-missing', labels: [] }),
+        always,
+      ),
+    ).toBe(list);
+    expect(
+      applyIssueListFrame(
+        list,
+        frame('issue.labels_changed', { issue_id: 'iss-1', labels: 'invalid' }),
+        always,
+      ),
+    ).toBe(list);
+  });
+
+  it('updates only the matching row when the frame omits an updated_at watermark', () => {
+    const other = { ...BASE, id: 'iss-2', identifier: 'WS-2' };
+    const next = applyIssueListFrame(
+      [BASE, other],
+      frame('issue.updated', { id: 'iss-1', changes: { title: 'without watermark' } }),
+      always,
+    );
+    expect(next[0].title).toBe('without watermark');
+    expect(next[1]).toBe(other);
+  });
+
+  it('re-filters label changes and preserves unrelated rows', () => {
+    const other = { ...BASE, id: 'iss-2', identifier: 'WS-2' };
+    const labels = [{ id: 'lbl-1', name: 'bug', color: '#e5484d' }];
+    const kept = applyIssueListFrame(
+      [BASE, other],
+      frame('issue.labels_changed', { issue_id: 'iss-1', labels }),
+      always,
+    );
+    expect(kept[0].labels).toEqual(labels);
+    expect(kept[1]).toBe(other);
+
+    const removed = applyIssueListFrame(
+      [BASE, other],
+      frame('issue.labels_changed', { issue_id: 'iss-1', labels }),
+      () => false,
+    );
+    expect(removed).toEqual([other]);
   });
 });
 

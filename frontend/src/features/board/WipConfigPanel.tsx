@@ -10,7 +10,11 @@ import type { BoardColumn, WipEnforcement } from './types';
 
 interface WipConfigPanelProps {
   readonly columns: readonly BoardColumn[];
-  readonly onSave: (groupKey: string, limit: number | null, enforcement: WipEnforcement) => Promise<void>;
+  readonly onSave: (
+    groupKey: string,
+    limit: number | null,
+    enforcement: WipEnforcement,
+  ) => Promise<void>;
 }
 
 export function WipConfigPanel(props: WipConfigPanelProps): React.JSX.Element {
@@ -21,9 +25,7 @@ export function WipConfigPanel(props: WipConfigPanelProps): React.JSX.Element {
   return (
     <div className="mesh-wip-panel" data-testid="wip-config-panel">
       {columns.map((column) => {
-        const label = column.key === '__dynamic__'
-          ? t('board.wipDynamicColumn')
-          : t(column.label);
+        const label = t(column.label);
         return (
           <WipRow
             key={column.key}
@@ -88,7 +90,12 @@ function WipRow(props: WipRowProps): React.JSX.Element {
         <option value="warn">{t('board.wipWarn')}</option>
         <option value="block">{t('board.wipBlock')}</option>
       </Select>
-      <Button variant="secondary" disabled={busy} onClick={() => void submit()} data-testid={`wip-save-${groupKey}`}>
+      <Button
+        variant="secondary"
+        disabled={busy}
+        onClick={() => void submit()}
+        data-testid={`wip-save-${groupKey}`}
+      >
         {t('common.save')}
       </Button>
     </div>

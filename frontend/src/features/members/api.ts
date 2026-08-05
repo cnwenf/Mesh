@@ -27,7 +27,7 @@ export async function fetchMe(client: MeshApiClient): Promise<MeResponse> {
 
 export interface UpdateOwnProfileBody {
   readonly display_name?: string;
-  readonly avatar_url?: string;
+  readonly avatar_url?: string | null;
 }
 
 /** 当前用户资料写入(auth.md §3.1 / member.md §3.1)。 */
@@ -73,8 +73,12 @@ export async function getMember(
   client: MeshApiClient,
   workspaceId: string,
   memberId: string,
+  signal?: AbortSignal,
 ): Promise<MemberDetail> {
-  return client.request<MemberDetail>('GET', memberPath(workspaceId, memberId));
+  const path = memberPath(workspaceId, memberId);
+  return signal === undefined
+    ? client.request<MemberDetail>('GET', path)
+    : client.request<MemberDetail>('GET', path, { signal });
 }
 
 export interface UpdateMemberBody {

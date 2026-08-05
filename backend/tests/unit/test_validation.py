@@ -76,6 +76,11 @@ def test_https_url_passes():
         "ftp://cdn.example/logo.png",
         "//cdn.example/logo.png",
         "cdn.example/logo.png",
+        "https://",
+        "https:///logo.png",
+        "https://exa mple/logo.png",
+        "https://cdn.example:not-a-port/logo.png",
+        "https://%",
     ],
 )
 def test_non_https_urls_are_400_validation_error(url):

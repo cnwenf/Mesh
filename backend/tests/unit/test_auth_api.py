@@ -205,6 +205,23 @@ async def test_update_me_explicit_null_clears_settings_key_inprocess(client):
     assert clear_theme.json()["data"]["settings"] == {}
 
 
+async def test_update_me_explicit_null_clears_avatar_inprocess(client):
+    tokens = await _register_and_login(client)
+    h = _auth(tokens["access_token"])
+    set_avatar = await client.patch(
+        "/api/v1/users/me", headers=h, json={"avatar_url": "https://cdn.example/avatar.png"}
+    )
+    assert set_avatar.status_code == 200
+    renamed = await client.patch(
+        "/api/v1/users/me", headers=h, json={"display_name": "Renamed"}
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["data"]["avatar_url"] == "https://cdn.example/avatar.png"
+    cleared = await client.patch("/api/v1/users/me", headers=h, json={"avatar_url": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["data"]["avatar_url"] is None
+
+
 async def test_sessions_and_logout_all_inprocess(client):
     tokens = await _register_and_login(client)
     h = _auth(tokens["access_token"])

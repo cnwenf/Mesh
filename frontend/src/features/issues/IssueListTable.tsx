@@ -12,6 +12,7 @@ import { useIntl } from 'react-intl';
 import { Avatar, Badge, Button, Checkbox, DataTableSurface, Icon, Menu } from '../../design';
 import type { ListKeyboardSelection } from '../../design';
 import { formatDate, useT } from '../../i18n';
+import { LabelDots } from '../labels/LabelDots';
 import type { IssueSummary } from './types';
 import type { IssueSortField, IssueSortState } from './issuesSort';
 import { categoryTone } from './issuePresentation';
@@ -121,6 +122,9 @@ function IssueRow(props: IssueRowProps): React.JSX.Element {
           </Badge>
         </span>
       </td>
+      <td className="mesh-issues__cell--labels">
+        <LabelDots labels={issue.labels ?? []} />
+      </td>
       <td className="mesh-issues__cell--priority">{t(`issues.priority.${issue.priority}`)}</td>
       <td className="mesh-issues__cell--assignee">
         {issue.assignee !== null ? (
@@ -214,6 +218,7 @@ export function IssueListTable(props: IssueListTableProps): React.JSX.Element {
               onSort={onSort}
             />
             <th scope="col">{t('issues.columns.status')}</th>
+            <th scope="col">{t('issues.columns.labels')}</th>
             <SortableHeader
               field="priority"
               label={t('issues.columns.priority')}

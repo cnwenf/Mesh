@@ -9,6 +9,7 @@ accepts these values uses these validators so the codes never drift.
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from mesh.config import SUPPORTED_LOCALES, SUPPORTED_THEMES
@@ -82,7 +83,22 @@ def validate_https_url(value: str, *, field: str) -> None:
     https only — ``javascript:``/``data:`` schemes are XSS attack surface and
     plain http is a mixed-content weak point.
     """
-    if not value.startswith("https://"):
+    try:
+        parsed = urlsplit(value)
+        # Accessing port also validates malformed/overflowing port syntax.
+        _ = parsed.port
+    except (TypeError, ValueError):
+        parsed = None
+    valid = (
+        parsed is not None
+        and parsed.scheme.lower() == "https"
+        and parsed.hostname is not None
+        and "%" not in parsed.hostname
+        and parsed.netloc != ""
+        and "\\" not in value
+        and not any(character.isspace() or ord(character) < 32 for character in value)
+    )
+    if not valid:
         raise ValidationError(
             f"{field} must be an https URL",
             code="validation_error",

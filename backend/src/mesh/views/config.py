@@ -14,6 +14,7 @@ query compiler (injection guard, kanban §2.9 closing note). Failures raise
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from mesh.db.models.view import VIEW_LAYOUT_VALUES, VIEW_VISIBILITY_VALUES
@@ -87,8 +88,8 @@ SORT_FIELDS: frozenset[str] = frozenset(
 )
 
 # group_by columns (kanban §2.4); NULL group_by defaults a board to
-# state_category at render time. Custom-field grouping lands with the
-# label-property increment.
+# state_category at render time. A custom-field axis is represented by the
+# field definition UUID itself.
 GROUP_BY_FIELDS: frozenset[str] = frozenset(
     {"state_category", "status", "assignee", "priority", "project", "label"}
 )
@@ -225,6 +226,7 @@ def _validate_op(condition: dict, *, field: str, path: str) -> None:
         return
     if "value" not in condition or value is None:
         raise _invalid("invalid_filters", f"op {op!r} requires a value", path=f"{path}.value")
+    allows_boolean = field == "<custom_field>"
     if op in _LIST_OPS:
         if not isinstance(value, list) or not value:
             raise _invalid(
@@ -232,10 +234,10 @@ def _validate_op(condition: dict, *, field: str, path: str) -> None:
                 f"op {op!r} requires a non-empty array value",
                 path=f"{path}.value",
             )
-        if not all(_is_scalar_json(item) for item in value):
+        if not all(_is_scalar_json(item) or (allows_boolean and isinstance(item, bool)) for item in value):
             raise _invalid("invalid_filters", "list values must be scalars", path=f"{path}.value")
         return
-    if not _is_scalar_json(value):
+    if not _is_scalar_json(value) and not (allows_boolean and isinstance(value, bool)):
         raise _invalid("invalid_filters", "value must be a scalar", path=f"{path}.value")
 
 
@@ -382,11 +384,21 @@ def validate_group_by(value: Any) -> str | None:
     """Validate group_by (NULL = board default state_category at render time)."""
     if value is None:
         return None
-    if not isinstance(value, str) or value not in GROUP_BY_FIELDS:
+    is_custom_field = False
+    if isinstance(value, str):
+        try:
+            uuid.UUID(value)
+            is_custom_field = True
+        except ValueError:
+            pass
+    if not isinstance(value, str) or (value not in GROUP_BY_FIELDS and not is_custom_field):
         raise ValidationError(
             "unknown group_by field",
             code="invalid_group_by",
-            details={"group_by": str(value), "allowed": sorted(GROUP_BY_FIELDS)},
+            details={
+                "group_by": str(value),
+                "allowed": [*sorted(GROUP_BY_FIELDS), "<custom_field_def_id>"],
+            },
         )
     return value
 

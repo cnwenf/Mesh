@@ -8,14 +8,11 @@ export type ViewLayout = 'board' | 'list' | 'timeline' | 'table';
 export type ViewVisibility = 'private' | 'shared';
 export type WipEnforcement = 'warn' | 'block';
 
-/** 内置分组字段(kanban §2.4);自定义字段分组随 label-property 增量。 */
-export type GroupByField =
-  | 'state_category'
-  | 'status'
-  | 'assignee'
-  | 'priority'
-  | 'project'
-  | 'label';
+/** 内置分组字段与以 UUID 标识的自定义字段轴(kanban §2.4)。 */
+export type BuiltinGroupByField =
+  'state_category' | 'status' | 'assignee' | 'priority' | 'project' | 'label';
+export type CustomFieldGroupBy = `${string}-${string}-${string}-${string}-${string}`;
+export type GroupByField = BuiltinGroupByField | CustomFieldGroupBy;
 
 export type FilterOperator = 'AND' | 'OR';
 

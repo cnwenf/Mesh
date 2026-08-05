@@ -166,4 +166,56 @@ describe('loadAllGroups', () => {
     expect(result.lanes[1]?.groups[1]?.data.map((item) => item.id)).toEqual(['c']);
     expect(result.columns.map((column) => column.key)).toEqual(['todo', 'done']);
   });
+
+  it('后续页出现新泳道或既有泳道的新分组时保留动态投影', async () => {
+    const skeleton = {
+      layout: 'board',
+      group_by: 'state_category',
+      sub_group_by: 'priority',
+      column_target_status: {},
+      columns: [
+        { key: 'todo', label: 'Todo', count: 1, wip: null },
+        { key: 'done', label: 'Done', count: 2, wip: null },
+      ],
+    };
+    const client = groupedClient([
+      {
+        ...skeleton,
+        lanes: [
+          {
+            key: 'high',
+            label: 'High',
+            count: 1,
+            groups: [{ key: 'todo', count: 1, data: [CARD_A] }],
+          },
+        ],
+        next_cursor: 'cur-dynamic',
+      },
+      {
+        ...skeleton,
+        lanes: [
+          {
+            key: 'high',
+            label: 'High',
+            count: 1,
+            groups: [{ key: 'done', count: 1, data: [CARD_C] }],
+          },
+          {
+            key: 'low',
+            label: 'Low',
+            count: 1,
+            groups: [{ key: 'done', count: 1, data: [CARD_B] }],
+          },
+        ],
+        next_cursor: null,
+      },
+    ]);
+
+    const result = await loadAllGroups(client as never, 'v1');
+    const byLane = new Map(result.lanes.map((lane) => [lane.key, lane]));
+
+    expect(byLane.get('high')?.groups.map((group) => group.key)).toEqual(['todo', 'done']);
+    expect(byLane.get('high')?.groups[1]?.data.map((item) => item.id)).toEqual(['c']);
+    expect(byLane.get('low')?.groups[0]?.data.map((item) => item.id)).toEqual(['b']);
+  });
 });

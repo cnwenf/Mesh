@@ -9,7 +9,14 @@
  * 保守保留卡片(不静默移除),由上层在需要时重拉对账。
  */
 import type { RealtimeEventFrame } from '../../types/realtime';
-import type { BoardCard, BoardGroup, BoardLane, BoardProjectionColumn } from './projection';
+import type { CustomFieldDef } from '../labels/types';
+import type {
+  BoardCard,
+  BoardCustomFieldValue,
+  BoardGroup,
+  BoardLane,
+  BoardProjectionColumn,
+} from './projection';
 import type { WipLimit } from './types';
 
 /** 空分组 key(assignee/project 无值列,对齐后端 §2.4)。 */
@@ -17,6 +24,7 @@ export const NONE_KEY = '__none__';
 
 interface FramePayload {
   readonly id?: unknown;
+  readonly issue_id?: unknown;
   readonly updated_at?: unknown;
   readonly changes?: unknown;
   readonly issue?: unknown;
@@ -54,6 +62,71 @@ export function groupKeyForCard(card: BoardCard, groupBy: string): string {
   }
 }
 
+const LOCAL_AXIS_KEYS = new Set(['state_category', 'status', 'assignee', 'priority', 'project']);
+
+function isDynamicAxis(axis: string): boolean {
+  return axis === 'label' || !LOCAL_AXIS_KEYS.has(axis);
+}
+
+function customValueKeys(
+  definition: CustomFieldDef | undefined,
+  value: BoardCustomFieldValue | undefined,
+): string[] {
+  if (value === undefined) return [NONE_KEY];
+  if (definition === undefined) {
+    if (Array.isArray(value.value_json)) {
+      const keys = value.value_json.filter((item): item is string => typeof item === 'string');
+      return [...new Set(keys)].length > 0 ? [...new Set(keys)] : [NONE_KEY];
+    }
+    if (typeof value.value_json === 'string') return [value.value_json];
+    if (typeof value.value_text === 'string') return [value.value_text];
+    if (typeof value.value_number === 'number') return [String(value.value_number)];
+    if (typeof value.value_date === 'string') return [value.value_date];
+    if (typeof value.value_member_id === 'string') return [value.value_member_id];
+    if (typeof value.value_boolean === 'boolean') return [String(value.value_boolean)];
+    return [NONE_KEY];
+  }
+  switch (definition.type) {
+    case 'text':
+    case 'textarea':
+    case 'url':
+      return typeof value.value_text === 'string' ? [value.value_text] : [NONE_KEY];
+    case 'number':
+      return typeof value.value_number === 'number' ? [String(value.value_number)] : [NONE_KEY];
+    case 'date':
+    case 'datetime':
+      return typeof value.value_date === 'string' ? [value.value_date] : [NONE_KEY];
+    case 'member':
+      return typeof value.value_member_id === 'string' ? [value.value_member_id] : [NONE_KEY];
+    case 'boolean':
+      return typeof value.value_boolean === 'boolean' ? [String(value.value_boolean)] : [NONE_KEY];
+    case 'single_select':
+      return typeof value.value_json === 'string' ? [value.value_json] : [NONE_KEY];
+    case 'multi_select': {
+      const keys = Array.isArray(value.value_json)
+        ? value.value_json.filter((item): item is string => typeof item === 'string')
+        : [];
+      return [...new Set(keys)].length > 0 ? [...new Set(keys)] : [NONE_KEY];
+    }
+  }
+}
+
+/** 一张卡在动态轴上的完整 memberships；多值轴返回多个去重 key。 */
+export function groupKeysForCard(
+  card: BoardCard,
+  groupBy: string,
+  customFields: readonly CustomFieldDef[] = [],
+): readonly string[] {
+  if (groupBy === 'label') {
+    const keys = (card.labels ?? []).map((label) => label.id);
+    return [...new Set(keys)].length > 0 ? [...new Set(keys)] : [NONE_KEY];
+  }
+  if (!isDynamicAxis(groupBy)) return [groupKeyForCard(card, groupBy)];
+  const definition = customFields.find((field) => field.id === groupBy);
+  const value = card.custom_field_values?.find((item) => item.field_def_id === groupBy);
+  return customValueKeys(definition, value);
+}
+
 /** 帧元字段:不得扩散到卡片对象(F11)。 */
 const FRAME_META_KEYS = new Set([
   'changes',
@@ -69,6 +142,10 @@ const FRAME_META_KEYS = new Set([
   'visibility',
   'from_sub_group',
   'to_sub_group',
+  'issue_id',
+  'field_def_id',
+  'field_key',
+  'value',
 ]);
 
 function mergedCard(existing: BoardCard, payload: FramePayload): BoardCard {
@@ -82,6 +159,30 @@ function mergedCard(existing: BoardCard, payload: FramePayload): BoardCard {
   return { ...existing, ...topFields, ...changeFields } as BoardCard;
 }
 
+function withCustomFieldPayload(card: BoardCard, payload: FramePayload): BoardCard {
+  if (typeof payload.field_def_id !== 'string') return card;
+  const retained = (card.custom_field_values ?? []).filter(
+    (value) => value.field_def_id !== payload.field_def_id,
+  );
+  if (typeof payload.value !== 'object' || payload.value === null) {
+    return { ...card, custom_field_values: retained };
+  }
+  const value = payload.value as BoardCustomFieldValue;
+  return {
+    ...card,
+    custom_field_values: [...retained, { ...value, field_def_id: payload.field_def_id }],
+  };
+}
+
+/** 将关联帧快照并入单卡；用于投影内更新及缺失卡的单卡 GET 对账。 */
+export function mergeBoardCardForRealtime(card: BoardCard, frame: RealtimeEventFrame): BoardCard {
+  const payload = payloadOf(frame);
+  const merged = mergedCard(card, payload);
+  return actionOf(frame.event) === 'custom_field_changed'
+    ? withCustomFieldPayload(merged, payload)
+    : merged;
+}
+
 function isStale(existing: BoardCard, payload: FramePayload): boolean {
   const frameUpdatedAt = typeof payload.updated_at === 'string' ? payload.updated_at : undefined;
   if (frameUpdatedAt === undefined) return false;
@@ -90,6 +191,7 @@ function isStale(existing: BoardCard, payload: FramePayload): boolean {
 
 export interface BoardMergeContext {
   readonly groupBy: string;
+  readonly customFields?: readonly CustomFieldDef[];
   /** 卡片是否仍属于当前视图(视图 filters 的本地重判;无法判定 → true 保守保留)。 */
   readonly belongs: (card: BoardCard) => boolean;
 }
@@ -103,7 +205,21 @@ export interface BoardMergeResult {
 }
 
 function needsIssueReconcile(action: string): boolean {
-  return action === 'updated' || action === 'moved' || action === 'project_changed';
+  return (
+    action === 'updated' ||
+    action === 'moved' ||
+    action === 'project_changed' ||
+    action === 'labels_changed' ||
+    action === 'custom_field_changed'
+  );
+}
+
+function issueIdFromPayload(payload: FramePayload, action: string): string | undefined {
+  const value =
+    action === 'labels_changed' || action === 'custom_field_changed'
+      ? payload.issue_id
+      : payload.id;
+  return typeof value === 'string' ? value : undefined;
 }
 
 function removeFromGroups(
@@ -144,8 +260,204 @@ function upsertIntoGroup(
   });
 }
 
-function labelFor(groups: readonly BoardGroup[], key: string): string {
-  return groups.find((group) => group.key === key)?.label ?? key;
+function labelForCardAxis(
+  groups: readonly BoardGroup[],
+  card: BoardCard,
+  axis: string,
+  key: string,
+  customFields: readonly CustomFieldDef[],
+): string {
+  const existing = groups.find((group) => group.key === key)?.label;
+  if (existing !== undefined) return existing;
+  if (axis === 'label') return card.labels?.find((label) => label.id === key)?.name ?? key;
+  const definition = customFields.find((field) => field.id === axis);
+  if (key === NONE_KEY) return definition === undefined ? key : `No ${definition.name}`;
+  return definition?.options.find((option) => option.id === key)?.name ?? key;
+}
+
+function groupKeysContaining(groups: readonly BoardGroup[], issueId: string): string[] {
+  return groups
+    .filter((group) => group.data.some((card) => card.id === issueId))
+    .map((group) => group.key);
+}
+
+function upsertIntoGroups(
+  groups: readonly BoardGroup[],
+  keys: readonly string[],
+  card: BoardCard,
+  axis: string,
+  customFields: readonly CustomFieldDef[],
+): BoardGroup[] {
+  let next = [...groups];
+  for (const key of new Set(keys)) {
+    next = upsertIntoGroup(
+      next,
+      key,
+      card,
+      labelForCardAxis(groups, card, axis, key, customFields),
+    );
+  }
+  return next;
+}
+
+interface LabelDefinitionPayload {
+  readonly id: string;
+  readonly name?: string;
+  readonly color?: string;
+}
+
+interface AxisSkeletonMutation {
+  readonly key?: string;
+  readonly label?: string;
+  readonly remove?: boolean;
+  readonly noneLabel?: string;
+  readonly removeAxis?: boolean;
+}
+
+function customFieldSkeletonMutation(
+  frame: RealtimeEventFrame,
+  axis: string,
+): AxisSkeletonMutation | null {
+  const payload = payloadOf(frame);
+  if (frame.event === 'custom_field.updated') {
+    if (payload.id !== axis) return null;
+    if (payload.change === 'deleted' || payload.is_active === false) return { removeAxis: true };
+    return typeof payload.name === 'string' ? { noneLabel: `No ${payload.name}` } : null;
+  }
+  if (frame.event !== 'custom_field_option.updated' || payload.field_def_id !== axis) return null;
+  const change = typeof payload.change === 'string' ? payload.change : 'updated';
+  if (typeof payload.option === 'object' && payload.option !== null) {
+    const option = payload.option as Record<string, unknown>;
+    if (typeof option.id !== 'string') return null;
+    return {
+      key: option.id,
+      ...(typeof option.name === 'string' ? { label: option.name } : {}),
+      remove: change === 'deleted' || option.is_active === false,
+    };
+  }
+  return typeof payload.id === 'string' && change === 'deleted'
+    ? { key: payload.id, remove: true }
+    : null;
+}
+
+function labelDefinitionPayload(frame: RealtimeEventFrame): LabelDefinitionPayload | null {
+  if (!frame.event.startsWith('label.')) return null;
+  const payload = payloadOf(frame);
+  return typeof payload.id === 'string'
+    ? {
+        id: payload.id,
+        ...(typeof payload.name === 'string' ? { name: payload.name } : {}),
+        ...(typeof payload.color === 'string' ? { color: payload.color } : {}),
+      }
+    : null;
+}
+
+function patchCardLabel(
+  card: BoardCard,
+  label: LabelDefinitionPayload,
+  deleted: boolean,
+): BoardCard {
+  if (card.labels === undefined) return card;
+  const labels = deleted
+    ? card.labels.filter((item) => item.id !== label.id)
+    : card.labels.map((item) =>
+        item.id === label.id
+          ? {
+              ...item,
+              ...(label.name === undefined ? {} : { name: label.name }),
+              ...(label.color === undefined ? {} : { color: label.color }),
+            }
+          : item,
+      );
+  return { ...card, labels };
+}
+
+function insertBeforeNone<T extends { readonly key: string }>(items: readonly T[], item: T): T[] {
+  const noneIndex = items.findIndex((candidate) => candidate.key === NONE_KEY);
+  if (noneIndex === -1) return [...items, item];
+  return [...items.slice(0, noneIndex), item, ...items.slice(noneIndex)];
+}
+
+/** label 定义帧只改一维列骨架/卡片快照，不触发投影重拉。 */
+export function applyLabelDefinitionToGroups(
+  groups: readonly BoardGroup[],
+  frame: RealtimeEventFrame,
+): readonly BoardGroup[] {
+  const label = labelDefinitionPayload(frame);
+  if (label === null) return groups;
+  const action = actionOf(frame.event);
+  if (action === 'created') {
+    if (groups.some((group) => group.key === label.id) || label.name === undefined) return groups;
+    return insertBeforeNone(groups, {
+      key: label.id,
+      label: label.name,
+      count: 0,
+      wip: null,
+      data: [],
+    });
+  }
+  if (action === 'updated') {
+    if (label.name === undefined) return groups;
+    return groups.map((group) => ({
+      ...group,
+      ...(group.key === label.id ? { label: label.name } : {}),
+      data: group.data.map((card) => patchCardLabel(card, label, false)),
+    }));
+  }
+  if (action !== 'deleted') return groups;
+
+  const removedCards = groups.find((group) => group.key === label.id)?.data ?? [];
+  let next: BoardGroup[] = groups
+    .filter((group) => group.key !== label.id)
+    .map((group) => ({
+      ...group,
+      data: group.data.map((card) => patchCardLabel(card, label, true)),
+    }));
+  for (const removed of removedCards) {
+    if (next.some((group) => group.data.some((card) => card.id === removed.id))) continue;
+    const patched = patchCardLabel(removed, label, true);
+    next = upsertIntoGroup(next, NONE_KEY, patched, 'No label');
+  }
+  return next;
+}
+
+/** custom field/option 定义帧局部维护一维 skeleton。 */
+export function applyCustomFieldDefinitionToGroups(
+  groups: readonly BoardGroup[],
+  frame: RealtimeEventFrame,
+  axis: string,
+): readonly BoardGroup[] {
+  const mutation = customFieldSkeletonMutation(frame, axis);
+  if (mutation === null) return groups;
+  if (mutation.removeAxis === true) return [];
+  let next = groups.map((group) =>
+    group.key === NONE_KEY && mutation.noneLabel !== undefined
+      ? { ...group, label: mutation.noneLabel }
+      : group,
+  );
+  if (mutation.key === undefined) return next;
+  if (mutation.remove === true) {
+    const removedCards = next.find((group) => group.key === mutation.key)?.data ?? [];
+    next = next.filter((group) => group.key !== mutation.key);
+    for (const card of removedCards) {
+      if (next.some((group) => group.data.some((item) => item.id === card.id))) continue;
+      next = upsertIntoGroup(next, NONE_KEY, card, mutation.noneLabel ?? 'None');
+    }
+    return next;
+  }
+  if (mutation.label === undefined) return next;
+  if (next.some((group) => group.key === mutation.key)) {
+    return next.map((group) =>
+      group.key === mutation.key ? { ...group, label: mutation.label! } : group,
+    );
+  }
+  return insertBeforeNone(next, {
+    key: mutation.key,
+    label: mutation.label,
+    count: 0,
+    wip: null,
+    data: [],
+  });
 }
 
 /**
@@ -170,6 +482,7 @@ export function applyBoardFrame(
 
   const payload = payloadOf(frame);
   const action = actionOf(frame.event);
+  const customFields = ctx.customFields ?? [];
 
   if (action === 'created') {
     const nested = payload.issue;
@@ -179,11 +492,14 @@ export function applyBoardFrame(
     const flat = groups.flatMap((group) => group.data);
     if (flat.some((item) => item.id === card.id)) return { groups, refetch: false };
     if (!ctx.belongs(card)) return { groups, refetch: false };
-    const key = groupKeyForCard(card, ctx.groupBy);
-    return { groups: upsertIntoGroup(groups, key, card, labelFor(groups, key)), refetch: false };
+    const keys = groupKeysForCard(card, ctx.groupBy, customFields);
+    return {
+      groups: upsertIntoGroups(groups, keys, card, ctx.groupBy, customFields),
+      refetch: false,
+    };
   }
 
-  const id = typeof payload.id === 'string' ? payload.id : undefined;
+  const id = issueIdFromPayload(payload, action);
   if (id === undefined) return { groups, refetch: false };
 
   if (action === 'deleted') {
@@ -191,14 +507,28 @@ export function applyBoardFrame(
   }
   if (!needsIssueReconcile(action)) return { groups, refetch: false };
 
-  // updated / moved / project_changed
+  // updated / moved / project_changed / labels_changed
+  const priorKeys = groupKeysContaining(groups, id);
   const { groups: stripped, removed } = removeFromGroups(groups, id);
   if (removed === null) return { groups, refetch: false, reconcileIssueId: id };
   if (isStale(removed, payload)) return { groups, refetch: false };
-  const merged = mergedCard(removed, payload);
+  const merged = mergeBoardCardForRealtime(removed, frame);
   if (!ctx.belongs(merged)) return { groups: stripped, refetch: false };
-  const key = groupKeyForCard(merged, ctx.groupBy);
-  return { groups: upsertIntoGroup(stripped, key, merged, labelFor(groups, key)), refetch: false };
+  const associationChangesAxis =
+    (action === 'labels_changed' && ctx.groupBy === 'label') ||
+    (action === 'custom_field_changed' && payload.field_def_id === ctx.groupBy);
+  let keys =
+    isDynamicAxis(ctx.groupBy) && !associationChangesAxis
+      ? priorKeys
+      : groupKeysForCard(merged, ctx.groupBy, customFields);
+  if (action === 'moved' && typeof payload.to === 'object' && payload.to !== null) {
+    const targetKey = (payload.to as Record<string, unknown>).group_key;
+    if (typeof targetKey === 'string') keys = [targetKey];
+  }
+  return {
+    groups: upsertIntoGroups(stripped, keys, merged, ctx.groupBy, customFields),
+    refetch: false,
+  };
 }
 
 export interface BoardLaneMergeContext extends BoardMergeContext {
@@ -270,15 +600,15 @@ function rebuildLaneProjection(
     addMissingKey(laneKeys, knownLanes, placement.subGroupKey);
   }
 
-  const columnCounts = new Map(columnKeys.map((key) => [key, 0]));
-  const laneCounts = new Map(laneKeys.map((key) => [key, 0]));
+  const columnIssueIds = new Map(columnKeys.map((key) => [key, new Set<string>()]));
+  const laneIssueIds = new Map(laneKeys.map((key) => [key, new Set<string>()]));
   const cellCards = new Map<string, Map<string, BoardCard[]>>();
   const firstColumnCard = new Map<string, BoardCard>();
   const firstLaneCard = new Map<string, BoardCard>();
 
   for (const placement of placements) {
-    columnCounts.set(placement.groupKey, columnCounts.get(placement.groupKey)! + 1);
-    laneCounts.set(placement.subGroupKey, laneCounts.get(placement.subGroupKey)! + 1);
+    columnIssueIds.get(placement.groupKey)!.add(placement.card.id);
+    laneIssueIds.get(placement.subGroupKey)!.add(placement.card.id);
     if (!firstColumnCard.has(placement.groupKey)) {
       firstColumnCard.set(placement.groupKey, placement.card);
     }
@@ -305,7 +635,7 @@ function rebuildLaneProjection(
       return {
         key,
         label: template?.label ?? fallbackLabel(key, [card!], ctx.groupBy),
-        count: columnCounts.get(key)!,
+        count: columnIssueIds.get(key)!.size,
         wip: template?.wip ?? null,
       };
     }),
@@ -316,7 +646,7 @@ function rebuildLaneProjection(
       return {
         key,
         label: template?.label ?? fallbackLabel(key, [card!], ctx.subGroupBy),
-        count: laneCounts.get(key)!,
+        count: laneIssueIds.get(key)!.size,
         groups: columnKeys.map((columnKey) => {
           const data = cells?.get(columnKey) ?? [];
           return { key: columnKey, count: data.length, data };
@@ -341,8 +671,9 @@ function patchCardAxis(card: BoardCard, axis: string, targetKey: string): BoardC
     case 'project':
       return { ...card, project_id: targetKey === NONE_KEY ? null : targetKey };
     case 'state_category':
-    default:
       return { ...card, state_category: targetKey };
+    default:
+      return card;
   }
 }
 
@@ -389,6 +720,210 @@ function applyProjectChangedPayload(card: BoardCard, payload: FramePayload): Boa
   };
 }
 
+function uniquePlacementKeys(
+  placements: readonly BoardCellPlacement[],
+  field: 'groupKey' | 'subGroupKey',
+): string[] {
+  return [...new Set(placements.map((placement) => placement[field]))];
+}
+
+function cartesianPlacements(
+  card: BoardCard,
+  groupKeys: readonly string[],
+  subGroupKeys: readonly string[],
+): BoardCellPlacement[] {
+  return groupKeys.flatMap((groupKey) =>
+    subGroupKeys.map((subGroupKey) => ({ card, groupKey, subGroupKey })),
+  );
+}
+
+/** label 定义帧局部维护二维 column/lane skeleton，并在删除时把孤儿落入 __none__。 */
+export function applyLabelDefinitionToLanes(
+  columns: readonly BoardProjectionColumn[],
+  lanes: readonly BoardLane[],
+  frame: RealtimeEventFrame,
+  ctx: BoardLaneMergeContext,
+): Pick<BoardLaneMergeResult, 'columns' | 'lanes'> {
+  const label = labelDefinitionPayload(frame);
+  const groupUsesLabels = ctx.groupBy === 'label';
+  const laneUsesLabels = ctx.subGroupBy === 'label';
+  if (label === null || (!groupUsesLabels && !laneUsesLabels)) return { columns, lanes };
+  const action = actionOf(frame.event);
+  const existsAsColumn = columns.some((column) => column.key === label.id);
+  const existsAsLane = lanes.some((lane) => lane.key === label.id);
+
+  let templates = [...columns];
+  let laneTemplates = [...lanes];
+  if (action === 'created') {
+    if (label.name === undefined) return { columns, lanes };
+    if (groupUsesLabels && !existsAsColumn) {
+      templates = insertBeforeNone(templates, {
+        key: label.id,
+        label: label.name,
+        count: 0,
+        wip: null,
+      });
+    }
+    if (laneUsesLabels && !existsAsLane) {
+      laneTemplates = insertBeforeNone(laneTemplates, {
+        key: label.id,
+        label: label.name,
+        count: 0,
+        groups: templates.map((column) => ({ key: column.key, count: 0, data: [] })),
+      });
+    }
+    return rebuildLaneProjection(templates, laneTemplates, flattenLaneCards(lanes), ctx);
+  }
+
+  if (action === 'updated') {
+    if (label.name === undefined) return { columns, lanes };
+    templates = templates.map((column) =>
+      column.key === label.id ? { ...column, label: label.name! } : column,
+    );
+    laneTemplates = laneTemplates.map((lane) =>
+      lane.key === label.id ? { ...lane, label: label.name! } : lane,
+    );
+    const placements = flattenLaneCards(lanes).map((placement) => ({
+      ...placement,
+      card: patchCardLabel(placement.card, label, false),
+    }));
+    return rebuildLaneProjection(templates, laneTemplates, placements, ctx);
+  }
+
+  if (action !== 'deleted') return { columns, lanes };
+  if (groupUsesLabels) templates = templates.filter((column) => column.key !== label.id);
+  if (laneUsesLabels) laneTemplates = laneTemplates.filter((lane) => lane.key !== label.id);
+
+  const byIssue = new Map<
+    string,
+    { card: BoardCard; groupKeys: Set<string>; subGroupKeys: Set<string> }
+  >();
+  for (const placement of flattenLaneCards(lanes)) {
+    const current = byIssue.get(placement.card.id) ?? {
+      card: patchCardLabel(placement.card, label, true),
+      groupKeys: new Set<string>(),
+      subGroupKeys: new Set<string>(),
+    };
+    current.groupKeys.add(placement.groupKey);
+    current.subGroupKeys.add(placement.subGroupKey);
+    byIssue.set(placement.card.id, current);
+  }
+  const placements = [...byIssue.values()].flatMap((current) => {
+    if (groupUsesLabels) current.groupKeys.delete(label.id);
+    if (laneUsesLabels) current.subGroupKeys.delete(label.id);
+    if (current.groupKeys.size === 0) current.groupKeys.add(NONE_KEY);
+    if (current.subGroupKeys.size === 0) current.subGroupKeys.add(NONE_KEY);
+    return cartesianPlacements(current.card, [...current.groupKeys], [...current.subGroupKeys]);
+  });
+  return rebuildLaneProjection(templates, laneTemplates, placements, ctx);
+}
+
+/** custom field/option 定义帧局部维护二维 skeleton，不请求整板投影。 */
+export function applyCustomFieldDefinitionToLanes(
+  columns: readonly BoardProjectionColumn[],
+  lanes: readonly BoardLane[],
+  frame: RealtimeEventFrame,
+  ctx: BoardLaneMergeContext,
+): Pick<BoardLaneMergeResult, 'columns' | 'lanes'> {
+  const groupMutation = customFieldSkeletonMutation(frame, ctx.groupBy);
+  const laneMutation = customFieldSkeletonMutation(frame, ctx.subGroupBy);
+  if (groupMutation === null && laneMutation === null) return { columns, lanes };
+  if (groupMutation?.removeAxis === true && laneMutation?.removeAxis === true) {
+    return { columns: [], lanes: [] };
+  }
+  if (groupMutation?.removeAxis === true) {
+    return {
+      columns: [],
+      lanes: lanes.map((lane) => ({ ...lane, count: 0, groups: [] })),
+    };
+  }
+  if (laneMutation?.removeAxis === true) {
+    return {
+      columns: columns.map((column) => ({ ...column, count: 0 })),
+      lanes: [],
+    };
+  }
+  let templates = columns.map((column) =>
+    column.key === NONE_KEY && groupMutation?.noneLabel !== undefined
+      ? { ...column, label: groupMutation.noneLabel }
+      : column,
+  );
+  let laneTemplates = lanes.map((lane) =>
+    lane.key === NONE_KEY && laneMutation?.noneLabel !== undefined
+      ? { ...lane, label: laneMutation.noneLabel }
+      : lane,
+  );
+
+  const applyColumnMutation = (mutation: AxisSkeletonMutation | null): void => {
+    if (mutation?.key === undefined) return;
+    if (mutation.remove === true) {
+      templates = templates.filter((column) => column.key !== mutation.key);
+    } else if (mutation.label !== undefined) {
+      if (templates.some((column) => column.key === mutation.key)) {
+        templates = templates.map((column) =>
+          column.key === mutation.key ? { ...column, label: mutation.label! } : column,
+        );
+      } else {
+        templates = insertBeforeNone(templates, {
+          key: mutation.key,
+          label: mutation.label,
+          count: 0,
+          wip: null,
+        });
+      }
+    }
+  };
+  const applyLaneMutation = (mutation: AxisSkeletonMutation | null): void => {
+    if (mutation?.key === undefined) return;
+    if (mutation.remove === true) {
+      laneTemplates = laneTemplates.filter((lane) => lane.key !== mutation.key);
+    } else if (mutation.label !== undefined) {
+      if (laneTemplates.some((lane) => lane.key === mutation.key)) {
+        laneTemplates = laneTemplates.map((lane) =>
+          lane.key === mutation.key ? { ...lane, label: mutation.label! } : lane,
+        );
+      } else {
+        laneTemplates = insertBeforeNone(laneTemplates, {
+          key: mutation.key,
+          label: mutation.label,
+          count: 0,
+          groups: templates.map((column) => ({ key: column.key, count: 0, data: [] })),
+        });
+      }
+    }
+  };
+  applyColumnMutation(groupMutation);
+  applyLaneMutation(laneMutation);
+
+  const removedGroupKey = groupMutation?.remove === true ? groupMutation.key : undefined;
+  const removedLaneKey = laneMutation?.remove === true ? laneMutation.key : undefined;
+  if (removedGroupKey === undefined && removedLaneKey === undefined) {
+    return rebuildLaneProjection(templates, laneTemplates, flattenLaneCards(lanes), ctx);
+  }
+  const byIssue = new Map<
+    string,
+    { card: BoardCard; groupKeys: Set<string>; subGroupKeys: Set<string> }
+  >();
+  for (const placement of flattenLaneCards(lanes)) {
+    const current = byIssue.get(placement.card.id) ?? {
+      card: placement.card,
+      groupKeys: new Set<string>(),
+      subGroupKeys: new Set<string>(),
+    };
+    current.groupKeys.add(placement.groupKey);
+    current.subGroupKeys.add(placement.subGroupKey);
+    byIssue.set(placement.card.id, current);
+  }
+  const placements = [...byIssue.values()].flatMap((current) => {
+    if (removedGroupKey !== undefined) current.groupKeys.delete(removedGroupKey);
+    if (removedLaneKey !== undefined) current.subGroupKeys.delete(removedLaneKey);
+    if (current.groupKeys.size === 0) current.groupKeys.add(NONE_KEY);
+    if (current.subGroupKeys.size === 0) current.subGroupKeys.add(NONE_KEY);
+    return cartesianPlacements(current.card, [...current.groupKeys], [...current.subGroupKeys]);
+  });
+  return rebuildLaneProjection(templates, laneTemplates, placements, ctx);
+}
+
 /**
  * 把一帧并入二维泳道投影。issue.* 仅改动目标卡及其 cell；三层 count 由
  * 当前整体游标数据同步重算。view.updated 才请求投影重拉，presence/WIP 等视图帧不动。
@@ -408,6 +943,7 @@ export function applyBoardLaneFrame(
   const payload = payloadOf(frame);
   const action = actionOf(frame.event);
   const placements = flattenLaneCards(lanes);
+  const customFields = ctx.customFields ?? [];
 
   if (action === 'created') {
     const nested = payload.issue;
@@ -425,21 +961,21 @@ export function applyBoardLaneFrame(
       lanes,
       [
         ...placements,
-        {
-          card: created,
-          groupKey: groupKeyForCard(created, ctx.groupBy),
-          subGroupKey: groupKeyForCard(created, ctx.subGroupBy),
-        },
+        ...cartesianPlacements(
+          created,
+          groupKeysForCard(created, ctx.groupBy, customFields),
+          groupKeysForCard(created, ctx.subGroupBy, customFields),
+        ),
       ],
       ctx,
     );
     return { ...rebuilt, refetch: false };
   }
 
-  const id = typeof payload.id === 'string' ? payload.id : undefined;
+  const id = issueIdFromPayload(payload, action);
   if (id === undefined) return unchangedLaneResult(columns, lanes);
-  const placementIndex = placements.findIndex((placement) => placement.card.id === id);
-  if (placementIndex === -1) {
+  const issuePlacements = placements.filter((placement) => placement.card.id === id);
+  if (issuePlacements.length === 0) {
     return unchangedLaneResult(columns, lanes, false, needsIssueReconcile(action) ? id : undefined);
   }
 
@@ -452,32 +988,52 @@ export function applyBoardLaneFrame(
     );
     return { ...rebuilt, refetch: false };
   }
-  if (action !== 'updated' && action !== 'moved' && action !== 'project_changed') {
+  if (
+    action !== 'updated' &&
+    action !== 'moved' &&
+    action !== 'project_changed' &&
+    action !== 'labels_changed' &&
+    action !== 'custom_field_changed'
+  ) {
     return unchangedLaneResult(columns, lanes);
   }
 
-  const existing = placements[placementIndex]!;
+  const existing = issuePlacements[0]!;
   if (isStale(existing.card, payload)) {
     return unchangedLaneResult(columns, lanes);
   }
-  let merged = mergedCard(existing.card, payload);
+  let merged = mergeBoardCardForRealtime(existing.card, frame);
   if (action === 'project_changed') merged = applyProjectChangedPayload(merged, payload);
 
-  let groupKey = groupKeyForCard(merged, ctx.groupBy);
-  let subGroupKey = groupKeyForCard(merged, ctx.subGroupBy);
+  const groupAssociationChanged =
+    (action === 'labels_changed' && ctx.groupBy === 'label') ||
+    (action === 'custom_field_changed' && payload.field_def_id === ctx.groupBy);
+  const subGroupAssociationChanged =
+    (action === 'labels_changed' && ctx.subGroupBy === 'label') ||
+    (action === 'custom_field_changed' && payload.field_def_id === ctx.subGroupBy);
+  let groupKeys =
+    isDynamicAxis(ctx.groupBy) && !groupAssociationChanged
+      ? uniquePlacementKeys(issuePlacements, 'groupKey')
+      : [...groupKeysForCard(merged, ctx.groupBy, customFields)];
+  let subGroupKeys =
+    isDynamicAxis(ctx.subGroupBy) && !subGroupAssociationChanged
+      ? uniquePlacementKeys(issuePlacements, 'subGroupKey')
+      : [...groupKeysForCard(merged, ctx.subGroupBy, customFields)];
   if (action === 'moved') {
     const target =
       typeof payload.to === 'object' && payload.to !== null
         ? (payload.to as Record<string, unknown>)
         : {};
-    groupKey =
+    const groupKey =
       (typeof target.group_key === 'string' ? target.group_key : undefined) ??
       movedAxisTarget(payload, ctx.groupBy) ??
-      groupKey;
-    subGroupKey =
+      groupKeys[0]!;
+    const subGroupKey =
       (typeof payload.to_sub_group === 'string' ? payload.to_sub_group : undefined) ??
       movedAxisTarget(payload, ctx.subGroupBy) ??
-      subGroupKey;
+      subGroupKeys[0]!;
+    groupKeys = [groupKey];
+    subGroupKeys = [subGroupKey];
     merged = patchCardAxis(merged, ctx.groupBy, groupKey);
     merged = patchCardAxis(merged, ctx.subGroupBy, subGroupKey);
     if (typeof payload.position === 'number') merged = { ...merged, position: payload.position };
@@ -488,8 +1044,10 @@ export function applyBoardLaneFrame(
     const rebuilt = rebuildLaneProjection(columns, lanes, remaining, ctx);
     return { ...rebuilt, refetch: false };
   }
-  const nextPlacements = [...placements];
-  nextPlacements[placementIndex] = { card: merged, groupKey, subGroupKey };
+  const nextPlacements = [
+    ...placements.filter((placement) => placement.card.id !== id),
+    ...cartesianPlacements(merged, groupKeys, subGroupKeys),
+  ];
   const rebuilt = rebuildLaneProjection(columns, lanes, nextPlacements, ctx);
   return { ...rebuilt, refetch: false };
 }
@@ -521,6 +1079,9 @@ function fieldValue(card: BoardCard, field: string): unknown {
       return card.assignee_id;
     case 'project_id':
       return card.project_id;
+    case 'label':
+    case 'label_id':
+      return (card.labels ?? []).map((label) => label.id);
     default:
       return undefined; // 不支持本地评估的字段
   }
@@ -539,10 +1100,21 @@ function evaluateCondition(card: BoardCard, condition: unknown): boolean | null 
   if (cond.operator !== undefined) return null; // 嵌套 → 保守(上层处理)
   if (cond.field_kind !== undefined) return null; // 自定义字段 → 保守
   const field = typeof cond.field === 'string' ? cond.field : null;
-  if (field === null || field === 'label' || field === 'q') return null;
+  if (field === null || field === 'q') return null;
   const actual = fieldValue(card, field);
   if (actual === undefined) return null;
   const op = cond.op;
+  if (Array.isArray(actual)) {
+    if (op === 'eq') return actual.includes(cond.value);
+    if (op === 'neq') return !actual.includes(cond.value);
+    if (op === 'in') {
+      return Array.isArray(cond.value) && cond.value.some((value) => actual.includes(value));
+    }
+    if (op === 'not_in') {
+      return Array.isArray(cond.value) && !cond.value.some((value) => actual.includes(value));
+    }
+    return null;
+  }
   if (op === 'eq') return actual === cond.value;
   if (op === 'neq') return actual !== cond.value;
   if (op === 'in') return Array.isArray(cond.value) && cond.value.includes(actual);

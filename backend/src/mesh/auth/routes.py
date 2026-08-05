@@ -47,6 +47,7 @@ from mesh.auth.schemas import (
 )
 from mesh.auth.security import REFRESH_TOKEN_PREFIX
 from mesh.auth.service import (
+    UNSET,
     AuthService,
     MfaRequiredResult,
     RefreshWinner,
@@ -514,7 +515,7 @@ async def update_me(
     service: AuthService = get_auth_service(request)
     patch = UserUpdate(
         display_name=body.display_name,
-        avatar_url=body.avatar_url,
+        avatar_url=body.avatar_url if "avatar_url" in body.model_fields_set else UNSET,
         timezone=body.timezone,
         settings=body.settings.model_dump(exclude_unset=True) if body.settings else None,
     )

@@ -54,6 +54,7 @@ export async function listIssues(
   client: MeshApiClient,
   workspaceId: string,
   params: ListIssuesParams = {},
+  signal?: AbortSignal,
 ): Promise<Page<IssueSummary>> {
   const envelope = await client.list<IssueSummary>(workspaceIssuesPath(workspaceId), {
     query: {
@@ -72,6 +73,7 @@ export async function listIssues(
       limit: params.limit,
       cursor: params.cursor,
     },
+    ...(signal === undefined ? {} : { signal }),
   });
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
@@ -236,9 +238,8 @@ export async function listStatuses(
   workspaceId: string,
   projectId?: string,
 ): Promise<readonly IssueStatusRef[]> {
-  const envelope = await client.list<IssueStatusRef>(
-    `/api/v1/workspaces/${workspaceId}/statuses`,
-    { query: { project_id: projectId } },
-  );
+  const envelope = await client.list<IssueStatusRef>(`/api/v1/workspaces/${workspaceId}/statuses`, {
+    query: { project_id: projectId },
+  });
   return envelope.data;
 }

@@ -15,7 +15,16 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
+from mesh.db.models.issue import Issue
+from mesh.db.models.label import (
+    CustomFieldDef,
+    CustomFieldOption,
+    IssueCustomFieldValue,
+    IssueLabel,
+    Label,
+)
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.user import User
@@ -122,6 +131,63 @@ async def _outbox_events(session_factory, event_name):
             .all()
         )
     return [row for row in rows if row.get("event") == event_name]
+
+
+async def _multi_value_fixture(session_factory, workspace):
+    async with session_factory() as session, session.begin():
+        label = Label(
+            workspace_id=workspace.id,
+            name=f"Label {uuid.uuid4().hex[:6]}",
+            color="#336699",
+        )
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name=f"Areas {uuid.uuid4().hex[:6]}",
+            field_key=f"areas_{uuid.uuid4().hex[:8]}",
+            type="multi_select",
+            config={},
+        )
+        session.add_all([label, definition])
+        await session.flush()
+        option = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Payments",
+            color="#8844cc",
+        )
+        session.add(option)
+        await session.flush()
+        return label, definition, option
+
+
+async def _single_select_fixture(session_factory, workspace):
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name=f"Severity {uuid.uuid4().hex[:6]}",
+            field_key=f"severity_{uuid.uuid4().hex[:8]}",
+            type="single_select",
+            config={},
+        )
+        session.add(definition)
+        await session.flush()
+        minor = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Minor",
+            color="#669944",
+            position=1,
+        )
+        major = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Major",
+            color="#cc5533",
+            position=2,
+        )
+        session.add_all([minor, major])
+        await session.flush()
+        return definition, minor, major
 
 
 # ---------------------------------------------------------------------------
@@ -1041,17 +1107,14 @@ async def test_move_missing_view_not_found(session_factory) -> None:
         )
 
 
-async def test_move_label_group_by_gated(session_factory) -> None:
+async def test_label_axis_move_and_reorder_are_read_only(session_factory) -> None:
     workspace, member, issue_service, view_service, board = await _setup(session_factory)
     status_map = await _status_map(session_factory, workspace)
     issue = await _mk_issue(
         issue_service, actor=member, workspace=workspace, category="todo", status_map=status_map
     )
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="label")
-    from mesh.errors import ValidationError
-    from mesh.views.projection import PROJECTION_FIELD_PENDING
-
-    with pytest.raises(ValidationError) as exc:
+    with pytest.raises(BusinessRuleError) as exc:
         await board.move(
             actor=member,
             workspace_id=workspace.id,
@@ -1060,7 +1123,573 @@ async def test_move_label_group_by_gated(session_factory) -> None:
             to_group_key="lbl_x",
             position=1.0,
         )
-    assert exc.value.code == PROJECTION_FIELD_PENDING
+    assert exc.value.code == "multi_value_axis_move_unsupported"
+
+    with pytest.raises(BusinessRuleError) as reorder_exc:
+        await board.reorder(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key="lbl_x",
+            position=1.0,
+        )
+    assert reorder_exc.value.code == "multi_value_axis_move_unsupported"
+
+
+async def test_multi_value_axes_quick_create_writes_both_associations_atomically(
+    session_factory,
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    label, definition, option = await _multi_value_fixture(session_factory, workspace)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="label",
+        sub_group_by=str(definition.id),
+    )
+
+    created = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        title="Created in two dynamic axes",
+        group_key=str(label.id),
+        sub_group_key=str(option.id),
+    )
+
+    assert created["labels"] == [{"id": str(label.id), "name": label.name, "color": label.color}]
+    assert created["custom_field_values"] == [
+        {
+            "field_def_id": str(definition.id),
+            "value_text": None,
+            "value_number": None,
+            "value_date": None,
+            "value_member_id": None,
+            "value_boolean": None,
+            "value_json": [str(option.id)],
+        }
+    ]
+    async with session_factory() as session:
+        label_row = await session.scalar(
+            select(IssueLabel).where(IssueLabel.issue_id == uuid.UUID(created["id"]))
+        )
+        field_row = await session.scalar(
+            select(IssueCustomFieldValue).where(IssueCustomFieldValue.issue_id == uuid.UUID(created["id"]))
+        )
+    assert label_row is not None and label_row.label_id == label.id
+    assert field_row is not None and field_row.value_json == [str(option.id)]
+    created_events = await _outbox_events(session_factory, "issue.created")
+    snapshots = [
+        frame["data"]["issue"] for frame in created_events if frame["data"]["issue"]["id"] == created["id"]
+    ]
+    assert snapshots
+    assert all(snapshot["labels"] == created["labels"] for snapshot in snapshots)
+    assert all(snapshot["custom_field_values"] == created["custom_field_values"] for snapshot in snapshots)
+
+
+async def test_multi_value_axes_quick_create_none_keeps_empty_sets(session_factory) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    _label, definition, _option = await _multi_value_fixture(session_factory, workspace)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="label",
+        sub_group_by=str(definition.id),
+    )
+
+    created = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        title="Empty dynamic values",
+        group_key="__none__",
+        sub_group_key="__none__",
+    )
+
+    assert created["labels"] == []
+    assert created["custom_field_values"] == []
+
+
+async def test_multi_select_quick_create_rejects_inactive_option_before_writes(
+    session_factory,
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    _label, definition, option = await _multi_value_fixture(session_factory, workspace)
+    async with session_factory() as session, session.begin():
+        stored = await session.get(CustomFieldOption, option.id)
+        assert stored is not None
+        stored.is_active = False
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+
+    with pytest.raises(BusinessRuleError) as exc:
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Must not be created",
+            group_key=str(option.id),
+        )
+    assert exc.value.code == "invalid_field_value"
+    async with session_factory() as session:
+        issue_count = await session.scalar(
+            select(func.count()).select_from(Issue).where(Issue.workspace_id == workspace.id)
+        )
+        stored_workspace = await session.get(Workspace, workspace.id)
+    assert issue_count == 0
+    assert stored_workspace is not None and stored_workspace.inbox_issue_seq == 0
+    assert await _outbox_events(session_factory, "issue.created") == []
+
+
+async def test_single_select_primary_axis_move_writes_eav_position_and_realtime(
+    session_factory,
+) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    definition, _minor, major = await _single_select_fixture(session_factory, workspace)
+    issue = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+
+    moved = await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        issue_id=uuid.UUID(issue["id"]),
+        to_group_key=str(major.id),
+        position=7.5,
+        version=issue["version"],
+    )
+
+    async with session_factory() as session:
+        stored_issue = await session.get(Issue, uuid.UUID(issue["id"]))
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    position = await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(issue["id"]))
+    assert moved["version"] == issue["version"] + 1
+    assert stored_issue is not None and stored_issue.version == moved["version"]
+    assert stored_issue.updated_at == FIXED_NOW
+    assert value is not None and value.value_json == str(major.id)
+    assert position is not None
+    assert (position.group_key, position.sub_group_key, float(position.position)) == (
+        str(major.id),
+        "",
+        7.5,
+    )
+    events = await _outbox_events(session_factory, "issue.custom_field_changed")
+    assert any(
+        event["data"]["field_def_id"] == str(definition.id)
+        and event["data"]["value"]["value_json"] == str(major.id)
+        for event in events
+    )
+
+
+async def test_single_select_swimlane_move_writes_secondary_axis(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    definition, minor, _major = await _single_select_fixture(session_factory, workspace)
+    issue = await _mk_issue(issue_service, actor=member, workspace=workspace, priority="high")
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="priority",
+        sub_group_by=str(definition.id),
+    )
+
+    await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        issue_id=uuid.UUID(issue["id"]),
+        to_group_key="high",
+        to_sub_group_key=str(minor.id),
+        position=3.0,
+        version=issue["version"],
+    )
+
+    async with session_factory() as session:
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    position = await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(issue["id"]))
+    assert value is not None and value.value_json == str(minor.id)
+    assert position is not None
+    assert (position.group_key, position.sub_group_key) == ("high", str(minor.id))
+
+
+async def test_single_select_move_to_none_clears_eav_row(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    definition, minor, _major = await _single_select_fixture(session_factory, workspace)
+    issue = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        session.add(
+            IssueCustomFieldValue(
+                workspace_id=workspace.id,
+                issue_id=uuid.UUID(issue["id"]),
+                field_def_id=definition.id,
+                value_json=str(minor.id),
+            )
+        )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+
+    moved = await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        issue_id=uuid.UUID(issue["id"]),
+        to_group_key="__none__",
+        position=2.0,
+        version=issue["version"],
+    )
+
+    async with session_factory() as session:
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    assert value is None
+    assert moved["version"] == issue["version"] + 1
+    events = await _outbox_events(session_factory, "issue.custom_field_changed")
+    assert any(
+        event["data"]["field_def_id"] == str(definition.id) and event["data"]["value"] is None
+        for event in events
+    )
+
+
+async def test_single_select_quick_create_supports_primary_secondary_and_none(
+    session_factory,
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    definition, minor, major = await _single_select_fixture(session_factory, workspace)
+    primary_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+    primary = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(primary_view["id"]),
+        title="Primary scalar custom",
+        group_key=str(major.id),
+    )
+    secondary_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="priority",
+        sub_group_by=str(definition.id),
+    )
+    secondary = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(secondary_view["id"]),
+        title="Secondary scalar custom",
+        group_key="low",
+        sub_group_key=str(minor.id),
+    )
+    empty = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(primary_view["id"]),
+        title="Empty scalar custom",
+        group_key="__none__",
+    )
+
+    assert primary["custom_field_values"][0]["value_json"] == str(major.id)
+    assert secondary["custom_field_values"][0]["value_json"] == str(minor.id)
+    assert empty["custom_field_values"] == []
+    primary_position = await _position_row(
+        session_factory, uuid.UUID(primary_view["id"]), uuid.UUID(primary["id"])
+    )
+    secondary_position = await _position_row(
+        session_factory, uuid.UUID(secondary_view["id"]), uuid.UUID(secondary["id"])
+    )
+    empty_position = await _position_row(
+        session_factory, uuid.UUID(primary_view["id"]), uuid.UUID(empty["id"])
+    )
+    assert primary_position is not None and primary_position.group_key == str(major.id)
+    assert secondary_position is not None
+    assert (secondary_position.group_key, secondary_position.sub_group_key) == (
+        "low",
+        str(minor.id),
+    )
+    assert empty_position is not None and empty_position.group_key == "__none__"
+
+
+async def test_single_select_move_filter_mismatch_rolls_back_eav_and_position(
+    session_factory,
+) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    definition, minor, major = await _single_select_fixture(session_factory, workspace)
+    issue = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        session.add(
+            IssueCustomFieldValue(
+                workspace_id=workspace.id,
+                issue_id=uuid.UUID(issue["id"]),
+                field_def_id=definition.id,
+                value_json=str(minor.id),
+            )
+        )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+        filters={
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": str(definition.id),
+                    "op": "eq",
+                    "value": str(minor.id),
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(BusinessRuleError) as exc:
+        await board.move(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key=str(major.id),
+            position=9.0,
+            version=issue["version"],
+        )
+    assert exc.value.code == "incompatible_projection_cell"
+    async with session_factory() as session:
+        stored_issue = await session.get(Issue, uuid.UUID(issue["id"]))
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    assert stored_issue is not None and stored_issue.version == issue["version"]
+    assert value is not None and value.value_json == str(minor.id)
+    assert await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(issue["id"])) is None
+
+
+async def test_single_select_inactive_option_is_rejected_without_writes(
+    session_factory,
+) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    definition, _minor, major = await _single_select_fixture(session_factory, workspace)
+    issue = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        stored = await session.get(CustomFieldOption, major.id)
+        assert stored is not None
+        stored.is_active = False
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+
+    with pytest.raises(BusinessRuleError) as exc:
+        await board.move(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key=str(major.id),
+            position=1.0,
+            version=issue["version"],
+        )
+    assert exc.value.code == "invalid_field_value"
+    async with session_factory() as session:
+        stored_issue = await session.get(Issue, uuid.UUID(issue["id"]))
+        value_count = await session.scalar(
+            select(func.count())
+            .select_from(IssueCustomFieldValue)
+            .where(IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]))
+        )
+    assert stored_issue is not None and stored_issue.version == issue["version"]
+    assert value_count == 0
+    assert await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(issue["id"])) is None
+
+
+@pytest.mark.parametrize(
+    ("field_type", "group_key", "value_column", "expected"),
+    [
+        ("text", "none", "value_text", "none"),
+        ("textarea", "Longer board value", "value_text", "Longer board value"),
+        ("url", "https://mesh.example/board", "value_text", "https://mesh.example/board"),
+        ("number", "12.5", "value_number", 12.5),
+        ("date", "2026-08-05T00:00:00Z", "value_date", "2026-08-05"),
+        ("datetime", "2026-08-05T12:34:56Z", "value_date", "2026-08-05T12:34:56Z"),
+        ("boolean", "true", "value_boolean", True),
+        ("member", "__actor__", "value_member_id", "__actor__"),
+    ],
+)
+async def test_scalar_custom_quick_create_uses_typed_eav_column(
+    session_factory,
+    field_type,
+    group_key,
+    value_column,
+    expected,
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    actual_key = str(member.id) if group_key == "__actor__" else group_key
+    actual_expected = str(member.id) if expected == "__actor__" else expected
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name=f"{field_type} {uuid.uuid4().hex[:6]}",
+            field_key=f"scalar_{uuid.uuid4().hex[:8]}",
+            type=field_type,
+            config={},
+        )
+        session.add(definition)
+        await session.flush()
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+
+    created = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        title=f"Typed {field_type}",
+        group_key=actual_key,
+    )
+
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(created["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    assert row is not None
+    stored = getattr(row, value_column)
+    if field_type == "number":
+        assert float(stored) == actual_expected
+    elif field_type == "date":
+        assert stored.date().isoformat() == actual_expected
+    elif field_type == "datetime":
+        assert stored.isoformat().replace("+00:00", "Z") == actual_expected
+    elif field_type == "member":
+        assert str(stored) == actual_expected
+    else:
+        assert stored == actual_expected
+    position = await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(created["id"]))
+    assert position is not None and position.group_key == actual_key
+
+
+@pytest.mark.parametrize(
+    ("field_type", "group_key"),
+    [
+        ("boolean", "yes"),
+        ("date", "notTdate"),
+        ("member", "00000000-0000-0000-0000-000000000001"),
+    ],
+)
+async def test_scalar_custom_quick_create_rejects_invalid_typed_key(
+    session_factory, field_type, group_key
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name=f"Invalid {field_type}",
+            field_key=f"invalid_{uuid.uuid4().hex[:8]}",
+            type=field_type,
+            config={},
+        )
+        session.add(definition)
+        await session.flush()
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+
+    with pytest.raises(BusinessRuleError):
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Invalid scalar value",
+            group_key=group_key,
+        )
+
+
+async def test_label_quick_create_constraint_failure_rolls_back_entire_transaction(
+    session_factory, monkeypatch
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    label, _definition, _option = await _multi_value_fixture(session_factory, workspace)
+    view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="label")
+    real_write = board._write_multi_value_targets
+
+    async def fail_after_valid_association(session, **kwargs):
+        await real_write(session, **kwargs)
+        issue = kwargs["issue"]
+        session.add(
+            IssueLabel(
+                workspace_id=workspace.id,
+                issue_id=issue.id,
+                label_id=uuid.uuid4(),
+            )
+        )
+        await session.flush()
+
+    monkeypatch.setattr(board, "_write_multi_value_targets", fail_after_valid_association)
+    with pytest.raises(IntegrityError):
+        await board.quick_create(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            title="Everything rolls back",
+            group_key=str(label.id),
+        )
+
+    async with session_factory() as session:
+        issue_count = await session.scalar(
+            select(func.count()).select_from(Issue).where(Issue.workspace_id == workspace.id)
+        )
+        label_count = await session.scalar(
+            select(func.count()).select_from(IssueLabel).where(IssueLabel.workspace_id == workspace.id)
+        )
+        stored_workspace = await session.get(Workspace, workspace.id)
+    assert (issue_count, label_count) == (0, 0)
+    assert stored_workspace is not None and stored_workspace.inbox_issue_seq == 0
+    assert await _outbox_events(session_factory, "issue.created") == []
 
 
 async def test_move_group_by_status(session_factory) -> None:

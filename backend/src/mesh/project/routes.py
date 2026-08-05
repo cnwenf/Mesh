@@ -146,6 +146,20 @@ async def create_project(
     return {"data": created}
 
 
+@router.get("/workspaces/{workspace_id}/projects/key-availability")
+async def project_key_availability(
+    request: Request,
+    key: str = Query(...),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    available = await _project_service(request).project_key_available(
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        key=key,
+    )
+    return {"data": {"key": key, "available": available}}
+
+
 @router.get("/workspaces/{workspace_id}/projects")
 async def list_projects(
     request: Request,

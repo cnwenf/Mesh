@@ -369,7 +369,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/workspaces/{ws}/labels` | 列出标签(可按 `project_id` 过滤;含工作区级) |
+| GET | `/workspaces/{ws}/labels` | 列出标签(可按 `project_id` 过滤;含工作区级);每项含当前调用者可见、未删除 issue 的 `issue_count`，供使用次数与合并预览使用 |
 | POST | `/workspaces/{ws}/labels` | 创建标签 |
 | PATCH | `/labels/{id}` | 编辑名称/颜色/描述 |
 | DELETE | `/labels/{id}` | 删除标签(级联清 `issue_labels`) |
@@ -404,6 +404,13 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 // 200:{ "data": { "merged_issue_count": 12, "target_label": { "id": "lbl_bug", "name": "bug" } } }
 // 源标签 lbl_defect 删除,其 issue 改挂 lbl_bug(去重)
 ```
+
+合并确认框的影响数读取源标签在 `GET /workspaces/{ws}/labels` 中的
+`issue_count`，不得通过卡片当前页、客户端缓存或标签名称推算。该计数与调用者的
+issue 可见范围一致，只统计未删除 issue；具备合并权限的调用者执行后，响应中的
+`merged_issue_count` 是事务实际迁移的源标签载体数。合并完成后客户端消费
+`issue.labels_changed` / `label.deleted` 实时事件并刷新标签定义，不能保留已删除源
+标签的色点。
 
 **创建枚举字段** `POST /api/v1/workspaces/{ws}/custom-fields`
 ```jsonc

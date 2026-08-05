@@ -136,9 +136,11 @@ Textarea、Button、DataTable 与 Tabs 的 Appica 渲染契约由组件测试中
 游标、错误与加载态响应均由请求代次守卫丢弃，旧工作区 Realtime 帧和项目级
 对话框目标也不得进入新工作区。看板桌面拖拽、键盘移动、触控移动和取消回滚
 仍走同一原子 move 数据流。
-当前 Spec 仅声明 `sub_group_by` 配置字段，未定义二维泳道投影返回体、
-跨泳道 move 参数/实时事件、位置作用域与 WIP 口径。因此本基线只覆盖
-已定义的单维看板，不把未定义的泳道行为计为已完成。
+二维泳道现已以 `columns/lanes/groups` 返回体落地。主轴与副轴均可使用
+status、priority、assignee、project、label 或自定义字段；两条多值轴按笛卡尔积投影。
+单值轴移动走原子 move，label/`multi_select` 轴保持只读，但单元格 quick-create 会在
+同一事务写入目标关联。`issue.labels_changed` / `issue.custom_field_changed` 只按新旧
+placement 集合差增删卡片实例，缺失卡最多单卡对账，不以整板刷新代替增量协议。
 
 MES-185 进一步冻结公开流程 `384px`、设置 `224px + 704px`、看板 `280px`
 列与普通信息卡的运行态尺寸。账号资料通过既有 `/users/me` 读写昵称和 HTTPS
@@ -146,6 +148,18 @@ MES-185 进一步冻结公开流程 `384px`、设置 `224px + 704px`、看板 `2
 API 并独立呈现 loading/empty/error/ready。相对时间组件每 30 秒刷新并在提示中
 同时保留用户时区绝对时间与 UTC 原值。完整测量和验证边界见
 `../docs/audits/mes185-interface-alignment-audit.md`。
+
+MES-187 补齐上述业务深度：动态 label/自定义字段列、二维多轴投影和原子创建已接通；
+项目 key 在创建前经永久前缀注册表实时检查，创建端点仍负责竞态下的最终 409；成员页
+提供真实详情抽屉，个人资料可通过显式 `avatar_url: null` 恢复默认头像。隔离的
+production-auth 真栈套件会启动真实 API、worker、PostgreSQL、Redis 与浏览器，在
+desktop/phone × light/dark 四组合操作代表页面；完整 desktop-light 旅程另校验动态列、
+标签合并实时收敛、严格状态/必填字段、Agent 分派、项目 key 永久保留和头像清空，并把
+截图写入 `e2e/evidence/mes187/`、把最终 PostgreSQL 断言作为 Playwright attachment 留证：
+
+```bash
+npm run test:e2e:mes187
+```
 
 真实 production 栈验证继续使用 `e2e/mes128-real/run-e2e.sh`。
 `MES128_FRONTEND_PORT` 是浏览器入口的单一端口输入，runner 会把同一值传给
@@ -171,6 +185,7 @@ node scripts/verify-coverage.mjs --base origin/main   # 新增/变更代码覆�
 npm run build           # 生产构建(gen:tokens + tsc -b + vite build)
 npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与生产构建预览)
 npm run test:e2e:mes130 # 一次性强凭据隔离真栈：二维斜向移动、cell 创建、亮暗/compact/离线截图；结束销毁数据卷
+npm run test:e2e:mes187 # production-auth 真栈：动态关联轴、成员抽屉、永久 key、头像清空与四组合证据
 ```
 
 mock 契约套件在每次运行时先生成一次生产构建,再由 `vite preview`

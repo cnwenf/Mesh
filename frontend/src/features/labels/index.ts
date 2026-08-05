@@ -4,6 +4,7 @@
 export { LabelsPanel } from './LabelsPanel';
 export { CustomFieldsPanel } from './CustomFieldsPanel';
 export { ColorPicker, isValidHexColor, PRESET_COLORS } from './ColorPicker';
+export { LabelDots } from './LabelDots';
 export { WorkspaceLabelsPage } from './pages/WorkspaceLabelsPage';
 export { WorkspaceCustomFieldsPage } from './pages/WorkspaceCustomFieldsPage';
 export { IssueLabelsEditor } from './IssueLabelsEditor';
@@ -18,3 +19,4 @@ export type {
   IssueLabelsPayload,
   MergeLabelResult,
 } from './associationTypes';
+export type { CompactLabel } from './types';

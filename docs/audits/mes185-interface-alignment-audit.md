@@ -1,7 +1,7 @@
-# MES-185 界面精确收口审计
+# MES-185 界面精确收口审计（含 MES-187 业务深度增量）
 
 > 日期：2026-08-05
-> 范围：Web 前端全部既有页面，重点复核公开流程、应用外壳、工作区首页、看板、账号设置与共享时间呈现。
+> 范围：Web 前端全部既有页面；MES-187 增量复核动态看板关联轴、issue 属性、标签、成员抽屉、项目 key 与账号头像清空。
 > 方法：授权运行态黑盒测量 + Mesh Spec 对账 + 单元/组件测试 + 生产构建浏览器 E2E + 固定视口视觉 diff。
 
 ## 1. 边界与独立性
@@ -32,45 +32,58 @@
 | 顶栏 | 用户菜单补齐个人设置、light/dark/system、system 实时解析值、快捷键帮助和退出 |
 | 时间 | 评论使用共享 `RelativeTime`，每 `30s` 自动刷新，tooltip 同时显示用户时区绝对时间和 UTC 原值 |
 | 工作区首页 | 最近项目、issue、收件箱、执行四张真实 API 卡；每张独立 loading/empty/error/ready，并提供规范深链 |
+| 看板关联轴(MES-187) | label / 自定义字段进入主副轴，双多值轴形成笛卡尔 placement；标量轴可 move，多值轴已有卡片只读但 quick-create 原子写关联；关联事件按 placement 集合差增量收敛 |
+| Issue / 标签(MES-187) | Agent 分派提示与同值 no-op、严格状态阻断、必填字段具名提示、409 服务端快照收敛、标签合并和紧凑色点 `+N` 已落地 |
+| 成员 / 项目 / 资料(MES-187) | human/Agent 名册运行态与真实详情抽屉、永久注册表 key 检查、删除披露、项目冲突收敛及 `avatar_url:null` 恢复默认头像已落地 |
 
 ## 4. 逐项检查表处置
 
-`competitor-parity-checklist.md` 在本分支入口共有 **142 条未勾选断言**。MES-185 对其逐项复核后：
+前端对齐核对表的审计全集仍为 **142 条断言**。MES-187 在 MES-185 基线的 retained 集合中关闭 10 条后，当前处置为：
 
-- **73 条通过**：66 条已由既有实现和浏览器证据满足，6 条由本轮实现闭合，另 1 条信息密度经黑盒测量与视觉矩阵复核闭合。
-- **37 条保留产品差异**：属于独立业务功能、服务端契约或跨模块交互，不是排版/布局/主题精修；本轮明确记录而不伪装成已实现。
+- **83 条通过**：MES-185 的 73 条基线，加上 MES-187 关闭的 10 条业务深度断言。
+- **27 条保留产品差异**：仍属于独立业务功能、服务端契约或跨模块交互，不把部分实现伪装成完整交付。
 - **32 条环境边界或可选增强**：依赖目标操作系统读屏、真实软键盘、多客户端/外部平台、专门性能环境，或 Spec 明确标为可选。
 
-检查表中的 `[x]` 在 MES-185 收口段表示“已逐项审计并完成处置”，实际是否已实现以条目原有状态和本审计分类为准。以下编号指 `origin/main` 入口文件行号，便于逐项反查。
+检查表中的 `[x]` 表示“已逐项审计并完成处置”，实际是否已实现以条目状态和本审计分类为准。以下编号指 MES-187 收口后的当前检查表行号，便于逐项反查；本次仅替换条目文本，没有在对应区段前插入行。
 
-### 4.1 已验证通过（73）
+### 4.1 已验证通过（83）
 
-`L84, L85, L97, L98, L100, L111, L113, L136, L161–L164, L166, L189, L198, L206, L208, L214, L234–L235, L268, L277–L279, L293, L300, L313, L315–L318, L327, L345, L347, L349, L351, L353, L381, L387, L400, L402, L404, L414–L415, L421–L422, L428, L432, L449, L460–L465, L477–L479, L481, L493, L495, L508, L520–L522, L524, L534, L546–L547, L575–L578`。
+`L90, L91, L103, L104, L106, L117, L119, L142, L167–L170, L172, L195, L204, L212, L214, L220, L240–L241, L274, L283–L285, L299, L306, L316–L317, L319, L321–L324, L333, L336, L350–L351, L353–L355, L357, L359, L366, L379, L387–L388, L391–L393, L406, L408, L410, L420–L421, L427–L428, L434, L438, L455, L466–L471, L483–L485, L487, L499, L501, L514, L526–L528, L530, L540, L552–L553, L581–L584`。
 
-其中本轮直接闭合 `L136`（跨时区 tooltip）、`L234`（相对时间自动刷新）、`L277–L278`（顶栏用户菜单）、`L293`（工作区首页密度）和 `L316`（个人资料）。`L316` 中旧文案提到的 `bio` 与 canonical `users` 模型冲突，按 `member.md` 修正为昵称、头像与时区，不新增字段。
+MES-185 直接闭合 `L142`（跨时区 tooltip）、`L240`（相对时间自动刷新）、`L283–L284`（顶栏用户菜单）、`L299`（工作区首页密度）和 `L322`（个人资料）。`L322` 中旧文案提到的 `bio` 与 canonical `users` 模型冲突，按 `member.md` 修正为昵称、头像与时区，不新增字段；MES-187 进一步验证显式 `avatar_url:null` 清空。
 
-### 4.2 保留产品差异（37）
+MES-187 从 retained 集合移入通过的恰为 `L316, L317, L336, L350, L354, L366, L379, L388, L391, L392`。`L355` 原已计入 MES-185 的 73 条，本次只把检查表状态和 409 收敛证据修正为真实现状，不重复计数。
+
+| MES-187 能力 | 真实实现与测试证据 |
+| --- | --- |
+| 动态 label/自定义字段轴、二维笛卡尔投影 | `backend/src/mesh/views/config.py`、`backend/src/mesh/views/projection.py`；`backend/tests/unit/test_view_projection_service.py::test_execute_view_group_by_label_projects_each_value_and_empty_group`、`backend/tests/unit/test_view_projection_service.py::test_custom_axis_and_sort_enforce_view_project_scope`、`backend/tests/unit/test_view_projection_service.py::test_execute_view_two_multi_value_axes_form_cartesian_cells` |
+| 标量 move、多值轴只读与原子 quick-create | `backend/src/mesh/views/moves.py`；`backend/tests/unit/test_view_moves.py::test_move_group_by_status`、`::test_single_select_primary_axis_move_writes_eav_position_and_realtime`、`::test_label_axis_move_and_reorder_are_read_only`、`::test_multi_value_axes_quick_create_writes_both_associations_atomically` |
+| placement 集合差实时收敛与动态列 | `frontend/src/features/board/boardRealtime.ts`、`frontend/src/features/board/BoardPage.tsx`；`frontend/src/features/board/__tests__/boardRealtime.test.ts`（label 集合差/双多值笛卡尔 placement）与 `frontend/src/features/board/__tests__/BoardPage.realtime.test.tsx`（label/custom field 增量且不整板 refetch） |
+| Agent 分派、严格状态、必填与 409 | `frontend/src/features/issues/IssueProperties.tsx`、`frontend/src/features/issues/IssueDetailPage.tsx`；`frontend/src/features/issues/__tests__/IssueProperties.test.tsx` 与 `frontend/src/features/issues/__tests__/IssueDetailPage.test.tsx` 覆盖同 assignee no-op、严格目标、`required_field_missing`、回滚和 409 服务端快照收敛 |
+| 标签合并与色点溢出 | `frontend/src/features/labels/LabelsPanel.tsx`、`frontend/src/features/labels/LabelDots.tsx`；`frontend/src/features/labels/__tests__/LabelsPanel.test.tsx` 与 `frontend/src/features/labels/__tests__/LabelDots.test.tsx::renders compact data-colour dots and a +N overflow counter` |
+| 永久项目 key、成员抽屉与头像清空 | `backend/src/mesh/project/routes.py`、`backend/src/mesh/project/service.py`，`frontend/src/features/projects/CreateProjectDialog.tsx`、`frontend/src/features/members/MembersPage.tsx`、`frontend/src/shell/pages/settings/ProfileSettingsSection.tsx`；对应 `backend/tests/unit/test_project_api.py::test_project_key_availability_endpoint`、`backend/tests/unit/test_project_service.py::test_project_key_availability_uses_permanent_prefix_registry`、`frontend/src/features/members/__tests__/MembersPage.test.tsx`、`frontend/src/shell/__tests__/ProfileSettingsSection.test.tsx` |
+
+### 4.2 保留产品差异（27）
 
 | 入口行 | 主题 | 保留原因 |
 | --- | --- | --- |
-| `L86, L87, L176, L180` | URL/标题/离线队列/专项恢复 | 涉及多页面状态协议与离线命令队列，不是视觉层可独立闭合 |
-| `L196, L200, L201, L216, L236, L241, L245, L246` | 收件箱、邮件、收藏、批量、Presence、API 提示 | 需要通知聚合、邮件、收藏入口或服务端契约的独立功能切片 |
-| `L310, L311, L330, L344, L348, L360, L373, L382, L385, L386` | 成员、项目、issue、看板、标签/字段 | 依赖成员详情、严格状态机、二维投影或标签管理业务实现 |
-| `L396, L401, L434–L437, L450–L452` | 评论、agent、runtime/执行 | 需要线程状态机、完整运行生命周期与执行审计数据 |
-| `L474, L480, L507, L535–L537` | 小队、引导、导入导出 | 需要消息分类、导出协议、一次性引导状态或流式作业进度 |
+| `L92, L93, L182, L186` | URL/标题/离线队列/专项恢复 | 涉及多页面状态协议与离线命令队列，不是视觉层可独立闭合 |
+| `L202, L206, L207, L222, L242, L247, L251, L252` | 收件箱、邮件、收藏、批量、Presence、API 提示 | 需要通知聚合、邮件、收藏入口或服务端契约的独立功能切片 |
+| `L402, L407, L440–L443, L456–L458` | 评论、agent、runtime/执行 | 需要线程状态机、完整运行生命周期与执行审计数据 |
+| `L480, L486, L513, L541–L543` | 小队、引导、导入导出 | 需要消息分类、导出协议、一次性引导状态或流式作业进度 |
 
 这些差异不阻断本轮排版、布局、主题和既有路径可用性；若进入实现，应按对应功能 Spec 独立拆分，不在视觉 PR 中扩写服务端协议。
 
-其中 `L373` 经复核为明确的既有部分实现：本轮呈现并本地化服务端已有的描述、项目、估算、截止日、负责人姓名和更新时间；投影尚未返回标签、子任务进度、负责人类型/头像，虚拟卡也按固定高度性能契约隐藏扩展元数据。该项保留在 37 条产品差异内，未被本轮勾选语义误报为完整实现。
+`L373` 仍是明确的部分实现，不随上述 10 条转为完整通过：卡片投影已覆盖描述、项目、估算、截止日、负责人姓名、更新时间和标签；子任务进度与 assignee 人/Agent 类型头像仍未进入卡片投影，虚拟卡也按固定高度性能契约隐藏扩展元数据。动态分组列 `L379` 已由真实 skeleton 增量闭合，两项不得混用。
 
 ### 4.3 环境边界与可选增强（32）
 
 | 入口行 | 分类 | 原因 |
 | --- | --- | --- |
-| `L126, L165, L210, L233` | 目标设备人工项 | 真实手机软键盘、逐键鼠标等价路径、NVDA/VoiceOver 与跨页面 hover 人工签署需要目标设备 |
-| `L197, L253, L371, L403, L516, L523, L550, L562` | 多客户端/外部/性能 | 需要双客户端 P95、抓包、1000 卡性能、外部 OAuth/IM、跨时区数据集或会话撤销环境 |
-| `L302, L332, L388, L439, L453, L466, L482, L496, L509, L525, L538, L551, L563, L580` | 深层状态矩阵 | 当前四组合覆盖页面代表态；全部 Tab、庆祝态、外部回调和手机灯箱手势仍需专项矩阵 |
-| `L242, L244, L301, L352, L370, L372` | Spec 可选 | 短时撤销、桌面通知、域名自动加入、完整 URL 引用、Timeline/Table 与 viewer presence 明确为可选/延期 |
+| `L132, L171, L216, L239` | 目标设备人工项 | 真实手机软键盘、逐键鼠标等价路径、NVDA/VoiceOver 与跨页面 hover 人工签署需要目标设备 |
+| `L203, L259, L377, L409, L522, L529, L556, L568` | 多客户端/外部/性能 | 需要双客户端 P95、抓包、1000 卡性能、外部 OAuth/IM、跨时区数据集或会话撤销环境 |
+| `L308, L338, L394, L445, L459, L472, L488, L502, L515, L531, L544, L557, L569, L586` | 深层状态矩阵 | 当前四组合覆盖页面代表态；全部 Tab、庆祝态、外部回调和手机灯箱手势仍需专项矩阵 |
+| `L248, L250, L307, L358, L376, L378` | Spec 可选 | 短时撤销、桌面通知、域名自动加入、完整 URL 引用、Timeline/Table 与 viewer presence 明确为可选/延期 |
 
 ## 5. 视觉审查矩阵
 
@@ -86,7 +99,7 @@
 
 ## 7. 可复现验证
 
-最终复核结果如下：
+以下数字是 MES-185 已完成复核的既有记录，不据此声称 MES-187 新增真栈套件已经通过：
 
 - 格式门禁通过（保留 295 个历史债务路径）；ESLint/Stylelint、类型检查和生产构建通过，ESLint 为 0 error、25 个既有 warning。
 - 全量 Vitest 的 420 个测试文件全部通过；Statements/Lines `98.90%`、Functions `97.99%`、Branches `94.30%`。本轮 21 个变更 TS/TSX 文件逐文件覆盖率均不低于 `90%`。
@@ -94,3 +107,5 @@
 - production-auth 真栈回归 1 项通过，实际启动服务并验证 API、会话与数据库路径。
 - 响应式、无障碍静态契约、遗留 token、76 组双主题对比度、应用契约与真实服务契约门禁全部通过。
 - 证据校验通过：412 张截图 SHA-256 全部唯一；检查矩阵 112/112 verified、0 N/A、0 gaps。
+
+MES-187 另提供可复现的 production-auth 真栈入口 `./frontend/e2e/mes187-real/run-e2e.sh`（等价 npm 脚本：`npm --prefix frontend run test:e2e:mes187`）。runner、环境生成器、Playwright 配置与业务旅程分别位于 `frontend/e2e/mes187-real/run-e2e.sh`、`frontend/e2e/mes187-real/gen-stack-env.sh`、`frontend/playwright.mes187.config.ts`、`frontend/e2e/real-mes187-business-depth.spec.ts`；其覆盖真实 API/worker/PostgreSQL/Redis、desktop/phone × light/dark 浏览器操作及最终数据库断言。该命令及覆盖范围是交付说明，本审计未把未执行成功的结果写成 passed。
