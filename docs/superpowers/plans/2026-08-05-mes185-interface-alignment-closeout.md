@@ -56,4 +56,3 @@ environment instead of treating visual polish as proof of product behavior.
   responsive, secret, dependency, asset, and untested-branch regressions.
 - Publish only with a clean worktree, the required commit identity, no co-author
   trailer, and a passing CI handoff.
-

@@ -5,7 +5,7 @@
  * fetch 桩按调用序:GET issue → statuses / children / dependencies / activity / members。
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, headersOf } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -1233,6 +1233,93 @@ describe('IssueDetailPage', () => {
         STATUS_IN_PROGRESS.id,
       ),
     );
+    expect(screen.queryByTestId('issue-status-validation-error')).not.toBeInTheDocument();
+  });
+
+  it('clears stale required-field validation after another mutation reloads authoritative issue data', async () => {
+    const requiredFailure = fakeResponse({
+      status: 422,
+      body: {
+        error: {
+          code: 'required_field_missing',
+          message: 'required fields missing',
+          details: { missing: ['Release note'] },
+        },
+      },
+    });
+    const stub = queue(
+      requiredFailure,
+      fakeResponse({ body: { data: { ...DETAIL, priority: 'high', version: 4 } } }),
+      ...reloadRound({ ...DETAIL, priority: 'high', version: 4 }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+
+    fireEvent.change(screen.getByTestId('issue-detail-status'), {
+      target: { value: STATUS_IN_PROGRESS.id },
+    });
+    expect(await screen.findByTestId('issue-status-validation-error')).toHaveTextContent(
+      'Release note',
+    );
+
+    fireEvent.change(screen.getByTestId('issue-detail-priority'), { target: { value: 'high' } });
+    await waitFor(() =>
+      expect(stub.calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId('issue-status-validation-error')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('does not carry a required-field validation error to the next issue route', async () => {
+    const secondIssue = {
+      ...DETAIL,
+      id: 'iss-2',
+      identifier: 'APL-2',
+      title: 'Second issue',
+    };
+    const requiredFailure = fakeResponse({
+      status: 422,
+      body: {
+        error: {
+          code: 'required_field_missing',
+          message: 'required fields missing',
+          details: { missing: ['Release note'] },
+        },
+      },
+    });
+    const stub = detailStub(
+      ...detailResponses(),
+      requiredFailure,
+      ...reloadRound(secondIssue),
+      ...associationResponses(),
+      fakeResponse({ body: COMMENTS_EMPTY }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    render(
+      <MemoryRouter initialEntries={['/w/ws/issues/iss-1']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <Link to="/w/ws/issues/iss-2">Next issue</Link>
+              <Routes>
+                <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
+              </Routes>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    fireEvent.change(screen.getByTestId('issue-detail-status'), {
+      target: { value: STATUS_IN_PROGRESS.id },
+    });
+    expect(await screen.findByTestId('issue-status-validation-error')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Next issue' }));
+    expect(await screen.findByDisplayValue('Second issue')).toBeInTheDocument();
     expect(screen.queryByTestId('issue-status-validation-error')).not.toBeInTheDocument();
   });
 

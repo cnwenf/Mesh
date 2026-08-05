@@ -256,7 +256,9 @@ async def test_list_filter_params_sort_and_pagination(client):
             headers=_auth(owner),
         )
     ).status_code == 400
-    # group_by by assignee/priority/project; label rejected
+    # group_by accepts every documented axis, including the multi-valued
+    # label axis. These fixtures have no labels, so all issues share the
+    # explicit empty-label bucket.
     grouped = await client.get(
         f"/api/v1/workspaces/{ws['id']}/issues?group_by=priority", headers=_auth(owner)
     )
@@ -264,7 +266,13 @@ async def test_list_filter_params_sort_and_pagination(client):
     label = await client.get(
         f"/api/v1/workspaces/{ws['id']}/issues?group_by=label", headers=_auth(owner)
     )
-    assert label.status_code == 400
+    assert label.status_code == 200
+    assert len(label.json()["groups"]) == 1
+    empty_group = label.json()["groups"][0]
+    assert empty_group["key"] == "__none__"
+    assert empty_group["label"] == "No label"
+    assert empty_group["count"] == 5
+    assert len(empty_group["data"]) == 5
     # structured filters: in / gte / is_null operators
     sf = await client.get(
         f"/api/v1/workspaces/{ws['id']}/issues",

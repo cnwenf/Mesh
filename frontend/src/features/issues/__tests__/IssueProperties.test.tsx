@@ -176,6 +176,21 @@ describe('IssueProperties status and assignee guards', () => {
     );
   });
 
+  it('uses the issue assignee snapshot when the assigned agent is outside the roster page', () => {
+    renderProperties({
+      members: MEMBERS.filter((member) => member.member_type === 'human'),
+      issue: {
+        ...ISSUE,
+        assignee_id: 'agent-outside-page',
+        assignee: { id: 'agent-outside-page', name: 'Remote builder', member_type: 'agent' },
+      },
+    });
+
+    expect(screen.getByTestId('issue-agent-assignee-hint')).toHaveTextContent(
+      'Work will start automatically after saving',
+    );
+  });
+
   it('derives the agent hint from controlled issue state so a failed save rollback removes it', () => {
     const { onPatch, rerenderProperties } = renderProperties();
     const select = screen.getByTestId('issue-detail-assignee');

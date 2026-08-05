@@ -1117,7 +1117,6 @@
     "error.project_member_exists": "该成员已是本项目成员。",
     "error.project_name_taken": "本工作区已存在同名项目。",
     "error.project_not_visible": "你没有该项目的访问权限。",
-    "error.projection_field_pending": "标签与自定义字段投影随后续增量落地。",
     "error.query_cost_exceeded": "查询开销过大，请收窄查询条件。",
     "error.queue_item_not_cancellable": "该消息已经开始执行，请在钉钉中使用 /stop 停止运行中的任务。",
     "error.quota_exceeded": "存储配额已用尽,请清理后重试",
@@ -2888,5 +2887,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "27c2c94b"
+  "version": "e5600c5a"
 }

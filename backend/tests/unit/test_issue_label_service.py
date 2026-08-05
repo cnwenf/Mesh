@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select, text
 
-from mesh.db.models.issue import Issue
-from mesh.db.models.label import IssueLabel, Label
+from mesh.db.models.issue import Issue, IssueStatus
+from mesh.db.models.label import IssueCustomFieldValue, IssueLabel, Label
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import Project
@@ -26,8 +28,9 @@ from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.errors import BusinessRuleError, ConflictError, NotFoundError
 from mesh.issue.schemas import CreateIssueRequest
-from mesh.issue.service import IssueService
+from mesh.issue.service import IssuePatch, IssueService
 from mesh.labels.association import IssueLabelService
+from mesh.labels.required_fields import _required_value_is_present
 from mesh.labels.service import LabelService
 
 pytestmark = pytest.mark.unit
@@ -133,6 +136,114 @@ async def _db_label_links(session_factory, issue_id: uuid.UUID) -> set[uuid.UUID
             )
         ).scalars().all()
     return set(rows)
+
+
+def _required_row(**values):
+    columns = {
+        "value_text": None,
+        "value_number": None,
+        "value_date": None,
+        "value_member_id": None,
+        "value_boolean": None,
+        "value_json": None,
+    }
+    columns.update(values)
+    return SimpleNamespace(**columns)
+
+
+@pytest.mark.parametrize(
+    ("field_type", "row", "expected"),
+    [
+        ("text", None, False),
+        ("text", _required_row(value_text=""), False),
+        ("text", _required_row(value_text="value"), True),
+        ("textarea", _required_row(value_text=""), False),
+        ("textarea", _required_row(value_text="details"), True),
+        ("url", _required_row(value_text=""), False),
+        ("url", _required_row(value_text="https://example.com"), True),
+        ("number", _required_row(value_number=Decimal("0")), True),
+        ("date", _required_row(value_date=FIXED_NOW), True),
+        ("datetime", _required_row(value_date=FIXED_NOW), True),
+        ("member", _required_row(value_member_id=None), False),
+        ("member", _required_row(value_member_id=uuid.uuid4()), True),
+        ("boolean", _required_row(value_boolean=False), True),
+        ("boolean", _required_row(value_boolean=True), True),
+        ("single_select", _required_row(value_json=None), False),
+        ("single_select", _required_row(value_json=""), False),
+        ("single_select", _required_row(value_json=str(uuid.uuid4())), True),
+        ("multi_select", _required_row(value_json=[]), False),
+        ("multi_select", _required_row(value_json=[str(uuid.uuid4())]), True),
+        ("multi_select", _required_row(value_json="not-an-array"), False),
+    ],
+)
+def test_required_value_presence_is_type_aware(field_type, row, expected):
+    definition = SimpleNamespace(type=field_type)
+
+    assert _required_value_is_present(definition, row) is expected
+
+
+async def test_required_member_value_nullified_by_fk_blocks_status_transition(
+    session_factory,
+):
+    ctx = await _setup(session_factory)
+    doomed_user_id = await _add_user(session_factory)
+    async with session_factory() as session, session.begin():
+        doomed = Member(
+            workspace_id=ctx.workspace.id,
+            member_type="human",
+            user_id=doomed_user_id,
+            role="member",
+            status="active",
+            joined_at=FIXED_NOW,
+        )
+        session.add(doomed)
+
+    field = await ctx.label_service.create_field_def(
+        actor=ctx.admin,
+        workspace_id=ctx.workspace.id,
+        name="Acceptor",
+        field_key=f"acceptor_{uuid.uuid4().hex[:8]}",
+        field_type="member",
+        is_required=True,
+        required_on=["status:done"],
+    )
+    issue_id = uuid.UUID(ctx.labels["issue"]["id"])
+    async with session_factory() as session, session.begin():
+        done_status_id = await session.scalar(
+            select(IssueStatus.id).where(
+                IssueStatus.workspace_id == ctx.workspace.id,
+                IssueStatus.category == "done",
+            )
+        )
+        assert done_status_id is not None
+        session.add(
+            IssueCustomFieldValue(
+                workspace_id=ctx.workspace.id,
+                issue_id=issue_id,
+                field_def_id=uuid.UUID(field["id"]),
+                value_member_id=doomed.id,
+            )
+        )
+
+    async with session_factory() as session, session.begin():
+        await session.execute(text("DELETE FROM members WHERE id = :id"), {"id": doomed.id})
+
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await ctx.issues.update_issue(
+            actor=ctx.admin,
+            workspace_id=ctx.workspace.id,
+            issue_id=issue_id,
+            patch=IssuePatch(status_id=done_status_id),
+            expected_version=ctx.labels["issue"]["version"],
+        )
+    assert excinfo.value.code == "required_field_missing"
+    assert excinfo.value.details["missing"] == [
+        {"field_def_id": field["id"], "name": "Acceptor"}
+    ]
+
+    async with session_factory() as session:
+        issue = await session.scalar(select(Issue).where(Issue.id == issue_id))
+    assert issue.state_category != "done"
 
 
 # ---------------------------------------------------------------------------

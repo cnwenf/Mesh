@@ -10,12 +10,14 @@ association-table predicates whose tenant key follows the outer issue row.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy.sql.elements import BooleanClauseList
 
 from mesh.errors import ValidationError
 from mesh.issue.filters import FilterTooComplexError
-from mesh.views.projection import compile_view_filters
+from mesh.views.projection import ProjectionService, compile_view_filters
 
 pytestmark = pytest.mark.unit
 
@@ -27,6 +29,14 @@ def _sql(clause) -> str:
 def test_empty_filters_compile_to_no_clause() -> None:
     assert compile_view_filters({}) is None
     assert compile_view_filters(None) is None
+
+
+def test_dynamic_axis_configured_order_keeps_empty_bucket_last() -> None:
+    keys = ["label-a", "label-b", "__none__"]
+
+    assert ProjectionService._apply_configured_order(
+        keys, ["__none__", "label-b"]
+    ) == ["label-b", "label-a", "__none__"]
 
 
 def test_and_of_two_leaves() -> None:
@@ -146,6 +156,52 @@ def test_custom_field_condition_compiles_to_typed_association_exists() -> None:
     assert "issue_custom_field_values" in sql
     assert "field_def_id" in sql
     assert "issue_custom_field_values.workspace_id = issues.workspace_id" in sql
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {
+            "field_kind": "custom_field",
+            "field_def_id": "00000000-0000-0000-0000-000000000201",
+            "op": "contains",
+            "value": "%_\\",
+        },
+        {"field": "q", "op": "contains", "value": "%_\\"},
+    ],
+)
+def test_contains_escapes_like_wildcards_as_literals(condition: dict) -> None:
+    clause = compile_view_filters(
+        {"operator": "AND", "conditions": [condition]}
+    )
+    compiled = clause.compile()
+
+    assert " escape " in str(compiled).lower()
+    patterns = [value for value in compiled.params.values() if isinstance(value, str)]
+    assert patterns
+    assert set(patterns) == {"%\\%\\_\\\\%"}
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"field": "created_at", "op": "gte", "value": "2026-08-05T12:30:00"},
+        {
+            "field_kind": "custom_field",
+            "field_def_id": "00000000-0000-0000-0000-000000000201",
+            "op": "eq",
+            "value": "2026-08-05T12:30:00",
+        },
+    ],
+)
+def test_datetime_filter_bind_values_are_utc_aware(condition: dict) -> None:
+    clause = compile_view_filters({"operator": "AND", "conditions": [condition]})
+    bound_datetimes = [
+        value for value in clause.compile().params.values() if isinstance(value, datetime)
+    ]
+
+    assert bound_datetimes
+    assert all(value.tzinfo is UTC for value in bound_datetimes)
 
 
 def test_unknown_field_is_invalid() -> None:

@@ -34,7 +34,7 @@ from mesh.errors import ConflictError, ValidationError
 from mesh.issue.schemas import CreateIssueRequest
 from mesh.issue.service import IssueService
 from mesh.issue.statuses import seed_default_statuses
-from mesh.views.projection import ProjectionService
+from mesh.views.projection import ProjectionService, _encode_custom_text_key
 from mesh.views.schemas import CreateViewRequest
 from mesh.views.service import ViewService
 
@@ -569,6 +569,68 @@ async def test_label_axis_skeleton_hides_private_project_definitions_from_worksp
     assert ids["public"] not in project_keys
 
 
+async def test_label_axis_skeleton_does_not_leak_ungranted_public_project_labels_to_guest(
+    session_factory,
+) -> None:
+    from tests.unit.test_view_service import _create_project
+
+    workspace, owner, _issue_service, view_service, projection = await _setup(
+        session_factory
+    )
+    public_project = await _create_project(
+        session_factory, workspace, visibility="public"
+    )
+    async with session_factory() as session, session.begin():
+        guest_user = User(
+            email=f"{uuid.uuid4().hex[:12]}@guest.test",
+            display_name="Guest",
+            password_hash="x",
+            status="active",
+        )
+        session.add(guest_user)
+        await session.flush()
+        guest = Member(
+            workspace_id=workspace.id,
+            member_type="human",
+            user_id=guest_user.id,
+            role="guest",
+            status="active",
+            joined_at=FIXED_NOW,
+        )
+        workspace_label = Label(
+            workspace_id=workspace.id,
+            name="Workspace label",
+            color="#336699",
+        )
+        project_label = Label(
+            workspace_id=workspace.id,
+            project_id=public_project.id,
+            name="Ungranted public-project label",
+            color="#30a46c",
+        )
+        session.add_all([guest, workspace_label, project_label])
+        await session.flush()
+        workspace_label_id = str(workspace_label.id)
+        project_label_id = str(project_label.id)
+
+    view = await _mk_view(
+        view_service,
+        actor=owner,
+        workspace=workspace,
+        group_by="label",
+        visibility="shared",
+    )
+    result = await projection.execute_view(
+        viewer=guest,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+    )
+
+    keys = {group["key"] for group in result["groups"]}
+    assert workspace_label_id in keys
+    assert project_label_id not in keys
+
+
 async def test_custom_axis_and_sort_enforce_view_project_scope(session_factory) -> None:
     from tests.unit.test_view_service import _create_project, _grant_project_access
 
@@ -724,6 +786,125 @@ async def test_execute_view_custom_select_filter_and_group_skeleton(session_fact
     assert groups["__none__"]["count"] == 1
     assert groups[major_id]["label"] == "Major"
     assert groups[minor_id]["label"] == "Minor"
+
+
+async def test_custom_select_projection_and_sort_fail_closed_for_inactive_options(
+    session_factory,
+) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(
+        session_factory
+    )
+    first = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    second = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    retired = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name="Severity",
+            field_key=f"severity_{uuid.uuid4().hex[:8]}",
+            type="single_select",
+        )
+        session.add(definition)
+        await session.flush()
+        inactive = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Retired",
+            position=0,
+            is_active=False,
+        )
+        first_option = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="First",
+            position=1,
+        )
+        second_option = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Second",
+            position=2,
+        )
+        session.add_all([inactive, first_option, second_option])
+        await session.flush()
+        session.add_all(
+            [
+                IssueCustomFieldValue(
+                    workspace_id=workspace.id,
+                    issue_id=uuid.UUID(first["id"]),
+                    field_def_id=definition.id,
+                    value_json=str(first_option.id),
+                ),
+                IssueCustomFieldValue(
+                    workspace_id=workspace.id,
+                    issue_id=uuid.UUID(second["id"]),
+                    field_def_id=definition.id,
+                    value_json=str(second_option.id),
+                ),
+                IssueCustomFieldValue(
+                    workspace_id=workspace.id,
+                    issue_id=uuid.UUID(retired["id"]),
+                    field_def_id=definition.id,
+                    value_json=str(inactive.id),
+                ),
+            ]
+        )
+        field_id = str(definition.id)
+        inactive_id = str(inactive.id)
+        first_option_id = str(first_option.id)
+        second_option_id = str(second_option.id)
+
+    axis_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=field_id,
+    )
+    axis_result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(axis_view["id"]),
+    )
+
+    assert [group["key"] for group in axis_result["groups"]] == [
+        first_option_id,
+        second_option_id,
+        "__none__",
+    ]
+    axis_groups = {group["key"]: group for group in axis_result["groups"]}
+    assert inactive_id not in axis_groups
+    assert {item["id"] for item in axis_groups["__none__"]["data"]} == {
+        retired["id"]
+    }
+
+    sorted_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sort=[
+            {
+                "field_kind": "custom_field",
+                "field_def_id": field_id,
+                "order": "asc",
+            }
+        ],
+    )
+    sorted_result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(sorted_view["id"]),
+    )
+    state_group = next(
+        group
+        for group in sorted_result["groups"]
+        if group["key"] == first["state_category"]
+    )
+    assert [item["id"] for item in state_group["data"]] == [
+        first["id"],
+        second["id"],
+        retired["id"],
+    ]
 
 
 async def test_execute_view_two_multi_value_axes_form_cartesian_cells(session_factory) -> None:
@@ -1235,3 +1416,48 @@ async def test_swimlane_cursor_expires_fail_closed(session_factory) -> None:
             cursor=first["next_cursor"],
         )
     assert expired.value.code == "cursor_invalidated"
+
+
+async def test_text_custom_literal_none_has_distinct_projection_key(session_factory) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(
+        session_factory
+    )
+    literal = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    empty = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name="Literal sentinel",
+            field_key=f"literal_{uuid.uuid4().hex[:8]}",
+            type="text",
+        )
+        session.add(definition)
+        await session.flush()
+        session.add(
+            IssueCustomFieldValue(
+                workspace_id=workspace.id,
+                issue_id=uuid.UUID(literal["id"]),
+                field_def_id=definition.id,
+                value_text="__none__",
+            )
+        )
+        field_id = str(definition.id)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=field_id,
+    )
+
+    result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+    )
+
+    literal_key = _encode_custom_text_key("__none__")
+    groups = {group["key"]: group for group in result["groups"]}
+    assert literal_key != "__none__"
+    assert groups[literal_key]["label"] == "__none__"
+    assert {card["id"] for card in groups[literal_key]["data"]} == {literal["id"]}
+    assert {card["id"] for card in groups["__none__"]["data"]} == {empty["id"]}

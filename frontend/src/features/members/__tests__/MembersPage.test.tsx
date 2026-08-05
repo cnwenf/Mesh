@@ -517,6 +517,109 @@ describe('MembersPage', () => {
     ).toBe(true);
   });
 
+  it('成员抽屉分页读取全部名下 issue，再计算真实 open 与最近更新列表', async () => {
+    const user = userEvent.setup();
+    const oldDone = Array.from({ length: 100 }, (_, index) => ({
+      ...ASSIGNED_ISSUE,
+      id: `done-${index}`,
+      identifier: `TEAM-${index + 10}`,
+      title: `Done ${index}`,
+      state_category: 'done',
+      updated_at: `2026-01-${String((index % 28) + 1).padStart(2, '0')}T00:00:00Z`,
+    }));
+    const newestOpen = {
+      ...ASSIGNED_ISSUE,
+      id: 'issue-newest-open',
+      identifier: 'TEAM-999',
+      title: 'Newest open outside first page',
+      updated_at: '2026-08-05T12:00:00Z',
+    };
+    const issueCalls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+        if (url.includes('/issues')) {
+          issueCalls.push(url);
+          const cursor = new URL(url, 'http://x').searchParams.get('cursor');
+          return cursor === 'page-2'
+            ? fakeResponse({ body: { data: [newestOpen], next_cursor: null } })
+            : fakeResponse({ body: { data: oldDone, next_cursor: 'page-2' } });
+        }
+        if (url.includes('/members/mem-h')) {
+          return fakeResponse({
+            body: {
+              data: {
+                ...HUMAN,
+                display_override: null,
+                disabled_at: null,
+                counts: { open_issues_assigned: 1 },
+              },
+            },
+          });
+        }
+        if (url.includes('/members')) {
+          return fakeResponse({ body: { data: [HUMAN], next_cursor: null } });
+        }
+        return fakeResponse({ status: 404 });
+      }) as typeof fetch,
+    );
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await user.click(screen.getByTestId('member-open-mem-h'));
+    const drawer = await screen.findByTestId('member-drawer');
+    expect(await within(drawer).findByText(/TEAM-999 · Newest open outside first page/)).toBeVisible();
+    expect(issueCalls).toHaveLength(2);
+    expect(issueCalls[1]).toContain('cursor=page-2');
+    expect(within(drawer).getAllByText(/TEAM-999 · Newest open outside first page/)).toHaveLength(2);
+  });
+
+  it('成员抽屉为 issue、agent 与能力配置的独立读取失败显示可重试错误态', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+        if (url.includes('/issues') || url.includes('/agents/agt-9')) {
+          return fakeResponse({
+            status: 500,
+            body: { error: { code: 'internal_error', message: 'failed' } },
+          });
+        }
+        if (url.includes('/members/mem-a')) {
+          return fakeResponse({
+            body: {
+              data: {
+                ...AGENT,
+                display_override: null,
+                disabled_at: null,
+                counts: { open_issues_assigned: 0 },
+              },
+            },
+          });
+        }
+        if (url.includes('/members')) {
+          return fakeResponse({ body: { data: [AGENT], next_cursor: null } });
+        }
+        return fakeResponse({ status: 404 });
+      }) as typeof fetch,
+    );
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await user.click(screen.getByTestId('member-open-mem-a'));
+    const drawer = await screen.findByTestId('member-drawer');
+    expect(await within(drawer).findByTestId('member-detail-issues-error')).toBeVisible();
+    expect(within(drawer).getByTestId('member-detail-agent-error')).toBeVisible();
+    expect(within(drawer).getByTestId('member-detail-capabilities-error')).toBeVisible();
+    expect(
+      within(drawer).queryByText('No capability grants in the active configuration.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('agent 也在成员详情抽屉展示运行态、能力与配置入口', async () => {
     const user = userEvent.setup();
     const calls = stub([AGENT]);
@@ -755,6 +858,16 @@ describe('MembersPage', () => {
     stub([]);
     renderWithProviders(<MembersPage />, { route: '/members' });
     expect(await screen.findByText('No members yet')).toBeInTheDocument();
+  });
+
+  it('空名册的唯一 Agent 创建入口仍打开同一向导', async () => {
+    const user = userEvent.setup();
+    stub([]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+
+    await user.click(await screen.findByTestId('members-empty-agent'));
+
+    expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
   });
 
   it('无工作区成员身份时提示无工作区', async () => {

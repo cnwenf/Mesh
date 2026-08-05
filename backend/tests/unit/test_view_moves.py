@@ -36,6 +36,7 @@ from mesh.issue.schemas import CreateIssueRequest
 from mesh.issue.service import IssueService
 from mesh.issue.statuses import seed_default_statuses
 from mesh.views.moves import BoardMoveService
+from mesh.views.projection import _encode_custom_text_key
 from mesh.views.schemas import CreateViewRequest
 from mesh.views.service import ViewService
 
@@ -1191,7 +1192,11 @@ async def test_multi_value_axes_quick_create_writes_both_associations_atomically
 
 async def test_multi_value_axes_quick_create_none_keeps_empty_sets(session_factory) -> None:
     workspace, member, _issue_service, view_service, board = await _setup(session_factory)
-    _label, definition, _option = await _multi_value_fixture(session_factory, workspace)
+    _label, definition, option = await _multi_value_fixture(session_factory, workspace)
+    async with session_factory() as session, session.begin():
+        stored = await session.get(CustomFieldDef, definition.id)
+        assert stored is not None
+        stored.default_value = [str(option.id)]
     view = await _mk_view(
         view_service,
         actor=member,
@@ -1211,6 +1216,52 @@ async def test_multi_value_axes_quick_create_none_keeps_empty_sets(session_facto
 
     assert created["labels"] == []
     assert created["custom_field_values"] == []
+
+
+async def test_quick_create_applies_non_axis_custom_default_before_filter_check(
+    session_factory,
+) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    definition, _minor, major = await _single_select_fixture(session_factory, workspace)
+    async with session_factory() as session, session.begin():
+        stored = await session.get(CustomFieldDef, definition.id)
+        assert stored is not None
+        stored.default_value = str(major.id)
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="priority",
+        filters={
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": str(definition.id),
+                    "op": "eq",
+                    "value": str(major.id),
+                }
+            ],
+        },
+    )
+
+    created = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        title="Defaulted severity",
+        group_key="high",
+    )
+
+    async with session_factory() as session:
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(created["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    assert value is not None and value.value_json == str(major.id)
+    assert created["custom_field_values"][0]["value_json"] == str(major.id)
 
 
 async def test_multi_select_quick_create_rejects_inactive_option_before_writes(
@@ -1539,6 +1590,106 @@ async def test_single_select_inactive_option_is_rejected_without_writes(
     assert await _position_row(session_factory, uuid.UUID(view["id"]), uuid.UUID(issue["id"])) is None
 
 
+@pytest.mark.parametrize("custom_axis_first", [False, True])
+async def test_diagonal_move_validates_required_field_after_custom_axis_write(
+    session_factory,
+    custom_axis_first,
+) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    statuses = await _status_map(session_factory, workspace)
+    definition, _minor, major = await _single_select_fixture(session_factory, workspace)
+    async with session_factory() as session, session.begin():
+        stored = await session.get(CustomFieldDef, definition.id)
+        assert stored is not None
+        stored.is_required = True
+        stored.required_on = ["status:done"]
+    issue = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=statuses,
+    )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id) if custom_axis_first else "state_category",
+        sub_group_by="state_category" if custom_axis_first else str(definition.id),
+    )
+
+    moved = await board.move(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        issue_id=uuid.UUID(issue["id"]),
+        to_group_key=str(major.id) if custom_axis_first else "done",
+        to_sub_group_key="done" if custom_axis_first else str(major.id),
+        position=4.0,
+        version=issue["version"],
+    )
+
+    async with session_factory() as session:
+        stored_issue = await session.get(Issue, uuid.UUID(issue["id"]))
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    assert moved["version"] == issue["version"] + 1
+    assert stored_issue is not None and stored_issue.state_category == "done"
+    assert value is not None and value.value_json == str(major.id)
+
+
+async def test_diagonal_move_missing_required_custom_axis_rolls_back(session_factory) -> None:
+    workspace, member, issue_service, view_service, board = await _setup(session_factory)
+    statuses = await _status_map(session_factory, workspace)
+    definition, _minor, _major = await _single_select_fixture(session_factory, workspace)
+    async with session_factory() as session, session.begin():
+        stored = await session.get(CustomFieldDef, definition.id)
+        assert stored is not None
+        stored.is_required = True
+        stored.required_on = ["status:done"]
+    issue = await _mk_issue(
+        issue_service,
+        actor=member,
+        workspace=workspace,
+        category="todo",
+        status_map=statuses,
+    )
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sub_group_by=str(definition.id),
+    )
+
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await board.move(
+            actor=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(view["id"]),
+            issue_id=uuid.UUID(issue["id"]),
+            to_group_key="done",
+            to_sub_group_key="__none__",
+            position=4.0,
+            version=issue["version"],
+        )
+    assert excinfo.value.code == "required_field_missing"
+    async with session_factory() as session:
+        stored_issue = await session.get(Issue, uuid.UUID(issue["id"]))
+        value_count = await session.scalar(
+            select(func.count())
+            .select_from(IssueCustomFieldValue)
+            .where(IssueCustomFieldValue.issue_id == uuid.UUID(issue["id"]))
+        )
+    assert stored_issue is not None and stored_issue.state_category == "todo"
+    assert stored_issue.version == issue["version"]
+    assert value_count == 0
+
+
 @pytest.mark.parametrize(
     ("field_type", "group_key", "value_column", "expected"),
     [
@@ -1561,6 +1712,8 @@ async def test_scalar_custom_quick_create_uses_typed_eav_column(
 ) -> None:
     workspace, member, _issue_service, view_service, board = await _setup(session_factory)
     actual_key = str(member.id) if group_key == "__actor__" else group_key
+    if field_type in {"text", "textarea", "url"}:
+        actual_key = _encode_custom_text_key(actual_key)
     actual_expected = str(member.id) if expected == "__actor__" else expected
     async with session_factory() as session, session.begin():
         definition = CustomFieldDef(
@@ -1647,6 +1800,48 @@ async def test_scalar_custom_quick_create_rejects_invalid_typed_key(
             title="Invalid scalar value",
             group_key=group_key,
         )
+
+
+async def test_text_custom_literal_none_key_is_not_treated_as_empty(session_factory) -> None:
+    workspace, member, _issue_service, view_service, board = await _setup(session_factory)
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name="Literal sentinel",
+            field_key=f"literal_{uuid.uuid4().hex[:8]}",
+            type="text",
+            config={},
+        )
+        session.add(definition)
+        await session.flush()
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=str(definition.id),
+    )
+    literal_key = _encode_custom_text_key("__none__")
+
+    created = await board.quick_create(
+        actor=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+        title="Literal none",
+        group_key=literal_key,
+    )
+
+    async with session_factory() as session:
+        value = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.issue_id == uuid.UUID(created["id"]),
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+    assert value is not None and value.value_text == "__none__"
+    position = await _position_row(
+        session_factory, uuid.UUID(view["id"]), uuid.UUID(created["id"])
+    )
+    assert position is not None and position.group_key == literal_key
 
 
 async def test_label_quick_create_constraint_failure_rolls_back_entire_transaction(

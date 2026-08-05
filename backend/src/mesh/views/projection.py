@@ -22,6 +22,7 @@ distinct per lane/column as required by kanban.md §2.4.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import secrets
@@ -74,7 +75,13 @@ from mesh.search.cursor import (
 from mesh.search.cursor import (
     encode_cursor as encode_signed_cursor,
 )
-from mesh.views.config import PRIORITY_KEYS, STATE_CATEGORY_KEYS, validate_group_axes
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
+from mesh.views.config import (
+    PRIORITY_KEYS,
+    STATE_CATEGORY_KEYS,
+    validate_group_axes,
+    validate_group_by,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -82,12 +89,8 @@ if TYPE_CHECKING:
     from mesh.issue.service import IssueService
     from mesh.views.service import ViewService
 
-# Kept as a public compatibility constant for older API clients; current
-# projection paths no longer raise it for label/custom-field data.
-PROJECTION_FIELD_PENDING = "projection_field_pending"
-
 # Built-in filterable columns (kanban §2.3 minus ``label``/``q`` which are
-# handled specially; custom fields are gated on MES-32).
+# handled specially; custom fields use the EAV compiler below).
 _FILTER_COLUMNS: dict[str, Any] = {
     "state_category": Issue.state_category,
     "status_id": Issue.status_id,
@@ -103,6 +106,38 @@ _FILTER_COLUMNS: dict[str, Any] = {
     "updated_at": Issue.updated_at,
     "parent_id": Issue.parent_id,
 }
+
+_CUSTOM_TEXT_KEY_PREFIX = "cf-text-v1:"
+
+
+def _encode_custom_text_key(value: str) -> str:
+    """Encode text-like scalar group keys so ``__none__`` remains reserved."""
+
+    payload = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"{_CUSTOM_TEXT_KEY_PREFIX}{payload}"
+
+
+def _decode_custom_text_key(key: str) -> str:
+    """Decode a v1 text key; unprefixed values are accepted as legacy keys."""
+
+    if not key.startswith(_CUSTOM_TEXT_KEY_PREFIX):
+        return key
+    payload = key[len(_CUSTOM_TEXT_KEY_PREFIX) :]
+    try:
+        padding = "=" * (-len(payload) % 4)
+        return base64.urlsafe_b64decode(f"{payload}{padding}").decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValidationError(
+            "invalid encoded custom text group key",
+            code="invalid_group_by",
+            details={"group_key": key[:96]},
+        ) from exc
+
+
+def _normalize_custom_text_config_key(key: str) -> str:
+    if key == _EMPTY_MEMBER_KEY or key.startswith(_CUSTOM_TEXT_KEY_PREFIX):
+        return key
+    return _encode_custom_text_key(key)
 
 _UUID_FIELDS = frozenset(
     {
@@ -141,11 +176,15 @@ def _coerce_scalar(field: str, value: Any) -> Any:
             raise _invalid_filters("invalid date filter value", field=field) from exc
     if field in _DATETIME_FIELDS:
         if isinstance(value, datetime):
-            return value
-        try:
-            return datetime.fromisoformat(str(value))
-        except (ValueError, TypeError) as exc:
-            raise _invalid_filters("invalid datetime filter value", field=field) from exc
+            parsed = value
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except (ValueError, TypeError) as exc:
+                raise _invalid_filters("invalid datetime filter value", field=field) from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     return value
 
 
@@ -237,6 +276,10 @@ def _custom_scalar_match(value: Any, *, op: str) -> Any:
         except ValueError:
             date_value = None
         if date_value is not None:
+            if date_value.tzinfo is None:
+                date_value = date_value.replace(tzinfo=UTC)
+            else:
+                date_value = date_value.astimezone(UTC)
             comparisons.append(compare(IssueCustomFieldValue.value_date, date_value))
     else:
         raise _invalid_filters("custom-field value must be a scalar")
@@ -262,7 +305,9 @@ def _compile_custom_field(condition: dict) -> Any:
         value = condition.get("value")
         if not isinstance(value, str):
             raise _invalid_filters("contains requires a text value", field="field_def_id")
-        match = IssueCustomFieldValue.value_text.ilike(f"%{value}%")
+        match = IssueCustomFieldValue.value_text.ilike(
+            f"%{escape_like(value)}%", escape=LIKE_ESCAPE_CHAR
+        )
     elif op in _LIST_OPS:
         raw = condition.get("value")
         if not isinstance(raw, list) or not raw:
@@ -304,8 +349,11 @@ def _compile_leaf(condition: dict) -> Any:
 
     if field == "q":
         # title/identifier search (contains only, kanban §2.3).
-        pattern = f"%{condition.get('value', '')}%"
-        return or_(Issue.title.ilike(pattern), Issue.identifier.ilike(pattern))
+        pattern = f"%{escape_like(condition.get('value', ''))}%"
+        return or_(
+            Issue.title.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+            Issue.identifier.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+        )
 
     if field not in _FILTER_COLUMNS:
         raise _invalid_filters("unknown filter field", field=str(field)[:32])
@@ -326,7 +374,10 @@ def _compile_leaf(condition: dict) -> Any:
         # Only meaningful on text columns; reject type/op mismatch (§3.3).
         if field in _UUID_FIELDS or field in _DATE_FIELDS or field in _DATETIME_FIELDS:
             raise _invalid_filters("contains is not valid for this field", field=field)
-        return column.ilike(f"%{condition.get('value', '')}%")
+        return column.ilike(
+            f"%{escape_like(condition.get('value', ''))}%",
+            escape=LIKE_ESCAPE_CHAR,
+        )
 
     value = _coerce_scalar(field, condition.get("value"))
     if op == "eq":
@@ -476,7 +527,11 @@ def _custom_value_keys(definition: CustomFieldDef, row: IssueCustomFieldValue | 
     if row is None:
         return (_EMPTY_MEMBER_KEY,)
     if definition.type in {"text", "textarea", "url"}:
-        return (row.value_text,) if row.value_text is not None else (_EMPTY_MEMBER_KEY,)
+        return (
+            (_encode_custom_text_key(row.value_text),)
+            if row.value_text is not None
+            else (_EMPTY_MEMBER_KEY,)
+        )
     if definition.type == "number":
         return (_decimal_key(row.value_number),) if row.value_number is not None else (_EMPTY_MEMBER_KEY,)
     if definition.type in {"date", "datetime"}:
@@ -543,9 +598,19 @@ class ProjectionService:
             await self._views.assert_can_read(session, viewer=viewer, view=view)
             if view.layout in ("timeline", "table"):
                 raise NotImplementedLayout("layout is not renderable", details={"layout": view.layout})
-            group_by = view.group_by or "state_category"
-            sub_group_by = view.sub_group_by
-            validate_group_axes(view.group_by, sub_group_by)
+            canonical_group_by = validate_group_by(view.group_by)
+            sub_group_by = validate_group_by(view.sub_group_by)
+            group_by = canonical_group_by or "state_category"
+            validate_group_axes(canonical_group_by, sub_group_by)
+            await self._views.validate_config_references(
+                session,
+                workspace_id=workspace_id,
+                project_id=view.project_id,
+                group_by=canonical_group_by,
+                sub_group_by=sub_group_by,
+                filters=view.filters or {},
+                sort=view.sort or [],
+            )
             try:
                 return await self._run(
                     session,
@@ -603,10 +668,37 @@ class ProjectionService:
 
     @staticmethod
     def _apply_configured_order(keys: list[str], configured: list[str] | None) -> list[str]:
-        if not configured:
-            return keys
-        wanted = list(dict.fromkeys(key for key in configured if key in keys))
-        return wanted + [key for key in keys if key not in wanted]
+        # kanban §2.4: the empty-value bucket is unconditionally last. A
+        # persisted columns override may order real values, but must never
+        # pull ``__none__`` ahead of them (applies equally to label and custom
+        # dynamic axes).
+        has_empty = _EMPTY_MEMBER_KEY in keys
+        ordered = [key for key in keys if key != _EMPTY_MEMBER_KEY]
+        if configured:
+            wanted = list(
+                dict.fromkeys(
+                    key
+                    for key in configured
+                    if key in ordered and key != _EMPTY_MEMBER_KEY
+                )
+            )
+            ordered = wanted + [key for key in ordered if key not in wanted]
+        if has_empty:
+            ordered.append(_EMPTY_MEMBER_KEY)
+        return ordered
+
+    @staticmethod
+    def _normalize_stored_axis_key(axis: _ProjectionAxis, key: str | None) -> str | None:
+        if key is None or axis.custom_field_type not in {"text", "textarea", "url"}:
+            return key
+        return _normalize_custom_text_config_key(key)
+
+    @classmethod
+    def _normalized_wip_map(cls, axis: _ProjectionAxis, board_settings: dict) -> dict:
+        return {
+            cls._normalize_stored_axis_key(axis, key) or key: value
+            for key, value in (board_settings.get("wip") or {}).items()
+        }
 
     async def _custom_field_definition(
         self,
@@ -661,7 +753,10 @@ class ProjectionService:
                     MemberProjectAccess.workspace_id == workspace_id,
                 )
             )
-            return or_(public, granted)
+            # Guests see only explicitly granted projects (the same gate used
+            # by IssueService and LabelService); public visibility alone does
+            # not grant a guest access to project-scoped label definitions.
+            return granted
         lead = Project.lead_member_id == viewer.id
         member_of = Project.id.in_(
             select(ProjectMember.project_id).where(
@@ -783,6 +878,10 @@ class ProjectionService:
         memberships = {
             issue.id: _custom_value_keys(definition, values_by_issue.get(issue.id)) for issue in issues
         }
+        if definition.type in {"text", "textarea", "url"} and configured_order:
+            configured_order = [
+                _normalize_custom_text_config_key(key) for key in configured_order
+            ]
         present = {key for values in memberships.values() for key in values if key != _EMPTY_MEMBER_KEY}
         labels: dict[str, str] = {}
         keys: list[str]
@@ -793,6 +892,7 @@ class ProjectionService:
                         select(CustomFieldOption).where(
                             CustomFieldOption.workspace_id == workspace_id,
                             CustomFieldOption.field_def_id == definition.id,
+                            CustomFieldOption.is_active.is_(True),
                         )
                     )
                 )
@@ -801,8 +901,16 @@ class ProjectionService:
             )
             options.sort(key=lambda option: (float(option.position), str(option.id)))
             keys = [str(option.id) for option in options]
-            known = set(keys)
-            keys.extend(sorted(present - known))
+            active_keys = set(keys)
+            # Retired/unknown option ids may remain in persisted EAV values,
+            # but they are not part of the current visible value domain. Drop
+            # them fail-closed; an issue with no active value projects to the
+            # canonical empty bucket instead of resurrecting a stale column.
+            memberships = {
+                issue_id: tuple(key for key in values if key in active_keys)
+                or (_EMPTY_MEMBER_KEY,)
+                for issue_id, values in memberships.items()
+            }
             labels.update({str(option.id): option.name for option in options})
         elif definition.type == "member":
             for key in sorted(present):
@@ -825,6 +933,9 @@ class ProjectionService:
                     return (1, key)
 
             keys = sorted(present, key=number_order)
+        elif definition.type in {"text", "textarea", "url"}:
+            keys = sorted(present, key=lambda key: (_decode_custom_text_key(key), key))
+            labels.update({key: _decode_custom_text_key(key) for key in keys})
         else:
             keys = sorted(present)
         for key in keys:
@@ -885,6 +996,7 @@ class ProjectionService:
                         .where(
                             CustomFieldOption.workspace_id == workspace_id,
                             CustomFieldOption.field_def_id == definition.id,
+                            CustomFieldOption.is_active.is_(True),
                         )
                         .order_by(CustomFieldOption.position.asc(), CustomFieldOption.id.asc())
                     )
@@ -901,8 +1013,14 @@ class ProjectionService:
                     values[row.issue_id] = row.value_date
                 elif definition.type == "boolean":
                     values[row.issue_id] = row.value_boolean
-                elif option_rank:
-                    values[row.issue_id] = tuple(option_rank.get(key, len(option_rank)) for key in keys)
+                elif definition.type in {"single_select", "multi_select"}:
+                    active_ranks = tuple(
+                        sorted(option_rank[key] for key in keys if key in option_rank)
+                    )
+                    if active_ranks:
+                        values[row.issue_id] = active_ranks
+                elif definition.type in {"text", "textarea", "url"}:
+                    values[row.issue_id] = row.value_text
                 else:
                     values[row.issue_id] = keys[0] if len(keys) == 1 else keys
             result[axis] = values
@@ -1114,8 +1232,14 @@ class ProjectionService:
                 use_manual = (
                     not multi_value_axis
                     and manual_position is not None
-                    and manual_group == group_key
-                    and manual_sub_group == lane_key
+                    and self._normalize_stored_axis_key(group_axis, manual_group)
+                    == group_key
+                    and (
+                        self._normalize_stored_axis_key(lane_axis, manual_sub_group)
+                        if lane_axis is not None
+                        else manual_sub_group
+                    )
+                    == lane_key
                 )
                 position = float(manual_position) if use_manual else float(issue.position)
                 rows.append((issue, lane_key, group_key, position))
@@ -1189,7 +1313,7 @@ class ProjectionService:
         for issue, lane_key, group_key, _position in page_rows:
             page_membership.setdefault((lane_key, group_key), []).append(rendered_cache[issue.id])
         group_counts = {key: len(ids) for key, ids in group_ids.items()}
-        wip_map = (view.board_settings or {}).get("wip", {})
+        wip_map = self._normalized_wip_map(group_axis, view.board_settings or {})
 
         if lane_axis is None:
             groups = [
@@ -1607,10 +1731,7 @@ class ProjectionService:
                     key,
                 ),
             )
-        if not configured_order:
-            return ordered
-        configured = list(dict.fromkeys(key for key in configured_order if key in ordered))
-        return configured + [key for key in ordered if key not in configured]
+        return self._apply_configured_order(ordered, configured_order)
 
     async def _group_labels(
         self,
@@ -1691,7 +1812,6 @@ class ProjectionService:
 
 __all__ = [
     "NotImplementedLayout",
-    "PROJECTION_FIELD_PENDING",
     "ProjectionService",
     "compile_view_filters",
     "group_key_for",

@@ -17,7 +17,6 @@ import type {
   BoardLane,
   BoardProjectionColumn,
 } from './projection';
-import type { WipLimit } from './types';
 
 /** 空分组 key(assignee/project 无值列,对齐后端 §2.4)。 */
 export const NONE_KEY = '__none__';
@@ -248,7 +247,7 @@ function upsertIntoGroup(
 ): BoardGroup[] {
   const exists = groups.some((group) => group.key === key);
   if (!exists) {
-    return [...groups, { key, label, count: 1, wip: null, data: [card] }];
+    return insertBeforeNone(groups, { key, label, count: 1, wip: null, data: [card] });
   }
   return groups.map((group) => {
     if (group.key !== key) return group;
@@ -261,7 +260,7 @@ function upsertIntoGroup(
 }
 
 function labelForCardAxis(
-  groups: readonly BoardGroup[],
+  groups: readonly { readonly key: string; readonly label: string }[],
   card: BoardCard,
   axis: string,
   key: string,
@@ -269,7 +268,10 @@ function labelForCardAxis(
 ): string {
   const existing = groups.find((group) => group.key === key)?.label;
   if (existing !== undefined) return existing;
-  if (axis === 'label') return card.labels?.find((label) => label.id === key)?.name ?? key;
+  if (axis === 'label') {
+    if (key === NONE_KEY) return 'No label';
+    return card.labels?.find((label) => label.id === key)?.name ?? key;
+  }
   const definition = customFields.find((field) => field.id === axis);
   if (key === NONE_KEY) return definition === undefined ? key : `No ${definition.name}`;
   return definition?.options.find((option) => option.id === key)?.name ?? key;
@@ -575,7 +577,12 @@ function flattenLaneCards(lanes: readonly BoardLane[]): BoardCellPlacement[] {
 function addMissingKey(keys: string[], seen: Set<string>, key: string): void {
   if (seen.has(key)) return;
   seen.add(key);
-  keys.push(key);
+  const noneIndex = keys.indexOf(NONE_KEY);
+  if (key !== NONE_KEY && noneIndex !== -1) {
+    keys.splice(noneIndex, 0, key);
+  } else {
+    keys.push(key);
+  }
 }
 
 /**
@@ -605,6 +612,7 @@ function rebuildLaneProjection(
   const cellCards = new Map<string, Map<string, BoardCard[]>>();
   const firstColumnCard = new Map<string, BoardCard>();
   const firstLaneCard = new Map<string, BoardCard>();
+  const customFields = ctx.customFields ?? [];
 
   for (const placement of placements) {
     columnIssueIds.get(placement.groupKey)!.add(placement.card.id);
@@ -634,7 +642,11 @@ function rebuildLaneProjection(
       const card = firstColumnCard.get(key);
       return {
         key,
-        label: template?.label ?? fallbackLabel(key, [card!], ctx.groupBy),
+        label:
+          template?.label ??
+          (isDynamicAxis(ctx.groupBy)
+            ? labelForCardAxis(columns, card!, ctx.groupBy, key, customFields)
+            : fallbackLabel(key, [card!], ctx.groupBy)),
         count: columnIssueIds.get(key)!.size,
         wip: template?.wip ?? null,
       };
@@ -645,7 +657,11 @@ function rebuildLaneProjection(
       const cells = cellCards.get(key);
       return {
         key,
-        label: template?.label ?? fallbackLabel(key, [card!], ctx.subGroupBy),
+        label:
+          template?.label ??
+          (isDynamicAxis(ctx.subGroupBy)
+            ? labelForCardAxis(lanes, card!, ctx.subGroupBy, key, customFields)
+            : fallbackLabel(key, [card!], ctx.subGroupBy)),
         count: laneIssueIds.get(key)!.size,
         groups: columnKeys.map((columnKey) => {
           const data = cells?.get(columnKey) ?? [];
@@ -1126,44 +1142,65 @@ function fallbackLabel(key: string, data: readonly BoardCard[], groupBy: string)
   if (key === NONE_KEY) return groupBy === 'assignee' ? 'No assignee' : 'No project';
   if (groupBy === 'status') return data[0]?.status?.name ?? key;
   if (groupBy === 'assignee') return data[0]?.assignee?.name ?? key;
+  if (groupBy === 'project') return data[0]?.project?.name ?? key;
   return key;
 }
 
 /**
  * 按(草稿)group_by 对已加载卡片本地重分桶(§4.2 分组切换即时反映)。
- * 标签优先取投影响应携带的(已本地化)组标签,缺失时按卡片内嵌字段回退;
+ * 目标轴标签仅从卡片/字段定义派生,避免与源轴同 key 时串用标签或 WIP;
  * count 为本地组内卡片数(整板已分页加载完毕,故等于组内总数)。
  */
-export function rebucketGroups(groups: readonly BoardGroup[], groupBy: string): BoardGroup[] {
-  const labelMap = new Map<string, string>();
-  const wipMap = new Map<string, WipLimit | null>();
-  const cards: BoardCard[] = [];
+export function rebucketGroups(
+  groups: readonly BoardGroup[],
+  groupBy: string,
+  customFields: readonly CustomFieldDef[] = [],
+): BoardGroup[] {
+  const cards = new Map<string, BoardCard>();
   for (const group of groups) {
-    labelMap.set(group.key, group.label);
-    wipMap.set(group.key, group.wip);
-    cards.push(...group.data);
+    for (const card of group.data) cards.set(card.id, card);
   }
-  const byKey = new Map<string, BoardCard[]>();
-  for (const card of cards) {
-    const key = groupKeyForCard(card, groupBy);
-    const bucket = byKey.get(key);
-    if (bucket === undefined) {
-      byKey.set(key, [card]);
-    } else {
-      bucket.push(card);
+  const byKey = new Map<string, Map<string, BoardCard>>();
+  for (const card of cards.values()) {
+    for (const key of groupKeysForCard(card, groupBy, customFields)) {
+      const bucket = byKey.get(key) ?? new Map<string, BoardCard>();
+      bucket.set(card.id, card);
+      byKey.set(key, bucket);
     }
   }
   const result: BoardGroup[] = [];
-  for (const [key, data] of byKey) {
-    // 组标签优先取服务端(已本地化)标签;仅当服务端缺失时才回退到卡片内嵌字段
-    // (fallbackLabel,英文兜底,正常路径不会触发)。
+  for (const [key, bucket] of byKey) {
+    const data = [...bucket.values()];
     result.push({
       key,
-      label: labelMap.get(key) ?? fallbackLabel(key, data, groupBy),
+      label: isDynamicAxis(groupBy)
+        ? labelForCardAxis([], data[0]!, groupBy, key, customFields)
+        : fallbackLabel(key, data, groupBy),
       count: data.length,
-      wip: wipMap.get(key) ?? null,
+      wip: null,
       data,
     });
   }
+  const definition = customFields.find((field) => field.id === groupBy);
+  const optionRank = new Map(
+    definition?.options.map((option) => [option.id, option.position] as const) ?? [],
+  );
+  result.sort((left, right) => {
+    if (left.key === NONE_KEY) return right.key === NONE_KEY ? 0 : 1;
+    if (right.key === NONE_KEY) return -1;
+    if (optionRank.size > 0) {
+      const byPosition =
+        (optionRank.get(left.key) ?? Number.MAX_SAFE_INTEGER) -
+        (optionRank.get(right.key) ?? Number.MAX_SAFE_INTEGER);
+      if (byPosition !== 0) return byPosition;
+    }
+    if (groupBy === 'label' || groupBy === 'assignee' || groupBy === 'project') {
+      const leftLabel = left.label.toLowerCase();
+      const rightLabel = right.label.toLowerCase();
+      if (leftLabel < rightLabel) return -1;
+      if (leftLabel > rightLabel) return 1;
+    }
+    return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+  });
   return result;
 }

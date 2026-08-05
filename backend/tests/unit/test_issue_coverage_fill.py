@@ -12,6 +12,7 @@ from datetime import date
 import pytest
 
 from mesh.db.models.issue import Issue
+from mesh.db.models.label import IssueLabel, Label
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.user import User
 from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError, ValidationError
@@ -228,6 +229,68 @@ async def test_group_by_assignee_project_cycle_labels(session_factory, issue_ser
         assert expected_keys <= keys
         assert all(g["label"] for g in result["groups"])
         assert sum(g["count"] for g in result["groups"]) == 2
+
+
+@pytest.mark.unit
+async def test_group_by_label_projects_multi_value_membership_and_full_counts(
+    session_factory, issue_service
+):
+    ws = await _ws(session_factory)
+    owner = await _member(session_factory, ws, role="owner")
+    multi = await _issue(issue_service, actor=owner, ws=ws, title="multi")
+    zulu_only = await _issue(issue_service, actor=owner, ws=ws, title="zulu")
+    await _issue(issue_service, actor=owner, ws=ws, title="empty")
+
+    async with session_factory() as session, session.begin():
+        alpha = Label(workspace_id=ws.id, name="alpha", color="#112233")
+        zulu = Label(workspace_id=ws.id, name="Zulu", color="#445566")
+        session.add_all([alpha, zulu])
+        await session.flush()
+        session.add_all(
+            [
+                IssueLabel(
+                    workspace_id=ws.id,
+                    issue_id=uuid.UUID(multi["id"]),
+                    label_id=alpha.id,
+                ),
+                IssueLabel(
+                    workspace_id=ws.id,
+                    issue_id=uuid.UUID(multi["id"]),
+                    label_id=zulu.id,
+                ),
+                IssueLabel(
+                    workspace_id=ws.id,
+                    issue_id=uuid.UUID(zulu_only["id"]),
+                    label_id=zulu.id,
+                ),
+            ]
+        )
+
+    result = await issue_service.list_issues(
+        viewer=owner,
+        workspace_id=ws.id,
+        group_by="label",
+        sort="created_at",
+        order="asc",
+        limit=1,
+    )
+
+    assert result["next_cursor"] is not None
+    assert [group["key"] for group in result["groups"]] == [
+        str(alpha.id),
+        str(zulu.id),
+        "__none__",
+    ]
+    groups = {group["key"]: group for group in result["groups"]}
+    assert groups[str(alpha.id)]["label"] == "alpha"
+    assert groups[str(alpha.id)]["count"] == 1
+    assert groups[str(zulu.id)]["label"] == "Zulu"
+    assert groups[str(zulu.id)]["count"] == 2
+    assert groups["__none__"]["label"] == "No label"
+    assert groups["__none__"]["count"] == 1
+    assert [item["id"] for item in groups[str(alpha.id)]["data"]] == [multi["id"]]
+    assert [item["id"] for item in groups[str(zulu.id)]["data"]] == [multi["id"]]
+    assert groups["__none__"]["data"] == []
 
 
 @pytest.mark.unit

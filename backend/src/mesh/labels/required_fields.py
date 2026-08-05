@@ -13,7 +13,6 @@ and aborts the surrounding write (就地阻断,属校验而非通知).
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Iterable
 
 from sqlalchemy import select
@@ -38,6 +37,40 @@ def _occasion_matches(required_on: list, occasion: str) -> bool:
     return occasion in required_on
 
 
+def _required_value_is_present(
+    definition: CustomFieldDef,
+    row: IssueCustomFieldValue | None,
+) -> bool:
+    """Return whether ``row`` holds a non-empty value for its field type.
+
+    Row existence alone is insufficient: the member FK intentionally leaves
+    an all-NULL row after physical member deletion, and JSONB can represent an
+    empty multi-select. Valid falsy scalar values (number zero and boolean
+    false) remain present.
+    """
+    if row is None:
+        return False
+    if definition.type in {"text", "textarea", "url"}:
+        return isinstance(row.value_text, str) and row.value_text != ""
+    if definition.type == "number":
+        return row.value_number is not None
+    if definition.type in {"date", "datetime"}:
+        return row.value_date is not None
+    if definition.type == "member":
+        return row.value_member_id is not None
+    if definition.type == "boolean":
+        return row.value_boolean is not None
+    if definition.type == "single_select":
+        return isinstance(row.value_json, str) and row.value_json != ""
+    if definition.type == "multi_select":
+        return (
+            isinstance(row.value_json, list)
+            and bool(row.value_json)
+            and all(isinstance(item, str) and item != "" for item in row.value_json)
+        )
+    return False
+
+
 async def find_missing_required_values(
     session: AsyncSession,
     *,
@@ -47,10 +80,9 @@ async def find_missing_required_values(
     """Return ``[{"field_def_id", "name"}]`` for required fields lacking a value.
 
     Applicable definitions = workspace-level + the issue's project scope,
-    active, required, and matching at least one occasion. A value counts when
-    a row exists for (issue, field) — service-layer typing guarantees exactly
-    one non-NULL column per row, so row presence == value presence (an empty
-    multi_select is stored as no row).
+    active, required, and matching at least one occasion. Presence is checked
+    against the definition's value column and empty semantics; an all-NULL row
+    left by a member FK deletion and an empty multi-select remain missing.
     """
     occasion_set = set(occasions)
     if not occasion_set:
@@ -75,10 +107,10 @@ async def find_missing_required_values(
     ]
     if not candidates:
         return []
-    valued_field_ids = (
+    value_rows = list(
         (
             await session.execute(
-                select(IssueCustomFieldValue.field_def_id).where(
+                select(IssueCustomFieldValue).where(
                     IssueCustomFieldValue.workspace_id == issue.workspace_id,
                     IssueCustomFieldValue.issue_id == issue.id,
                     IssueCustomFieldValue.field_def_id.in_(
@@ -90,11 +122,13 @@ async def find_missing_required_values(
         .scalars()
         .all()
     )
-    valued: set[uuid.UUID] = set(valued_field_ids)
+    values_by_field = {row.field_def_id: row for row in value_rows}
     return [
         {"field_def_id": str(definition.id), "name": definition.name}
         for definition in candidates
-        if definition.id not in valued
+        if not _required_value_is_present(
+            definition, values_by_field.get(definition.id)
+        )
     ]
 
 

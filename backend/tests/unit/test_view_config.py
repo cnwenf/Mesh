@@ -238,6 +238,23 @@ def test_filters_boolean_values_rejected() -> None:
     assert _error_code(excinfo) == "invalid_filters"
 
 
+def test_filters_canonicalize_custom_field_definition_id() -> None:
+    canonical = "33333333-3333-3333-3333-333333333333"
+    filters = validate_filters(
+        {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": canonical.replace("-", ""),
+                    "op": "is_null",
+                }
+            ],
+        }
+    )
+    assert filters["conditions"][0]["field_def_id"] == canonical
+
+
 def test_filters_custom_field_boolean_values_are_valid_scalars() -> None:
     for op, value in (("eq", True), ("in", [True, False])):
         filters = {
@@ -280,6 +297,20 @@ def test_sort_custom_field_rule() -> None:
         }
     ]
     assert validate_sort(value) == value
+
+
+def test_sort_canonicalizes_custom_field_definition_id() -> None:
+    canonical = "33333333-3333-3333-3333-333333333333"
+    rules = validate_sort(
+        [
+            {
+                "field_kind": "custom_field",
+                "field_def_id": f"{{{canonical}}}",
+                "order": "asc",
+            }
+        ]
+    )
+    assert rules[0]["field_def_id"] == canonical
 
 
 @pytest.mark.parametrize(
@@ -372,6 +403,15 @@ def test_group_by_invalid_value() -> None:
 def test_group_by_accepts_custom_field_definition_id() -> None:
     field_id = "00000000-0000-0000-0000-000000000201"
     assert validate_group_by(field_id) == field_id
+
+
+def test_group_by_canonicalizes_custom_field_definition_id() -> None:
+    canonical = "00000000-0000-0000-0000-000000000201"
+    alternate = canonical.replace("-", "")
+    normalized = validate_group_by(alternate)
+    assert normalized == canonical
+    with pytest.raises(ValidationError):
+        validate_group_axes(canonical, normalized)
 
 
 def test_group_axes_reject_same_effective_field() -> None:

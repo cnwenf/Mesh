@@ -28,6 +28,7 @@ PASSWORD = "a-strong-passw0rd"
 def app(db_url, redis_url):
     settings = load_settings(
         database_url=db_url,
+        app_database_url=db_url,
         redis_url=redis_url,
         auth_mode="dev",
         jwt_secret="inprocess-auth-test-signing-secret",

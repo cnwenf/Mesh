@@ -350,6 +350,74 @@ describe('动态轴实时 memberships', () => {
     expect(updated.groups.filter((group) => group.data[0]?.title === 'Patched')).toHaveLength(2);
   });
 
+  it('关联帧早于一维定义骨架时派生名称并保持 __none__ 最后', () => {
+    const item = card({
+      labels: [{ id: 'label-a', name: 'Alpha', color: '#111111' }],
+      custom_field_values: [{ field_def_id: 'field-a', value_json: ['option-a'] }],
+    });
+    const labelResult = applyBoardFrame(
+      [
+        { key: 'label-a', label: 'Alpha', count: 1, wip: null, data: [item] },
+        { key: NONE_KEY, label: 'No label', count: 0, wip: null, data: [] },
+      ],
+      frame('issue.labels_changed', {
+        issue_id: item.id,
+        labels: [
+          { id: 'label-a', name: 'Alpha', color: '#111111' },
+          { id: 'label-b', name: 'Beta', color: '#222222' },
+        ],
+      }),
+      { groupBy: 'label', belongs: () => true },
+    );
+    expect(labelResult.groups.map((group) => [group.key, group.label])).toEqual([
+      ['label-a', 'Alpha'],
+      ['label-b', 'Beta'],
+      [NONE_KEY, 'No label'],
+    ]);
+
+    const definition = customField('multi_select', {
+      options: [
+        {
+          id: 'option-a',
+          field_def_id: 'field-a',
+          name: 'Alpha',
+          color: null,
+          position: 0,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'option-b',
+          field_def_id: 'field-a',
+          name: 'Beta',
+          color: null,
+          position: 1,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    });
+    const customResult = applyBoardFrame(
+      [
+        { key: 'option-a', label: 'Alpha', count: 1, wip: null, data: [item] },
+        { key: NONE_KEY, label: 'No Teams', count: 0, wip: null, data: [] },
+      ],
+      frame('issue.custom_field_changed', {
+        issue_id: item.id,
+        field_def_id: definition.id,
+        value: { value_json: ['option-a', 'option-b'] },
+      }),
+      { groupBy: definition.id, customFields: [definition], belongs: () => true },
+    );
+    expect(customResult.groups.map((group) => [group.key, group.label])).toEqual([
+      ['option-a', 'Alpha'],
+      ['option-b', 'Beta'],
+      [NONE_KEY, 'No Teams'],
+    ]);
+  });
+
   it('双多值轴生成笛卡尔 placements，但 column/lane count 按 issue distinct', () => {
     const fieldId = '11111111-1111-4111-8111-111111111111';
     const definition = {
@@ -426,6 +494,101 @@ describe('动态轴实时 memberships', () => {
     );
   });
 
+  it('关联帧早于二维定义骨架时为新列/泳道派生名称并保持 __none__ 最后', () => {
+    const definition = customField('multi_select', {
+      options: [
+        {
+          id: 'option-a',
+          field_def_id: 'field-a',
+          name: 'Alpha team',
+          color: null,
+          position: 0,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'option-b',
+          field_def_id: 'field-a',
+          name: 'Beta team',
+          color: null,
+          position: 1,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    });
+    const item = card({
+      labels: [{ id: 'label-a', name: 'Alpha', color: '#111111' }],
+      custom_field_values: [{ field_def_id: definition.id, value_json: ['option-a'] }],
+    });
+    const columns: BoardProjectionColumn[] = [
+      { key: 'label-a', label: 'Alpha', count: 1, wip: null },
+      { key: NONE_KEY, label: 'No label', count: 0, wip: null },
+    ];
+    const dynamicLanes: BoardLane[] = [
+      {
+        key: 'option-a',
+        label: 'Alpha team',
+        count: 1,
+        groups: [
+          { key: 'label-a', count: 1, data: [item] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+      {
+        key: NONE_KEY,
+        label: 'No Teams',
+        count: 0,
+        groups: [
+          { key: 'label-a', count: 0, data: [] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+    ];
+    const context = {
+      groupBy: 'label',
+      subGroupBy: definition.id,
+      customFields: [definition],
+      belongs: () => true,
+    };
+
+    const withLabel = applyBoardLaneFrame(
+      columns,
+      dynamicLanes,
+      frame('issue.labels_changed', {
+        issue_id: item.id,
+        labels: [
+          { id: 'label-a', name: 'Alpha', color: '#111111' },
+          { id: 'label-b', name: 'Beta', color: '#222222' },
+        ],
+      }),
+      context,
+    );
+    expect(withLabel.columns.map((column) => [column.key, column.label])).toEqual([
+      ['label-a', 'Alpha'],
+      ['label-b', 'Beta'],
+      [NONE_KEY, 'No label'],
+    ]);
+
+    const withCustom = applyBoardLaneFrame(
+      withLabel.columns,
+      withLabel.lanes,
+      frame('issue.custom_field_changed', {
+        issue_id: item.id,
+        field_def_id: definition.id,
+        value: { value_json: ['option-a', 'option-b'] },
+      }),
+      context,
+    );
+    expect(withCustom.lanes.map((lane) => [lane.key, lane.label])).toEqual([
+      ['option-a', 'Alpha team'],
+      ['option-b', 'Beta team'],
+      [NONE_KEY, 'No Teams'],
+    ]);
+  });
+
   it('label 定义 created/updated/deleted 局部维护 skeleton', () => {
     const base: BoardGroup[] = [
       { key: NONE_KEY, label: 'No label', count: 0, wip: null, data: [] },
@@ -446,6 +609,36 @@ describe('动态轴实时 memberships', () => {
     expect(
       applyLabelDefinitionToGroups(updated, frame('label.deleted', { id: 'label-a' })),
     ).toEqual(base);
+  });
+
+  it('label 定义创建与重命名后按显示名/稳定 key 排序，none 恒在末尾', () => {
+    const base: BoardGroup[] = [
+      { key: 'label-z', label: 'Zulu', count: 0, wip: null, data: [] },
+      { key: 'label-m', label: 'Mike', count: 0, wip: null, data: [] },
+      { key: NONE_KEY, label: 'No label', count: 0, wip: null, data: [] },
+    ];
+
+    const created = applyLabelDefinitionToGroups(
+      base,
+      frame('label.created', { id: 'label-a', name: 'Alpha' }),
+    );
+    expect(created.map((group) => group.key)).toEqual([
+      'label-a',
+      'label-m',
+      'label-z',
+      NONE_KEY,
+    ]);
+
+    const renamed = applyLabelDefinitionToGroups(
+      created,
+      frame('label.updated', { id: 'label-z', name: 'Bravo' }),
+    );
+    expect(renamed.map((group) => group.key)).toEqual([
+      'label-a',
+      'label-z',
+      'label-m',
+      NONE_KEY,
+    ]);
   });
 
   it('custom option updated 按名称/active 局部增删 skeleton', () => {
@@ -673,6 +866,89 @@ describe('二维定义帧局部维护 skeleton', () => {
     ).toBe('i1');
   });
 
+  it('custom option create/position update uses definition order in one and two dimensions', () => {
+    const field = customField('single_select', {
+      options: [
+        {
+          id: 'option-a',
+          field_def_id: 'field-a',
+          name: 'Alpha',
+          color: null,
+          position: 10,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'option-b',
+          field_def_id: 'field-a',
+          name: 'Beta',
+          color: null,
+          position: 20,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    });
+    const groups: BoardGroup[] = [
+      { key: 'option-b', label: 'Beta', count: 0, wip: null, data: [] },
+      { key: 'option-a', label: 'Alpha', count: 0, wip: null, data: [] },
+      { key: NONE_KEY, label: 'No Teams', count: 0, wip: null, data: [] },
+    ];
+    const positionFrame = frame('custom_field_option.updated', {
+      field_def_id: 'field-a',
+      change: 'updated',
+      option: { id: 'option-b', name: 'Beta', position: 5, is_active: true },
+    });
+
+    const ordered = applyCustomFieldDefinitionToGroups(groups, positionFrame, 'field-a', [field]);
+    expect(ordered.map((group) => group.key)).toEqual(['option-b', 'option-a', NONE_KEY]);
+
+    const columns = groups.map(({ key, label, count, wip }) => ({ key, label, count, wip }));
+    const laneTemplates: BoardLane[] = [
+      {
+        key: 'option-b',
+        label: 'Beta',
+        count: 0,
+        groups: columns.map((column) => ({ key: column.key, count: 0, data: [] })),
+      },
+      {
+        key: 'option-a',
+        label: 'Alpha',
+        count: 0,
+        groups: columns.map((column) => ({ key: column.key, count: 0, data: [] })),
+      },
+      {
+        key: NONE_KEY,
+        label: 'No Teams',
+        count: 0,
+        groups: columns.map((column) => ({ key: column.key, count: 0, data: [] })),
+      },
+    ];
+    const laneOrdered = applyCustomFieldDefinitionToLanes(
+      columns,
+      laneTemplates,
+      positionFrame,
+      {
+        groupBy: 'field-a',
+        subGroupBy: 'field-a',
+        customFields: [field],
+        belongs: () => true,
+      },
+    );
+    expect(laneOrdered.columns.map((column) => column.key)).toEqual([
+      'option-b',
+      'option-a',
+      NONE_KEY,
+    ]);
+    expect(laneOrdered.lanes.map((lane) => lane.key)).toEqual([
+      'option-b',
+      'option-a',
+      NONE_KEY,
+    ]);
+  });
+
   it('custom field rename 更新 none 标签，双轴/单轴删除保持 skeleton 一致', () => {
     const item = card({
       custom_field_values: [{ field_def_id: 'field-a', value_json: 'option-a' }],
@@ -741,6 +1017,114 @@ describe('二维定义帧局部维护 skeleton', () => {
 });
 
 describe('applyBoardFrame 单卡增量(§3.5)', () => {
+  it('同列非排序字段更新保持卡片顺序，显式 sort 对 created/updated 重新定位', () => {
+    const a = card({ id: 'a', identifier: 'WEB-1', position: 1, updated_at: '2026-07-26T10:00:00Z' });
+    const b = card({ id: 'b', identifier: 'WEB-2', position: 2, updated_at: '2026-07-26T10:01:00Z' });
+    const c = card({ id: 'c', identifier: 'WEB-3', position: 3, updated_at: '2026-07-26T10:02:00Z' });
+    const base: BoardGroup[] = [
+      { key: 'todo', label: 'Todo', count: 3, wip: null, data: [a, b, c] },
+    ];
+
+    const updated = applyBoardFrame(
+      base,
+      frame('issue.updated', {
+        id: 'b',
+        changes: { title: 'Updated title' },
+        updated_at: '2026-07-26T11:00:00Z',
+      }),
+      CTX,
+    );
+    expect(updated.groups[0]?.data.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+
+    const sorted = applyBoardFrame(
+      base,
+      frame('issue.created', {
+        issue: card({
+          id: 'newest',
+          identifier: 'WEB-4',
+          position: 99,
+          updated_at: '2026-07-26T12:00:00Z',
+        }),
+      }),
+      { ...CTX, sort: [{ field: 'updated_at', order: 'desc' }] },
+    );
+    expect(sorted.groups[0]?.data.map((item) => item.id)).toEqual(['newest', 'c', 'b', 'a']);
+  });
+
+  it('为首次出现的内置轴值使用卡片显示快照，并格式化 none/boolean 标签', () => {
+    const empty: BoardGroup[] = [];
+    const builtins = [
+      {
+        axis: 'status',
+        expected: 'In review',
+        item: card({
+          status_id: 'status-review',
+          status: { id: 'status-review', name: 'In review', category: 'in_review' },
+        }),
+      },
+      {
+        axis: 'assignee',
+        expected: 'Ada',
+        item: card({ assignee_id: 'member-ada', assignee: { id: 'member-ada', name: 'Ada' } }),
+      },
+      {
+        axis: 'project',
+        expected: 'Platform',
+        item: card({
+          project_id: 'project-platform',
+          project: { id: 'project-platform', name: 'Platform', key: 'PLAT' },
+        }),
+      },
+    ] as const;
+    for (const sample of builtins) {
+      const result = applyBoardFrame(
+        empty,
+        frame('issue.created', { issue: sample.item }),
+        { groupBy: sample.axis, belongs: () => true },
+      );
+      expect(result.groups[0]?.label).toBe(sample.expected);
+    }
+
+    const none = applyBoardFrame(
+      empty,
+      frame('issue.created', { issue: card({ assignee_id: null, assignee: null }) }),
+      { groupBy: 'assignee', belongs: () => true },
+    );
+    expect(none.groups[0]?.label).toBe('No assignee');
+
+    const booleanField = customField('boolean', { id: 'field-boolean', name: 'Approved' });
+    const boolean = applyBoardFrame(
+      empty,
+      frame('issue.created', {
+        issue: card({
+          custom_field_values: [
+            { field_def_id: booleanField.id, value_boolean: false },
+          ],
+        }),
+      }),
+      { groupBy: booleanField.id, customFields: [booleanField], belongs: () => true },
+    );
+    expect(boolean.groups[0]?.label).toBe('False');
+  });
+
+  it('未知 custom member 显示名时请求权威投影，不泄露成员 UUID', () => {
+    const memberField = customField('member', { id: 'field-member', name: 'Reviewer' });
+    const result = applyBoardFrame(
+      [],
+      frame('issue.created', {
+        issue: card({
+          custom_field_values: [
+            { field_def_id: memberField.id, value_member_id: 'member-private-uuid' },
+          ],
+        }),
+      }),
+      { groupBy: memberField.id, customFields: [memberField], belongs: () => true },
+    );
+
+    expect(result.refetch).toBe(true);
+    expect(result.groups).toEqual([]);
+  });
+
   it('issue.moved 跨列重分桶并调整计数', () => {
     const result = applyBoardFrame(
       groups(),
@@ -911,6 +1295,55 @@ describe('applyBoardFrame 单卡增量(§3.5)', () => {
 });
 
 describe('applyBoardLaneFrame 二维 cell 增量(§3.5)', () => {
+  it('同 cell 更新保持位置，并按视图 sort 插入新卡', () => {
+    const a = card({ id: 'a', identifier: 'WEB-1', position: 1, updated_at: '2026-07-26T10:00:00Z' });
+    const b = card({ id: 'b', identifier: 'WEB-2', position: 2, updated_at: '2026-07-26T10:01:00Z' });
+    const c = card({ id: 'c', identifier: 'WEB-3', position: 3, updated_at: '2026-07-26T10:02:00Z' });
+    const baseColumns: BoardProjectionColumn[] = [
+      { key: 'todo', label: 'Todo', count: 3, wip: null },
+    ];
+    const baseLanes: BoardLane[] = [
+      {
+        key: 'high',
+        label: 'High',
+        count: 3,
+        groups: [{ key: 'todo', count: 3, data: [a, b, c] }],
+      },
+    ];
+
+    const updated = applyBoardLaneFrame(
+      baseColumns,
+      baseLanes,
+      frame('issue.updated', {
+        id: 'b',
+        changes: { title: 'Updated title' },
+        updated_at: '2026-07-26T11:00:00Z',
+      }),
+      LANE_CTX,
+    );
+    expect(updated.lanes[0]?.groups[0]?.data.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+
+    const sorted = applyBoardLaneFrame(
+      baseColumns,
+      baseLanes,
+      frame('issue.created', {
+        issue: card({
+          id: 'newest',
+          identifier: 'WEB-4',
+          position: 99,
+          updated_at: '2026-07-26T12:00:00Z',
+        }),
+      }),
+      { ...LANE_CTX, sort: [{ field: 'updated_at', order: 'desc' }] },
+    );
+    expect(sorted.lanes[0]?.groups[0]?.data.map((item) => item.id)).toEqual([
+      'newest',
+      'c',
+      'b',
+      'a',
+    ]);
+  });
+
   it('issue.created 插入对应 cell 并同步 lane/column/cell count', () => {
     const created = card({
       id: 'i2',
@@ -1377,6 +1810,19 @@ describe('rebucketGroups(按 group_by 本地重分桶,§4.2)', () => {
     expect(byProject.find((x) => x.key === NONE_KEY)?.label).toBe('No project');
   });
 
+  it('assignee/project 动态目标轴使用卡片内嵌实体名称', () => {
+    const item = card({
+      assignee_id: 'member-1',
+      assignee: { id: 'member-1', name: 'Ada' },
+      project_id: 'project-1',
+      project: { id: 'project-1', name: 'Platform', key: 'PLAT' },
+    });
+    const source = [g('todo', [item], 'Todo')];
+
+    expect(rebucketGroups(source, 'assignee')[0]?.label).toBe('Ada');
+    expect(rebucketGroups(source, 'project')[0]?.label).toBe('Platform');
+  });
+
   it('status 分组回退到卡片状态名', () => {
     const a = card({
       id: 'a',
@@ -1386,5 +1832,99 @@ describe('rebucketGroups(按 group_by 本地重分桶,§4.2)', () => {
     const groups = [g('todo', [a], 'Todo')];
     const byStatus = rebucketGroups(groups, 'status');
     expect(byStatus.find((x) => x.key === 'st1')?.label).toBe('In Review');
+  });
+
+  it('从 label 多值轴切换到单值轴时同一 issue 只重分桶一次', () => {
+    const labelled = card({
+      id: 'multi',
+      labels: [
+        { id: 'label-a', name: 'Alpha', color: '#111111' },
+        { id: 'label-b', name: 'Beta', color: '#222222' },
+      ],
+    });
+    const labelGroups = [g('label-a', [labelled], 'Alpha'), g('label-b', [labelled], 'Beta')];
+
+    const byCategory = rebucketGroups(labelGroups, 'state_category');
+
+    expect(byCategory).toHaveLength(1);
+    expect(byCategory[0]?.data.map((item) => item.id)).toEqual(['multi']);
+    expect(byCategory[0]?.count).toBe(1);
+  });
+
+  it('预览 label 与 multi_select 目标轴时按完整多值集合分桶', () => {
+    const field = customField('multi_select', {
+      id: 'field-teams',
+      name: 'Teams',
+      options: [
+        {
+          id: 'option-a',
+          field_def_id: 'field-teams',
+          name: 'Alpha',
+          color: null,
+          position: 0,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'option-b',
+          field_def_id: 'field-teams',
+          name: 'Beta',
+          color: null,
+          position: 1,
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    });
+    const item = card({
+      labels: [
+        { id: 'label-b', name: 'Beta', color: '#222222' },
+        { id: 'label-a', name: 'Alpha', color: '#111111' },
+      ],
+      custom_field_values: [{ field_def_id: field.id, value_json: ['option-a', 'option-b'] }],
+    });
+    const source = [g('todo', [item], 'Todo')];
+
+    expect(rebucketGroups(source, 'label').map((group) => [group.key, group.label])).toEqual([
+      ['label-a', 'Alpha'],
+      ['label-b', 'Beta'],
+    ]);
+    expect(
+      rebucketGroups(source, field.id, [field]).map((group) => [group.key, group.label]),
+    ).toEqual([
+      ['option-a', 'Alpha'],
+      ['option-b', 'Beta'],
+    ]);
+  });
+
+  it('目标轴 __none__ 不继承源轴的标签或 WIP', () => {
+    const item = card({ id: 'empty', assignee_id: null, labels: [], custom_field_values: [] });
+    const source: BoardGroup[] = [
+      {
+        key: NONE_KEY,
+        label: 'No assignee',
+        count: 1,
+        wip: { limit: 1, enforcement: 'block' },
+        data: [item],
+      },
+    ];
+    const field = customField('multi_select', {
+      id: 'field-teams',
+      name: 'Teams',
+      options: [],
+    });
+
+    expect(rebucketGroups(source, 'label')[0]).toMatchObject({
+      key: NONE_KEY,
+      label: 'No label',
+      wip: null,
+    });
+    expect(rebucketGroups(source, field.id, [field])[0]).toMatchObject({
+      key: NONE_KEY,
+      label: 'No Teams',
+      wip: null,
+    });
   });
 });

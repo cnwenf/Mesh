@@ -133,6 +133,21 @@ const GROUP_BY_OPTIONS: readonly GroupByField[] = [
 const HIGHLIGHT_MS = 1200;
 
 /** 从整体游标分组包络拉取整板卡片(遍历 next_cursor 至末页,§6.14)。 */
+function appendUniqueCards(
+  current: readonly BoardCard[],
+  incoming: readonly BoardCard[],
+): BoardCard[] {
+  const seen = new Set(current.map((card) => card.id));
+  return [
+    ...current,
+    ...incoming.filter((card) => {
+      if (seen.has(card.id)) return false;
+      seen.add(card.id);
+      return true;
+    }),
+  ];
+}
+
 export async function loadAllGroups(
   client: ReturnType<typeof getApiClient>,
   viewId: string,
@@ -168,14 +183,17 @@ export async function loadAllGroups(
             incomingGroup.key,
             existingGroup === undefined
               ? incomingGroup
-              : { ...existingGroup, data: [...existingGroup.data, ...incomingGroup.data] },
+              : {
+                  ...existingGroup,
+                  data: appendUniqueCards(existingGroup.data, incomingGroup.data),
+                },
           );
         }
         lanes.set(incomingLane.key, { ...existingLane, groups: [...groups.values()] });
       }
       cursor = page.next_cursor;
     }
-    return { ...first, lanes: [...lanes.values()] };
+    return { ...first, lanes: [...lanes.values()], next_cursor: null };
   }
 
   const byKey = new Map<string, BoardGroup>();
@@ -191,12 +209,12 @@ export async function loadAllGroups(
         incoming.key,
         existing === undefined
           ? incoming
-          : { ...existing, data: [...existing.data, ...incoming.data] },
+          : { ...existing, data: appendUniqueCards(existing.data, incoming.data) },
       );
     }
     cursor = page.next_cursor;
   }
-  return { ...first, groups: [...byKey.values()] };
+  return { ...first, groups: [...byKey.values()], next_cursor: null };
 }
 
 export function BoardPage(): React.JSX.Element {
@@ -439,8 +457,8 @@ export function BoardPage(): React.JSX.Element {
     () =>
       effectiveGroupBy === loadedGroupBy
         ? boardGroups
-        : rebucketGroups(boardGroups, effectiveGroupBy),
-    [boardGroups, effectiveGroupBy, loadedGroupBy],
+        : rebucketGroups(boardGroups, effectiveGroupBy, customGroupFields),
+    [boardGroups, effectiveGroupBy, loadedGroupBy, customGroupFields],
   );
 
   const toastError = useCallback(

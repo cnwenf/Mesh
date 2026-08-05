@@ -22,9 +22,10 @@ Contract anchors (kanban.md + README §6):
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select, text, update
@@ -35,6 +36,7 @@ from mesh.api.pagination import paginate
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import role_satisfies
 from mesh.db.constraints import violates as _violates
+from mesh.db.models.label import CustomFieldDef, CustomFieldOption
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.project import Project, ProjectMember
 from mesh.db.models.view import View
@@ -59,6 +61,10 @@ MAX_PAGE_LIMIT = 100
 
 _VIEW_NOT_FOUND = "view not found"
 _DUPLICATE_SUFFIX_LIMIT = 50
+
+_CUSTOM_EQUALITY_OPS = frozenset({"eq", "neq", "in", "not_in", "is_null", "is_not_null"})
+_CUSTOM_RANGE_OPS = frozenset({"lt", "lte", "gt", "gte"})
+_CUSTOM_TEXT_OPS = _CUSTOM_EQUALITY_OPS | {"contains"}
 
 # PATCH fields that REPLACE the stored JSONB wholesale; board_settings is the
 # shallow-merged exception (handled separately).
@@ -326,6 +332,259 @@ class ViewService:
             raise ForbiddenError("project is not visible to you")
         return project
 
+    @staticmethod
+    def _custom_definition_scope(project_id: uuid.UUID | None) -> Any:
+        if project_id is None:
+            return CustomFieldDef.project_id.is_(None)
+        return or_(
+            CustomFieldDef.project_id.is_(None),
+            CustomFieldDef.project_id == project_id,
+        )
+
+    @staticmethod
+    def _custom_config_error(
+        *, code: str, message: str, path: str, field_def_id: str
+    ) -> ValidationError:
+        return ValidationError(
+            message,
+            code=code,
+            details={"path": path, "field_def_id": field_def_id},
+        )
+
+    async def validate_config_references(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        group_by: str | None,
+        sub_group_by: str | None,
+        filters: dict,
+        sort: list,
+    ) -> None:
+        """Resolve every custom config reference against the current value domain.
+
+        Shape validation is intentionally separate and pure. This transaction-
+        aware gate closes the remaining fail-open surface: a config can only
+        reference active definitions in the view's scope, supported operators,
+        active enum options, and active workspace members. Execution paths call
+        the same method so legacy/directly-written JSONB also fails closed.
+        """
+
+        definitions: dict[tuple[str, str], CustomFieldDef] = {}
+        option_ids: dict[uuid.UUID, set[str]] = {}
+
+        async def resolve(raw: Any, *, code: str, path: str) -> CustomFieldDef:
+            try:
+                canonical = str(uuid.UUID(str(raw)))
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise self._custom_config_error(
+                    code=code,
+                    message="field_def_id must be a UUID",
+                    path=path,
+                    field_def_id=str(raw)[:64],
+                ) from exc
+            cache_key = (code, canonical)
+            if cache_key in definitions:
+                return definitions[cache_key]
+            definition = await session.scalar(
+                select(CustomFieldDef).where(
+                    CustomFieldDef.workspace_id == workspace_id,
+                    CustomFieldDef.id == uuid.UUID(canonical),
+                    CustomFieldDef.is_active.is_(True),
+                    self._custom_definition_scope(project_id),
+                )
+            )
+            if definition is None:
+                raise self._custom_config_error(
+                    code=code,
+                    message="custom field is not available to this view",
+                    path=path,
+                    field_def_id=canonical,
+                )
+            definitions[cache_key] = definition
+            return definition
+
+        async def active_options(definition: CustomFieldDef) -> set[str]:
+            if definition.id not in option_ids:
+                rows = (
+                    await session.execute(
+                        select(CustomFieldOption.id).where(
+                            CustomFieldOption.workspace_id == workspace_id,
+                            CustomFieldOption.field_def_id == definition.id,
+                            CustomFieldOption.is_active.is_(True),
+                        )
+                    )
+                ).all()
+                option_ids[definition.id] = {str(option_id) for (option_id,) in rows}
+            return option_ids[definition.id]
+
+        async def validate_filter_value(
+            definition: CustomFieldDef,
+            value: Any,
+            *,
+            path: str,
+        ) -> Any:
+            field_type = definition.type
+            if field_type in {"text", "textarea", "url"}:
+                if not isinstance(value, str):
+                    raise self._custom_config_error(
+                        code="invalid_filters",
+                        message="custom text filter value must be a string",
+                        path=path,
+                        field_def_id=str(definition.id),
+                    )
+                return value
+            if field_type == "number":
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise self._custom_config_error(
+                        code="invalid_filters",
+                        message="custom number filter value must be finite",
+                        path=path,
+                        field_def_id=str(definition.id),
+                    )
+                return value
+            if field_type in {"date", "datetime"}:
+                if not isinstance(value, str):
+                    parsed = None
+                else:
+                    try:
+                        parsed = (
+                            date.fromisoformat(value)
+                            if field_type == "date"
+                            else datetime.fromisoformat(value.replace("Z", "+00:00"))
+                        )
+                    except ValueError:
+                        parsed = None
+                if parsed is None:
+                    raise self._custom_config_error(
+                        code="invalid_filters",
+                        message=f"custom {field_type} filter value must be ISO-8601",
+                        path=path,
+                        field_def_id=str(definition.id),
+                    )
+                return value
+            if field_type == "boolean":
+                if not isinstance(value, bool):
+                    raise self._custom_config_error(
+                        code="invalid_filters",
+                        message="custom boolean filter value must be true or false",
+                        path=path,
+                        field_def_id=str(definition.id),
+                    )
+                return value
+            if field_type == "member":
+                try:
+                    member_id = uuid.UUID(value) if isinstance(value, str) else None
+                except ValueError:
+                    member_id = None
+                member = (
+                    await session.scalar(
+                        select(Member.id).where(
+                            Member.workspace_id == workspace_id,
+                            Member.id == member_id,
+                            Member.status == "active",
+                        )
+                    )
+                    if member_id is not None
+                    else None
+                )
+                if member is None:
+                    raise self._custom_config_error(
+                        code="invalid_filters",
+                        message="custom member filter value is not active in this workspace",
+                        path=path,
+                        field_def_id=str(definition.id),
+                    )
+                return str(member_id)
+            if field_type in {"single_select", "multi_select"}:
+                try:
+                    canonical = str(uuid.UUID(value)) if isinstance(value, str) else ""
+                except ValueError:
+                    canonical = ""
+                if canonical not in await active_options(definition):
+                    raise self._custom_config_error(
+                        code="invalid_filters",
+                        message="custom select filter value is not an active option",
+                        path=path,
+                        field_def_id=str(definition.id),
+                    )
+                return canonical
+            raise self._custom_config_error(
+                code="invalid_filters",
+                message="unsupported custom field type",
+                path=path,
+                field_def_id=str(definition.id),
+            )
+
+        async def walk(node: Any, *, path: str) -> None:
+            if not isinstance(node, dict):
+                return
+            if "conditions" in node:
+                for index, child in enumerate(node.get("conditions", [])):
+                    await walk(child, path=f"{path}.conditions[{index}]")
+                return
+            if node.get("field_kind") != "custom_field" and "field_def_id" not in node:
+                return
+            definition = await resolve(
+                node.get("field_def_id"),
+                code="invalid_filters",
+                path=f"{path}.field_def_id",
+            )
+            op = node.get("op")
+            allowed = (
+                _CUSTOM_TEXT_OPS
+                if definition.type in {"text", "textarea", "url"}
+                else _CUSTOM_EQUALITY_OPS
+            )
+            if definition.type in {"number", "date", "datetime"}:
+                allowed |= _CUSTOM_RANGE_OPS
+            if op not in allowed:
+                raise self._custom_config_error(
+                    code="invalid_filters",
+                    message=f"operator {op!r} is not valid for custom field type {definition.type!r}",
+                    path=f"{path}.op",
+                    field_def_id=str(definition.id),
+                )
+            if op in {"is_null", "is_not_null"}:
+                return
+            raw = node.get("value")
+            if op in {"in", "not_in"}:
+                node["value"] = [
+                    await validate_filter_value(
+                        definition,
+                        item,
+                        path=f"{path}.value[{index}]",
+                    )
+                    for index, item in enumerate(raw)
+                ]
+            else:
+                node["value"] = await validate_filter_value(
+                    definition,
+                    raw,
+                    path=f"{path}.value",
+                )
+
+        built_in_axes = {
+            "state_category",
+            "status",
+            "assignee",
+            "priority",
+            "project",
+            "label",
+        }
+        for field_name, axis in (("group_by", group_by), ("sub_group_by", sub_group_by)):
+            if axis is not None and axis not in built_in_axes:
+                await resolve(axis, code="invalid_group_by", path=f"$.{field_name}")
+        await walk(filters, path="$")
+        for index, rule in enumerate(sort):
+            if rule.get("field_kind") == "custom_field" or "field_def_id" in rule:
+                await resolve(
+                    rule.get("field_def_id"),
+                    code="invalid_sort",
+                    path=f"$.[{index}].field_def_id",
+                )
+
     async def _next_position(self, session: AsyncSession, *, workspace_id: uuid.UUID) -> float:
         maximum = await session.scalar(
             select(func.max(View.position)).where(View.workspace_id == workspace_id)
@@ -443,6 +702,15 @@ class ViewService:
                 await self._validate_project_ref(
                     session, viewer=actor, workspace_id=workspace_id, project_id=project_id
                 )
+            await self.validate_config_references(
+                session,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                filters=filters,
+                sort=sort,
+            )
             if body.is_default:
                 await self._clear_scope_defaults(session, workspace_id=workspace_id, project_id=project_id)
             view = await self._insert_view(
@@ -648,6 +916,15 @@ class ViewService:
                     )
                 if new_project_id != view.project_id:
                     changes["project_id"] = new_project_id
+            await self.validate_config_references(
+                session,
+                workspace_id=workspace_id,
+                project_id=changes.get("project_id", view.project_id),
+                group_by=changes.get("group_by", view.group_by),
+                sub_group_by=changes.get("sub_group_by", view.sub_group_by),
+                filters=changes.get("filters", view.filters or {}),
+                sort=changes.get("sort", view.sort or []),
+            )
             if "is_default" in fields and not fields["is_default"] and view.is_default:
                 changes["is_default"] = False
             if "is_default" in fields and fields["is_default"] and not view.is_default:
@@ -763,6 +1040,15 @@ class ViewService:
             await self.assert_can_read(session, viewer=actor, view=source)
             if actor.role == "guest":
                 raise ForbiddenError("guests cannot create views")
+            await self.validate_config_references(
+                session,
+                workspace_id=workspace_id,
+                project_id=source.project_id,
+                group_by=source.group_by,
+                sub_group_by=source.sub_group_by,
+                filters=source.filters or {},
+                sort=source.sort or [],
+            )
             name = await self._duplicate_name(session, source=source)
             view = await self._insert_view(
                 session,

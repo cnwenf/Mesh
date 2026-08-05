@@ -326,6 +326,35 @@ describe('看板投影层交互', () => {
     });
   });
 
+  it('cell 内中间位置 reorder 按提交 position 乐观落位，不追加到列尾', async () => {
+    const calls = stubBoard({
+      groups: [
+        {
+          key: 'todo',
+          label: 'Todo',
+          count: 3,
+          wip: null,
+          data: [card('i1', { position: 1 }), card('i2', { position: 2 }), card('i3', { position: 3 })],
+        },
+      ],
+    });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+    const issue = await screen.findByTestId('board-card-i1');
+
+    fireEvent.keyDown(issue, { key: 'ArrowDown' });
+    fireEvent.keyDown(issue, { key: 'ArrowDown' });
+    fireEvent.keyDown(issue, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === 'POST' && call.url.includes('/reorder'))).toBe(
+        true,
+      ),
+    );
+    const ids = [...screen.getByTestId('board-column-todo').querySelectorAll('[data-testid^="board-card-"]')]
+      .map((node) => node.getAttribute('data-testid'));
+    expect(ids).toEqual(['board-card-i2', 'board-card-i1', 'board-card-i3']);
+  });
+
   it('WIP block 服务端拒绝 → 422 弹回原列并提示(§4.4)', async () => {
     // 客户端看目标列未满(允许落位),服务端计数已满 → 422 → 弹回。
     const calls = stubBoard({

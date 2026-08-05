@@ -1117,7 +1117,6 @@
     "error.project_member_exists": "That member is already part of this project.",
     "error.project_name_taken": "A project with that name already exists in this workspace.",
     "error.project_not_visible": "You do not have access to that project.",
-    "error.projection_field_pending": "Label and custom-field projection arrives with a later increment.",
     "error.query_cost_exceeded": "The query is too expensive. Please narrow your conditions.",
     "error.queue_item_not_cancellable": "This message has already started. Use /stop in DingTalk to stop the running task.",
     "error.quota_exceeded": "Storage quota exceeded. Free up space and try again.",
@@ -2888,5 +2887,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "79ebcc5f"
+  "version": "35a78886"
 }

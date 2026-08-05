@@ -70,4 +70,3 @@ unit, real API/database, and real-browser acceptance.
   `cnwenf <cnwenf@outlook.com>`, disable commit hooks that add trailers, verify
   author/committer and commit body, push the issue branch, open a ready PR, and
   hand it to the serialized merge queue without merging it locally.
-

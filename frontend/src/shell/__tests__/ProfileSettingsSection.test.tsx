@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test-utils/render';
 import { ProfileSettingsSection } from '../pages/settings/ProfileSettingsSection';
@@ -87,6 +88,33 @@ describe('ProfileSettingsSection', () => {
     fireEvent.blur(avatar);
     expect(await screen.findByText('Use an HTTPS avatar URL.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never passes an unsafe avatar draft to the image preview', async () => {
+    const imageSources: string[] = [];
+    class ImageStub {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      complete = false;
+      naturalWidth = 0;
+
+      set src(value: string) {
+        imageSources.push(value);
+      }
+    }
+    vi.stubGlobal('Image', ImageStub);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ data: ME })),
+    );
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    expect(imageSources).toContain('https://cdn.example/avatar.png');
+
+    fireEvent.change(avatar, { target: { value: 'data:image/svg+xml,<svg></svg>' } });
+
+    expect(imageSources).not.toContain('data:image/svg+xml,<svg></svg>');
   });
 
   it('shows a retryable load error and recovers through the same current-user endpoint', async () => {
@@ -210,6 +238,114 @@ describe('ProfileSettingsSection', () => {
     expect(screen.queryByRole('button', { name: 'Restore default avatar' })).toBeNull();
   });
 
+  it('does not autosave a focused avatar draft before restoring the default', async () => {
+    const patchBodies: unknown[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        patchBodies.push(JSON.parse(String(init.body)));
+        return jsonResponse({ data: { ...ME.user, avatar_url: null } });
+      }
+      return jsonResponse({ data: ME });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    await user.clear(avatar);
+    await user.type(avatar, 'https://cdn.example/unsaved-draft.png');
+    await user.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+
+    await waitFor(() => expect(patchBodies).toHaveLength(1));
+    expect(patchBodies).toEqual([{ avatar_url: null }]);
+    expect(avatar).toHaveValue('');
+  });
+
+  it('serializes a keyboard-triggered clear behind the avatar blur save', async () => {
+    const draftSave = deferred<Response>();
+    const clearSave = deferred<Response>();
+    const pending = [draftSave, clearSave];
+    const patchBodies: unknown[] = [];
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== 'PATCH') return Promise.resolve(jsonResponse({ data: ME }));
+      patchBodies.push(JSON.parse(String(init.body)));
+      return pending.shift()!.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    await user.clear(avatar);
+    await user.type(avatar, 'https://cdn.example/keyboard-draft.png');
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Restore default avatar' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    expect(patchBodies).toEqual([{ avatar_url: 'https://cdn.example/keyboard-draft.png' }]);
+    await act(async () => {
+      draftSave.resolve(
+        jsonResponse({
+          data: { ...ME.user, avatar_url: 'https://cdn.example/keyboard-draft.png' },
+        }),
+      );
+      await draftSave.promise;
+    });
+    await waitFor(() => expect(patchBodies).toHaveLength(2));
+    expect(patchBodies[1]).toEqual({ avatar_url: null });
+
+    await act(async () => {
+      clearSave.resolve(jsonResponse({ data: { ...ME.user, avatar_url: null } }));
+      await clearSave.promise;
+    });
+    expect(avatar).toHaveValue('');
+  });
+
+  it('rolls a failed queued clear back to the preceding authoritative avatar save', async () => {
+    const draftSave = deferred<Response>();
+    const clearSave = deferred<Response>();
+    const pending = [draftSave, clearSave];
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PATCH'
+        ? pending.shift()!.promise
+        : Promise.resolve(jsonResponse({ data: ME })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    await user.clear(avatar);
+    await user.type(avatar, 'https://cdn.example/client-draft.png');
+    await user.tab();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await user.keyboard('{Enter}');
+    expect(avatar).toHaveValue('');
+
+    await act(async () => {
+      draftSave.resolve(
+        jsonResponse({
+          data: { ...ME.user, avatar_url: 'https://cdn.example/server-normalized.png' },
+        }),
+      );
+      await draftSave.promise;
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      clearSave.resolve(
+        jsonResponse(
+          { error: { code: 'internal_error', message: 'clear failed', details: {} } },
+          500,
+        ),
+      );
+      await clearSave.promise;
+    });
+
+    expect(await screen.findByText('Could not save your profile. Try again.')).toBeInTheDocument();
+    expect(avatar).toHaveValue('https://cdn.example/server-normalized.png');
+  });
+
   it('rolls an optimistic avatar clear back when the server rejects it', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'PATCH') throw new Error('save failed');
@@ -290,9 +426,10 @@ describe('ProfileSettingsSection', () => {
 
     const avatar = await screen.findByLabelText('Avatar URL');
     fireEvent.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     fireEvent.change(avatar, { target: { value: 'https://cdn.example/newer.png' } });
     fireEvent.blur(avatar);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       clearSave.resolve(
@@ -303,6 +440,7 @@ describe('ProfileSettingsSection', () => {
       );
       await clearSave.promise;
     });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(screen.queryByText('Could not save your profile. Try again.')).toBeNull();
 
     await act(async () => {
@@ -412,7 +550,7 @@ describe('ProfileSettingsSection', () => {
     expect(name).toHaveValue('Still editing');
   });
 
-  it('ignores stale avatar responses and preserves a newer unsaved URL', async () => {
+  it('serializes avatar saves and preserves a newer unsaved URL', async () => {
     const firstSave = deferred<Response>();
     const secondSave = deferred<Response>();
     const pending = [firstSave, secondSave];
@@ -426,9 +564,10 @@ describe('ProfileSettingsSection', () => {
     const avatar = await screen.findByLabelText('Avatar URL');
     fireEvent.change(avatar, { target: { value: 'https://cdn.example/first.png' } });
     fireEvent.blur(avatar);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     fireEvent.change(avatar, { target: { value: 'https://cdn.example/second.png' } });
     fireEvent.blur(avatar);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       firstSave.resolve(
@@ -436,6 +575,7 @@ describe('ProfileSettingsSection', () => {
       );
       await firstSave.promise;
     });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(avatar).toHaveValue('https://cdn.example/second.png');
 
     fireEvent.change(avatar, { target: { value: 'https://cdn.example/still-editing.png' } });

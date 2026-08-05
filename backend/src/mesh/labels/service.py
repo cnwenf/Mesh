@@ -502,22 +502,32 @@ class LabelService:
         if role is None and project.lead_member_id != viewer.id:
             raise ForbiddenError("project is private")
 
-    async def _visible_project_clause(self, session: AsyncSession, *, viewer: Member):
+    async def _visible_project_clause(
+        self,
+        session: AsyncSession,
+        *,
+        viewer: Member,
+        workspace_id: uuid.UUID,
+    ):
         """SQL clause restricting to projects visible to ``viewer`` (None = all)."""
         if self._is_workspace_manager(viewer):
             return None
         public = Project.visibility == "public"
         lead = Project.lead_member_id == viewer.id
         member_of = Project.id.in_(
-            select(ProjectMember.project_id).where(ProjectMember.member_id == viewer.id)
+            select(ProjectMember.project_id).where(
+                ProjectMember.member_id == viewer.id,
+                ProjectMember.workspace_id == workspace_id,
+            )
         )
         if viewer.role == "guest":
             granted = Project.id.in_(
                 select(MemberProjectAccess.project_id).where(
-                    MemberProjectAccess.member_id == viewer.id
+                    MemberProjectAccess.member_id == viewer.id,
+                    MemberProjectAccess.workspace_id == workspace_id,
                 )
             )
-            return or_(public, granted)
+            return granted
         return or_(public, lead, member_of)
 
     def _visible_issue_clause(self, *, viewer: Member, workspace_id: uuid.UUID):
@@ -719,7 +729,7 @@ class LabelService:
             await set_tenant_context(session, workspace_id)
             stmt = select(Label).where(Label.workspace_id == workspace_id)
             visible_project_clause = await self._visible_project_clause(
-                session, viewer=viewer
+                session, viewer=viewer, workspace_id=workspace_id
             )
             if project_id is not None:
                 project = await self._load_scope_project(
@@ -1356,7 +1366,9 @@ class LabelService:
                     )
                 )
             else:
-                clause = await self._visible_project_clause(session, viewer=viewer)
+                clause = await self._visible_project_clause(
+                    session, viewer=viewer, workspace_id=workspace_id
+                )
                 if clause is not None:
                     stmt = stmt.where(
                         or_(

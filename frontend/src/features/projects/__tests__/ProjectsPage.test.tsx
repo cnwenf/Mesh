@@ -828,6 +828,48 @@ describe('ProjectsPage', () => {
     expect(screen.queryByText('Ceres')).not.toBeInTheDocument();
   });
 
+  it('实时项目严格遵循当前状态筛选', async () => {
+    stub([PROJECT_A, PROJECT_B]);
+    const realtime = makeFakeRealtime();
+    render(
+      <MemoryRouter initialEntries={['/projects?status=planning']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={realtime.value}>
+                <ProjectsPage />
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Borealis');
+    expect(screen.queryByText('Apollo')).not.toBeInTheDocument();
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:projects',
+        seq: 1,
+        event: 'project.created',
+        payload: { project: { ...PROJECT_A, id: 'prj-active-rt', name: 'Active realtime' } },
+      });
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:projects',
+        seq: 2,
+        event: 'project.created',
+        payload: {
+          project: { ...PROJECT_B, id: 'prj-planning-rt', name: 'Planning realtime' },
+        },
+      });
+    });
+
+    expect(screen.queryByText('Active realtime')).not.toBeInTheDocument();
+    expect(await screen.findByText('Planning realtime')).toBeInTheDocument();
+  });
+
   it('实时列表忽略 foreign channel 与当前频道中的 foreign workspace payload', async () => {
     stub([PROJECT_A]);
     const realtime = makeFakeRealtime();

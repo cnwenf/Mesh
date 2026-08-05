@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
+from mesh.db.models.label import CustomFieldDef, CustomFieldOption
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import Project, ProjectMember
@@ -92,6 +93,37 @@ async def _grant_project_access(
         session.add(
             ProjectMember(workspace_id=workspace.id, project_id=project.id, member_id=member.id, role=role)
         )
+
+
+async def _create_custom_field(
+    session_factory,
+    workspace: Workspace,
+    *,
+    field_type: str = "text",
+    project: Project | None = None,
+    is_active: bool = True,
+) -> tuple[CustomFieldDef, CustomFieldOption | None]:
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            project_id=project.id if project is not None else None,
+            name=f"Field {uuid.uuid4().hex[:6]}",
+            field_key=f"f_{uuid.uuid4().hex[:8]}",
+            type=field_type,
+            is_active=is_active,
+        )
+        session.add(definition)
+        await session.flush()
+        option = None
+        if field_type in {"single_select", "multi_select"}:
+            option = CustomFieldOption(
+                workspace_id=workspace.id,
+                field_def_id=definition.id,
+                name="Active",
+                is_active=True,
+            )
+            session.add(option)
+    return definition, option
 
 
 def _create_body(**overrides) -> CreateViewRequest:
@@ -212,6 +244,112 @@ async def test_create_view_rejects_duplicate_group_axes(session_factory) -> None
             body=_create_body(group_by="priority", sub_group_by="priority"),
         )
     assert excinfo.value.code == "validation_error"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "code"),
+    [
+        ({"group_by": "00000000-0000-0000-0000-000000000991"}, "invalid_group_by"),
+        (
+            {
+                "filters": {
+                    "operator": "AND",
+                    "conditions": [
+                        {
+                            "field_kind": "custom_field",
+                            "field_def_id": "00000000-0000-0000-0000-000000000991",
+                            "op": "is_null",
+                        }
+                    ],
+                }
+            },
+            "invalid_filters",
+        ),
+        (
+            {
+                "sort": [
+                    {
+                        "field_kind": "custom_field",
+                        "field_def_id": "00000000-0000-0000-0000-000000000991",
+                        "order": "asc",
+                    }
+                ]
+            },
+            "invalid_sort",
+        ),
+    ],
+)
+async def test_create_view_rejects_unknown_custom_references(
+    session_factory, overrides, code
+) -> None:
+    workspace, member, service = await _setup(session_factory)
+    with pytest.raises(ValidationError) as excinfo:
+        await service.create_view(
+            actor=member,
+            workspace_id=workspace.id,
+            body=_create_body(**overrides),
+        )
+    assert excinfo.value.code == code
+
+
+async def test_create_view_validates_custom_scope_operator_and_option(session_factory) -> None:
+    workspace, member, service = await _setup(session_factory)
+    project = await _create_project(session_factory, workspace)
+    project_field, _ = await _create_custom_field(
+        session_factory, workspace, project=project
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        await service.create_view(
+            actor=member,
+            workspace_id=workspace.id,
+            body=_create_body(group_by=str(project_field.id)),
+        )
+    assert excinfo.value.code == "invalid_group_by"
+
+    select_field, option = await _create_custom_field(
+        session_factory, workspace, field_type="single_select"
+    )
+    assert option is not None
+    with pytest.raises(ValidationError) as excinfo:
+        await service.create_view(
+            actor=member,
+            workspace_id=workspace.id,
+            body=_create_body(
+                filters={
+                    "operator": "AND",
+                    "conditions": [
+                        {
+                            "field_kind": "custom_field",
+                            "field_def_id": str(select_field.id),
+                            "op": "contains",
+                            "value": str(option.id),
+                        }
+                    ],
+                }
+            ),
+        )
+    assert excinfo.value.code == "invalid_filters"
+
+    inactive_option_id = uuid.uuid4()
+    with pytest.raises(ValidationError) as excinfo:
+        await service.create_view(
+            actor=member,
+            workspace_id=workspace.id,
+            body=_create_body(
+                filters={
+                    "operator": "AND",
+                    "conditions": [
+                        {
+                            "field_kind": "custom_field",
+                            "field_def_id": str(select_field.id),
+                            "op": "eq",
+                            "value": str(inactive_option_id),
+                        }
+                    ],
+                }
+            ),
+        )
+    assert excinfo.value.code == "invalid_filters"
 
 
 async def test_update_view_validates_final_group_axis_pair(session_factory) -> None:

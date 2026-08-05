@@ -288,6 +288,27 @@ describe('BoardColumns 渲染', () => {
     expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
   });
 
+  it('多值轴重复卡片按 cell 独立聚焦与标记 aria-current', () => {
+    const duplicated = card('shared', 1);
+    render({
+      groupBy: 'label',
+      columns: [
+        column({ key: 'label-a', label: 'Alpha' }),
+        column({ key: 'label-b', label: 'Beta' }),
+      ],
+      cardsByKey: { 'label-a': [duplicated], 'label-b': [duplicated] },
+      dragEnabled: false,
+    });
+
+    const copies = screen.getAllByTestId('board-card-shared');
+    expect(copies).toHaveLength(2);
+    fireEvent.focus(copies[1]!);
+
+    expect(document.activeElement).toBe(copies[1]);
+    expect(copies[0]).not.toHaveAttribute('aria-current', 'true');
+    expect(copies[1]).toHaveAttribute('aria-current', 'true');
+  });
+
   it('父页面尚未注册 handler 时 palette 命令是安全 no-op', () => {
     render({ columns: [], cardsByKey: {} });
     const commands = useShortcutRegistry

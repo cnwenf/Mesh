@@ -14,6 +14,7 @@ query compiler (injection guard, kanban §2.9 closing note). Failures raise
 
 from __future__ import annotations
 
+import copy
 import uuid
 from typing import Any
 
@@ -128,6 +129,15 @@ def _is_scalar_json(value: Any) -> bool:
     return isinstance(value, (str, int, float)) or value is None
 
 
+def _canonical_custom_field_id(value: Any, *, code: str, path: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise _invalid(code, "custom field needs a non-empty field_def_id", path=path)
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise _invalid(code, "field_def_id must be a UUID", path=path) from exc
+
+
 def _count_conditions(conditions: list[Any]) -> int:
     total = 0
     for condition in conditions:
@@ -183,13 +193,11 @@ def _validate_condition(condition: Any, *, path: str, depth: int) -> None:
                 path=path,
                 keys=sorted(extra),
             )
-        field_def_id = condition.get("field_def_id")
-        if not isinstance(field_def_id, str) or not field_def_id:
-            raise _invalid(
-                "invalid_filters",
-                "custom-field condition needs a non-empty field_def_id",
-                path=f"{path}.field_def_id",
-            )
+        condition["field_def_id"] = _canonical_custom_field_id(
+            condition.get("field_def_id"),
+            code="invalid_filters",
+            path=f"{path}.field_def_id",
+        )
         _validate_op(condition, field="<custom_field>", path=path)
         return
 
@@ -252,6 +260,7 @@ def validate_filters(value: Any) -> dict:
         return {}
     if not isinstance(value, dict):
         raise _invalid("invalid_filters", "filters must be an object", path="$")
+    value = copy.deepcopy(value)
     extra = set(value) - _FILTER_GROUP_KEYS
     if extra:
         raise _invalid("invalid_filters", "unknown keys in filters", path="$", keys=sorted(extra))
@@ -279,6 +288,7 @@ def validate_sort(value: Any) -> list[dict]:
     """Validate a sort rules array (ordered, earlier rules win)."""
     if not isinstance(value, list):
         raise _invalid("invalid_sort", "sort must be an array", path="$")
+    value = copy.deepcopy(value)
     for index, rule in enumerate(value):
         path = f"$.[{index}]"
         if not isinstance(rule, dict):
@@ -290,13 +300,11 @@ def validate_sort(value: Any) -> list[dict]:
             extra = set(rule) - {"field_kind", "field_def_id", "order"}
             if extra:
                 raise _invalid("invalid_sort", "unknown keys in sort rule", path=path, keys=sorted(extra))
-            field_def_id = rule.get("field_def_id")
-            if not isinstance(field_def_id, str) or not field_def_id:
-                raise _invalid(
-                    "invalid_sort",
-                    "custom-field sort rule needs a non-empty field_def_id",
-                    path=f"{path}.field_def_id",
-                )
+            rule["field_def_id"] = _canonical_custom_field_id(
+                rule.get("field_def_id"),
+                code="invalid_sort",
+                path=f"{path}.field_def_id",
+            )
             continue
         extra = set(rule) - {"field", "order"}
         if extra:
@@ -384,14 +392,13 @@ def validate_group_by(value: Any) -> str | None:
     """Validate group_by (NULL = board default state_category at render time)."""
     if value is None:
         return None
-    is_custom_field = False
+    canonical_custom_field: str | None = None
     if isinstance(value, str):
         try:
-            uuid.UUID(value)
-            is_custom_field = True
+            canonical_custom_field = str(uuid.UUID(value))
         except ValueError:
             pass
-    if not isinstance(value, str) or (value not in GROUP_BY_FIELDS and not is_custom_field):
+    if not isinstance(value, str) or (value not in GROUP_BY_FIELDS and canonical_custom_field is None):
         raise ValidationError(
             "unknown group_by field",
             code="invalid_group_by",
@@ -400,7 +407,7 @@ def validate_group_by(value: Any) -> str | None:
                 "allowed": [*sorted(GROUP_BY_FIELDS), "<custom_field_def_id>"],
             },
         )
-    return value
+    return canonical_custom_field or value
 
 
 def validate_group_axes(group_by: str | None, sub_group_by: str | None) -> None:

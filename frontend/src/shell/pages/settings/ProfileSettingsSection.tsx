@@ -33,6 +33,9 @@ export function ProfileSettingsSection(): React.JSX.Element {
   const [avatarError, setAvatarError] = useState<string | undefined>();
   const nameSaveVersion = useRef(0);
   const avatarSaveVersion = useRef(0);
+  const skipNextAvatarBlurSave = useRef(false);
+  const avatarWriteQueue = useRef<Promise<void>>(Promise.resolve());
+  const authoritativeAvatarUrl = useRef<string | null>(null);
 
   const load = useCallback(() => {
     let active = true;
@@ -43,6 +46,7 @@ export function ProfileSettingsSection(): React.JSX.Element {
         setProfile(me.user);
         setDisplayName(me.user.display_name);
         setAvatarUrl(me.user.avatar_url ?? '');
+        authoritativeAvatarUrl.current = me.user.avatar_url ?? null;
         setStatus('ready');
       })
       .catch(() => {
@@ -69,6 +73,8 @@ export function ProfileSettingsSection(): React.JSX.Element {
     );
   }
   const currentProfile = profile;
+  const trimmedAvatarUrl = avatarUrl.trim();
+  const previewAvatarUrl = isSecureAvatarUrl(trimmedAvatarUrl) ? trimmedAvatarUrl : undefined;
   const notifySaved = (): void => {
     toast.addToast(t('profile.saved'), {
       tone: 'success',
@@ -79,6 +85,20 @@ export function ProfileSettingsSection(): React.JSX.Element {
     error instanceof MeshApiError && error.code === 'validation_error'
       ? t('profile.avatarHttps')
       : t('profile.saveError');
+  const enqueueAvatarUpdate = (avatar_url: string | null): Promise<UserProfile> => {
+    const request = avatarWriteQueue.current.then(async () => {
+      const next = await updateOwnProfile(client, { avatar_url });
+      authoritativeAvatarUrl.current = next.avatar_url ?? null;
+      return next;
+    });
+    // Keep the tail fulfilled so a rejected save never blocks the next user
+    // action. Serial order makes the final server value match interaction order.
+    avatarWriteQueue.current = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    return request;
+  };
 
   const saveDisplayName = (): void => {
     const value = displayName.trim();
@@ -104,6 +124,13 @@ export function ProfileSettingsSection(): React.JSX.Element {
   };
 
   const saveAvatarUrl = (): void => {
+    // Pointer activation of "restore default" blurs the URL input before the
+    // button click. Suppress that one blur save so a draft URL and the explicit
+    // `avatar_url:null` clear are never issued concurrently.
+    if (skipNextAvatarBlurSave.current) {
+      skipNextAvatarBlurSave.current = false;
+      return;
+    }
     const value = avatarUrl.trim();
     if (!isSecureAvatarUrl(value)) {
       setAvatarError(t('profile.avatarHttps'));
@@ -112,7 +139,7 @@ export function ProfileSettingsSection(): React.JSX.Element {
     setAvatarError(undefined);
     if (value === (currentProfile.avatar_url ?? '')) return;
     const saveVersion = ++avatarSaveVersion.current;
-    void updateOwnProfile(client, { avatar_url: value })
+    void enqueueAvatarUpdate(value)
       .then((next) => {
         if (saveVersion !== avatarSaveVersion.current) return;
         setProfile((current) =>
@@ -127,14 +154,13 @@ export function ProfileSettingsSection(): React.JSX.Element {
   };
 
   const clearAvatar = (): void => {
+    skipNextAvatarBlurSave.current = false;
     if ((currentProfile.avatar_url ?? '') === '' && avatarUrl === '') return;
-    const previousProfileAvatar = currentProfile.avatar_url ?? null;
-    const previousInput = avatarUrl;
     const saveVersion = ++avatarSaveVersion.current;
     setAvatarError(undefined);
     setProfile((current) => (current === null ? current : { ...current, avatar_url: null }));
     setAvatarUrl('');
-    void updateOwnProfile(client, { avatar_url: null })
+    void enqueueAvatarUpdate(null)
       .then((next) => {
         if (saveVersion !== avatarSaveVersion.current) return;
         setProfile((current) =>
@@ -145,10 +171,11 @@ export function ProfileSettingsSection(): React.JSX.Element {
       })
       .catch((error: unknown) => {
         if (saveVersion !== avatarSaveVersion.current) return;
+        const rollbackAvatar = authoritativeAvatarUrl.current;
         setProfile((current) =>
-          current === null ? current : { ...current, avatar_url: previousProfileAvatar },
+          current === null ? current : { ...current, avatar_url: rollbackAvatar },
         );
-        setAvatarUrl((current) => (current === '' ? previousInput : current));
+        setAvatarUrl((current) => (current === '' ? (rollbackAvatar ?? '') : current));
         setAvatarError(avatarSaveError(error));
       });
   };
@@ -163,7 +190,7 @@ export function ProfileSettingsSection(): React.JSX.Element {
             <span>{currentProfile.email}</span>
           </div>
           <div className="mesh-settings-section__identity-preview">
-            <Avatar name={displayName} src={avatarUrl} size={56} />
+            <Avatar name={displayName} src={previewAvatarUrl} size={56} />
           </div>
         </div>
         <Input
@@ -184,7 +211,14 @@ export function ProfileSettingsSection(): React.JSX.Element {
           onBlur={saveAvatarUrl}
         />
         {avatarUrl !== '' || currentProfile.avatar_url ? (
-          <Button type="button" variant="secondary" onClick={clearAvatar}>
+          <Button
+            type="button"
+            variant="secondary"
+            onPointerDown={() => {
+              skipNextAvatarBlurSave.current = true;
+            }}
+            onClick={clearAvatar}
+          >
             {t('profile.restoreDefaultAvatar')}
           </Button>
         ) : null}

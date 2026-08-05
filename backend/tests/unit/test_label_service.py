@@ -553,7 +553,7 @@ async def test_list_labels_private_project_visibility(session_factory):
     assert {item["name"] for item in member_visible} == {"hidden", "shared"}
 
 
-async def test_list_labels_guest_only_public_and_granted(session_factory):
+async def test_list_labels_guest_only_explicitly_granted_projects(session_factory):
     workspace, admin, service = await _setup(session_factory)
     guest = await _second_member(session_factory, workspace, role="guest")
     public = await _create_project(session_factory, workspace, visibility="public")
@@ -566,9 +566,30 @@ async def test_list_labels_guest_only_public_and_granted(session_factory):
         actor=admin, workspace_id=workspace.id, name="priv", color="#ffffff",
         project_id=private.id,
     )
+    await service.create_field_def(
+        actor=admin,
+        workspace_id=workspace.id,
+        name="Public field",
+        field_key="public_field",
+        field_type="text",
+        project_id=public.id,
+    )
+    await service.create_field_def(
+        actor=admin,
+        workspace_id=workspace.id,
+        name="Private field",
+        field_key="private_field",
+        field_type="text",
+        project_id=private.id,
+    )
     visible, _ = await service.list_labels(viewer=guest, workspace_id=workspace.id)
-    assert {item["name"] for item in visible} == {"pub"}
-    # Grant the guest the private project → it appears.
+    assert visible == []
+    visible_fields, _ = await service.list_field_defs(
+        viewer=guest, workspace_id=workspace.id
+    )
+    assert visible_fields == []
+    # Public visibility does not bypass the guest's explicit project-access
+    # allow-list. Granting the private project exposes only that project.
     async with session_factory() as session, session.begin():
         session.add(
             MemberProjectAccess(
@@ -577,7 +598,11 @@ async def test_list_labels_guest_only_public_and_granted(session_factory):
             )
         )
     visible2, _ = await service.list_labels(viewer=guest, workspace_id=workspace.id)
-    assert {item["name"] for item in visible2} == {"pub", "priv"}
+    assert {item["name"] for item in visible2} == {"priv"}
+    visible_fields2, _ = await service.list_field_defs(
+        viewer=guest, workspace_id=workspace.id
+    )
+    assert {item["field_key"] for item in visible_fields2} == {"private_field"}
 
 
 async def test_label_cross_workspace_isolation(session_factory):

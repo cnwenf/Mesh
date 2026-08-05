@@ -95,6 +95,27 @@ describe('loadAllGroups', () => {
     const byKey = new Map(result.groups.map((g) => [g.key, g]));
     expect(byKey.get('todo')?.data.map((c) => c.id)).toEqual(['a', 'b']);
     expect(byKey.get('done')?.data.map((c) => c.id)).toEqual(['c']);
+    expect(result.next_cursor).toBeNull();
+  });
+
+  it('整体游标页面重叠时按 cell + issue id 去重', async () => {
+    const client = groupedClient([
+      PAGE1,
+      {
+        ...PAGE2,
+        groups: [
+          { key: 'todo', label: 'Todo', count: 2, wip: null, data: [CARD_A, CARD_B] },
+          { key: 'done', label: 'Done', count: 1, wip: null, data: [CARD_C] },
+        ],
+      },
+    ]);
+
+    const result = await loadAllGroups(client as never, 'v1');
+
+    expect(
+      result.groups.find((group) => group.key === 'todo')?.data.map((item) => item.id),
+    ).toEqual(['a', 'b']);
+    expect(result.next_cursor).toBeNull();
   });
 
   it('多页按 lane + group cell 合并二维数据', async () => {
@@ -165,6 +186,35 @@ describe('loadAllGroups', () => {
     expect(result.lanes[0]?.groups[0]?.data.map((item) => item.id)).toEqual(['a', 'b']);
     expect(result.lanes[1]?.groups[1]?.data.map((item) => item.id)).toEqual(['c']);
     expect(result.columns.map((column) => column.key)).toEqual(['todo', 'done']);
+    expect(result.next_cursor).toBeNull();
+  });
+
+  it('二维页面重叠时仅在同一 lane + group cell 内去重', async () => {
+    const skeleton = {
+      layout: 'board',
+      group_by: 'state_category',
+      sub_group_by: 'priority',
+      column_target_status: {},
+      columns: [{ key: 'todo', label: 'Todo', count: 2, wip: null }],
+    };
+    const lane = (data: readonly (typeof CARD_A)[], nextCursor: string | null) => ({
+      ...skeleton,
+      lanes: [
+        {
+          key: 'high',
+          label: 'High',
+          count: 2,
+          groups: [{ key: 'todo', count: 2, data }],
+        },
+      ],
+      next_cursor: nextCursor,
+    });
+    const client = groupedClient([lane([CARD_A], 'next'), lane([CARD_A, CARD_B], null)]);
+
+    const result = await loadAllGroups(client as never, 'v1');
+
+    expect(result.lanes[0]?.groups[0]?.data.map((item) => item.id)).toEqual(['a', 'b']);
+    expect(result.next_cursor).toBeNull();
   });
 
   it('后续页出现新泳道或既有泳道的新分组时保留动态投影', async () => {

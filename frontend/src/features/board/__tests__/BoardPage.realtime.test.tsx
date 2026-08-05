@@ -294,6 +294,75 @@ describe('看板实时增量合并接线', () => {
     );
   });
 
+  it('缺失卡对账在 GET 在途时合并最新帧，且不以旧帧覆盖较新的权威响应', async () => {
+    const gate = deferred<Response>();
+    const calls = stub(view(), { 'i-race': gate.promise });
+    const rt = makeRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/views/v1' },
+    );
+    await screen.findByTestId('board-card-i1');
+
+    act(() => {
+      rt.emitFrame({
+        op: 'event',
+        channel: 'workspace:ws-1:issues',
+        seq: 3,
+        event: 'issue.updated',
+        payload: {
+          id: 'i-race',
+          changes: { title: 'Older frame', state_category: 'todo' },
+          updated_at: '2026-07-26T11:00:00Z',
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(calls.filter((url) => url.includes('/api/v1/issues/i-race'))).toHaveLength(1),
+    );
+
+    act(() => {
+      rt.emitFrame({
+        op: 'event',
+        channel: 'view:v1',
+        seq: 4,
+        event: 'issue.updated',
+        payload: {
+          id: 'i-race',
+          changes: { title: 'Newest frame', state_category: 'done' },
+          updated_at: '2026-07-26T12:00:00Z',
+        },
+      });
+    });
+    await act(async () => {
+      gate.resolve(
+        fakeResponse({
+          body: {
+            data: {
+              ...CARD,
+              id: 'i-race',
+              identifier: 'WEB-9',
+              workspace_id: 'ws-1',
+              title: 'Newest server state',
+              state_category: 'done',
+              status: { id: 'st-done', name: 'Done', category: 'done' },
+              status_id: 'st-done',
+              updated_at: '2026-07-26T12:00:00Z',
+            },
+          },
+        }),
+      );
+      await gate.promise;
+    });
+
+    const card = await screen.findByTestId('board-card-i-race');
+    expect(card).toHaveTextContent('Newest server state');
+    expect(screen.getByTestId('board-column-done')).toContainElement(card);
+    expect(calls.filter((url) => url.includes('/api/v1/issues/i-race'))).toHaveLength(1);
+  });
+
   it('二维缺失卡仅单卡对账并按当前 lane/cell 插入，不整板 refetch', async () => {
     const entered = {
       ...CARD,

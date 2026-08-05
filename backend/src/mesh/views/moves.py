@@ -63,10 +63,17 @@ from mesh.issue.service import IssuePatch
 from mesh.issue.statuses import resolve_default_status, resolve_status_in_scope
 from mesh.issue.triggers import apply_assign_triggers
 from mesh.labels.association import TYPE_VALUE_COLUMN, VALUE_COLUMNS, FieldValueService
+from mesh.labels.required_fields import validate_required_field_values
 from mesh.outbox.service import emit_realtime
-from mesh.views.config import PRIORITY_KEYS, STATE_CATEGORY_KEYS, validate_group_axes
+from mesh.views.config import (
+    PRIORITY_KEYS,
+    STATE_CATEGORY_KEYS,
+    validate_group_axes,
+    validate_group_by,
+)
 from mesh.views.projection import (
     _custom_value_keys,
+    _decode_custom_text_key,
     compile_view_filters,
     group_key_for,
 )
@@ -325,7 +332,11 @@ class BoardMoveService:
                 target_project_id=target_project_id,
             )
             rendered, changes = await self._issues.apply_changes_in_tx(
-                session, actor=actor, issue=issue, patch=patch
+                session,
+                actor=actor,
+                issue=issue,
+                patch=patch,
+                validate_required_fields=False,
             )
             scalar_targets = await self._resolve_scalar_custom_targets(
                 session,
@@ -341,6 +352,12 @@ class BoardMoveService:
                 issue=issue,
                 targets=scalar_targets,
                 bump_issue=not bool(changes),
+            )
+            await self._validate_required_after_cell_mutation(
+                session,
+                issue=issue,
+                issue_changes=changes,
+                custom_changes=custom_changes,
             )
             final_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
             final_sub_group_key = (
@@ -588,7 +605,11 @@ class BoardMoveService:
                 target_project_id=target_project_id,
             )
             rendered, changes = await self._issues.apply_changes_in_tx(
-                session, actor=actor, issue=issue, patch=patch
+                session,
+                actor=actor,
+                issue=issue,
+                patch=patch,
+                validate_required_fields=False,
             )
             scalar_targets = await self._resolve_scalar_custom_targets(
                 session,
@@ -606,6 +627,12 @@ class BoardMoveService:
                 # The confirmed project migration has already advanced the
                 # issue's optimistic version in this same transaction.
                 bump_issue=False,
+            )
+            await self._validate_required_after_cell_mutation(
+                session,
+                issue=issue,
+                issue_changes=changes,
+                custom_changes=custom_changes,
             )
             final_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
             final_sub_group_key = (
@@ -807,6 +834,13 @@ class BoardMoveService:
                 sub_group_key=sub_group_key,
                 target_project_id=target_project_id,
             )
+            default_custom_targets = await self._resolve_custom_defaults(
+                session,
+                workspace_id=workspace_id,
+                target_project_id=target_project_id,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+            )
             body = await self._create_body_for_cell(
                 session,
                 view=view,
@@ -860,7 +894,7 @@ class BoardMoveService:
             await self._write_scalar_custom_targets(
                 session,
                 issue=issue,
-                targets=scalar_custom_targets,
+                targets=[*default_custom_targets, *scalar_custom_targets],
                 bump_issue=False,
             )
             if not await self._candidate_matches_view(
@@ -1020,6 +1054,23 @@ class BoardMoveService:
     # ------------------------------------------------------------------
 
     @staticmethod
+    async def _validate_required_after_cell_mutation(
+        session: AsyncSession,
+        *,
+        issue: Issue,
+        issue_changes: dict,
+        custom_changes: list[tuple[CustomFieldDef, IssueCustomFieldValue | None]],
+    ) -> None:
+        """Validate the final atomic cell state, after its pending EAV writes."""
+
+        if not issue_changes and not custom_changes:
+            return
+        occasions = {"save"}
+        if "status_id" in issue_changes and issue.state_category is not None:
+            occasions.add(f"status:{issue.state_category}")
+        await validate_required_field_values(session, issue=issue, occasions=occasions)
+
+    @staticmethod
     def _custom_definition_scope(view: View) -> Any:
         if view.project_id is None:
             return CustomFieldDef.project_id.is_(None)
@@ -1041,7 +1092,18 @@ class BoardMoveService:
     ) -> None:
         if view.layout != "board":
             raise ValidationError("cell commands require a board view", details={"layout": view.layout})
-        validate_group_axes(view.group_by, sub_group_by)
+        canonical_group_by = validate_group_by(view.group_by)
+        canonical_sub_group_by = validate_group_by(sub_group_by)
+        validate_group_axes(canonical_group_by, canonical_sub_group_by)
+        await self._views.validate_config_references(
+            session,
+            workspace_id=view.workspace_id,
+            project_id=view.project_id,
+            group_by=canonical_group_by,
+            sub_group_by=canonical_sub_group_by,
+            filters=view.filters or {},
+            sort=view.sort or [],
+        )
         for field_name, axis in (("group_by", group_by), ("sub_group_by", sub_group_by)):
             if axis is None or axis in _SUPPORTED_GROUP_BY:
                 continue
@@ -1246,7 +1308,9 @@ class BoardMoveService:
 
             column = TYPE_VALUE_COLUMN[definition.type]
             raw: Any = key
-            if definition.type == "number":
+            if definition.type in {"text", "textarea", "url"}:
+                raw = _decode_custom_text_key(key)
+            elif definition.type == "number":
                 try:
                     raw = float(Decimal(key))
                 except (InvalidOperation, ValueError, OverflowError):
@@ -1323,6 +1387,70 @@ class BoardMoveService:
                 _ScalarCustomTarget(
                     definition=definition,
                     key=key,
+                    column=column,
+                    value=stored,
+                )
+            )
+        return targets
+
+    async def _resolve_custom_defaults(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        target_project_id: uuid.UUID | None,
+        group_by: str,
+        sub_group_by: str | None,
+    ) -> list[_ScalarCustomTarget]:
+        """Resolve applicable defaults, excluding axes that explicitly override them."""
+
+        excluded: set[uuid.UUID] = set()
+        for axis in (group_by, sub_group_by):
+            if axis is None or axis in _SUPPORTED_GROUP_BY or axis == "label":
+                continue
+            excluded.add(self._parse_uuid_key(axis, field="custom_field_def_id"))
+        scope = (
+            CustomFieldDef.project_id.is_(None)
+            if target_project_id is None
+            else or_(
+                CustomFieldDef.project_id.is_(None),
+                CustomFieldDef.project_id == target_project_id,
+            )
+        )
+        definitions = list(
+            (
+                await session.execute(
+                    select(CustomFieldDef)
+                    .where(
+                        CustomFieldDef.workspace_id == workspace_id,
+                        CustomFieldDef.is_active.is_(True),
+                        scope,
+                    )
+                    .order_by(CustomFieldDef.position.asc(), CustomFieldDef.id.asc())
+                    .with_for_update(read=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        targets: list[_ScalarCustomTarget] = []
+        for definition in definitions:
+            if definition.id in excluded or definition.default_value is None:
+                continue
+            column = TYPE_VALUE_COLUMN[definition.type]
+            stored = await self._field_values._coerce_value(
+                session,
+                workspace_id=workspace_id,
+                definition=definition,
+                column=column,
+                raw=definition.default_value,
+            )
+            if stored is None:
+                continue
+            targets.append(
+                _ScalarCustomTarget(
+                    definition=definition,
+                    key="<default>",
                     column=column,
                     value=stored,
                 )
@@ -1896,7 +2024,9 @@ class BoardMoveService:
             option_id = self._parse_uuid_key(to_group_key, field="custom_field_option_key")
             match = IssueCustomFieldValue.value_json == type_coerce(str(option_id), JSONB)
         elif definition.type in {"text", "textarea", "url"}:
-            match = IssueCustomFieldValue.value_text == to_group_key
+            match = IssueCustomFieldValue.value_text == _decode_custom_text_key(
+                to_group_key
+            )
         elif definition.type == "number":
             try:
                 numeric = Decimal(to_group_key)
