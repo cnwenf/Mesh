@@ -238,6 +238,22 @@ def test_filters_boolean_values_rejected() -> None:
     assert _error_code(excinfo) == "invalid_filters"
 
 
+def test_filters_custom_field_boolean_values_are_valid_scalars() -> None:
+    for op, value in (("eq", True), ("in", [True, False])):
+        filters = {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": "33333333-3333-3333-3333-333333333333",
+                    "op": op,
+                    "value": value,
+                }
+            ],
+        }
+        assert validate_filters(filters) == filters
+
+
 # ---------------------------------------------------------------------------
 # sort
 # ---------------------------------------------------------------------------
@@ -351,6 +367,11 @@ def test_group_by_invalid_value() -> None:
     with pytest.raises(ValidationError) as excinfo:
         validate_group_by("severity")
     assert _error_code(excinfo) == "invalid_group_by"
+
+
+def test_group_by_accepts_custom_field_definition_id() -> None:
+    field_id = "00000000-0000-0000-0000-000000000201"
+    assert validate_group_by(field_id) == field_id
 
 
 def test_group_axes_reject_same_effective_field() -> None:

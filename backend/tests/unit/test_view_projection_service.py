@@ -18,6 +18,13 @@ import pytest
 from sqlalchemy import select
 
 from mesh.db.models.issue import Issue, IssueStatus
+from mesh.db.models.label import (
+    CustomFieldDef,
+    CustomFieldOption,
+    IssueCustomFieldValue,
+    IssueLabel,
+    Label,
+)
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.db.models.view import View
@@ -27,7 +34,7 @@ from mesh.errors import ConflictError, ValidationError
 from mesh.issue.schemas import CreateIssueRequest
 from mesh.issue.service import IssueService
 from mesh.issue.statuses import seed_default_statuses
-from mesh.views.projection import PROJECTION_FIELD_PENDING, ProjectionService
+from mesh.views.projection import ProjectionService
 from mesh.views.schemas import CreateViewRequest
 from mesh.views.service import ViewService
 
@@ -449,12 +456,340 @@ async def test_execute_view_surfaces_wip_per_group(session_factory) -> None:
     assert by_key["todo"]["wip"] is None
 
 
-async def test_execute_view_group_by_label_is_gated(session_factory) -> None:
+async def test_execute_view_group_by_label_projects_each_value_and_empty_group(
+    session_factory,
+) -> None:
     workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    first = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    second = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        bug = Label(workspace_id=workspace.id, name="Bug", color="#e5484d")
+        api = Label(workspace_id=workspace.id, name="API", color="#30a46c")
+        session.add_all([bug, api])
+        await session.flush()
+        session.add_all(
+            [
+                IssueLabel(
+                    workspace_id=workspace.id,
+                    issue_id=uuid.UUID(first["id"]),
+                    label_id=bug.id,
+                ),
+                IssueLabel(
+                    workspace_id=workspace.id,
+                    issue_id=uuid.UUID(first["id"]),
+                    label_id=api.id,
+                ),
+            ]
+        )
     view = await _mk_view(view_service, actor=member, workspace=workspace, group_by="label")
-    with pytest.raises(ValidationError) as exc:
-        await projection.execute_view(viewer=member, workspace_id=workspace.id, view_id=uuid.UUID(view["id"]))
-    assert exc.value.code == PROJECTION_FIELD_PENDING
+    result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+    )
+
+    groups = {group["label"]: group for group in result["groups"]}
+    assert [group["label"] for group in result["groups"][:2]] == ["API", "Bug"]
+    assert {card["id"] for card in groups["API"]["data"]} == {first["id"]}
+    assert {card["id"] for card in groups["Bug"]["data"]} == {first["id"]}
+    assert {card["id"] for card in groups["No label"]["data"]} == {second["id"]}
+    assert groups["API"]["data"][0]["labels"] == [
+        {"id": str(api.id), "name": "API", "color": "#30a46c"},
+        {"id": str(bug.id), "name": "Bug", "color": "#e5484d"},
+    ]
+
+
+async def test_label_axis_skeleton_hides_private_project_definitions_from_workspace_view(
+    session_factory,
+) -> None:
+    from tests.unit.test_view_service import _create_project, _grant_project_access
+
+    workspace, member, _issue_service, view_service, projection = await _setup(session_factory)
+    public_project = await _create_project(session_factory, workspace, visibility="public")
+    private_project = await _create_project(session_factory, workspace, visibility="private")
+    async with session_factory() as session, session.begin():
+        workspace_label = Label(
+            workspace_id=workspace.id,
+            name="Workspace label",
+            color="#336699",
+        )
+        public_label = Label(
+            workspace_id=workspace.id,
+            project_id=public_project.id,
+            name="Public project label",
+            color="#30a46c",
+        )
+        hidden_label = Label(
+            workspace_id=workspace.id,
+            project_id=private_project.id,
+            name="Private secret label",
+            color="#e5484d",
+        )
+        session.add_all([workspace_label, public_label, hidden_label])
+        await session.flush()
+        ids = {
+            "workspace": str(workspace_label.id),
+            "public": str(public_label.id),
+            "hidden": str(hidden_label.id),
+        }
+
+    workspace_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="label",
+    )
+    workspace_result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(workspace_view["id"]),
+    )
+    workspace_keys = {group["key"] for group in workspace_result["groups"]}
+    assert ids["workspace"] in workspace_keys
+    assert ids["public"] in workspace_keys
+    assert ids["hidden"] not in workspace_keys
+    assert "Private secret label" not in {group["label"] for group in workspace_result["groups"]}
+
+    await _grant_project_access(session_factory, workspace, private_project, member)
+    project_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        project_id=str(private_project.id),
+        group_by="label",
+    )
+    project_result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(project_view["id"]),
+    )
+    project_keys = {group["key"] for group in project_result["groups"]}
+    assert ids["workspace"] in project_keys
+    assert ids["hidden"] in project_keys
+    assert ids["public"] not in project_keys
+
+
+async def test_custom_axis_and_sort_enforce_view_project_scope(session_factory) -> None:
+    from tests.unit.test_view_service import _create_project, _grant_project_access
+
+    workspace, member, _issue_service, view_service, projection = await _setup(session_factory)
+    project = await _create_project(session_factory, workspace, visibility="private")
+    await _grant_project_access(session_factory, workspace, project, member)
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            project_id=project.id,
+            name="Private severity",
+            field_key=f"private_severity_{uuid.uuid4().hex[:8]}",
+            type="single_select",
+        )
+        session.add(definition)
+        await session.flush()
+        option = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Secret option",
+        )
+        session.add(option)
+        await session.flush()
+        field_id = str(definition.id)
+        option_id = str(option.id)
+
+    workspace_axis = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=field_id,
+    )
+    with pytest.raises(ValidationError) as axis_error:
+        await projection.execute_view(
+            viewer=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(workspace_axis["id"]),
+        )
+    assert axis_error.value.code == "invalid_group_by"
+
+    custom_sort = [
+        {
+            "field_kind": "custom_field",
+            "field_def_id": field_id,
+            "order": "asc",
+        }
+    ]
+    workspace_sort = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="state_category",
+        sort=custom_sort,
+    )
+    with pytest.raises(ValidationError) as sort_error:
+        await projection.execute_view(
+            viewer=member,
+            workspace_id=workspace.id,
+            view_id=uuid.UUID(workspace_sort["id"]),
+        )
+    assert sort_error.value.code == "invalid_group_by"
+
+    project_view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        project_id=str(project.id),
+        group_by=field_id,
+        sort=custom_sort,
+    )
+    result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(project_view["id"]),
+    )
+    groups = {group["key"]: group for group in result["groups"]}
+    assert groups[option_id]["label"] == "Secret option"
+
+
+async def test_execute_view_custom_select_filter_and_group_skeleton(session_factory) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    major_issue = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name="Severity",
+            field_key=f"severity_{uuid.uuid4().hex[:8]}",
+            type="single_select",
+        )
+        session.add(definition)
+        await session.flush()
+        major = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Major",
+            color="#e5484d",
+            position=1,
+        )
+        minor = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Minor",
+            color="#30a46c",
+            position=2,
+        )
+        session.add_all([major, minor])
+        await session.flush()
+        session.add(
+            IssueCustomFieldValue(
+                workspace_id=workspace.id,
+                issue_id=uuid.UUID(major_issue["id"]),
+                field_def_id=definition.id,
+                value_json=str(major.id),
+            )
+        )
+        field_id = str(definition.id)
+        major_id = str(major.id)
+        minor_id = str(minor.id)
+
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by=field_id,
+        filters={
+            "operator": "OR",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": field_id,
+                    "op": "eq",
+                    "value": major_id,
+                },
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": field_id,
+                    "op": "is_null",
+                },
+            ],
+        },
+    )
+    result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+    )
+
+    assert [group["key"] for group in result["groups"]] == [major_id, minor_id, "__none__"]
+    groups = {group["key"]: group for group in result["groups"]}
+    assert groups[major_id]["count"] == 1
+    assert groups[minor_id]["count"] == 0
+    assert groups["__none__"]["count"] == 1
+    assert groups[major_id]["label"] == "Major"
+    assert groups[minor_id]["label"] == "Minor"
+
+
+async def test_execute_view_two_multi_value_axes_form_cartesian_cells(session_factory) -> None:
+    workspace, member, issue_service, view_service, projection = await _setup(session_factory)
+    issue = await _mk_issue(issue_service, actor=member, workspace=workspace)
+    async with session_factory() as session, session.begin():
+        red = Label(workspace_id=workspace.id, name="Red", color="#e5484d")
+        blue = Label(workspace_id=workspace.id, name="Blue", color="#3e63dd")
+        definition = CustomFieldDef(
+            workspace_id=workspace.id,
+            name="Components",
+            field_key=f"components_{uuid.uuid4().hex[:8]}",
+            type="multi_select",
+        )
+        session.add_all([red, blue, definition])
+        await session.flush()
+        web = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="Web",
+            position=1,
+        )
+        api = CustomFieldOption(
+            workspace_id=workspace.id,
+            field_def_id=definition.id,
+            name="API",
+            position=2,
+        )
+        session.add_all([web, api])
+        await session.flush()
+        issue_id = uuid.UUID(issue["id"])
+        session.add_all(
+            [
+                IssueLabel(workspace_id=workspace.id, issue_id=issue_id, label_id=red.id),
+                IssueLabel(workspace_id=workspace.id, issue_id=issue_id, label_id=blue.id),
+                IssueCustomFieldValue(
+                    workspace_id=workspace.id,
+                    issue_id=issue_id,
+                    field_def_id=definition.id,
+                    value_json=[str(web.id), str(api.id)],
+                ),
+            ]
+        )
+        field_id = str(definition.id)
+        option_ids = {str(web.id), str(api.id)}
+        label_ids = {str(red.id), str(blue.id)}
+
+    view = await _mk_view(
+        view_service,
+        actor=member,
+        workspace=workspace,
+        group_by="label",
+        sub_group_by=field_id,
+    )
+    result = await projection.execute_view(
+        viewer=member,
+        workspace_id=workspace.id,
+        view_id=uuid.UUID(view["id"]),
+    )
+
+    populated = {
+        (lane["key"], group["key"]) for lane in result["lanes"] for group in lane["groups"] if group["count"]
+    }
+    assert populated == {(option_id, label_id) for option_id in option_ids for label_id in label_ids}
+    assert all(column["count"] == 1 for column in result["columns"] if column["key"] in label_ids)
+    assert all(lane["count"] == 1 for lane in result["lanes"] if lane["key"] in option_ids)
 
 
 async def test_execute_view_timeline_layout_is_501(session_factory) -> None:

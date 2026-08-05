@@ -4,9 +4,8 @@ The saved-view filter shape (``{"operator","conditions":[...]}``, ops
 eq/neq/in/not_in/lt/lte/gt/gte/is_null/is_not_null/contains) differs from the
 issue module's flat tree, so the projection layer compiles it itself against
 the ``issues`` columns — parameterized only (no JSON-to-SQL string splicing,
-§2.9 injection guard). Label / custom-field conditions are gated until the
-label-property association tables land (MES-32), exactly like the issue module
-gates ``group_by=label``.
+§2.9 injection guard). Label / custom-field conditions compile to correlated
+association-table predicates whose tenant key follows the outer issue row.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from sqlalchemy.sql.elements import BooleanClauseList
 
 from mesh.errors import ValidationError
 from mesh.issue.filters import FilterTooComplexError
-from mesh.views.projection import PROJECTION_FIELD_PENDING, compile_view_filters
+from mesh.views.projection import compile_view_filters
 
 pytestmark = pytest.mark.unit
 
@@ -70,9 +69,7 @@ def test_nested_group_depth_three_is_allowed() -> None:
                 "conditions": [
                     {
                         "operator": "AND",
-                        "conditions": [
-                            {"field": "priority", "op": "eq", "value": "high"}
-                        ],
+                        "conditions": [{"field": "priority", "op": "eq", "value": "high"}],
                     }
                 ],
             }
@@ -93,9 +90,7 @@ def test_depth_four_group_is_too_complex() -> None:
                         "conditions": [
                             {
                                 "operator": "OR",
-                                "conditions": [
-                                    {"field": "priority", "op": "eq", "value": "high"}
-                                ],
+                                "conditions": [{"field": "priority", "op": "eq", "value": "high"}],
                             }
                         ],
                     }
@@ -108,40 +103,49 @@ def test_depth_four_group_is_too_complex() -> None:
 
 
 def test_more_than_twenty_conditions_is_too_complex() -> None:
-    conditions = [
-        {"field": "priority", "op": "eq", "value": "high"} for _ in range(21)
-    ]
+    conditions = [{"field": "priority", "op": "eq", "value": "high"} for _ in range(21)]
     with pytest.raises(FilterTooComplexError):
         compile_view_filters({"operator": "AND", "conditions": conditions})
 
 
-def test_label_condition_is_gated() -> None:
-    with pytest.raises(ValidationError) as exc:
-        compile_view_filters(
-            {
-                "operator": "AND",
-                "conditions": [{"field": "label", "op": "in", "value": ["lbl_1"]}],
-            }
-        )
-    assert exc.value.code == PROJECTION_FIELD_PENDING
+def test_label_condition_compiles_to_association_exists() -> None:
+    clause = compile_view_filters(
+        {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field": "label",
+                    "op": "in",
+                    "value": ["00000000-0000-0000-0000-000000000101"],
+                }
+            ],
+        }
+    )
+    sql = _sql(clause)
+    assert "exists" in sql
+    assert "issue_labels" in sql
+    assert "issue_labels.workspace_id = issues.workspace_id" in sql
 
 
-def test_custom_field_condition_is_gated() -> None:
-    with pytest.raises(ValidationError) as exc:
-        compile_view_filters(
-            {
-                "operator": "AND",
-                "conditions": [
-                    {
-                        "field_kind": "custom_field",
-                        "field_def_id": "cf_sev",
-                        "op": "eq",
-                        "value": "opt_major",
-                    }
-                ],
-            }
-        )
-    assert exc.value.code == PROJECTION_FIELD_PENDING
+def test_custom_field_condition_compiles_to_typed_association_exists() -> None:
+    clause = compile_view_filters(
+        {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": "00000000-0000-0000-0000-000000000201",
+                    "op": "eq",
+                    "value": "00000000-0000-0000-0000-000000000301",
+                }
+            ],
+        }
+    )
+    sql = _sql(clause)
+    assert "exists" in sql
+    assert "issue_custom_field_values" in sql
+    assert "field_def_id" in sql
+    assert "issue_custom_field_values.workspace_id = issues.workspace_id" in sql
 
 
 def test_unknown_field_is_invalid() -> None:
@@ -262,9 +266,7 @@ def test_datetime_coercion() -> None:
     clause = compile_view_filters(
         {
             "operator": "AND",
-            "conditions": [
-                {"field": "created_at", "op": "gte", "value": "2026-01-01T00:00:00"}
-            ],
+            "conditions": [{"field": "created_at", "op": "gte", "value": "2026-01-01T00:00:00"}],
         }
     )
     assert "created_at" in _sql(clause)
@@ -274,9 +276,7 @@ def test_datetime_coercion() -> None:
     clause2 = compile_view_filters(
         {
             "operator": "AND",
-            "conditions": [
-                {"field": "updated_at", "op": "lt", "value": datetime(2026, 1, 1)}
-            ],
+            "conditions": [{"field": "updated_at", "op": "lt", "value": datetime(2026, 1, 1)}],
         }
     )
     assert "updated_at" in _sql(clause2)
@@ -287,9 +287,7 @@ def test_datetime_bad_value_is_invalid() -> None:
         compile_view_filters(
             {
                 "operator": "AND",
-                "conditions": [
-                    {"field": "created_at", "op": "eq", "value": "not-a-datetime"}
-                ],
+                "conditions": [{"field": "created_at", "op": "eq", "value": "not-a-datetime"}],
             }
         )
     assert exc.value.code == "invalid_filters"

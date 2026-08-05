@@ -6,6 +6,8 @@
 > - `auth.md`:`users`(人类登录身份)、角色权限矩阵、鉴权中间件、审计、API token(agent 运行凭证)。
 > - `agent.md`:`agents`(AI agent 身份与运行时/技能/模型配置);本 Spec 只消费 agent 的核心身份字段。
 > **被依赖方(核心抽象)**:`issue.assignee_id` / `reporter_id`、评论 `author_id`、@提及目标、通知收件人 **一律引用 `members.id`**,使引用方无需关心被引用者是人还是 agent。
+>
+> **实现状态(MES-187)**:名册行已区分 human/AI agent，并把 agent presence 映射为统一运行态；成员详情抽屉读取真实成员详情与名下 issue，展示最近更新的已分派事项，agent 另读取详情、配置版本、能力与实时 presence，并提供配置入口。抽屉关闭、卸载或工作区切换会取消旧请求，失败态可重试。账号资料支持将 `avatar_url` 显式写为 `null` 以恢复默认头像，并在失败时回滚预览。
 
 ---
 
@@ -195,7 +197,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 | DELETE | `/workspaces/{ws}/members/{id}` | 移除成员(可选 `?reassign_to=<member_id>`) | admin |
 | POST | `/workspaces/{ws}/members/reassign` | 批量转派某成员未完成 issue 给另一成员 | admin |
 | GET | `/users/me` | 当前登录用户及其在各工作区的成员身份 | 已登录 |
-| PATCH | `/users/me` | 更新自己的资料(头像、昵称、时区) | 已登录 |
+| PATCH | `/users/me` | 更新自己的资料；字段省略=不变，`avatar_url:null`=恢复默认头像，非空头像仅允许绝对 HTTPS URL | 已登录 |
 | GET | `/workspaces/{ws}/agents/available` | 列出可加入名册的 agent(详见 agent.md) | admin |
 | GET | `/members/{id}/presence` | 成员在线/运行态(可选) | 成员 |
 | GET | `/workspaces/{ws}/members/{id}/project-access` | 列出 guest 的项目级可见性 | admin |
@@ -257,6 +259,17 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 // 200 Response
 { "removed": true, "reassigned_issues": 20 }
 ```
+
+**更新自己的头像** `PATCH /api/v1/users/me`
+```json
+// 设置自定义头像
+{ "avatar_url": "https://cdn.example/jane.png" }
+
+// 显式清空，恢复 Avatar 的默认缩写/轮廓
+{ "avatar_url": null }
+```
+
+`avatar_url` 是三态更新字段：请求体省略该键时保持原值，字符串必须是绝对 `https:` URL，显式 `null` 清空持久化值。客户端先行校验只用于即时反馈，服务端仍是 scheme 与数据合法性的最终权威；失败时输入、预览和缓存都回滚到最后一次服务端快照。
 
 **加入 agent 到名册** `POST /api/v1/workspaces/{ws}/members`
 ```json
@@ -345,7 +358,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 
 - **名册表格**:人类与 agent 同表;agent 行带"AI"徽章与机器人头像样式,悬停展示能力简介。
 - **角色下拉**:行内可改(owner/admin/member/guest);agent 行的 `owner` 选项禁用并置灰(后端同样强校验)。
-- **成员详情抽屉**:点击成员打开侧栏,展示资料、其名下进行中 issue、最近活动;agent 详情额外展示运行时状态与配置入口(链接到 agent.md)。
+- **成员详情抽屉**:点击成员打开侧栏，读取 `GET /workspaces/{ws}/members/{id}` 与按 `assignee_id` 过滤的 issue 列表，展示资料、进行中 issue 和最近更新的已分派事项；这里不是通用审计“最近活动”。agent 详情额外读取 agent 详情与配置版本，展示实时 presence 运行态、模型层级、默认 runtime、能力和配置入口(链接到 agent.md)。抽屉关闭/卸载/工作区切换必须取消旧请求并清空目标，错误态提供原位重试，迟到响应不得污染新工作区或新成员。
 - **添加成员弹窗**:两个 Tab——"邀请人类"(邮箱,衔接 workspace.md 邀请)与"添加 AI agent"(从可用 agent 列表挑选)。
 - **停用/移除确认**:二次确认弹窗,提示"是否把其名下未完成 issue 转派给…",并提供转派目标选择器。
 - **assignee 选择器**(issue/看板复用):人与 agent 混合列出,各带类型图标;选中 agent 即触发其接管。
@@ -353,7 +366,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 #### 4.2.1 账号个人资料
 
 - `/settings/profile` 是账号资料默认入口，读取 `GET /users/me`，昵称与头像地址失焦后经 `PATCH /users/me` 原位保存并反馈结果。
-- 昵称对应唯一字段 `users.display_name`；头像对应 `users.avatar_url`，前端只接受绝对 `https:` URL，服务端仍执行同一 scheme 强校验。
+- 昵称对应唯一字段 `users.display_name`；头像对应 `users.avatar_url`。字符串只接受绝对 `https:` URL；“恢复默认头像”必须发送显式 `avatar_url:null`，不能把空字符串当持久化值。服务端仍执行同一 scheme/nullable 强校验。
 - 用户时区继续由 `/settings/appearance` 管理并写入 `users.timezone`。`users` 模型没有 `bio`，界面不得虚构简介字段或建立并行存储。
 - 页面必须分别呈现 loading、可重试 error、字段 validation error 与保存成功，头像预览不得导致不安全 URL 执行。
 
@@ -408,6 +421,8 @@ disabled ──移除──► removed
 - [ ] 撤销 guest 某项目共享后,该成员立即不可见该项目及其 issue。
 - [ ] 所有 UI/API 的显示名遵循统一解析顺序(display_override → user/agent 名称),返回单一 `display_name` 字段。
 - [ ] `PATCH /users/me` 允许任何成员改自己资料;改他人需 admin。
+- [ ] `PATCH /users/me` 的 `avatar_url` 遵循三态更新：省略保持原值、绝对 HTTPS 字符串设置头像、显式 `null` 清空并恢复默认头像；非法 scheme 返回 `validation_error`，客户端失败回滚到服务端快照。
+- [ ] 成员详情抽屉使用真实成员详情与 `assignee_id` issue 查询，展示进行中事项和最近更新的已分派事项；agent 额外加载详情/配置版本并消费 presence。关闭、卸载、工作区或目标切换会取消旧请求，错误态可重试且迟到响应不回写。
 - [ ] `display_override` 仅在当前工作区生效,不影响全局 `users` 资料。
 
 ### 5.2 性能

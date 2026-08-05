@@ -86,6 +86,16 @@ async def _label(client, token, ws_id: str, name: str, **extra) -> dict:
     return resp.json()["data"]
 
 
+async def _project(client, token, ws_id: str, name: str, key: str) -> dict:
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws_id}/projects",
+        json={"name": name, "key": key},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["data"]
+
+
 async def _field(client, token, ws_id: str, **body) -> dict:
     resp = await client.post(
         f"/api/v1/workspaces/{ws_id}/custom-fields",
@@ -126,6 +136,21 @@ async def test_issue_labels_full_http_flow(client):
     assert resp.status_code == 200, resp.text
     assert [label["id"] for label in resp.json()["data"]["labels"]] == [bug["id"]]
     assert "X-RateLimit-Limit" in resp.headers
+
+    # The generic issue detail/list payloads are the fact source used by
+    # issue rows and board cards. They expose the same compact, coloured
+    # label snapshot instead of making each consumer refetch associations.
+    detail = await client.get(f"/api/v1/issues/{issue['id']}", headers=_auth(token))
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["labels"] == [
+        {"id": bug["id"], "name": "bug", "color": "#e5484d"}
+    ]
+    listing = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/issues", headers=_auth(token)
+    )
+    assert listing.status_code == 200, listing.text
+    projected = next(row for row in listing.json()["data"] if row["id"] == issue["id"])
+    assert projected["labels"] == detail.json()["data"]["labels"]
 
     # Whole-set replace (PUT) with de-dup.
     resp = await client.put(
@@ -247,6 +272,14 @@ async def test_merge_endpoint(client):
     await client.post(
         f"/api/v1/issues/{issue['id']}/labels/{defect['id']}", headers=_auth(token)
     )
+    # The settings list is also the merge-preview source: it reports the
+    # number of live issues that will be migrated before the destructive
+    # confirmation is accepted (label-property.md §4.1/§4.4).
+    listing = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(token)
+    )
+    counts = {label["id"]: label["issue_count"] for label in listing.json()["data"]}
+    assert counts == {bug["id"]: 0, defect["id"]: 1}
     resp = await client.post(
         f"/api/v1/labels/{defect['id']}/merge",
         json={"target_label_id": bug["id"]}, headers=_auth(token),
@@ -263,6 +296,7 @@ async def test_merge_endpoint(client):
         f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(token)
     )
     assert all(label["id"] != defect["id"] for label in resp.json()["data"])
+    assert resp.json()["data"][0]["issue_count"] == 1
 
 
 async def test_merge_self_conflict(client):
@@ -275,6 +309,66 @@ async def test_merge_self_conflict(client):
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "conflict"
+
+
+async def test_merge_rejects_unsafe_project_targets_without_mutating_labels(client):
+    token = await _register_and_login(client, "merge-scope@corp.com")
+    ws = await _workspace(client, token, "merge-scope-ws")
+    first = await _project(client, token, ws["id"], "First", "MG1")
+    second = await _project(client, token, ws["id"], "Second", "MG2")
+    workspace_source = await _label(client, token, ws["id"], "workspace source")
+    first_label = await _label(
+        client, token, ws["id"], "first private", project_id=first["id"]
+    )
+    second_label = await _label(
+        client, token, ws["id"], "second private", project_id=second["id"]
+    )
+
+    for source_id, target_id in (
+        (workspace_source["id"], first_label["id"]),
+        (first_label["id"], second_label["id"]),
+    ):
+        resp = await client.post(
+            f"/api/v1/labels/{source_id}/merge",
+            json={"target_label_id": target_id},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["error"]["code"] == "label_scope_mismatch"
+
+    listing = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(token)
+    )
+    assert listing.status_code == 200, listing.text
+    assert {label["id"] for label in listing.json()["data"]} == {
+        workspace_source["id"],
+        first_label["id"],
+        second_label["id"],
+    }
+
+
+async def test_merge_cross_tenant_target_is_same_404_as_unknown_target(client):
+    suffix = uuid.uuid4().hex[:10]
+    owner_a = await _register_and_login(client, f"merge-a-{suffix}@corp.com")
+    owner_b = await _register_and_login(client, f"merge-b-{suffix}@corp.com")
+    ws_a = await _workspace(client, owner_a, f"merge-a-{suffix}")
+    ws_b = await _workspace(client, owner_b, f"merge-b-{suffix}")
+    source = await _label(client, owner_a, ws_a["id"], "source")
+    foreign_target = await _label(client, owner_b, ws_b["id"], "foreign target")
+
+    foreign = await client.post(
+        f"/api/v1/labels/{source['id']}/merge",
+        json={"target_label_id": foreign_target["id"]},
+        headers=_auth(owner_a),
+    )
+    unknown = await client.post(
+        f"/api/v1/labels/{source['id']}/merge",
+        json={"target_label_id": str(uuid.uuid4())},
+        headers=_auth(owner_a),
+    )
+
+    assert foreign.status_code == unknown.status_code == 404
+    assert foreign.json()["error"] == unknown.json()["error"]
 
 
 # ---------------------------------------------------------------------------

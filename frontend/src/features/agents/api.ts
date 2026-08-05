@@ -55,8 +55,12 @@ export async function getAgent(
   client: MeshApiClient,
   workspaceId: string,
   agentId: string,
+  signal?: AbortSignal,
 ): Promise<AgentDetail> {
-  return client.request<AgentDetail>('GET', agentPath(workspaceId, agentId));
+  const path = agentPath(workspaceId, agentId);
+  return signal === undefined
+    ? client.request<AgentDetail>('GET', path)
+    : client.request<AgentDetail>('GET', path, { signal });
 }
 
 export interface CreateAgentBody {
@@ -121,10 +125,14 @@ export async function listConfigVersions(
   workspaceId: string,
   agentId: string,
   params: { readonly limit?: number; readonly cursor?: string } = {},
+  signal?: AbortSignal,
 ): Promise<{ data: AgentConfigVersion[]; nextCursor: string | null }> {
   const envelope = await client.list<AgentConfigVersion>(
     `${agentPath(workspaceId, agentId)}/config-versions`,
-    { query: { limit: params.limit, cursor: params.cursor } },
+    {
+      query: { limit: params.limit, cursor: params.cursor },
+      ...(signal === undefined ? {} : { signal }),
+    },
   );
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
@@ -142,13 +150,7 @@ export async function rollbackConfig(
   );
 }
 
-export type AgentLifecycleVerb =
-  | 'pause'
-  | 'resume'
-  | 'disable'
-  | 'enable'
-  | 'archive'
-  | 'restore';
+export type AgentLifecycleVerb = 'pause' | 'resume' | 'disable' | 'enable' | 'archive' | 'restore';
 
 /** 生命周期动作端点(:verb 后缀,agent.md §3.1 / §4.8 状态机)。 */
 export async function transitionAgentLifecycle(
@@ -156,7 +158,10 @@ export async function transitionAgentLifecycle(
   workspaceId: string,
   agentId: string,
   verb: AgentLifecycleVerb,
-  body?: { readonly reason?: string; readonly in_flight_policy?: 'finish_current' | 'cancel_current' },
+  body?: {
+    readonly reason?: string;
+    readonly in_flight_policy?: 'finish_current' | 'cancel_current';
+  },
 ): Promise<AgentSummary> {
   return client.request<AgentSummary>('POST', `${agentPath(workspaceId, agentId)}:${verb}`, {
     body: body ?? {},

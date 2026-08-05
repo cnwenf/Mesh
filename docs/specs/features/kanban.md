@@ -6,7 +6,7 @@
 > - `label-property.md`(标签与自定义属性)——提供可作为筛选/分组/排序依据的 `label` 与自定义字段。
 > - `project.md`(项目)、`member.md`(统一成员抽象,含 AI agent)。
 > **文档性质**:可直接指导开发的实现规格;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
-> **实现状态**:`views` 定义层、一维 issue 投影与单值内置轴的二维泳道运行时均已落地。`sub_group_by` 非空时服务端返回完整 `columns/lanes/groups` 网格和签名整体游标；move/reorder/quick-create 以完整单元格为作用域，支持 project-first 状态解析、跨项目确认、主列 WIP、每视图单元格排序和创建幂等；前端提供桌面共享网格、compact 泳道切换、原子乐观写入与单卡实时增量合并。`sub_group_by=NULL` 的既有一维形状保持兼容。**label / 自定义字段的分组与筛选**依赖 `issue_labels` / `issue_custom_field_values` 关联层；关联层接入二维投影前，`group_by=label`、`sub_group_by=label`、任一轴的自定义字段与对应筛选均返回 `400 projection_field_pending`，其多值轴写入与集合差实时协议仍按下文作为后续增量验收项。
+> **实现状态(MES-187)**:`views` 定义层、一维兼容形状与二维 `columns/lanes/groups` 运行时均已落地。主轴和副轴都可解析内置字段、动态 label 与自定义字段；双多值轴按笛卡尔积生成 placement。status/priority/assignee/project 与标量自定义字段走原子 move，label / `multi_select` 已有卡片保持只读移动模式，但单元格 quick-create 会在创建事务内原子写入目标关联。`issue.labels_changed` / `issue.custom_field_changed` 按新旧 placement 集合差局部增删实例，不以整板重载代替增量协议；只有投影规则变化或 `resync_required` 才整板对账。`sub_group_by=NULL` 的既有一维形状保持兼容。
 
 ---
 
@@ -139,7 +139,7 @@ realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成�
 - `layout IN ('timeline','table')` 可写入但本期 UI 不渲染(返回 501 由前端兜底为 board/list)。
 - `group_by` / `sub_group_by` 的可选集均为 §2.4 的 `state_category` / `status` / `assignee` / `priority` / `project` / `label` / 自定义字段(`field_def_id`);创建与 `PATCH` 均执行同一白名单校验。
 - `sub_group_by` 与实际 `group_by` 为同一字段时返回 `400 validation_error`;board 的 `group_by=NULL` 先按默认 `state_category` 归一后再比较,禁止两轴投影同一字段。该校验同样适用于当前不渲染泳道的 list 视图。
-- 关联层合入前,`sub_group_by=label` / 自定义字段与 `group_by` 的同类配置使用同一门控,返回 `400 projection_field_pending`;不得因其位于子分组轴而绕过字段可用性与权限校验。
+- `label` / 自定义字段位于 `group_by` 或 `sub_group_by` 时使用同一解析、作用域与权限校验：仅允许当前工作区、当前项目作用域内可见且 active 的定义/option；不存在、已停用、越作用域或不可见值一律按 §3.4 fail closed，不得因其位于子分组轴而绕过校验。
 
 ### 2.3 `filters` / `sort` / `board_settings` 结构
 
@@ -575,7 +575,6 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 |------|------|------|
 | 400 | `validation_error` | 非法 filters/layout/op;字段类型与 op 不匹配;`sub_group_by` 与 `group_by` 同字段;无子分组的视图传 `to_sub_group_key`;quick-create 的 layout/cell key 形状与视图不符 |
 | 400 | `filter_too_complex` | filters 嵌套深度 >3 或条件数 >20(README §6.14) |
-| 400 | `projection_field_pending` | label / 自定义字段关联层未就绪时用于 `group_by` / `sub_group_by` / filters |
 | 401 | `unauthorized` | 缺失/失效 token |
 | 403 | `forbidden` | 编辑他人私有视图;对共享视图无配置写权限;quick-create 缺少 issue 创建/目标项目/目标值域写权限 |
 | 404 | `not_found` | 视图不存在或不可见 |
@@ -738,7 +737,7 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 
 - [ ] 可创建/读取/更新/删除/复制视图;`layout`/`visibility` 取值受 CHECK 约束,非法值返回 `400`。
 - [ ] 视图配置(filters/group_by/sub_group_by/sort/display_fields/board_settings)以 JSONB 持久化,**不持久化任何 issue 集合**。
-- [ ] **子分组配置校验**:`sub_group_by` 可选集与 `group_by` 完全一致;两轴同字段(含 `group_by=NULL` 归一后的默认 `state_category`)在创建与 PATCH 均返回 `400 validation_error`;关联层未就绪时 label/自定义字段两轴均返回 `400 projection_field_pending`;list 可保存但不渲染 `sub_group_by`。
+- [ ] **子分组配置校验**:`sub_group_by` 可选集与 `group_by` 完全一致;两轴同字段(含 `group_by=NULL` 归一后的默认 `state_category`)在创建与 PATCH 均返回 `400 validation_error`;label/自定义字段两轴使用相同的工作区、项目作用域、active 与权限校验并对不可见值 fail closed;list 可保存但不渲染 `sub_group_by`。
 - [ ] **一维兼容**:`sub_group_by=NULL` 时,`GET /views/{id}/issues` 继续返回既有 `groups[{key,label,count,wip?,data}]` + 顶层 `next_cursor`,不得出现 `columns` / `lanes`,已交付响应形状零变化。
 - [ ] **二维投影**:`sub_group_by` 非空时,响应精确包含顶层 `columns[{key,label,count,wip}]`(主列跨泳道汇总)、`lanes[{key,label,count,groups:[{key,count,data}]}]` 与唯一顶层 `next_cursor`;每一页都返回完整网格骨架,单元格 `count` 为未分页总数、`data` 为当前全局页切片,无组/单元格/泳道独立 cursor;`count>0,data=[]` 表示待加载而非空格。
 - [ ] **卡片级整体游标**:二维 `limit=N` 时全网格 `data` 合计 ≤N,以 `K=(lane_rank,lane_key,group_rank,group_key,sort_tuple,issue_id)` 稳定总序逐卡分页;opaque cursor 绑定查询/视图/授权指纹、limit、数据水位、末尾 K 与过期时间。任一绑定变化或相关写入返回 `409 cursor_invalidated`,客户端清空本次拼页并从无 cursor 首屏重启。

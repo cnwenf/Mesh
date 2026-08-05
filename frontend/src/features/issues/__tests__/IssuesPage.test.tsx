@@ -160,10 +160,19 @@ function issueFixture(id: string, identifier: string, title: string) {
     version: 1,
     created_at: '2026-07-01T00:00:00Z',
     updated_at: '2026-07-02T00:00:00Z',
+    labels: [] as Array<{ id: string; name: string; color: string }>,
   };
 }
 
-const ISSUE_1 = issueFixture('iss-1', 'WS-1', 'Fix the login bug');
+const ISSUE_1 = {
+  ...issueFixture('iss-1', 'WS-1', 'Fix the login bug'),
+  labels: [
+    { id: 'l1', name: 'bug', color: '#e5484d' },
+    { id: 'l2', name: 'frontend', color: '#3e63dd' },
+    { id: 'l3', name: 'customer', color: '#46a758' },
+    { id: 'l4', name: 'urgent', color: '#f5a623' },
+  ],
+};
 const ISSUE_2 = issueFixture('iss-2', 'WS-2', 'Ship the docs');
 
 function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
@@ -376,6 +385,9 @@ describe('IssuesPage', () => {
       '/w/team/issues/by-identifier/WS-1',
     );
     expect(rt.subscribe).toHaveBeenCalledWith('workspace:ws-1:issues');
+    const firstRow = screen.getByTestId('issue-row-WS-1');
+    expect(firstRow.querySelectorAll('[data-testid="issue-label-dot"]')).toHaveLength(3);
+    expect(firstRow.querySelector('[data-testid="issue-label-overflow"]')).toHaveTextContent('+1');
   });
 
   it('renders DataView with a single h1 title (页面模板唯一 h1,§4.4)', async () => {

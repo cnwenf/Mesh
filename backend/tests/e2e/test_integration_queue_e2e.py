@@ -417,7 +417,9 @@ async def test_btw_appends_context_row(api_client, queue_worker, session_factory
 
     async def _processing():
         items = await _items(session_factory, world["ws_id"])
-        return items if items and items[0].state in ("dispatching", "processing") else None
+        # /btw is injectable only after the queue item owns a processing
+        # execution; dispatching is an intermediate state with no target yet.
+        return items if items and items[0].state == "processing" else None
 
     items = await poll_until(_processing, timeout=60)
     assert items is not None

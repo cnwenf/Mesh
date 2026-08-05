@@ -15,6 +15,7 @@ import {
   deleteMilestone,
   deleteProject,
   deleteProjectTemplate,
+  getProjectKeyAvailability,
   getProject,
   instantiateProjectTemplate,
   listCycles,
@@ -115,6 +116,19 @@ describe('项目 CRUD 与归档', () => {
     const created = await createProject(client, 'ws-1', body);
     expect(request).toHaveBeenCalledWith('POST', '/api/v1/workspaces/ws-1/projects', { body });
     expect(created.id).toBe('p1');
+  });
+
+  it('getProjectKeyAvailability 读取服务端永久前缀注册表判定', async () => {
+    const { client, request } = makeClient();
+    const controller = new AbortController();
+    request.mockResolvedValueOnce({ key: 'APL', available: false });
+    const result = await getProjectKeyAvailability(client, 'ws-1', 'APL', controller.signal);
+    expect(request).toHaveBeenCalledWith(
+      'GET',
+      '/api/v1/workspaces/ws-1/projects/key-availability',
+      { query: { key: 'APL' }, signal: controller.signal },
+    );
+    expect(result.available).toBe(false);
   });
 
   it('updateProject 以 PATCH 提交并把 ifMatch 透传为 opts.ifMatch', async () => {

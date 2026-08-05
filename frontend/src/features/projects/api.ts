@@ -89,6 +89,20 @@ export async function createProject(
   return client.request<ProjectSummary>('POST', workspaceProjectsPath(workspaceId), { body });
 }
 
+/** 实时检查永久前缀注册表;创建端点仍是竞态下的最终权威。 */
+export async function getProjectKeyAvailability(
+  client: MeshApiClient,
+  workspaceId: string,
+  key: string,
+  signal?: AbortSignal,
+): Promise<{ readonly key: string; readonly available: boolean }> {
+  return client.request<{ readonly key: string; readonly available: boolean }>(
+    'GET',
+    `${workspaceProjectsPath(workspaceId)}/key-availability`,
+    { query: { key }, ...(signal === undefined ? {} : { signal }) },
+  );
+}
+
 /** 设置 PATCH(三态:省略保持 / null 清空;ifMatch 启用乐观并发,409 conflict 收敛)。 */
 export async function updateProject(
   client: MeshApiClient,
@@ -238,9 +252,13 @@ export async function updateProjectMemberRole(
   memberId: string,
   body: UpdateProjectMemberRoleBody,
 ): Promise<ProjectMemberEntry> {
-  return client.request<ProjectMemberEntry>('PATCH', `${projectPath(projectId)}/members/${memberId}`, {
-    body,
-  });
+  return client.request<ProjectMemberEntry>(
+    'PATCH',
+    `${projectPath(projectId)}/members/${memberId}`,
+    {
+      body,
+    },
+  );
 }
 
 export async function removeProjectMember(

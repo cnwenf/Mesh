@@ -3,9 +3,10 @@
  * 纯函数:绝不修改入参,有变化返回新数组/对象,无变化返回原引用。
  *
  * 帧形态:{op:'event', channel, seq, event, payload};event ∈
- * issue.created/updated/deleted/moved/project_changed · dependency.changed。
+ * issue.created/updated/deleted/moved/project_changed/labels_changed · dependency.changed。
  * issue.created → `{issue: 摘要}`;issue.updated/moved/project_changed 为
- * 扁平 `{id, changes, version, updated_at}`;issue.deleted → `{id}`。
+ * 扁平 `{id, changes, version, updated_at}`;issue.labels_changed 为
+ * `{issue_id, labels}`;issue.deleted → `{id}`。
  * 防回退以 updated_at 字符串比较为闸(RFC3339 UTC 可直接比较,§6.7 水位)。
  * 客户端按 id 增量合并,不整页刷新(§3.6)。
  */
@@ -14,6 +15,8 @@ import type { IssueSummary } from './types';
 
 interface FramePayload {
   readonly id?: unknown;
+  readonly issue_id?: unknown;
+  readonly labels?: unknown;
   readonly updated_at?: unknown;
   readonly version?: unknown;
   readonly changes?: unknown;
@@ -51,6 +54,7 @@ const FRAME_META_KEYS = new Set([
   'mapped_fields',
   'cleared_fields',
   'visibility',
+  'issue_id',
 ]);
 
 /**
@@ -115,6 +119,16 @@ export function applyIssueListFrame(
     if (existing === undefined) return issues as IssueSummary[];
     if (isStale(existing, payload)) return issues as IssueSummary[];
     const merged = mergedFields(existing, payload);
+    if (!belongs(merged)) return issues.filter((issue) => issue.id !== id);
+    return issues.map((issue) => (issue.id === id ? merged : issue));
+  }
+
+  if (action === 'labels_changed') {
+    const id = typeof payload.issue_id === 'string' ? payload.issue_id : undefined;
+    if (id === undefined || !Array.isArray(payload.labels)) return issues as IssueSummary[];
+    const existing = issues.find((issue) => issue.id === id);
+    if (existing === undefined) return issues as IssueSummary[];
+    const merged = { ...existing, labels: payload.labels } as IssueSummary;
     if (!belongs(merged)) return issues.filter((issue) => issue.id !== id);
     return issues.map((issue) => (issue.id === id ? merged : issue));
   }

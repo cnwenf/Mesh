@@ -111,6 +111,21 @@ async def test_issue_association_full_flow_durable(api_client, session_factory):
         f"/api/v1/issues/{issue['id']}/labels/{bug['id']}", headers=_auth(owner)
     )
     assert resp.status_code == 200, resp.text
+    detail = await api_client.get(
+        f"/api/v1/issues/{issue['id']}", headers=_auth(owner)
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["labels"] == [
+        {"id": bug["id"], "name": "bug", "color": "#e5484d"}
+    ]
+    issue_page = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/issues", headers=_auth(owner)
+    )
+    assert issue_page.status_code == 200, issue_page.text
+    listed_issue = next(
+        row for row in issue_page.json()["data"] if row["id"] == issue["id"]
+    )
+    assert listed_issue["labels"] == detail.json()["data"]["labels"]
     resp = await api_client.put(
         f"/api/v1/issues/{issue['id']}/custom-field-values",
         json={"values": [{"field_def_id": field["id"], "value_json": major}]},
@@ -193,6 +208,13 @@ async def test_issue_association_full_flow_durable(api_client, session_factory):
     await api_client.post(
         f"/api/v1/issues/{issue['id']}/labels/{defect['id']}", headers=_auth(owner)
     )
+    preview = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(owner)
+    )
+    preview_counts = {
+        label["id"]: label["issue_count"] for label in preview.json()["data"]
+    }
+    assert preview_counts[defect["id"]] == 1
     resp = await api_client.post(
         f"/api/v1/labels/{defect['id']}/merge",
         json={"target_label_id": bug["id"]}, headers=_auth(owner),
@@ -209,6 +231,10 @@ async def test_issue_association_full_flow_durable(api_client, session_factory):
             ).scalars().all()
         )
     assert [str(r) for r in remaining] == [bug["id"]]
+    listing = await api_client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(owner)
+    )
+    assert listing.json()["data"][0]["issue_count"] == 1
 
 
 async def test_type_validation_negatives_over_http(api_client):

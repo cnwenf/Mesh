@@ -3,7 +3,7 @@
  * 自定义 key(upper-case + keyTouched)、空表单守卫、非 API 错误回退。
  * 409 内联错误路径见 ProjectsPage.test.tsx。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api';
@@ -14,10 +14,11 @@ import type { ProjectSummary } from '../types';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return { ...actual, createProject: vi.fn() };
+  return { ...actual, createProject: vi.fn(), getProjectKeyAvailability: vi.fn() };
 });
 
 const createProjectMock = vi.mocked(projectsApi.createProject);
+const getProjectKeyAvailabilityMock = vi.mocked(projectsApi.getProjectKeyAvailability);
 
 function makeProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
@@ -66,6 +67,46 @@ function renderDialog(): { onClose: () => void; onCreated: (projectId: string) =
 describe('CreateProjectDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getProjectKeyAvailabilityMock.mockImplementation(async (_client, _workspaceId, key) => ({
+      key,
+      available: true,
+    }));
+  });
+
+  it('checks key availability live and blocks a permanently reserved prefix', async () => {
+    getProjectKeyAvailabilityMock.mockResolvedValue({ key: 'APOLLO', available: false });
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.type(screen.getByTestId('create-project-name'), 'Apollo');
+    expect(await screen.findByText('This key is already reserved.')).toBeInTheDocument();
+    expect(getProjectKeyAvailabilityMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'ws-1',
+      'APOLLO',
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByTestId('create-project-submit')).toBeDisabled();
+  });
+
+  it('disables submit while a live key check is in progress', async () => {
+    let resolveCheck!: (value: { key: string; available: boolean }) => void;
+    getProjectKeyAvailabilityMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCheck = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.type(screen.getByTestId('create-project-name'), 'Apollo');
+    expect(await screen.findByText('Checking availability…')).toBeInTheDocument();
+    expect(screen.getByTestId('create-project-submit')).toBeDisabled();
+
+    await act(async () => resolveCheck({ key: 'APOLLO', available: true }));
+    expect(await screen.findByText('This key is available.')).toBeInTheDocument();
+    expect(screen.getByTestId('create-project-submit')).toBeEnabled();
   });
 
   it('submits description, private visibility and target date when provided', async () => {

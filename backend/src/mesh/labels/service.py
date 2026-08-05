@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import Select, or_, select, text
+from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -520,6 +520,35 @@ class LabelService:
             return or_(public, granted)
         return or_(public, lead, member_of)
 
+    def _visible_issue_clause(self, *, viewer: Member, workspace_id: uuid.UUID):
+        """Match the issue module's row-level read gate for usage aggregates."""
+        if self._is_workspace_manager(viewer):
+            return None
+        if viewer.role == "guest":
+            granted_projects = select(MemberProjectAccess.project_id).where(
+                MemberProjectAccess.member_id == viewer.id,
+                MemberProjectAccess.workspace_id == workspace_id,
+            )
+            return or_(
+                Issue.project_id.in_(granted_projects),
+                Issue.assignee_id == viewer.id,
+                Issue.reporter_id == viewer.id,
+            )
+        member_projects = select(ProjectMember.project_id).where(
+            ProjectMember.member_id == viewer.id,
+            ProjectMember.workspace_id == workspace_id,
+        )
+        public_projects = select(Project.id).where(
+            Project.workspace_id == workspace_id,
+            Project.visibility == "public",
+            Project.deleted_at.is_(None),
+        )
+        return or_(
+            Issue.project_id.is_(None),
+            Issue.project_id.in_(member_projects),
+            Issue.project_id.in_(public_projects),
+        )
+
     # ------------------------------------------------------------------
     # realtime + audit helpers (§6.7 registered names, §6.6 unique path)
     # ------------------------------------------------------------------
@@ -689,6 +718,9 @@ class LabelService:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
             stmt = select(Label).where(Label.workspace_id == workspace_id)
+            visible_project_clause = await self._visible_project_clause(
+                session, viewer=viewer
+            )
             if project_id is not None:
                 project = await self._load_scope_project(
                     session, workspace_id=workspace_id, project_id=project_id
@@ -698,8 +730,7 @@ class LabelService:
                     or_(Label.project_id == project_id, Label.project_id.is_(None))
                 )
             else:
-                clause = await self._visible_project_clause(session, viewer=viewer)
-                if clause is not None:
+                if visible_project_clause is not None:
                     stmt = stmt.where(
                         or_(
                             Label.project_id.is_(None),
@@ -707,7 +738,7 @@ class LabelService:
                                 select(Project.id).where(
                                     Project.workspace_id == workspace_id,
                                     Project.deleted_at.is_(None),
-                                    clause,
+                                    visible_project_clause,
                                 )
                             ),
                         )
@@ -715,7 +746,40 @@ class LabelService:
             items, next_cursor = await self._paginate_labels(
                 session, stmt, limit=page_limit, cursor=cursor
             )
-            return [self.render_label(label) for label in items], next_cursor
+            issue_counts: dict[uuid.UUID, int] = {}
+            if items:
+                visible_issue_clause = self._visible_issue_clause(
+                    viewer=viewer, workspace_id=workspace_id
+                )
+                count_stmt = (
+                    select(IssueLabel.label_id, func.count())
+                    .join(
+                        Issue,
+                        and_(
+                            Issue.workspace_id == IssueLabel.workspace_id,
+                            Issue.id == IssueLabel.issue_id,
+                        ),
+                    )
+                    .where(
+                        IssueLabel.workspace_id == workspace_id,
+                        IssueLabel.label_id.in_([label.id for label in items]),
+                        Issue.deleted_at.is_(None),
+                    )
+                    .group_by(IssueLabel.label_id)
+                )
+                if visible_issue_clause is not None:
+                    count_stmt = count_stmt.where(visible_issue_clause)
+                rows = (await session.execute(count_stmt)).all()
+                issue_counts = {label_id: int(count) for label_id, count in rows}
+            rendered = []
+            for label in items:
+                item = self.render_label(label)
+                # Used by both the settings table and the destructive merge
+                # confirmation. Count only live issues, matching merge_label's
+                # carrier set and returned merged_issue_count.
+                item["issue_count"] = issue_counts.get(label.id, 0)
+                rendered.append(item)
+            return rendered, next_cursor
 
     async def _paginate_labels(
         self,
@@ -981,7 +1045,9 @@ class LabelService:
         Every issue carrying the source label gains the target (de-duplicated)
         and loses the source; the source label is then deleted. Broadcasts
         ``issue.labels_changed`` for each migrated issue plus ``label.deleted``
-        for the source. Returns the migration count + target snapshot.
+        for the source. A project-private target only accepts a source from the
+        same project; a workspace target accepts either scope. Returns the
+        migration count + target snapshot.
         """
         if source_label_id == target_label_id:
             raise ConflictError(
@@ -1029,6 +1095,23 @@ class LabelService:
                 workspace_id=workspace_id,
                 project_id=target.project_id,
             )
+            # A workspace target is visible to every carrier and can safely
+            # receive any source. A project target is private to that one
+            # project, so accepting a broader/different source would attach a
+            # project-private label to out-of-scope issues.
+            if target.project_id is not None and source.project_id != target.project_id:
+                raise BusinessRuleError(
+                    "project-scoped merge target requires a source from the same project",
+                    code="label_scope_mismatch",
+                    details={
+                        "source_label_id": str(source.id),
+                        "source_project_id": str(source.project_id)
+                        if source.project_id is not None
+                        else None,
+                        "target_label_id": str(target.id),
+                        "target_project_id": str(target.project_id),
+                    },
+                )
 
             # Migrate the join rows: LIVE source carriers gain the target
             # (de-duplicated). Soft-deleted issues' links are left to the

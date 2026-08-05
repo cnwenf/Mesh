@@ -13,10 +13,11 @@ Every value is bound as a parameter (never spliced into SQL — kanban §2.9
 injection guard). Filter limits (depth ≤3, conditions ≤20 → ``filter_too_complex``)
 and ``statement_timeout`` (→ ``query_cost_exceeded``) follow README §6.14.
 
-Label / custom-field filtering & grouping require the ``issue_labels`` /
-``issue_custom_field_values`` association tables owned by the label-property
-increment (MES-32); until those exist they are gated with a named code, exactly
-as the issue module gates ``group_by=label`` (no mock stand-ins).
+Label / custom-field filtering and grouping consume the normalized
+``issue_labels`` / ``issue_custom_field_values`` associations. Multi-valued
+axes expand an issue into one projection instance per value (or the Cartesian
+product when both axes are multi-valued), while aggregate counts remain
+distinct per lane/column as required by kanban.md §2.4.
 """
 
 from __future__ import annotations
@@ -25,17 +26,30 @@ import hashlib
 import json
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from itertools import product
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import String, and_, cast, func, or_, select, text
+from sqlalchemy import String, and_, cast, exists, func, not_, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql import type_coerce
 
 from mesh.api.pagination import decode_cursor, encode_cursor
+from mesh.auth.rbac import role_satisfies
 from mesh.db.models.issue import Issue, IssueStatus
-from mesh.db.models.member import Member
-from mesh.db.models.project import Project
+from mesh.db.models.label import (
+    CustomFieldDef,
+    CustomFieldOption,
+    IssueCustomFieldValue,
+    IssueLabel,
+    Label,
+)
+from mesh.db.models.member import Member, MemberProjectAccess
+from mesh.db.models.project import Project, ProjectMember
 from mesh.db.models.view import View
 from mesh.db.models.view_position import ViewIssuePosition
 from mesh.db.tenant import set_tenant_context
@@ -68,7 +82,8 @@ if TYPE_CHECKING:
     from mesh.issue.service import IssueService
     from mesh.views.service import ViewService
 
-# Named code for label / custom-field projection gated on MES-32 associations.
+# Kept as a public compatibility constant for older API clients; current
+# projection paths no longer raise it for label/custom-field data.
 PROJECTION_FIELD_PENDING = "projection_field_pending"
 
 # Built-in filterable columns (kanban §2.3 minus ``label``/``q`` which are
@@ -157,24 +172,135 @@ def _enforce_limits(filters: dict) -> None:
     walk(filters, 1, [0])
 
 
+def _parse_filter_uuid(value: Any, *, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise _invalid_filters("invalid UUID filter value", field=field) from exc
+
+
+def _custom_value_is_present() -> Any:
+    return or_(
+        IssueCustomFieldValue.value_text.is_not(None),
+        IssueCustomFieldValue.value_number.is_not(None),
+        IssueCustomFieldValue.value_date.is_not(None),
+        IssueCustomFieldValue.value_member_id.is_not(None),
+        IssueCustomFieldValue.value_boolean.is_not(None),
+        IssueCustomFieldValue.value_json.is_not(None),
+    )
+
+
+def _custom_scalar_match(value: Any, *, op: str) -> Any:
+    """Match a JSON filter scalar against the EAV typed columns.
+
+    Definition-aware validation happens before execution. The compiler stays
+    synchronous and parameterized by emitting the small union of compatible
+    typed predicates; only the populated column can match a well-formed EAV
+    row. This also keeps saved filters compilable outside a database session.
+    """
+
+    comparisons: list[Any] = []
+
+    def compare(column: Any, candidate: Any) -> Any:
+        if op == "eq":
+            return column == candidate
+        if op == "lt":
+            return column < candidate
+        if op == "lte":
+            return column <= candidate
+        if op == "gt":
+            return column > candidate
+        if op == "gte":
+            return column >= candidate
+        raise _invalid_filters("unknown custom-field filter op", op=op)
+
+    if isinstance(value, bool):
+        if op != "eq":
+            raise _invalid_filters("boolean custom field only supports equality", op=op)
+        comparisons.append(IssueCustomFieldValue.value_boolean.is_(value))
+    elif isinstance(value, (int, float)):
+        comparisons.append(compare(IssueCustomFieldValue.value_number, value))
+    elif isinstance(value, str):
+        comparisons.append(compare(IssueCustomFieldValue.value_text, value))
+        if op == "eq":
+            # single_select stores a JSON string; multi_select stores an array.
+            # JSONB containment covers both shapes without string interpolation.
+            comparisons.append(IssueCustomFieldValue.value_json.op("@>")(type_coerce(value, JSONB)))
+        try:
+            member_id = uuid.UUID(value)
+        except ValueError:
+            member_id = None
+        if member_id is not None:
+            comparisons.append(compare(IssueCustomFieldValue.value_member_id, member_id))
+        try:
+            date_value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            date_value = None
+        if date_value is not None:
+            comparisons.append(compare(IssueCustomFieldValue.value_date, date_value))
+    else:
+        raise _invalid_filters("custom-field value must be a scalar")
+    return or_(*comparisons)
+
+
+def _compile_custom_field(condition: dict) -> Any:
+    field_def_id = _parse_filter_uuid(condition.get("field_def_id"), field="field_def_id")
+    op = condition.get("op")
+    base = [
+        IssueCustomFieldValue.workspace_id == Issue.workspace_id,
+        IssueCustomFieldValue.issue_id == Issue.id,
+        IssueCustomFieldValue.field_def_id == field_def_id,
+    ]
+    present = _custom_value_is_present()
+    if op == "is_null":
+        valued = select(IssueCustomFieldValue.issue_id).where(*base, present).correlate(Issue)
+        return not_(exists(valued))
+    if op == "is_not_null":
+        valued = select(IssueCustomFieldValue.issue_id).where(*base, present).correlate(Issue)
+        return exists(valued)
+    if op == "contains":
+        value = condition.get("value")
+        if not isinstance(value, str):
+            raise _invalid_filters("contains requires a text value", field="field_def_id")
+        match = IssueCustomFieldValue.value_text.ilike(f"%{value}%")
+    elif op in _LIST_OPS:
+        raw = condition.get("value")
+        if not isinstance(raw, list) or not raw:
+            raise _invalid_filters("list op requires a non-empty array value", field="field_def_id")
+        match = or_(*[_custom_scalar_match(item, op="eq") for item in raw])
+    else:
+        match = _custom_scalar_match(condition.get("value"), op="eq" if op == "neq" else op)
+    matched = select(IssueCustomFieldValue.issue_id).where(*base, match).correlate(Issue)
+    if op in {"neq", "not_in"}:
+        # Negative value predicates include an unset field, matching the
+        # collection semantics of label NOT IN.
+        return not_(exists(matched))
+    return exists(matched)
+
+
 def _compile_leaf(condition: dict) -> Any:
-    # Custom-field conditions gate on the MES-32 association tables.
     if condition.get("field_kind") == "custom_field" or "field_def_id" in condition:
-        raise ValidationError(
-            "custom-field filters await the label-property association increment",
-            code=PROJECTION_FIELD_PENDING,
-            details={"field_def_id": str(condition.get("field_def_id"))[:64]},
-        )
+        return _compile_custom_field(condition)
 
     field = condition.get("field")
     op = condition.get("op")
 
     if field == "label":
-        raise ValidationError(
-            "label filters await the label-property association increment",
-            code=PROJECTION_FIELD_PENDING,
-            details={"field": "label"},
+        raw = condition.get("value")
+        if not isinstance(raw, list) or not raw:
+            raise _invalid_filters("label filter requires a non-empty array", field="label")
+        label_ids = [_parse_filter_uuid(item, field="label") for item in raw]
+        matched = (
+            select(IssueLabel.issue_id)
+            .where(
+                IssueLabel.workspace_id == Issue.workspace_id,
+                IssueLabel.issue_id == Issue.id,
+                IssueLabel.label_id.in_(label_ids),
+            )
+            .correlate(Issue)
         )
+        clause = exists(matched)
+        return not_(clause) if op == "not_in" else clause
 
     if field == "q":
         # title/identifier search (contains only, kanban §2.3).
@@ -235,8 +361,7 @@ def compile_view_filters(filters: dict | None) -> Any:
     """Compile a validated saved-view ``filters`` JSONB into a SQL clause.
 
     ``{}``/``None`` → ``None`` (no filter). Raises ``filter_too_complex`` past
-    the §6.14 limits, ``projection_field_pending`` for label/custom-field
-    conditions, and ``invalid_filters`` for type/op mismatches.
+    the §6.14 limits and ``invalid_filters`` for type/op mismatches.
     """
     if not filters:
         return None
@@ -255,7 +380,7 @@ _VIEW_NOT_FOUND = "view not found"
 _EMPTY_MEMBER_KEY = "__none__"
 _EMPTY_PROJECT_KEY = "__none__"
 
-_SUPPORTED_GROUP_BY = frozenset({"state_category", "status", "assignee", "priority", "project"})
+_BUILTIN_GROUP_BY = frozenset({"state_category", "status", "assignee", "priority", "project"})
 _PROCESS_VIEW_CURSOR_SECRET = secrets.token_bytes(32)
 SWIMLANE_CURSOR_TTL = timedelta(minutes=15)
 
@@ -328,6 +453,54 @@ def group_key_for(group_by: str, issue: Issue) -> str:
     return _group_key(group_by, _raw_group_value(group_by, issue))
 
 
+@dataclass(frozen=True)
+class _ProjectionAxis:
+    """Resolved projection values and deterministic response skeleton."""
+
+    name: str
+    keys: list[str]
+    labels: dict[str, str]
+    memberships: dict[uuid.UUID, tuple[str, ...]]
+    multi: bool = False
+    custom_field_type: str | None = None
+
+
+def _decimal_key(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _custom_value_keys(definition: CustomFieldDef, row: IssueCustomFieldValue | None) -> tuple[str, ...]:
+    if row is None:
+        return (_EMPTY_MEMBER_KEY,)
+    if definition.type in {"text", "textarea", "url"}:
+        return (row.value_text,) if row.value_text is not None else (_EMPTY_MEMBER_KEY,)
+    if definition.type == "number":
+        return (_decimal_key(row.value_number),) if row.value_number is not None else (_EMPTY_MEMBER_KEY,)
+    if definition.type in {"date", "datetime"}:
+        if row.value_date is None:
+            return (_EMPTY_MEMBER_KEY,)
+        value = row.value_date.isoformat()
+        if value.endswith("+00:00"):
+            value = f"{value[:-6]}Z"
+        return (value,)
+    if definition.type == "member":
+        return (str(row.value_member_id),) if row.value_member_id is not None else (_EMPTY_MEMBER_KEY,)
+    if definition.type == "boolean":
+        if row.value_boolean is None:
+            return (_EMPTY_MEMBER_KEY,)
+        return ("true" if row.value_boolean else "false",)
+    if definition.type == "single_select":
+        return (str(row.value_json),) if isinstance(row.value_json, str) else (_EMPTY_MEMBER_KEY,)
+    if definition.type == "multi_select":
+        values = row.value_json if isinstance(row.value_json, list) else []
+        normalized = tuple(dict.fromkeys(str(value) for value in values if isinstance(value, str)))
+        return normalized or (_EMPTY_MEMBER_KEY,)
+    return (_EMPTY_MEMBER_KEY,)
+
+
 class ProjectionService:
     """Executes a saved view's config against issues (kanban §3.2)."""
 
@@ -373,18 +546,6 @@ class ProjectionService:
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
             validate_group_axes(view.group_by, sub_group_by)
-            if group_by not in _SUPPORTED_GROUP_BY:
-                raise ValidationError(
-                    "group_by=label/custom-field awaits the label-property association increment",
-                    code=PROJECTION_FIELD_PENDING,
-                    details={"group_by": group_by},
-                )
-            if sub_group_by is not None and sub_group_by not in _SUPPORTED_GROUP_BY:
-                raise ValidationError(
-                    "sub_group_by=label/custom-field awaits the label-property association increment",
-                    code=PROJECTION_FIELD_PENDING,
-                    details={"sub_group_by": sub_group_by},
-                )
             try:
                 return await self._run(
                     session,
@@ -417,6 +578,336 @@ class ProjectionService:
             conditions.append(filters_clause)
         return conditions
 
+    async def _render_projection_cards(
+        self,
+        session: AsyncSession,
+        issues: list[Issue],
+    ) -> dict[uuid.UUID, dict]:
+        """Render one projection page with a single batched label lookup."""
+        unique = list({issue.id: issue for issue in issues}.values())
+        if not unique:
+            return {}
+        labels_by_issue = await self._issues._labels_for_issues(
+            session,
+            workspace_id=unique[0].workspace_id,
+            issue_ids=[issue.id for issue in unique],
+        )
+        return {
+            issue.id: await self._issues.render_issue(
+                session,
+                issue,
+                labels=labels_by_issue[issue.id],
+            )
+            for issue in unique
+        }
+
+    @staticmethod
+    def _apply_configured_order(keys: list[str], configured: list[str] | None) -> list[str]:
+        if not configured:
+            return keys
+        wanted = list(dict.fromkeys(key for key in configured if key in keys))
+        return wanted + [key for key in keys if key not in wanted]
+
+    async def _custom_field_definition(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        view: View,
+        axis: str,
+    ) -> CustomFieldDef:
+        try:
+            field_def_id = uuid.UUID(axis)
+        except ValueError as exc:
+            raise ValidationError(
+                "unknown projection axis",
+                code="invalid_group_by",
+                details={"group_by": axis},
+            ) from exc
+        definition = await session.scalar(
+            select(CustomFieldDef).where(
+                CustomFieldDef.id == field_def_id,
+                CustomFieldDef.workspace_id == workspace_id,
+                CustomFieldDef.is_active.is_(True),
+            )
+        )
+        if (
+            definition is None
+            or (view.project_id is None and definition.project_id is not None)
+            or (
+                view.project_id is not None
+                and definition.project_id is not None
+                and definition.project_id != view.project_id
+            )
+        ):
+            raise ValidationError(
+                "custom field is not available to this view",
+                code="invalid_group_by",
+                details={"group_by": axis},
+            )
+        return definition
+
+    @staticmethod
+    def _visible_label_project_clause(*, viewer: Member, workspace_id: uuid.UUID) -> Any | None:
+        """Project visibility used by the label definition/listing domain."""
+
+        if role_satisfies(viewer.role, "project:manage"):
+            return None
+        public = Project.visibility == "public"
+        if viewer.role == "guest":
+            granted = Project.id.in_(
+                select(MemberProjectAccess.project_id).where(
+                    MemberProjectAccess.member_id == viewer.id,
+                    MemberProjectAccess.workspace_id == workspace_id,
+                )
+            )
+            return or_(public, granted)
+        lead = Project.lead_member_id == viewer.id
+        member_of = Project.id.in_(
+            select(ProjectMember.project_id).where(
+                ProjectMember.member_id == viewer.id,
+                ProjectMember.workspace_id == workspace_id,
+            )
+        )
+        return or_(public, lead, member_of)
+
+    async def _load_projection_axis(
+        self,
+        session: AsyncSession,
+        *,
+        axis: str,
+        workspace_id: uuid.UUID,
+        viewer: Member,
+        view: View,
+        issues: list[Issue],
+        configured_order: list[str] | None = None,
+    ) -> _ProjectionAxis:
+        issue_ids = [issue.id for issue in issues]
+        if axis in _BUILTIN_GROUP_BY:
+            memberships = {issue.id: (group_key_for(axis, issue),) for issue in issues}
+            counts: dict[str, int] = {}
+            for values in memberships.values():
+                for key in values:
+                    counts[key] = counts.get(key, 0) + 1
+            keys = await self._ordered_group_keys(
+                session,
+                group_by=axis,
+                workspace_id=workspace_id,
+                counts=counts,
+                membership={},
+                configured_order=configured_order,
+            )
+            labels = await self._group_labels(
+                session,
+                group_by=axis,
+                workspace_id=workspace_id,
+                keys=keys,
+            )
+            return _ProjectionAxis(axis, keys, labels, memberships)
+
+        if axis == "label":
+            label_stmt = select(Label).where(Label.workspace_id == workspace_id)
+            if view.project_id is not None:
+                label_stmt = label_stmt.where(
+                    or_(Label.project_id.is_(None), Label.project_id == view.project_id)
+                )
+            else:
+                visible_project_clause = self._visible_label_project_clause(
+                    viewer=viewer, workspace_id=workspace_id
+                )
+                if visible_project_clause is not None:
+                    label_stmt = label_stmt.where(
+                        or_(
+                            Label.project_id.is_(None),
+                            Label.project_id.in_(
+                                select(Project.id).where(
+                                    Project.workspace_id == workspace_id,
+                                    Project.deleted_at.is_(None),
+                                    visible_project_clause,
+                                )
+                            ),
+                        )
+                    )
+            definitions = list((await session.execute(label_stmt)).scalars().all())
+            definitions.sort(key=lambda label: (label.name.casefold(), str(label.id)))
+            available = {label.id: label for label in definitions}
+            by_issue: dict[uuid.UUID, list[str]] = {}
+            if issue_ids and available:
+                rows = (
+                    await session.execute(
+                        select(IssueLabel.issue_id, IssueLabel.label_id).where(
+                            IssueLabel.workspace_id == workspace_id,
+                            IssueLabel.issue_id.in_(issue_ids),
+                            IssueLabel.label_id.in_(list(available)),
+                        )
+                    )
+                ).all()
+                for issue_id, label_id in rows:
+                    by_issue.setdefault(issue_id, []).append(str(label_id))
+            order = {str(label.id): index for index, label in enumerate(definitions)}
+            memberships: dict[uuid.UUID, tuple[str, ...]] = {}
+            for issue in issues:
+                values = tuple(
+                    sorted(set(by_issue.get(issue.id, [])), key=lambda key: order.get(key, len(order)))
+                )
+                memberships[issue.id] = values or (_EMPTY_MEMBER_KEY,)
+            keys = [str(label.id) for label in definitions]
+            keys.append(_EMPTY_MEMBER_KEY)
+            keys = self._apply_configured_order(keys, configured_order)
+            labels = {str(label.id): label.name for label in definitions}
+            labels[_EMPTY_MEMBER_KEY] = "No label"
+            return _ProjectionAxis(axis, keys, labels, memberships, multi=True)
+
+        definition = await self._custom_field_definition(
+            session,
+            workspace_id=workspace_id,
+            view=view,
+            axis=axis,
+        )
+        values_by_issue: dict[uuid.UUID, IssueCustomFieldValue] = {}
+        if issue_ids:
+            value_rows = list(
+                (
+                    await session.execute(
+                        select(IssueCustomFieldValue).where(
+                            IssueCustomFieldValue.workspace_id == workspace_id,
+                            IssueCustomFieldValue.issue_id.in_(issue_ids),
+                            IssueCustomFieldValue.field_def_id == definition.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            values_by_issue = {row.issue_id: row for row in value_rows}
+        memberships = {
+            issue.id: _custom_value_keys(definition, values_by_issue.get(issue.id)) for issue in issues
+        }
+        present = {key for values in memberships.values() for key in values if key != _EMPTY_MEMBER_KEY}
+        labels: dict[str, str] = {}
+        keys: list[str]
+        if definition.type in {"single_select", "multi_select"}:
+            options = list(
+                (
+                    await session.execute(
+                        select(CustomFieldOption).where(
+                            CustomFieldOption.workspace_id == workspace_id,
+                            CustomFieldOption.field_def_id == definition.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            options.sort(key=lambda option: (float(option.position), str(option.id)))
+            keys = [str(option.id) for option in options]
+            known = set(keys)
+            keys.extend(sorted(present - known))
+            labels.update({str(option.id): option.name for option in options})
+        elif definition.type == "member":
+            for key in sorted(present):
+                summary = await self._issues._member_summary(
+                    session,
+                    workspace_id=workspace_id,
+                    member_id=uuid.UUID(key),
+                )
+                labels[key] = summary["name"] if summary is not None else key
+            keys = sorted(present, key=lambda key: (labels.get(key, key).casefold(), key))
+        elif definition.type == "boolean":
+            keys = [key for key in ("false", "true") if key in present]
+            labels.update({"false": "False", "true": "True"})
+        elif definition.type == "number":
+
+            def number_order(key: str) -> tuple[int, Decimal | str]:
+                try:
+                    return (0, Decimal(key))
+                except InvalidOperation:
+                    return (1, key)
+
+            keys = sorted(present, key=number_order)
+        else:
+            keys = sorted(present)
+        for key in keys:
+            labels.setdefault(key, key)
+        keys.append(_EMPTY_MEMBER_KEY)
+        labels[_EMPTY_MEMBER_KEY] = f"No {definition.name}"
+        keys = self._apply_configured_order(keys, configured_order)
+        return _ProjectionAxis(
+            axis,
+            keys,
+            labels,
+            memberships,
+            multi=definition.type == "multi_select",
+            custom_field_type=definition.type,
+        )
+
+    async def _custom_sort_values(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        view: View,
+        issues: list[Issue],
+        sort_rules: list[dict],
+    ) -> dict[str, dict[uuid.UUID, Any]]:
+        result: dict[str, dict[uuid.UUID, Any]] = {}
+        issue_ids = [issue.id for issue in issues]
+        for rule in sort_rules:
+            if rule.get("field_kind") != "custom_field" and "field_def_id" not in rule:
+                continue
+            axis = str(rule.get("field_def_id"))
+            definition = await self._custom_field_definition(
+                session,
+                workspace_id=workspace_id,
+                view=view,
+                axis=axis,
+            )
+            rows = []
+            if issue_ids:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(IssueCustomFieldValue).where(
+                                IssueCustomFieldValue.workspace_id == workspace_id,
+                                IssueCustomFieldValue.issue_id.in_(issue_ids),
+                                IssueCustomFieldValue.field_def_id == definition.id,
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            option_rank: dict[str, int] = {}
+            if definition.type in {"single_select", "multi_select"}:
+                option_rows = (
+                    await session.execute(
+                        select(CustomFieldOption.id)
+                        .where(
+                            CustomFieldOption.workspace_id == workspace_id,
+                            CustomFieldOption.field_def_id == definition.id,
+                        )
+                        .order_by(CustomFieldOption.position.asc(), CustomFieldOption.id.asc())
+                    )
+                ).all()
+                option_rank = {str(option_id): index for index, (option_id,) in enumerate(option_rows)}
+            values: dict[uuid.UUID, Any] = {}
+            for row in rows:
+                keys = tuple(key for key in _custom_value_keys(definition, row) if key != _EMPTY_MEMBER_KEY)
+                if not keys:
+                    continue
+                if definition.type == "number":
+                    values[row.issue_id] = row.value_number
+                elif definition.type in {"date", "datetime"}:
+                    values[row.issue_id] = row.value_date
+                elif definition.type == "boolean":
+                    values[row.issue_id] = row.value_boolean
+                elif option_rank:
+                    values[row.issue_id] = tuple(option_rank.get(key, len(option_rank)) for key in keys)
+                else:
+                    values[row.issue_id] = keys[0] if len(keys) == 1 else keys
+            result[axis] = values
+        return result
+
     async def _run(
         self,
         session: AsyncSession,
@@ -428,6 +919,24 @@ class ProjectionService:
         page_limit: int,
         cursor: str | None,
     ) -> dict:
+        rendered_sub_group = view.sub_group_by if view.layout == "board" else None
+        has_dynamic_axis = group_by not in _BUILTIN_GROUP_BY or (
+            rendered_sub_group is not None and rendered_sub_group not in _BUILTIN_GROUP_BY
+        )
+        has_custom_sort = any(
+            rule.get("field_kind") == "custom_field" or "field_def_id" in rule for rule in (view.sort or [])
+        )
+        if has_dynamic_axis or has_custom_sort:
+            return await self._run_projection_snapshot(
+                session,
+                workspace_id=workspace_id,
+                viewer=viewer,
+                view=view,
+                group_by=group_by,
+                sub_group_by=rendered_sub_group,
+                page_limit=page_limit,
+                cursor=cursor,
+            )
         if view.layout == "board" and view.sub_group_by is not None:
             return await self._run_swimlanes(
                 session,
@@ -484,8 +993,12 @@ class ProjectionService:
 
         # Bucket the page slice into groups, rendering each card.
         membership: dict[str, list[dict]] = {}
+        rendered_cards = await self._render_projection_cards(
+            session,
+            [issue for issue, _position in raw_rows],
+        )
         for issue, _pos in raw_rows:
-            rendered = await self._issues.render_issue(session, issue)
+            rendered = rendered_cards[issue.id]
             key = group_key_for(group_by, issue)
             membership.setdefault(key, []).append(rendered)
 
@@ -532,6 +1045,229 @@ class ProjectionService:
             )
         return result
 
+    async def _run_projection_snapshot(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        viewer: Member,
+        view: View,
+        group_by: str,
+        sub_group_by: str | None,
+        page_limit: int,
+        cursor: str | None,
+    ) -> dict:
+        """Project dynamic/custom axes from one consistent visible snapshot."""
+        conditions = self._base_conditions(viewer, session, view)
+        vip = aliased(ViewIssuePosition)
+        raw_rows = (
+            await session.execute(
+                select(Issue, vip.position, vip.group_key, vip.sub_group_key)
+                .outerjoin(vip, and_(vip.view_id == view.id, vip.issue_id == Issue.id))
+                .where(*conditions)
+            )
+        ).all()
+        issues = [issue for issue, _position, _group, _sub_group in raw_rows]
+        group_axis = await self._load_projection_axis(
+            session,
+            axis=group_by,
+            workspace_id=workspace_id,
+            viewer=viewer,
+            view=view,
+            issues=issues,
+            configured_order=(view.board_settings or {}).get("columns"),
+        )
+        lane_axis = None
+        if sub_group_by is not None:
+            lane_axis = await self._load_projection_axis(
+                session,
+                axis=sub_group_by,
+                workspace_id=workspace_id,
+                viewer=viewer,
+                view=view,
+                issues=issues,
+            )
+        multi_value_axis = group_axis.multi or (lane_axis is not None and lane_axis.multi)
+        custom_values = await self._custom_sort_values(
+            session,
+            workspace_id=workspace_id,
+            view=view,
+            issues=issues,
+            sort_rules=view.sort or [],
+        )
+
+        rows: list[tuple[Issue, str, str, float]] = []
+        group_ids: dict[str, set[uuid.UUID]] = {}
+        lane_ids: dict[str, set[uuid.UUID]] = {}
+        cell_counts: dict[tuple[str, str], int] = {}
+        for issue, manual_position, manual_group, manual_sub_group in raw_rows:
+            group_values = group_axis.memberships.get(issue.id, (_EMPTY_MEMBER_KEY,))
+            lane_values = (
+                lane_axis.memberships.get(issue.id, (_EMPTY_MEMBER_KEY,)) if lane_axis is not None else ("",)
+            )
+            for lane_key, group_key in product(lane_values, group_values):
+                group_ids.setdefault(group_key, set()).add(issue.id)
+                if lane_axis is not None:
+                    lane_ids.setdefault(lane_key, set()).add(issue.id)
+                cell = (lane_key, group_key)
+                cell_counts[cell] = cell_counts.get(cell, 0) + 1
+                use_manual = (
+                    not multi_value_axis
+                    and manual_position is not None
+                    and manual_group == group_key
+                    and manual_sub_group == lane_key
+                )
+                position = float(manual_position) if use_manual else float(issue.position)
+                rows.append((issue, lane_key, group_key, position))
+
+        group_keys = group_axis.keys
+        lane_keys = lane_axis.keys if lane_axis is not None else [""]
+        rows_by_cell: dict[tuple[str, str], list[tuple[Issue, str, str, float]]] = {}
+        for row in rows:
+            rows_by_cell.setdefault((row[1], row[2]), []).append(row)
+        rows = [
+            row
+            for lane_key in lane_keys
+            for group_key in group_keys
+            for row in self._sort_cell_rows(
+                rows_by_cell.get((lane_key, group_key), []),
+                sort_rules=view.sort or [],
+                custom_values=custom_values,
+            )
+        ]
+        fingerprint = self._swimlane_fingerprint(
+            view=view,
+            viewer=viewer,
+            page_limit=page_limit,
+            group_keys=group_keys,
+            lane_keys=lane_keys,
+            rows=rows,
+        )
+        start = 0
+        if cursor is not None:
+            cursor_fingerprint, factors = decode_signed_cursor(self._cursor_secret, cursor)
+            if cursor_fingerprint != fingerprint or len(factors) != 5:
+                raise ConflictError("cursor no longer matches this view", code="cursor_invalidated")
+            expires_at, cursor_lane, cursor_group, cursor_position, cursor_issue_id = factors
+            if type(expires_at) is not int or int(_now(self._clock).timestamp()) > expires_at:
+                raise ConflictError("cursor no longer matches this view", code="cursor_invalidated")
+            for index, (issue, lane_key, group_key, position) in enumerate(rows):
+                if [lane_key, group_key, position, str(issue.id)] == [
+                    cursor_lane,
+                    cursor_group,
+                    cursor_position,
+                    cursor_issue_id,
+                ]:
+                    start = index + 1
+                    break
+            else:
+                raise ConflictError("cursor no longer matches this view", code="cursor_invalidated")
+
+        page_rows = rows[start : start + page_limit + 1]
+        has_more = len(page_rows) > page_limit
+        page_rows = page_rows[:page_limit]
+        next_cursor = None
+        if has_more and page_rows:
+            last_issue, last_lane, last_group, last_position = page_rows[-1]
+            next_cursor = encode_signed_cursor(
+                self._cursor_secret,
+                fp=fingerprint,
+                factors=[
+                    int((_now(self._clock) + SWIMLANE_CURSOR_TTL).timestamp()),
+                    last_lane,
+                    last_group,
+                    last_position,
+                    str(last_issue.id),
+                ],
+            )
+
+        rendered_cache = await self._render_projection_cards(
+            session,
+            [issue for issue, _lane, _group, _position in page_rows],
+        )
+        page_membership: dict[tuple[str, str], list[dict]] = {}
+        for issue, lane_key, group_key, _position in page_rows:
+            page_membership.setdefault((lane_key, group_key), []).append(rendered_cache[issue.id])
+        group_counts = {key: len(ids) for key, ids in group_ids.items()}
+        wip_map = (view.board_settings or {}).get("wip", {})
+
+        if lane_axis is None:
+            groups = [
+                {
+                    "key": key,
+                    "label": group_axis.labels.get(key, key),
+                    "count": group_counts.get(key, 0),
+                    "wip": wip_map.get(key),
+                    "data": page_membership.get(("", key), []),
+                }
+                for key in group_keys
+            ]
+            result: dict[str, Any] = {
+                "layout": view.layout,
+                "group_by": group_by,
+                "groups": groups,
+                "next_cursor": next_cursor,
+                "multi_value_axis": multi_value_axis,
+            }
+            if group_by == "state_category" and view.project_id is not None:
+                result["column_target_status"] = await self._column_target_status(
+                    session,
+                    group_by=group_by,
+                    workspace_id=workspace_id,
+                    view=view,
+                    keys=group_keys,
+                )
+            return result
+
+        lane_counts = {key: len(ids) for key, ids in lane_ids.items()}
+        columns = [
+            {
+                "key": key,
+                "label": group_axis.labels.get(key, key),
+                "count": group_counts.get(key, 0),
+                "wip": wip_map.get(key),
+            }
+            for key in group_keys
+        ]
+        lanes = [
+            {
+                "key": lane_key,
+                "label": lane_axis.labels.get(lane_key, lane_key),
+                "count": lane_counts.get(lane_key, 0),
+                "groups": [
+                    {
+                        "key": group_key,
+                        "count": cell_counts.get((lane_key, group_key), 0),
+                        "data": page_membership.get((lane_key, group_key), []),
+                    }
+                    for group_key in group_keys
+                ],
+            }
+            for lane_key in lane_keys
+        ]
+        result = {
+            "layout": view.layout,
+            "group_by": group_by,
+            "sub_group_by": sub_group_by,
+            "columns": columns,
+            "lanes": lanes,
+            "next_cursor": next_cursor,
+            "multi_value_axis": multi_value_axis,
+        }
+        if (
+            group_by == "state_category"
+            and view.project_id is not None
+            and sub_group_by not in {"status", "project"}
+        ):
+            result["column_target_status"] = await self._column_target_status(
+                session,
+                group_by=group_by,
+                workspace_id=workspace_id,
+                view=view,
+                keys=group_keys,
+            )
+        return result
+
     @staticmethod
     def _sort_value(issue: Issue, *, field: str, position: float) -> Any:
         if field == "position":
@@ -548,22 +1284,28 @@ class ProjectionService:
         rows: list[tuple[Issue, str, str, float]],
         *,
         sort_rules: list[dict],
+        custom_values: dict[str, dict[uuid.UUID, Any]] | None = None,
     ) -> list[tuple[Issue, str, str, float]]:
         ordered = sorted(rows, key=lambda row: str(row[0].id))
         rules = sort_rules or [{"field": "position", "order": "asc"}]
         for rule in reversed(rules):
-            if rule.get("field_kind") == "custom_field":
-                raise ValidationError(
-                    "custom-field sorting awaits the association increment",
-                    code=PROJECTION_FIELD_PENDING,
-                )
-            field = rule["field"]
-            present = [
-                row for row in ordered if self._sort_value(row[0], field=field, position=row[3]) is not None
-            ]
+            is_custom = rule.get("field_kind") == "custom_field" or "field_def_id" in rule
+            field = str(rule.get("field_def_id")) if is_custom else rule["field"]
+
+            def value(
+                row: tuple[Issue, str, str, float],
+                *,
+                custom: bool = is_custom,
+                sort_field: str = field,
+            ) -> Any:
+                if custom:
+                    return (custom_values or {}).get(sort_field, {}).get(row[0].id)
+                return self._sort_value(row[0], field=sort_field, position=row[3])
+
+            present = [row for row in ordered if value(row) is not None]
             missing = [row for row in ordered if row not in present]
             present.sort(
-                key=lambda row: self._sort_value(row[0], field=field, position=row[3]),
+                key=value,
                 reverse=rule["order"] == "desc",
             )
             ordered = present + missing
@@ -740,10 +1482,12 @@ class ProjectionService:
             )
 
         page_membership: dict[tuple[str, str], list[dict]] = {}
+        rendered_cards = await self._render_projection_cards(
+            session,
+            [issue for issue, _lane, _group, _position in page_rows],
+        )
         for issue, lane_key, group_key, _position in page_rows:
-            page_membership.setdefault((lane_key, group_key), []).append(
-                await self._issues.render_issue(session, issue)
-            )
+            page_membership.setdefault((lane_key, group_key), []).append(rendered_cards[issue.id])
 
         group_labels = await self._group_labels(
             session,

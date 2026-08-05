@@ -154,6 +154,192 @@ describe('ProfileSettingsSection', () => {
     expect(await screen.findByText('Profile saved.')).toBeInTheDocument();
   });
 
+  it('leaves an unchanged avatar URL as a no-op', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ data: ME }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByDisplayValue('https://cdn.example/avatar.png');
+    fireEvent.blur(avatar);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts the saved profile as authoritative when the server clears a submitted avatar', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        return jsonResponse({ data: { ...ME.user, avatar_url: null } });
+      }
+      return jsonResponse({ data: ME });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    fireEvent.change(avatar, { target: { value: 'https://cdn.example/replaced.png' } });
+    fireEvent.blur(avatar);
+
+    await screen.findByText('Profile saved.');
+    expect(avatar).toHaveValue('');
+    expect(screen.queryByRole('button', { name: 'Restore default avatar' })).toBeNull();
+  });
+
+  it('clears the avatar through the UI and restores the generated default', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        return jsonResponse({ data: { ...ME.user, avatar_url: null } });
+      }
+      return jsonResponse({ data: ME });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    await screen.findByDisplayValue('https://cdn.example/avatar.png');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        expect.stringContaining('/api/v1/users/me'),
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ avatar_url: null }),
+        }),
+      ),
+    );
+    expect(screen.getByLabelText('Avatar URL')).toHaveValue('');
+    expect(screen.queryByRole('button', { name: 'Restore default avatar' })).toBeNull();
+  });
+
+  it('rolls an optimistic avatar clear back when the server rejects it', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') throw new Error('save failed');
+      return jsonResponse({ data: ME });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    await screen.findByDisplayValue('https://cdn.example/avatar.png');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+
+    expect(await screen.findByText('Could not save your profile. Try again.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Avatar URL')).toHaveValue('https://cdn.example/avatar.png');
+    expect(screen.getByRole('button', { name: 'Restore default avatar' })).toBeInTheDocument();
+  });
+
+  it('clears an unsaved avatar draft when the server profile has no avatar', async () => {
+    const clearSave = deferred<Response>();
+    const withoutAvatar = { ...ME, user: { ...ME.user, avatar_url: null } };
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PATCH'
+        ? clearSave.promise
+        : Promise.resolve(jsonResponse({ data: withoutAvatar })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    fireEvent.change(avatar, { target: { value: 'https://cdn.example/draft.png' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+    expect(avatar).toHaveValue('');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    fireEvent.change(avatar, { target: { value: 'https://cdn.example/new-draft.png' } });
+    await act(async () => {
+      clearSave.resolve(jsonResponse({ data: withoutAvatar.user }));
+      await clearSave.promise;
+    });
+    expect(avatar).toHaveValue('https://cdn.example/new-draft.png');
+  });
+
+  it('keeps a newer unsaved avatar edit when an earlier clear fails', async () => {
+    const clearSave = deferred<Response>();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PATCH' ? clearSave.promise : Promise.resolve(jsonResponse({ data: ME })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+    fireEvent.change(avatar, { target: { value: 'https://cdn.example/keep-draft.png' } });
+
+    await act(async () => {
+      clearSave.resolve(
+        jsonResponse(
+          { error: { code: 'internal_error', message: 'save failed', details: {} } },
+          500,
+        ),
+      );
+      await clearSave.promise;
+    });
+    expect(await screen.findByText('Could not save your profile. Try again.')).toBeInTheDocument();
+    expect(avatar).toHaveValue('https://cdn.example/keep-draft.png');
+  });
+
+  it('ignores a stale clear rejection after a newer avatar save starts', async () => {
+    const clearSave = deferred<Response>();
+    const avatarSave = deferred<Response>();
+    const pending = [clearSave, avatarSave];
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PATCH'
+        ? pending.shift()!.promise
+        : Promise.resolve(jsonResponse({ data: ME })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore default avatar' }));
+    fireEvent.change(avatar, { target: { value: 'https://cdn.example/newer.png' } });
+    fireEvent.blur(avatar);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      clearSave.resolve(
+        jsonResponse(
+          { error: { code: 'internal_error', message: 'save failed', details: {} } },
+          500,
+        ),
+      );
+      await clearSave.promise;
+    });
+    expect(screen.queryByText('Could not save your profile. Try again.')).toBeNull();
+
+    await act(async () => {
+      avatarSave.resolve(
+        jsonResponse({ data: { ...ME.user, avatar_url: 'https://cdn.example/newer.png' } }),
+      );
+      await avatarSave.promise;
+    });
+    expect(avatar).toHaveValue('https://cdn.example/newer.png');
+  });
+
+  it('uses a server validation rejection as the authority for an avatar write', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        return jsonResponse(
+          {
+            error: {
+              code: 'validation_error',
+              message: 'avatar_url must be an https URL',
+              details: { avatar_url: 'https://cdn.example/new.png' },
+            },
+          },
+          400,
+        );
+      }
+      return jsonResponse({ data: ME });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<ProfileSettingsSection />);
+
+    const avatar = await screen.findByLabelText('Avatar URL');
+    fireEvent.change(avatar, { target: { value: 'https://cdn.example/new.png' } });
+    fireEvent.blur(avatar);
+
+    expect(await screen.findByText('Use an HTTPS avatar URL.')).toBeInTheDocument();
+  });
+
   it('keeps concurrent field saves isolated when responses arrive out of order', async () => {
     const nameSave = deferred<Response>();
     const avatarSave = deferred<Response>();
@@ -318,6 +504,11 @@ describe('isSecureAvatarUrl', () => {
   it.each([
     ['https://cdn.example/avatar.png', true],
     ['http://cdn.example/avatar.png', false],
+    ['https://', false],
+    ['https:///avatar.png', false],
+    ['https://exa mple/avatar.png', false],
+    ['https://cdn.example\\avatar.png', false],
+    ['https://%', false],
     ['', false],
     ['not a URL', false],
   ])('validates %s', (value, expected) => {

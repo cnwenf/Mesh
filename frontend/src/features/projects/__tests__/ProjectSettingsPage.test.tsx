@@ -248,7 +248,7 @@ describe('ProjectSettingsPage', () => {
   });
 
   it('converges on 409 conflict and shows the conflict toast', async () => {
-    const calls = stubFetch({ conflictPatchTimes: 1 });
+    const calls = stubFetch({ conflictPatchTimes: 1, serverNameAfterConflict: 'Server Edit' });
     renderSettings();
     const user = userEvent.setup();
     const nameInput = await screen.findByTestId('settings-name');
@@ -259,7 +259,8 @@ describe('ProjectSettingsPage', () => {
       // 409 → GET 重取 → onConflict 收敛(不再盲重放陈旧 changes),故仅 1 次 PATCH
       expect(patchProjectCalls(calls).length).toBe(1);
     });
-    expect(await screen.findByText(/changed elsewhere/)).toBeDefined();
+    expect(await screen.findByText(/rolled back/)).toBeDefined();
+    expect(screen.getByTestId('settings-name')).toHaveValue('Server Edit');
   });
 
   it('sends null for cleared description (tri-state)', async () => {
@@ -346,7 +347,9 @@ describe('ProjectSettingsPage', () => {
     const user = userEvent.setup();
     await screen.findByTestId('settings-name');
     await user.click(screen.getByTestId('settings-delete'));
-    expect(await screen.findByTestId('settings-delete-confirm-text')).toBeDefined();
+    const disclosure = await screen.findByTestId('settings-delete-confirm-text');
+    expect(disclosure).toHaveTextContent('APL');
+    expect(disclosure).toHaveTextContent('reserved forever');
     await user.click(screen.getByTestId('settings-delete-confirm'));
     await waitFor(() => {
       expect(

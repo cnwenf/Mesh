@@ -187,6 +187,104 @@ async def test_label_project_scope_and_filters(client):
     assert bad.json()["error"]["code"] == "validation_error"
 
 
+async def test_label_issue_count_respects_issue_visibility(client):
+    owner = await _register_and_login(client, "count-owner@corp.com")
+    ws = await _create_workspace(client, owner, "lbl-count-visibility")
+    _, member = await _invite_accept(
+        client, owner, ws["id"], "count-member@corp.com"
+    )
+    private = await _create_project(
+        client, owner, ws["id"], name="Private", visibility="private"
+    )
+    label_response = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/labels",
+        json={"name": "secret-carrier", "color": "#123456"},
+        headers=_auth(owner),
+    )
+    label = label_response.json()["data"]
+    issue_response = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/issues",
+        json={"title": "hidden", "project_id": private["id"]},
+        headers=_auth(owner),
+    )
+    issue = issue_response.json()["data"]
+    attached = await client.post(
+        f"/api/v1/issues/{issue['id']}/labels/{label['id']}",
+        headers=_auth(owner),
+    )
+    assert attached.status_code == 200, attached.text
+
+    owner_listing = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(owner)
+    )
+    assert owner_listing.json()["data"][0]["issue_count"] == 1
+
+    member_listing = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(member)
+    )
+    assert member_listing.status_code == 200
+    assert member_listing.json()["data"][0]["issue_count"] == 0
+
+
+async def test_label_issue_count_uses_guest_issue_visibility(client):
+    owner = await _register_and_login(client, "guest-count-owner@corp.com")
+    ws = await _create_workspace(client, owner, "lbl-count-guest-visibility")
+    guest_id, guest = await _invite_accept(
+        client, owner, ws["id"], "guest-count-viewer@corp.com", role="guest"
+    )
+    public = await _create_project(
+        client, owner, ws["id"], name="Public", visibility="public"
+    )
+    private = await _create_project(
+        client, owner, ws["id"], name="Private", visibility="private"
+    )
+
+    labels = {}
+    for name, color in (("public-carrier", "#112233"), ("assigned-carrier", "#445566")):
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/labels",
+            json={"name": name, "color": color},
+            headers=_auth(owner),
+        )
+        assert response.status_code == 201, response.text
+        labels[name] = response.json()["data"]
+
+    public_issue_response = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/issues",
+        json={"title": "public but unassigned", "project_id": public["id"]},
+        headers=_auth(owner),
+    )
+    assert public_issue_response.status_code == 201, public_issue_response.text
+    private_issue_response = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/issues",
+        json={
+            "title": "private but assigned",
+            "project_id": private["id"],
+            "assignee_id": guest_id,
+        },
+        headers=_auth(owner),
+    )
+    assert private_issue_response.status_code == 201, private_issue_response.text
+
+    for issue, label_name in (
+        (public_issue_response.json()["data"], "public-carrier"),
+        (private_issue_response.json()["data"], "assigned-carrier"),
+    ):
+        attached = await client.post(
+            f"/api/v1/issues/{issue['id']}/labels/{labels[label_name]['id']}",
+            headers=_auth(owner),
+        )
+        assert attached.status_code == 200, attached.text
+
+    listing = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/labels", headers=_auth(guest)
+    )
+    assert listing.status_code == 200, listing.text
+    counts = {item["name"]: item["issue_count"] for item in listing.json()["data"]}
+    assert counts["public-carrier"] == 0
+    assert counts["assigned-carrier"] == 1
+
+
 async def test_label_name_taken_and_validation_codes(client):
     owner = await _register_and_login(client, "owner3@corp.com")
     ws = await _create_workspace(client, owner, "lbl-dup")

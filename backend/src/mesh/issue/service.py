@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -43,6 +43,7 @@ from mesh.db.models.issue import (
     IssueActivity,
     IssueStatus,
 )
+from mesh.db.models.label import IssueLabel, Label
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.project import Cycle, Milestone, Project, ProjectMember
 from mesh.db.models.user import User
@@ -218,8 +219,52 @@ class IssueService:
             "member_type": member.member_type,
         }
 
+    async def _labels_for_issues(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        issue_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, list[dict]]:
+        """Load deterministic compact label snapshots for an issue page.
+
+        Lists call this once for the whole page, avoiding one association query
+        per row. Detail/create/update rendering reuses the same helper with a
+        single id so every generic issue payload has the same label shape.
+        """
+        if not issue_ids:
+            return {}
+        rows = (
+            await session.execute(
+                select(IssueLabel.issue_id, Label.id, Label.name, Label.color)
+                .join(
+                    Label,
+                    and_(
+                        Label.workspace_id == IssueLabel.workspace_id,
+                        Label.id == IssueLabel.label_id,
+                    ),
+                )
+                .where(
+                    IssueLabel.workspace_id == workspace_id,
+                    IssueLabel.issue_id.in_(issue_ids),
+                )
+            )
+        ).all()
+        rows.sort(key=lambda row: (row.name.casefold(), str(row.id), str(row.issue_id)))
+        result: dict[uuid.UUID, list[dict]] = {issue_id: [] for issue_id in issue_ids}
+        for issue_id, label_id, name, color in rows:
+            result[issue_id].append(
+                {"id": str(label_id), "name": name, "color": color}
+            )
+        return result
+
     async def render_issue(
-        self, session: AsyncSession, issue: Issue, *, with_children_progress: bool = False
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        *,
+        with_children_progress: bool = False,
+        labels: list[dict] | None = None,
     ) -> dict:
         status = await session.scalar(
             select(IssueStatus).where(
@@ -240,6 +285,14 @@ class IssueService:
                     "name": project_row.name,
                     "key": project_row.key,
                 }
+        if labels is None:
+            labels = (
+                await self._labels_for_issues(
+                    session,
+                    workspace_id=issue.workspace_id,
+                    issue_ids=[issue.id],
+                )
+            )[issue.id]
         payload = {
             "id": str(issue.id),
             "workspace_id": str(issue.workspace_id),
@@ -254,6 +307,7 @@ class IssueService:
             "status_id": str(issue.status_id),
             "state_category": issue.state_category,
             "priority": issue.priority,
+            "labels": labels,
             "assignee": await self._member_summary(
                 session, workspace_id=issue.workspace_id, member_id=issue.assignee_id
             ),
@@ -1060,7 +1114,15 @@ class IssueService:
             rows = rows[:page_limit]
             last = rows[-1]
             next_cursor = encode_cursor(sort_value_of(last), last.id)
-        rendered = [await self.render_issue(session, row) for row in rows]
+        labels_by_issue = await self._labels_for_issues(
+            session,
+            workspace_id=workspace_id,
+            issue_ids=[row.id for row in rows],
+        )
+        rendered = [
+            await self.render_issue(session, row, labels=labels_by_issue[row.id])
+            for row in rows
+        ]
         if group_by is None:
             return {"data": rendered, "next_cursor": next_cursor}
         return await self._group_response(

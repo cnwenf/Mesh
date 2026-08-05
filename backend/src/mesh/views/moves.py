@@ -24,14 +24,30 @@ kanban §2.7).
 
 from __future__ import annotations
 
+import copy
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import exists, func, not_, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.sql import type_coerce
 
 from mesh.auth.rbac import assert_scope, role_satisfies
 from mesh.db.models.issue import Issue
+from mesh.db.models.label import (
+    CustomFieldDef,
+    CustomFieldOption,
+    IssueCustomFieldValue,
+    IssueLabel,
+    Label,
+)
+from mesh.db.models.member import Member
+from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.view import View
 from mesh.db.models.view_position import ViewIssuePosition, ViewQuickCreateRequest
 from mesh.db.tenant import set_tenant_context
@@ -46,10 +62,11 @@ from mesh.issue.schemas import CreateIssueRequest
 from mesh.issue.service import IssuePatch
 from mesh.issue.statuses import resolve_default_status, resolve_status_in_scope
 from mesh.issue.triggers import apply_assign_triggers
+from mesh.labels.association import TYPE_VALUE_COLUMN, VALUE_COLUMNS, FieldValueService
 from mesh.outbox.service import emit_realtime
 from mesh.views.config import PRIORITY_KEYS, STATE_CATEGORY_KEYS, validate_group_axes
 from mesh.views.projection import (
-    PROJECTION_FIELD_PENDING,
+    _custom_value_keys,
     compile_view_filters,
     group_key_for,
 )
@@ -57,7 +74,6 @@ from mesh.views.projection import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from mesh.db.models.member import Member
     from mesh.issue.move import MoveService
     from mesh.issue.service import IssueService
     from mesh.views.service import ViewService
@@ -68,6 +84,27 @@ _SUPPORTED_GROUP_BY = frozenset({"state_category", "status", "assignee", "priori
 # Floating-point midpoint precision floor — below this a column re-ranks (kanban §4.3).
 POSITION_EPSILON = 1e-6
 IDEMPOTENCY_KEY_MAX_LENGTH = 255
+
+
+@dataclass(frozen=True)
+class _MultiValueTarget:
+    """One resolved association written by a dynamic quick-create axis."""
+
+    axis: str
+    key: str
+    label_id: uuid.UUID | None = None
+    field_def_id: uuid.UUID | None = None
+    option_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class _ScalarCustomTarget:
+    """One validated scalar EAV value selected by a board cell axis."""
+
+    definition: CustomFieldDef
+    key: str
+    column: str | None
+    value: Any = None
 
 
 def _view_channel(view_id: uuid.UUID) -> str:
@@ -103,6 +140,7 @@ class BoardMoveService:
         self._moves = move_service
         self._views = view_service
         self._clock = clock
+        self._field_values = FieldValueService(issue_service, clock=clock)
 
     async def _load_view(self, session: AsyncSession, *, workspace_id: uuid.UUID, view_id: uuid.UUID) -> View:
         view = await session.scalar(select(View).where(View.id == view_id, View.workspace_id == workspace_id))
@@ -150,16 +188,18 @@ class BoardMoveService:
             await self._views.assert_can_read(session, viewer=actor, view=view)
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
-            self._validate_axes_and_shape(
+            await self._validate_axes_and_shape(
+                session,
                 view=view,
                 group_by=group_by,
                 sub_group_by=sub_group_by,
                 sub_group_key=to_sub_group_key,
+                operation="move",
             )
             issue = await self._issues._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
             await self._issues.assert_can_view_issue(session, viewer=actor, issue=issue)
             target_sub_group_key = (
-                group_key_for(sub_group_by, issue)
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
                 if sub_group_by is not None and to_sub_group_key is None
                 else to_sub_group_key
             )
@@ -219,11 +259,13 @@ class BoardMoveService:
             assert_scope(actor, "issue:write")
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
-            self._validate_axes_and_shape(
+            await self._validate_axes_and_shape(
+                session,
                 view=view,
                 group_by=group_by,
                 sub_group_by=sub_group_by,
                 sub_group_key=to_sub_group_key,
+                operation="move",
             )
             issue = await self._issues._load_issue(
                 session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
@@ -236,8 +278,12 @@ class BoardMoveService:
                     details={"id": str(issue.id), "current_version": issue.version},
                 )
 
-            from_group_key = group_key_for(group_by, issue)
-            from_sub_group_key = group_key_for(sub_group_by, issue) if sub_group_by is not None else ""
+            from_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
+            from_sub_group_key = (
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
+                if sub_group_by is not None
+                else ""
+            )
             target_sub_group_key = from_sub_group_key if to_sub_group_key is None else to_sub_group_key
             target_project_id = self._target_project_id(
                 view=view,
@@ -281,8 +327,27 @@ class BoardMoveService:
             rendered, changes = await self._issues.apply_changes_in_tx(
                 session, actor=actor, issue=issue, patch=patch
             )
-            final_group_key = group_key_for(group_by, issue)
-            final_sub_group_key = group_key_for(sub_group_by, issue) if sub_group_by is not None else ""
+            scalar_targets = await self._resolve_scalar_custom_targets(
+                session,
+                view=view,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                group_key=to_group_key,
+                sub_group_key=target_sub_group_key,
+                target_project_id=target_project_id,
+            )
+            custom_changes = await self._write_scalar_custom_targets(
+                session,
+                issue=issue,
+                targets=scalar_targets,
+                bump_issue=not bool(changes),
+            )
+            final_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
+            final_sub_group_key = (
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
+                if sub_group_by is not None
+                else ""
+            )
             if final_group_key != to_group_key or (
                 sub_group_by is not None and final_sub_group_key != target_sub_group_key
             ):
@@ -291,8 +356,36 @@ class BoardMoveService:
                     code="incompatible_projection_cell",
                     details={"group_key": to_group_key},
                 )
+            if not await self._candidate_matches_view(
+                session,
+                actor=actor,
+                view=view,
+                issue=issue,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                group_key=to_group_key,
+                sub_group_key=target_sub_group_key,
+            ):
+                raise BusinessRuleError(
+                    "moved values do not match the locked view filters",
+                    code="incompatible_projection_cell",
+                    details={"group_key": to_group_key},
+                )
 
             project = await self._issues._project_of(session, issue)
+            for definition, row in custom_changes:
+                await self._issues._emit_issue_event(
+                    session,
+                    issue=issue,
+                    event="issue.custom_field_changed",
+                    data={
+                        "issue_id": str(issue.id),
+                        "field_def_id": str(definition.id),
+                        "field_key": definition.field_key,
+                        "value": FieldValueService.render_value(row) if row is not None else None,
+                    },
+                    project=project,
+                )
             moved_data: dict[str, Any] = {
                 "id": str(issue.id),
                 "from": {"group_key": from_group_key},
@@ -355,6 +448,9 @@ class BoardMoveService:
                     },
                 )
 
+            if custom_changes:
+                rendered = await self._issues.render_issue(session, issue)
+
         rendered["position"] = position
         return rendered
 
@@ -378,16 +474,18 @@ class BoardMoveService:
             await self._views.assert_can_read(session, viewer=actor, view=view)
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
-            self._validate_axes_and_shape(
+            await self._validate_axes_and_shape(
+                session,
                 view=view,
                 group_by=group_by,
                 sub_group_by=sub_group_by,
                 sub_group_key=to_sub_group_key,
+                operation="move",
             )
             issue = await self._issues._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
             await self._issues.assert_can_view_issue(session, viewer=actor, issue=issue)
             target_sub_group_key = (
-                group_key_for(sub_group_by, issue)
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
                 if sub_group_by is not None and to_sub_group_key is None
                 else to_sub_group_key
             )
@@ -430,18 +528,24 @@ class BoardMoveService:
             await self._views.assert_can_read(session, viewer=actor, view=view)
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
-            self._validate_axes_and_shape(
+            await self._validate_axes_and_shape(
+                session,
                 view=view,
                 group_by=group_by,
                 sub_group_by=sub_group_by,
                 sub_group_key=to_sub_group_key,
+                operation="move",
             )
             before = await self._issues._load_issue(
                 session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
             )
             await self._issues.assert_can_write_issue(session, actor=actor, issue=before)
-            from_group_key = group_key_for(group_by, before)
-            from_sub_group_key = group_key_for(sub_group_by, before) if sub_group_by is not None else ""
+            from_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=before)
+            from_sub_group_key = (
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=before)
+                if sub_group_by is not None
+                else ""
+            )
             target_sub_group_key = from_sub_group_key if to_sub_group_key is None else to_sub_group_key
             target_project_id = self._target_project_id(
                 view=view,
@@ -486,13 +590,49 @@ class BoardMoveService:
             rendered, changes = await self._issues.apply_changes_in_tx(
                 session, actor=actor, issue=issue, patch=patch
             )
-            final_group_key = group_key_for(group_by, issue)
-            final_sub_group_key = group_key_for(sub_group_by, issue) if sub_group_by is not None else ""
+            scalar_targets = await self._resolve_scalar_custom_targets(
+                session,
+                view=view,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                group_key=to_group_key,
+                sub_group_key=target_sub_group_key,
+                target_project_id=target_project_id,
+            )
+            custom_changes = await self._write_scalar_custom_targets(
+                session,
+                issue=issue,
+                targets=scalar_targets,
+                # The confirmed project migration has already advanced the
+                # issue's optimistic version in this same transaction.
+                bump_issue=False,
+            )
+            final_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
+            final_sub_group_key = (
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
+                if sub_group_by is not None
+                else ""
+            )
             if final_group_key != to_group_key or (
                 sub_group_by is not None and final_sub_group_key != target_sub_group_key
             ):
                 raise BusinessRuleError(
                     "target values do not form the requested projection cell",
+                    code="incompatible_projection_cell",
+                    details={"group_key": to_group_key},
+                )
+            if not await self._candidate_matches_view(
+                session,
+                actor=actor,
+                view=view,
+                issue=issue,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                group_key=to_group_key,
+                sub_group_key=target_sub_group_key,
+            ):
+                raise BusinessRuleError(
+                    "moved values do not match the locked view filters",
                     code="incompatible_projection_cell",
                     details={"group_key": to_group_key},
                 )
@@ -514,6 +654,19 @@ class BoardMoveService:
                 moved_issue_id=issue_id,
             )
             project = await self._issues._project_of(session, issue)
+            for definition, row in custom_changes:
+                await self._issues._emit_issue_event(
+                    session,
+                    issue=issue,
+                    event="issue.custom_field_changed",
+                    data={
+                        "issue_id": str(issue.id),
+                        "field_def_id": str(definition.id),
+                        "field_key": definition.field_key,
+                        "value": FieldValueService.render_value(row) if row is not None else None,
+                    },
+                    project=project,
+                )
             moved_data: dict[str, Any] = {
                 "id": str(issue.id),
                 "from": {"group_key": from_group_key},
@@ -557,6 +710,8 @@ class BoardMoveService:
                         "count": count + 1,
                     },
                 )
+            if custom_changes:
+                rendered = await self._issues.render_issue(session, issue)
         rendered["move_result"] = {
             "mapped_fields": plan.get("mapped_fields", []),
             "cleared_fields": plan.get("cleared_fields", []),
@@ -603,7 +758,7 @@ class BoardMoveService:
                         issue_id=replay.issue_id,
                     )
                     await self._issues.assert_can_view_issue(session, viewer=actor, issue=issue)
-                    rendered = await self._issues.render_issue(session, issue)
+                    rendered = await self._render_quick_created_issue(session, issue)
                     stored_position = await session.scalar(
                         select(ViewIssuePosition.position).where(
                             ViewIssuePosition.view_id == view_id,
@@ -616,12 +771,14 @@ class BoardMoveService:
                     return rendered
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
-            self._validate_axes_and_shape(
+            await self._validate_axes_and_shape(
+                session,
                 view=view,
                 group_by=group_by,
                 sub_group_by=sub_group_by,
                 sub_group_key=sub_group_key,
                 require_sub_group_key=True,
+                operation="quick_create",
             )
             target_project_id = self._target_project_id(
                 view=view,
@@ -631,6 +788,24 @@ class BoardMoveService:
                 group_key=group_key,
                 sub_group_key=sub_group_key,
                 creating=True,
+            )
+            multi_value_targets = await self._resolve_multi_value_targets(
+                session,
+                view=view,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                group_key=group_key,
+                sub_group_key=sub_group_key,
+                target_project_id=target_project_id,
+            )
+            scalar_custom_targets = await self._resolve_scalar_custom_targets(
+                session,
+                view=view,
+                group_by=group_by,
+                sub_group_by=sub_group_by,
+                group_key=group_key,
+                sub_group_key=sub_group_key,
+                target_project_id=target_project_id,
             )
             body = await self._create_body_for_cell(
                 session,
@@ -676,6 +851,18 @@ class BoardMoveService:
             issue = await self._issues._load_issue(
                 session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
             )
+            await self._write_multi_value_targets(
+                session,
+                workspace_id=workspace_id,
+                issue=issue,
+                targets=multi_value_targets,
+            )
+            await self._write_scalar_custom_targets(
+                session,
+                issue=issue,
+                targets=scalar_custom_targets,
+                bump_issue=False,
+            )
             if not await self._candidate_matches_view(
                 session,
                 actor=actor,
@@ -691,16 +878,17 @@ class BoardMoveService:
                     code="quick_create_filter_mismatch",
                     details={"unmet_filter_fields": self._filter_fields(view.filters)},
                 )
-            actual_sub_group_key = sub_group_key or ""
-            await self._upsert_position_tx(
-                session,
-                workspace_id=workspace_id,
-                view_id=view_id,
-                issue_id=issue_id,
-                group_key=group_key,
-                sub_group_key=actual_sub_group_key,
-                position=float(issue.position),
-            )
+            if not multi_value_targets:
+                actual_sub_group_key = sub_group_key or ""
+                await self._upsert_position_tx(
+                    session,
+                    workspace_id=workspace_id,
+                    view_id=view_id,
+                    issue_id=issue_id,
+                    group_key=group_key,
+                    sub_group_key=actual_sub_group_key,
+                    position=float(issue.position),
+                )
             if wip is not None and count >= wip["limit"]:
                 await emit_realtime(
                     session,
@@ -724,6 +912,13 @@ class BoardMoveService:
                         idempotency_key=normalized_idempotency_key,
                     )
                 )
+            rendered = await self._render_quick_created_issue(session, issue)
+            await self._refresh_created_event_snapshot(
+                session,
+                issue_id=issue.id,
+                labels=rendered["labels"],
+                custom_field_values=rendered["custom_field_values"],
+            )
             rendered["position"] = float(issue.position)
             return rendered
 
@@ -748,19 +943,25 @@ class BoardMoveService:
             await self._views.assert_can_read(session, viewer=actor, view=view)
             group_by = view.group_by or "state_category"
             sub_group_by = view.sub_group_by
-            self._validate_axes_and_shape(
+            await self._validate_axes_and_shape(
+                session,
                 view=view,
                 group_by=group_by,
                 sub_group_by=sub_group_by,
                 sub_group_key=sub_group_key,
                 require_sub_group_key=True,
+                operation="reorder",
             )
             issue = await self._issues._load_issue(
                 session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
             )
             await self._issues.assert_can_write_issue(session, actor=actor, issue=issue)
-            expected_group_key = group_key_for(group_by, issue)
-            expected_sub_group_key = group_key_for(sub_group_by, issue) if sub_group_by is not None else ""
+            expected_group_key = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
+            expected_sub_group_key = (
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
+                if sub_group_by is not None
+                else ""
+            )
             if to_group_key != expected_group_key or (
                 sub_group_by is not None and sub_group_key != expected_sub_group_key
             ):
@@ -818,25 +1019,67 @@ class BoardMoveService:
     # helpers
     # ------------------------------------------------------------------
 
-    def _validate_axes_and_shape(
+    @staticmethod
+    def _custom_definition_scope(view: View) -> Any:
+        if view.project_id is None:
+            return CustomFieldDef.project_id.is_(None)
+        return or_(
+            CustomFieldDef.project_id.is_(None),
+            CustomFieldDef.project_id == view.project_id,
+        )
+
+    async def _validate_axes_and_shape(
         self,
+        session: AsyncSession,
         *,
         view: View,
         group_by: str,
         sub_group_by: str | None,
         sub_group_key: str | None,
         require_sub_group_key: bool = False,
+        operation: str,
     ) -> None:
         if view.layout != "board":
             raise ValidationError("cell commands require a board view", details={"layout": view.layout})
         validate_group_axes(view.group_by, sub_group_by)
         for field_name, axis in (("group_by", group_by), ("sub_group_by", sub_group_by)):
-            if axis is not None and axis not in _SUPPORTED_GROUP_BY:
-                raise ValidationError(
-                    f"{field_name}=label/custom-field moves await the association increment",
-                    code=PROJECTION_FIELD_PENDING,
+            if axis is None or axis in _SUPPORTED_GROUP_BY:
+                continue
+            is_multi_value = axis == "label"
+            if axis != "label":
+                try:
+                    field_def_id = uuid.UUID(axis)
+                except ValueError as exc:
+                    raise ValidationError(
+                        "unknown projection axis",
+                        code="invalid_group_by",
+                        details={field_name: axis},
+                    ) from exc
+                definition = await session.scalar(
+                    select(CustomFieldDef).where(
+                        CustomFieldDef.workspace_id == view.workspace_id,
+                        CustomFieldDef.id == field_def_id,
+                        CustomFieldDef.is_active.is_(True),
+                        self._custom_definition_scope(view),
+                    )
+                )
+                if definition is None:
+                    raise ValidationError(
+                        "custom field is not available to this view",
+                        code="invalid_group_by",
+                        details={field_name: axis},
+                    )
+                is_multi_value = definition.type == "multi_select"
+            if is_multi_value and operation in {"move", "reorder"}:
+                raise BusinessRuleError(
+                    "multi-valued projection axes cannot be moved or manually reordered",
+                    code="multi_value_axis_move_unsupported",
                     details={field_name: axis},
                 )
+            if is_multi_value and operation == "quick_create":
+                continue
+            # Every other custom field is scalar and follows the same cell
+            # command semantics as builtin single-value axes.
         if sub_group_by is None and sub_group_key is not None:
             raise ValidationError(
                 "sub_group_key is not valid for a one-dimensional view",
@@ -847,6 +1090,389 @@ class BoardMoveService:
                 "sub_group_key is required for a swimlane cell",
                 details={"field": "sub_group_key"},
             )
+
+    async def _resolve_multi_value_targets(
+        self,
+        session: AsyncSession,
+        *,
+        view: View,
+        group_by: str,
+        sub_group_by: str | None,
+        group_key: str,
+        sub_group_key: str | None,
+        target_project_id: uuid.UUID | None,
+    ) -> list[_MultiValueTarget]:
+        """Resolve and share-lock every label/option before issue creation."""
+
+        targets: list[_MultiValueTarget] = []
+        for axis, key in (
+            (group_by, group_key),
+            (sub_group_by, sub_group_key),
+        ):
+            if axis is None or key is None or axis in _SUPPORTED_GROUP_BY:
+                continue
+            if axis == "label":
+                if key in _NONE_KEYS:
+                    targets.append(_MultiValueTarget(axis=axis, key="__none__"))
+                    continue
+                label_id = self._parse_uuid_key(key, field="label_key")
+                label = await session.scalar(
+                    select(Label)
+                    .where(
+                        Label.workspace_id == view.workspace_id,
+                        Label.id == label_id,
+                    )
+                    .with_for_update(read=True)
+                )
+                if label is None:
+                    raise NotFoundError("label not found")
+                if label.project_id is not None and label.project_id != target_project_id:
+                    raise BusinessRuleError(
+                        "project-scoped label cannot be applied to the target project",
+                        code="label_scope_mismatch",
+                        details={"label_id": str(label.id)},
+                    )
+                targets.append(_MultiValueTarget(axis=axis, key=str(label.id), label_id=label.id))
+                continue
+
+            field_def_id = self._parse_uuid_key(axis, field="custom_field_def_id")
+            definition = await session.scalar(
+                select(CustomFieldDef)
+                .where(
+                    CustomFieldDef.workspace_id == view.workspace_id,
+                    CustomFieldDef.id == field_def_id,
+                    CustomFieldDef.is_active.is_(True),
+                    self._custom_definition_scope(view),
+                )
+                .with_for_update(read=True)
+            )
+            if definition is None or definition.type != "multi_select":
+                # Scalar custom fields are resolved by the typed EAV path.
+                continue
+            if definition.project_id is not None and definition.project_id != target_project_id:
+                raise NotFoundError(
+                    "custom field not found",
+                    details={"field_def_id": str(field_def_id)},
+                )
+            if key == "__none__":
+                targets.append(
+                    _MultiValueTarget(
+                        axis=axis,
+                        key="__none__",
+                        field_def_id=definition.id,
+                    )
+                )
+                continue
+            option_id = self._parse_uuid_key(key, field="custom_field_option_key")
+            option = await session.scalar(
+                select(CustomFieldOption)
+                .where(
+                    CustomFieldOption.workspace_id == view.workspace_id,
+                    CustomFieldOption.field_def_id == definition.id,
+                    CustomFieldOption.id == option_id,
+                    CustomFieldOption.is_active.is_(True),
+                )
+                .with_for_update(read=True)
+            )
+            if option is None:
+                raise BusinessRuleError(
+                    "option is not active for this custom field",
+                    code="invalid_field_value",
+                    details={
+                        "field_def_id": str(definition.id),
+                        "reason": "option_not_in_field",
+                        "unknown_option_ids": [str(option_id)],
+                    },
+                )
+            targets.append(
+                _MultiValueTarget(
+                    axis=axis,
+                    key=str(option.id),
+                    field_def_id=definition.id,
+                    option_id=option.id,
+                )
+            )
+        return targets
+
+    async def _resolve_scalar_custom_targets(
+        self,
+        session: AsyncSession,
+        *,
+        view: View,
+        group_by: str,
+        sub_group_by: str | None,
+        group_key: str,
+        sub_group_key: str | None,
+        target_project_id: uuid.UUID | None,
+    ) -> list[_ScalarCustomTarget]:
+        """Resolve and share-lock typed scalar values before mutation."""
+
+        targets: list[_ScalarCustomTarget] = []
+        for axis, key in ((group_by, group_key), (sub_group_by, sub_group_key)):
+            if axis is None or key is None or axis in _SUPPORTED_GROUP_BY or axis == "label":
+                continue
+            field_def_id = self._parse_uuid_key(axis, field="custom_field_def_id")
+            definition = await session.scalar(
+                select(CustomFieldDef)
+                .where(
+                    CustomFieldDef.workspace_id == view.workspace_id,
+                    CustomFieldDef.id == field_def_id,
+                    CustomFieldDef.is_active.is_(True),
+                    self._custom_definition_scope(view),
+                )
+                .with_for_update(read=True)
+            )
+            if definition is None:
+                raise NotFoundError(
+                    "custom field not found",
+                    details={"field_def_id": str(field_def_id)},
+                )
+            if definition.project_id is not None and definition.project_id != target_project_id:
+                raise NotFoundError(
+                    "custom field not found",
+                    details={"field_def_id": str(field_def_id)},
+                )
+            if definition.type == "multi_select":
+                continue
+            if key == "__none__":
+                targets.append(
+                    _ScalarCustomTarget(
+                        definition=definition,
+                        key="__none__",
+                        column=None,
+                    )
+                )
+                continue
+
+            column = TYPE_VALUE_COLUMN[definition.type]
+            raw: Any = key
+            if definition.type == "number":
+                try:
+                    raw = float(Decimal(key))
+                except (InvalidOperation, ValueError, OverflowError):
+                    raw = float("nan")
+            elif definition.type == "boolean":
+                if key not in {"true", "false"}:
+                    raise BusinessRuleError(
+                        "invalid custom field value",
+                        code="invalid_field_value",
+                        details={
+                            "field_def_id": str(definition.id),
+                            "reason": "boolean_value_invalid",
+                            "expected": "boolean",
+                        },
+                    )
+                raw = key == "true"
+            elif definition.type == "date" and "T" in key:
+                try:
+                    raw = datetime.fromisoformat(key.replace("Z", "+00:00")).date().isoformat()
+                except ValueError:
+                    raw = key
+            elif definition.type == "member":
+                member_id = self._parse_uuid_key(key, field="custom_field_member_key")
+                member = await session.scalar(
+                    select(Member)
+                    .where(
+                        Member.workspace_id == view.workspace_id,
+                        Member.id == member_id,
+                        Member.status == "active",
+                    )
+                    .with_for_update(read=True)
+                )
+                if member is None:
+                    raise BusinessRuleError(
+                        "invalid custom field value",
+                        code="invalid_field_value",
+                        details={
+                            "field_def_id": str(definition.id),
+                            "reason": "member_not_in_workspace",
+                            "value_member_id": key,
+                        },
+                    )
+                raw = key
+            elif definition.type == "single_select":
+                option_id = self._parse_uuid_key(key, field="custom_field_option_key")
+                option = await session.scalar(
+                    select(CustomFieldOption)
+                    .where(
+                        CustomFieldOption.workspace_id == view.workspace_id,
+                        CustomFieldOption.field_def_id == definition.id,
+                        CustomFieldOption.id == option_id,
+                        CustomFieldOption.is_active.is_(True),
+                    )
+                    .with_for_update(read=True)
+                )
+                if option is None:
+                    raise BusinessRuleError(
+                        "invalid custom field value",
+                        code="invalid_field_value",
+                        details={
+                            "field_def_id": str(definition.id),
+                            "reason": "option_not_in_field",
+                            "unknown_option_ids": [key],
+                        },
+                    )
+            stored = await self._field_values._coerce_value(
+                session,
+                workspace_id=view.workspace_id,
+                definition=definition,
+                column=column,
+                raw=raw,
+            )
+            targets.append(
+                _ScalarCustomTarget(
+                    definition=definition,
+                    key=key,
+                    column=column,
+                    value=stored,
+                )
+            )
+        return targets
+
+    async def _write_scalar_custom_targets(
+        self,
+        session: AsyncSession,
+        *,
+        issue: Issue,
+        targets: list[_ScalarCustomTarget],
+        bump_issue: bool,
+    ) -> list[tuple[CustomFieldDef, IssueCustomFieldValue | None]]:
+        """Upsert/clear scalar EAV rows in the caller's transaction."""
+
+        changed: list[tuple[CustomFieldDef, IssueCustomFieldValue | None]] = []
+        stamp = self._clock() if self._clock is not None else datetime.now(UTC)
+        for target in targets:
+            row = await session.scalar(
+                select(IssueCustomFieldValue)
+                .where(
+                    IssueCustomFieldValue.workspace_id == issue.workspace_id,
+                    IssueCustomFieldValue.issue_id == issue.id,
+                    IssueCustomFieldValue.field_def_id == target.definition.id,
+                )
+                .with_for_update()
+            )
+            if target.column is None:
+                if row is not None:
+                    await session.delete(row)
+                    changed.append((target.definition, None))
+                continue
+            if row is not None and self._field_values._row_is_current(row, target.column, target.value):
+                continue
+            if row is None:
+                row = IssueCustomFieldValue(
+                    workspace_id=issue.workspace_id,
+                    issue_id=issue.id,
+                    field_def_id=target.definition.id,
+                )
+                session.add(row)
+            else:
+                for candidate in VALUE_COLUMNS:
+                    setattr(row, candidate, None)
+                row.updated_at = stamp
+            setattr(row, target.column, target.value)
+            changed.append((target.definition, row))
+        if changed:
+            if bump_issue:
+                issue.version += 1
+                issue.updated_at = stamp
+            await session.flush()
+        return changed
+
+    async def _write_multi_value_targets(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        issue: Issue,
+        targets: list[_MultiValueTarget],
+    ) -> None:
+        """Persist resolved dynamic axes in the caller's create transaction."""
+
+        for target in targets:
+            if target.key == "__none__":
+                # A new issue has no association rows. Keeping this explicit
+                # also documents that defaults must be suppressed for an
+                # empty multi-select target.
+                continue
+            if target.label_id is not None:
+                session.add(
+                    IssueLabel(
+                        workspace_id=workspace_id,
+                        issue_id=issue.id,
+                        label_id=target.label_id,
+                    )
+                )
+            elif target.field_def_id is not None and target.option_id is not None:
+                session.add(
+                    IssueCustomFieldValue(
+                        workspace_id=workspace_id,
+                        issue_id=issue.id,
+                        field_def_id=target.field_def_id,
+                        value_json=[str(target.option_id)],
+                    )
+                )
+        await session.flush()
+
+    async def _render_quick_created_issue(self, session: AsyncSession, issue: Issue) -> dict:
+        rendered = await self._issues.render_issue(session, issue)
+        rows = list(
+            (
+                await session.execute(
+                    select(IssueCustomFieldValue)
+                    .where(
+                        IssueCustomFieldValue.workspace_id == issue.workspace_id,
+                        IssueCustomFieldValue.issue_id == issue.id,
+                    )
+                    .order_by(IssueCustomFieldValue.field_def_id.asc())
+                )
+            ).scalars()
+        )
+        rendered["custom_field_values"] = [
+            {
+                "field_def_id": str(row.field_def_id),
+                "value_text": row.value_text,
+                "value_number": float(row.value_number) if row.value_number is not None else None,
+                "value_date": (
+                    row.value_date.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                    if row.value_date is not None
+                    else None
+                ),
+                "value_member_id": str(row.value_member_id) if row.value_member_id is not None else None,
+                "value_boolean": row.value_boolean,
+                "value_json": row.value_json,
+            }
+            for row in rows
+        ]
+        return rendered
+
+    async def _refresh_created_event_snapshot(
+        self,
+        session: AsyncSession,
+        *,
+        issue_id: uuid.UUID,
+        labels: list[dict],
+        custom_field_values: list[dict],
+    ) -> None:
+        """Replace the create event's pre-association snapshot before commit."""
+
+        rows = list(
+            (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "realtime.publish",
+                        OutboxEvent.payload["event"].astext == "issue.created",
+                        OutboxEvent.payload["data"]["issue"]["id"].astext == str(issue_id),
+                    )
+                )
+            ).scalars()
+        )
+        for row in rows:
+            payload = copy.deepcopy(row.payload)
+            snapshot = payload["data"]["issue"]
+            snapshot["labels"] = labels
+            snapshot["custom_field_values"] = custom_field_values
+            row.payload = payload
+            flag_modified(row, "payload")
 
     @staticmethod
     def _parse_uuid_key(raw: str, *, field: str) -> uuid.UUID:
@@ -1045,11 +1671,80 @@ class BoardMoveService:
         if filters_clause is not None:
             conditions.append(filters_clause)
         matched = await session.scalar(select(Issue.id).where(*conditions))
-        if matched is None or group_key_for(group_by, issue) != group_key:
+        if matched is None or not await self._issue_matches_axis(
+            session, issue=issue, axis=group_by, key=group_key
+        ):
             return False
         if sub_group_by is not None:
-            return group_key_for(sub_group_by, issue) == sub_group_key
+            return await self._issue_matches_axis(
+                session,
+                issue=issue,
+                axis=sub_group_by,
+                key=sub_group_key or "",
+            )
         return True
+
+    async def _issue_matches_axis(
+        self,
+        session: AsyncSession,
+        *,
+        issue: Issue,
+        axis: str,
+        key: str,
+    ) -> bool:
+        if axis in _SUPPORTED_GROUP_BY:
+            return group_key_for(axis, issue) == key
+        predicate = await self._group_predicate(
+            session,
+            axis,
+            key,
+            workspace_id=issue.workspace_id,
+        )
+        return await session.scalar(select(Issue.id).where(Issue.id == issue.id, predicate)) is not None
+
+    async def _axis_key_for_issue(
+        self,
+        session: AsyncSession,
+        *,
+        axis: str | None,
+        issue: Issue,
+    ) -> str:
+        if axis is None:
+            return ""
+        if axis in _SUPPORTED_GROUP_BY:
+            return group_key_for(axis, issue)
+        if axis == "label":
+            raise BusinessRuleError(
+                "multi-valued projection axes do not have one writable cell",
+                code="multi_value_axis_move_unsupported",
+            )
+        field_def_id = self._parse_uuid_key(axis, field="custom_field_def_id")
+        definition = await session.scalar(
+            select(CustomFieldDef).where(
+                CustomFieldDef.workspace_id == issue.workspace_id,
+                CustomFieldDef.id == field_def_id,
+                CustomFieldDef.is_active.is_(True),
+            )
+        )
+        if definition is None:
+            raise ValidationError(
+                "custom field is not available",
+                code="invalid_group_by",
+                details={"field_def_id": str(field_def_id)},
+            )
+        if definition.type == "multi_select":
+            raise BusinessRuleError(
+                "multi-valued projection axes do not have one writable cell",
+                code="multi_value_axis_move_unsupported",
+            )
+        row = await session.scalar(
+            select(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.workspace_id == issue.workspace_id,
+                IssueCustomFieldValue.issue_id == issue.id,
+                IssueCustomFieldValue.field_def_id == definition.id,
+            )
+        )
+        return _custom_value_keys(definition, row)[0]
 
     @staticmethod
     def _filter_fields(filters: dict | None) -> list[str]:
@@ -1114,7 +1809,14 @@ class BoardMoveService:
             )
         return wip, count, True
 
-    def _group_predicate(self, group_by: str, to_group_key: str) -> Any:
+    async def _group_predicate(
+        self,
+        session: AsyncSession,
+        group_by: str,
+        to_group_key: str,
+        *,
+        workspace_id: uuid.UUID,
+    ) -> Any:
         if group_by == "state_category":
             if to_group_key not in STATE_CATEGORY_KEYS:
                 raise ValidationError("invalid state category", details={"state_category": to_group_key})
@@ -1133,7 +1835,105 @@ class BoardMoveService:
             if to_group_key in _NONE_KEYS:
                 return Issue.project_id.is_(None)
             return Issue.project_id == self._parse_uuid_key(to_group_key, field="project_key")
-        raise ValidationError("unsupported group_by for WIP count", details={"group_by": group_by})
+        if group_by == "label":
+            membership = (
+                select(IssueLabel.issue_id)
+                .where(
+                    IssueLabel.workspace_id == Issue.workspace_id,
+                    IssueLabel.issue_id == Issue.id,
+                )
+                .correlate(Issue)
+            )
+            if to_group_key in _NONE_KEYS:
+                return not_(exists(membership))
+            label_id = self._parse_uuid_key(to_group_key, field="label_key")
+            return exists(membership.where(IssueLabel.label_id == label_id))
+        try:
+            field_def_id = uuid.UUID(group_by)
+        except ValueError as exc:
+            raise ValidationError(
+                "unsupported group_by for WIP count", details={"group_by": group_by}
+            ) from exc
+        definition = await session.scalar(
+            select(CustomFieldDef).where(
+                CustomFieldDef.workspace_id == workspace_id,
+                CustomFieldDef.id == field_def_id,
+            )
+        )
+        if definition is None:
+            raise ValidationError(
+                "custom field is not available",
+                code="invalid_group_by",
+                details={"field_def_id": str(field_def_id)},
+            )
+        values = (
+            select(IssueCustomFieldValue.id)
+            .where(
+                IssueCustomFieldValue.workspace_id == Issue.workspace_id,
+                IssueCustomFieldValue.issue_id == Issue.id,
+                IssueCustomFieldValue.field_def_id == field_def_id,
+            )
+            .correlate(Issue)
+        )
+        if to_group_key == "__none__":
+            value_column = {
+                "text": IssueCustomFieldValue.value_text,
+                "textarea": IssueCustomFieldValue.value_text,
+                "url": IssueCustomFieldValue.value_text,
+                "number": IssueCustomFieldValue.value_number,
+                "date": IssueCustomFieldValue.value_date,
+                "datetime": IssueCustomFieldValue.value_date,
+                "single_select": IssueCustomFieldValue.value_json,
+                "multi_select": IssueCustomFieldValue.value_json,
+                "member": IssueCustomFieldValue.value_member_id,
+                "boolean": IssueCustomFieldValue.value_boolean,
+            }[definition.type]
+            return not_(exists(values.where(value_column.is_not(None))))
+        if definition.type == "multi_select":
+            option_id = self._parse_uuid_key(to_group_key, field="custom_field_option_key")
+            match = IssueCustomFieldValue.value_json.op("@>")(type_coerce([str(option_id)], JSONB))
+        elif definition.type == "single_select":
+            option_id = self._parse_uuid_key(to_group_key, field="custom_field_option_key")
+            match = IssueCustomFieldValue.value_json == type_coerce(str(option_id), JSONB)
+        elif definition.type in {"text", "textarea", "url"}:
+            match = IssueCustomFieldValue.value_text == to_group_key
+        elif definition.type == "number":
+            try:
+                numeric = Decimal(to_group_key)
+            except InvalidOperation as exc:
+                raise ValidationError(
+                    "invalid custom field number key",
+                    details={"group_key": to_group_key},
+                ) from exc
+            match = IssueCustomFieldValue.value_number == numeric
+        elif definition.type in {"date", "datetime"}:
+            try:
+                parsed = datetime.fromisoformat(to_group_key.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValidationError(
+                    "invalid custom field date key",
+                    details={"group_key": to_group_key},
+                ) from exc
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            match = IssueCustomFieldValue.value_date == parsed.astimezone(UTC)
+        elif definition.type == "member":
+            match = IssueCustomFieldValue.value_member_id == self._parse_uuid_key(
+                to_group_key, field="custom_field_member_key"
+            )
+        elif definition.type == "boolean":
+            if to_group_key not in {"true", "false"}:
+                raise ValidationError(
+                    "invalid custom field boolean key",
+                    details={"group_key": to_group_key},
+                )
+            match = IssueCustomFieldValue.value_boolean.is_(to_group_key == "true")
+        else:  # pragma: no cover - DB enum/check constrains known field types
+            raise ValidationError(
+                "unsupported custom field type",
+                details={"field_type": definition.type},
+            )
+        return exists(values.where(match))
 
     async def _count_group(
         self,
@@ -1155,7 +1955,14 @@ class BoardMoveService:
         filters_clause = compile_view_filters(view.filters)
         if filters_clause is not None:
             conditions.append(filters_clause)
-        conditions.append(self._group_predicate(group_by, to_group_key))
+        conditions.append(
+            await self._group_predicate(
+                session,
+                group_by,
+                to_group_key,
+                workspace_id=workspace_id,
+            )
+        )
         conditions.append(Issue.id != exclude_issue_id)
         return int(await session.scalar(select(func.count()).select_from(Issue).where(*conditions)))
 
@@ -1193,12 +2000,16 @@ class BoardMoveService:
                 )
             )
         ).all()
-        valid_rows = [
-            (row, issue)
-            for row, issue in joined_rows
-            if group_key_for(group_by, issue) == group_key
-            and (sub_group_by is None or group_key_for(sub_group_by, issue) == sub_group_key)
-        ]
+        valid_rows: list[tuple[ViewIssuePosition, Issue]] = []
+        for row, issue in joined_rows:
+            current_group = await self._axis_key_for_issue(session, axis=group_by, issue=issue)
+            current_sub_group = (
+                await self._axis_key_for_issue(session, axis=sub_group_by, issue=issue)
+                if sub_group_by is not None
+                else ""
+            )
+            if current_group == group_key and current_sub_group == sub_group_key:
+                valid_rows.append((row, issue))
         collides = any(
             row.issue_id != moved_issue_id and abs(float(row.position) - position) < POSITION_EPSILON
             for row, _issue in valid_rows

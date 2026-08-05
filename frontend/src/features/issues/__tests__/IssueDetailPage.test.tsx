@@ -1139,6 +1139,103 @@ describe('IssueDetailPage', () => {
     expect(await screen.findByText('严格模式下不允许该状态转换')).toBeTruthy();
   });
 
+  it('blocks a status save in place and names required custom fields from a 422', async () => {
+    const stub = queue(
+      fakeResponse({
+        status: 422,
+        body: {
+          error: {
+            code: 'required_field_missing',
+            message: 'required fields missing',
+            details: {
+              missing: [
+                'Acceptance owner',
+                { field_def_id: 'cf-proof', name: 'Evidence link' },
+                '',
+                null,
+                42,
+                { field_def_id: 'cf-empty', name: '' },
+              ],
+            },
+          },
+        },
+      }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
+
+    fireEvent.change(screen.getByTestId('issue-detail-status'), {
+      target: { value: 'st-wip' },
+    });
+
+    const inlineError = await screen.findByTestId('issue-status-validation-error');
+    expect(inlineError).toHaveTextContent('Acceptance owner');
+    expect(inlineError).toHaveTextContent('Evidence link');
+    expect((screen.getByTestId('issue-detail-status') as HTMLSelectElement).value).toBe('st-todo');
+    expect(stub.calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(1);
+  });
+
+  it('falls back to the named 422 message when required-field details are unavailable', async () => {
+    const stub = queue(
+      fakeResponse({
+        status: 422,
+        body: {
+          error: {
+            code: 'required_field_missing',
+            message: 'required fields missing',
+            details: {},
+          },
+        },
+      }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
+
+    fireEvent.change(screen.getByTestId('issue-detail-status'), {
+      target: { value: 'st-wip' },
+    });
+
+    expect(await screen.findByTestId('issue-status-validation-error')).toHaveTextContent(
+      'Required fields must be filled before this change',
+    );
+  });
+
+  it('clears status validation state after a successful status transition', async () => {
+    const updated = {
+      ...DETAIL,
+      status: STATUS_IN_PROGRESS,
+      status_id: STATUS_IN_PROGRESS.id,
+      state_category: 'in_progress',
+      version: 4,
+    };
+    const stub = queue(fakeResponse({ body: { data: updated } }), ...reloadRound(updated));
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
+
+    fireEvent.change(screen.getByTestId('issue-detail-status'), {
+      target: { value: STATUS_IN_PROGRESS.id },
+    });
+
+    await waitFor(() =>
+      expect(stub.calls.filter((call) => call.init?.method === 'PATCH')).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect((screen.getByTestId('issue-detail-status') as HTMLSelectElement).value).toBe(
+        STATUS_IN_PROGRESS.id,
+      ),
+    );
+    expect(screen.queryByTestId('issue-status-validation-error')).not.toBeInTheDocument();
+  });
+
   it('renders move preview field/reason with readable i18n labels, not technical keys (LOW-2)', async () => {
     const preview = {
       issue_id: 'iss-1',
@@ -1240,6 +1337,114 @@ describe('IssueDetailPage', () => {
     );
   });
 
+  it('shows the agent automation hint optimistically and removes it after a failed save rollback', async () => {
+    const initialResponses = detailResponses();
+    initialResponses[5] = fakeResponse({
+      body: {
+        data: [
+          ...MEMBERS_PAGE.data,
+          {
+            id: 'mem-agent',
+            member_type: 'agent',
+            role: 'member',
+            status: 'active',
+            display_name: 'Builder',
+            joined_at: null,
+            profile: null,
+          },
+        ],
+        next_cursor: null,
+      },
+    });
+    const base = detailStub(...initialResponses);
+    let resolvePatch!: (response: Response) => void;
+    const pendingPatch = new Promise<Response>((resolve) => {
+      resolvePatch = resolve;
+    });
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') return pendingPatch;
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Builder (agent)' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: 'mem-agent' },
+    });
+    expect(screen.getByTestId('issue-agent-assignee-hint')).toHaveTextContent(
+      'Work will start automatically after saving',
+    );
+
+    await act(async () => {
+      resolvePatch(
+        fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'save failed' } },
+        }),
+      );
+      await pendingPatch;
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('issue-agent-assignee-hint')).not.toBeInTheDocument(),
+    );
+    expect((screen.getByTestId('issue-detail-assignee') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('keeps the 1280px properties drawer and agent hint open after a successful save', async () => {
+    const agent = {
+      id: 'mem-agent',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    };
+    const initialResponses = detailResponses();
+    initialResponses[5] = fakeResponse({
+      body: { data: [...MEMBERS_PAGE.data, agent], next_cursor: null },
+    });
+    const base = detailStub(...initialResponses);
+    const updated = {
+      ...DETAIL,
+      assignee_id: agent.id,
+      assignee: { id: agent.id, name: agent.display_name, member_type: 'agent' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url: String(input), init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Builder (agent)' });
+
+    fireEvent.click(screen.getByTestId('detail-aside-trigger'));
+    const drawer = await screen.findByTestId('detail-aside-sheet');
+    fireEvent.change(within(drawer).getByTestId('issue-detail-assignee'), {
+      target: { value: agent.id },
+    });
+
+    await screen.findByText('v4');
+    expect(within(drawer).getByTestId('issue-agent-assignee-hint')).toHaveTextContent(
+      'Work will start automatically after saving',
+    );
+    expect(screen.getByTestId('detail-aside-sheet')).toBeInTheDocument();
+    expect(
+      base.calls.filter(
+        (call) =>
+          (call.init?.method ?? 'GET') === 'GET' &&
+          String(call.url).endsWith('/api/v1/issues/iss-1'),
+      ),
+    ).toHaveLength(1);
+  });
+
   it('patches due date and estimate unit from the sidebar (§4.2)', async () => {
     await twoSidebarChanges(
       {
@@ -1305,7 +1510,13 @@ describe('IssueDetailPage', () => {
 
   it('clears assignee back to unassigned with an empty select value', async () => {
     const assigned = { ...DETAIL, assignee_id: 'mem-1' };
-    const stub = queue(fakeResponse({ body: { data: assigned } }), ...reloadRound(assigned));
+    const stub = detailStub(
+      fakeResponse({ body: { data: assigned } }),
+      ...detailResponses().slice(1),
+      fakeResponse({ body: { data: DETAIL } }),
+      ...reloadRound(DETAIL),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
     await screen.findByTestId('issue-detail');
     await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });

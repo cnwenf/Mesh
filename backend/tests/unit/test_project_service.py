@@ -233,6 +233,45 @@ async def test_create_project_duplicate_key_conflict(session_factory):
     assert excinfo.value.code == "project_key_taken"
 
 
+async def test_project_key_availability_uses_permanent_prefix_registry(session_factory):
+    workspace, member, service = await _setup(session_factory)
+    assert await service.project_key_available(
+        actor=member, workspace_id=workspace.id, key="FREE"
+    ) is True
+    created = await service.create_project(
+        actor=member, workspace_id=workspace.id, body=_body(key="USED")
+    )
+    assert await service.project_key_available(
+        actor=member, workspace_id=workspace.id, key="USED"
+    ) is False
+    await service.delete_project(
+        actor=member,
+        workspace_id=workspace.id,
+        project_id=uuid.UUID(created["id"]),
+    )
+    assert await service.project_key_available(
+        actor=member, workspace_id=workspace.id, key="USED"
+    ) is False
+
+
+@pytest.mark.parametrize("key", ["used", " USED", "USED ", ""])
+async def test_project_key_availability_uses_create_key_validation(session_factory, key):
+    workspace, member, service = await _setup(session_factory)
+    with pytest.raises(ValidationError):
+        await service.project_key_available(
+            actor=member, workspace_id=workspace.id, key=key
+        )
+
+
+async def test_project_key_availability_guest_is_forbidden(session_factory):
+    workspace, _, service = await _setup(session_factory)
+    guest = await _second_member(session_factory, workspace, role="guest")
+    with pytest.raises(ForbiddenError):
+        await service.project_key_available(
+            actor=guest, workspace_id=workspace.id, key="FREE"
+        )
+
+
 async def test_create_project_key_conflicts_with_inbox_prefix(session_factory):
     workspace, member, service = await _setup(session_factory)
     async with session_factory() as session, session.begin():

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { BoardPage } from '../BoardPage';
+import type { CustomFieldDef } from '../../labels/types';
 import type { BoardCard } from '../projection';
 import type { View } from '../types';
 import { ensurePointerEvent, mockRect } from './dragTestUtils';
@@ -77,6 +78,8 @@ interface StubOptions {
   moveStatus?: number;
   moveBody?: unknown;
   wipStatus?: number;
+  customFields?: readonly CustomFieldDef[];
+  multiValueAxis?: boolean;
 }
 
 function stubBoard(options: StubOptions = {}) {
@@ -97,6 +100,11 @@ function stubBoard(options: StubOptions = {}) {
     const method = init?.method ?? 'GET';
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (method === 'GET' && url.includes('/custom-fields')) {
+      return fakeResponse({
+        body: { data: options.customFields ?? [], next_cursor: null },
+      });
+    }
     if (method === 'GET' && url.includes('/issues')) {
       return fakeResponse({
         body: {
@@ -107,6 +115,7 @@ function stubBoard(options: StubOptions = {}) {
             todo: 'st_todo',
             in_progress: 'st_ip',
           },
+          multi_value_axis: options.multiValueAxis ?? false,
           ...(v.sub_group_by === null
             ? { groups }
             : { columns: options.columns ?? [], lanes: options.lanes ?? [] }),
@@ -140,6 +149,9 @@ function stubBoard(options: StubOptions = {}) {
             ? { error: { code: 'internal_error', message: 'x' } }
             : { data: v },
       });
+    }
+    if (method === 'PATCH' && url.includes('/views/')) {
+      return fakeResponse({ body: { data: v } });
     }
     if (method === 'POST' && url.includes('/issues')) {
       return fakeResponse({ status: 201, body: { data: card('i-new') } });
@@ -191,6 +203,110 @@ describe('看板投影层交互', () => {
     expect(within(ip).getByTestId('board-card-i2')).toBeInTheDocument();
     // 计数来自投影响应。
     expect(screen.getByTestId('count-in_progress')).toHaveTextContent('1');
+  });
+
+  it('自定义字段定义进入两轴编辑器，并渲染服务端动态列标签', async () => {
+    const fieldId = '11111111-2222-4333-8444-555555555555';
+    const optionId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const definition: CustomFieldDef = {
+      id: fieldId,
+      workspace_id: 'ws-1',
+      project_id: null,
+      name: 'Severity',
+      field_key: 'severity',
+      type: 'single_select',
+      is_required: false,
+      required_on: [],
+      default_value: null,
+      config: {},
+      position: 1,
+      is_active: true,
+      options: [],
+      created_at: '',
+      updated_at: '',
+    };
+    stubBoard({
+      view: view({ group_by: fieldId }),
+      customFields: [definition],
+      groups: [
+        {
+          key: optionId,
+          label: 'Major',
+          count: 1,
+          wip: null,
+          data: [card('i1')],
+        },
+        { key: '__none__', label: 'No Severity', count: 0, wip: null, data: [] },
+      ],
+    });
+
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+
+    expect(await screen.findByTestId(`board-column-${optionId}`)).toBeInTheDocument();
+    expect(screen.getByText('Major')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(screen.getByTestId('group-by-select')).getByText('Severity')).toHaveValue(
+        fieldId,
+      );
+      expect(within(screen.getByTestId('sub-group-by-select')).getByText('Severity')).toHaveValue(
+        fieldId,
+      );
+    });
+  });
+
+  it('保存自定义字段分组时 PATCH 透传 definition UUID', async () => {
+    const fieldId = '11111111-2222-4333-8444-555555555555';
+    const definition: CustomFieldDef = {
+      id: fieldId,
+      workspace_id: 'ws-1',
+      project_id: null,
+      name: 'Severity',
+      field_key: 'severity',
+      type: 'single_select',
+      is_required: false,
+      required_on: [],
+      default_value: null,
+      config: {},
+      position: 1,
+      is_active: true,
+      options: [],
+      created_at: '',
+      updated_at: '',
+    };
+    const calls = stubBoard({ customFields: [definition] });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+    await screen.findByTestId('board-column-todo');
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('group-by-select')).getByText('Severity'),
+      ).toBeInTheDocument(),
+    );
+
+    fireEvent.change(screen.getByTestId('group-by-select'), { target: { value: fieldId } });
+    fireEvent.click(await screen.findByTestId('view-save'));
+
+    await waitFor(() => {
+      const patch = calls.find((call) => call.method === 'PATCH' && call.url.includes('/views/v1'));
+      expect(patch?.body).toMatchObject({ group_by: fieldId });
+    });
+  });
+
+  it('服务端标记多值轴时禁用拖拽但保留 quick-create', async () => {
+    const calls = stubBoard({
+      view: view({ group_by: 'label' }),
+      multiValueAxis: true,
+      groups: [
+        { key: 'lbl-a', label: 'A', count: 1, wip: null, data: [card('i1')] },
+        { key: 'lbl-b', label: 'B', count: 0, wip: null, data: [] },
+      ],
+    });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
+    await screen.findByTestId('board-column-lbl-a');
+    expect(screen.getByTestId('quick-add-lbl-a')).toBeEnabled();
+
+    dropCard('i1', 'lbl-a', 'lbl-b');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.some((call) => call.method === 'POST' && call.url.includes('/moves'))).toBe(false);
   });
 
   it('拖拽跨列 → 调用 moves 并乐观收敛(§4.3)', async () => {

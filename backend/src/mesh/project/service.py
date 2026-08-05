@@ -52,6 +52,7 @@ from mesh.db.models.project import (
     ProjectUpdate,
 )
 from mesh.db.models.user import User
+from mesh.db.models.workspace import IdentifierPrefixRegistry
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
     BusinessRuleError,
@@ -714,6 +715,27 @@ class ProjectService:
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
+
+    async def project_key_available(
+        self,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        key: str,
+    ) -> bool:
+        """Return whether a valid key is absent from the permanent prefix registry."""
+        if actor.role == "guest":
+            raise ForbiddenError("guests cannot create projects")
+        _validate_project_key(key)
+        async with self._factory() as session:
+            await set_tenant_context(session, workspace_id)
+            occupied = await session.scalar(
+                select(IdentifierPrefixRegistry.id).where(
+                    IdentifierPrefixRegistry.workspace_id == workspace_id,
+                    IdentifierPrefixRegistry.key == key,
+                )
+            )
+        return occupied is None
 
     async def list_projects(
         self,
