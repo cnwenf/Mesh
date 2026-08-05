@@ -12,7 +12,12 @@ import type { MissingReporter } from '../../../i18n';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
-import { toggleReactionLocal, useCommentsData } from '../useCommentsData';
+import {
+  patchCommentById,
+  removeCommentById,
+  toggleReactionLocal,
+  useCommentsData,
+} from '../useCommentsData';
 import type { Comment, CommentMemberRef, ReactionSummary } from '../types';
 import { UNDO_WINDOW_MS } from '../useDeferredDelete';
 
@@ -107,6 +112,42 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('useCommentsData branch fill', () => {
+  it('does not update state after an initial list request resolves or rejects post-unmount', async () => {
+    let settle: ((response: Response) => void) | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            settle = resolve;
+          }),
+      ),
+    );
+    const resolved = renderData();
+    resolved.unmount();
+    await act(async () => {
+      settle?.(fakeResponse({ body: { data: [ROOT], next_cursor: null } }));
+      await Promise.resolve();
+    });
+
+    let reject: ((reason: unknown) => void) | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((_resolve, rejectRequest) => {
+            reject = rejectRequest;
+          }),
+      ),
+    );
+    const rejected = renderData();
+    rejected.unmount();
+    await act(async () => {
+      reject?.(new TypeError('late failure'));
+      await Promise.resolve();
+    });
+  });
+
   it('ignores realtime frames from a different channel', async () => {
     const { result } = renderData();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -141,8 +182,12 @@ describe('useCommentsData branch fill', () => {
     act(() => {
       result.current.remove(ROOT);
     });
-    // 乐观隐藏
-    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(false);
+    // 乐观墓碑保留实体与线程位置。
+    expect(result.current.comments.find((c) => c.id === 'c-1')?.deleted_at).not.toBeNull();
+    // A second delete while the first tombstone is pending is ignored.
+    act(() => {
+      result.current.remove(ROOT);
+    });
     // 窗口到期 → DELETE 失败 → 回滚恢复
     await act(async () => {
       vi.advanceTimersByTime(UNDO_WINDOW_MS);
@@ -150,12 +195,104 @@ describe('useCommentsData branch fill', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(true);
+    expect(result.current.comments.find((c) => c.id === 'c-1')?.deleted_at).toBeNull();
     vi.useRealTimers();
+  });
+
+  it('reconciles retries that were supplied from outside the current list', async () => {
+    const { result } = renderData();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await expect(result.current.retrySend(ROOT)).resolves.toBe(ROOT);
+    });
+
+    const failedTop: Comment = {
+      ...ROOT,
+      id: 'external-top',
+      body_markdown: 'external top',
+      delivery_state: 'failed',
+      client_request_id: null,
+    };
+    await act(async () => {
+      await expect(result.current.retrySend(failedTop)).resolves.toMatchObject({ id: 'c-server' });
+    });
+    expect(result.current.comments.some((comment) => comment.id === 'c-server')).toBe(true);
+
+    const failedReply: Comment = {
+      ...ROOT,
+      id: 'external-reply',
+      parent_id: ROOT.id,
+      thread_root_id: ROOT.id,
+      body_markdown: 'external reply',
+      delivery_state: 'failed',
+      client_request_id: 'request-reply',
+    };
+    await act(async () => {
+      await expect(result.current.retrySend(failedReply)).resolves.toMatchObject({
+        id: 'c-server',
+      });
+    });
+    expect(
+      result.current.comments[0]?.preview_replies?.some((reply) => reply.id === 'c-server'),
+    ).toBe(true);
+  });
+
+  it('hydrates a missing reply into an already loaded root and ignores a foreign issue target', async () => {
+    const target: Comment = {
+      ...ROOT,
+      id: 'deep-reply',
+      parent_id: ROOT.id,
+      thread_root_id: ROOT.id,
+    };
+    const otherRoot: Comment = { ...ROOT, id: 'other-root' };
+    const topTarget: Comment = { ...ROOT, id: 'top-target' };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/comments/foreign')) {
+          return fakeResponse({ body: { data: { ...ROOT, id: 'foreign', issue_id: 'other' } } });
+        }
+        if (url.endsWith('/comments/deep-reply')) {
+          return fakeResponse({ body: { data: target } });
+        }
+        if (url.endsWith('/comments/top-target')) {
+          return fakeResponse({ body: { data: topTarget } });
+        }
+        if (url.includes('/comments/c-1/replies')) {
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        }
+        if (url.endsWith('/comments/c-1')) return fakeResponse({ body: { data: ROOT } });
+        return fakeResponse({ body: { data: [ROOT, otherRoot], next_cursor: null } });
+      }),
+    );
+    const { result } = renderData();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.locateComment(ROOT.id);
+      await result.current.locateComment('deep-reply');
+      await result.current.locateComment('deep-reply');
+      await result.current.locateComment('top-target');
+      await result.current.locateComment('foreign');
+    });
+
+    expect(result.current.comments[0]?.preview_replies?.map((reply) => reply.id)).toContain(
+      'deep-reply',
+    );
+    expect(result.current.comments.some((comment) => comment.id === 'foreign')).toBe(false);
+    expect(result.current.comments.some((comment) => comment.id === 'top-target')).toBe(true);
   });
 });
 
 describe('toggleReactionLocal multi-emoji passthrough', () => {
+  it('returns the original comment collection when a populated reply preview misses the id', () => {
+    const input: readonly Comment[] = [{ ...ROOT, preview_replies: [] }];
+    expect(removeCommentById(input, 'missing')).toBe(input);
+    expect(patchCommentById(input, 'missing', (comment) => comment)).toBe(input);
+  });
+
   it('leaves the other emoji untouched when removing self (count>1)', () => {
     const reactions: ReactionSummary[] = [
       { emoji: '👍', count: 2, reacted_by_me: true, actors: [ME, OTHER] },

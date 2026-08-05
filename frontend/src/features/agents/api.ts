@@ -25,7 +25,7 @@ export const workspaceAgentsChannel = (workspaceId: string): string =>
 export const agentPresenceChannel = (agentId: string): string => `agent:${agentId}:presence`;
 
 export interface ListAgentsParams {
-  readonly status?: 'all' | 'active' | 'paused' | 'disabled' | 'archived';
+  readonly status?: 'default' | 'all' | 'active' | 'paused' | 'disabled' | 'archived';
   readonly visibility?: 'all' | AgentVisibility;
   readonly ownerId?: string;
   readonly q?: string;
@@ -142,13 +142,7 @@ export async function rollbackConfig(
   );
 }
 
-export type AgentLifecycleVerb =
-  | 'pause'
-  | 'resume'
-  | 'disable'
-  | 'enable'
-  | 'archive'
-  | 'restore';
+export type AgentLifecycleVerb = 'pause' | 'resume' | 'disable' | 'enable' | 'archive' | 'restore';
 
 /** 生命周期动作端点(:verb 后缀,agent.md §3.1 / §4.8 状态机)。 */
 export async function transitionAgentLifecycle(
@@ -156,7 +150,10 @@ export async function transitionAgentLifecycle(
   workspaceId: string,
   agentId: string,
   verb: AgentLifecycleVerb,
-  body?: { readonly reason?: string; readonly in_flight_policy?: 'finish_current' | 'cancel_current' },
+  body?: {
+    readonly reason?: string;
+    readonly in_flight_policy?: 'finish_current' | 'cancel_current';
+  },
 ): Promise<AgentSummary> {
   return client.request<AgentSummary>('POST', `${agentPath(workspaceId, agentId)}:${verb}`, {
     body: body ?? {},

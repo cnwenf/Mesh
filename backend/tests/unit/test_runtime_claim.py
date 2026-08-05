@@ -112,6 +112,36 @@ async def test_claim_picks_matching_task_and_builds_attempt(session_factory):
     assert stored.status == "claimed"
 
 
+async def test_claim_freezes_provider_audit_before_terminal_result(session_factory):
+    """Awaiting-approval attempts remain auditable before a result exists."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(
+        session_factory,
+        world["ws_id"],
+        provider_manifest={
+            "provider": "claude-code",
+            "version": "2.1.218",
+            "model": "runtime-default",
+        },
+    )
+    await make_execution(
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        config_snapshot={"provider": "claude-code", "model": "frozen-model"},
+    )
+
+    result = await _claim(session_factory, runtime)
+
+    assert result is not None
+    async with session_factory() as session:
+        attempt = (await session.execute(select(ExecutionAttempt))).scalar_one()
+    assert attempt.provider == "claude-code"
+    assert attempt.provider_version == "2.1.218"
+    assert attempt.model == "frozen-model"
+    assert attempt.result is None
+
+
 async def test_claim_label_containment_required(session_factory):
     """label_requirements must be contained in the runtime's labels."""
     world = await seed_world(session_factory)

@@ -23,11 +23,18 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mesh.db.models.agent import Agent
+from mesh.db.models.comment import CommentMention
 from mesh.db.models.integration import IntegrationMessageQueue
+from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.tenant import set_tenant_context
-from mesh.outbox.service import emit_realtime
+from mesh.issue.execution_observability import (
+    emit_workspace_execution_event,
+    record_issue_execution_phase,
+)
+from mesh.runtime.agent_presence import emit_agent_presence
 from mesh.runtime.attempts import cancel_in_flight_for_agent
 from mesh.runtime.claim import _emit_queue_depth
 
@@ -172,22 +179,80 @@ async def enqueue_execution_handler(
             seconds=execution.timeout_seconds + 300
         )
         await session.flush()
+
+    comment_id = _parse_uuid(payload.get("comment_id") or payload.get("trigger_comment_id"))
+    agent_member_id = _parse_uuid(payload.get("agent_member_id"))
+    agent_name: str | None = None
+    if execution.agent_id is not None:
+        member_snapshot = (
+            await session.execute(
+                select(Member.id, Member.display_override, Agent.name)
+                .join(Agent, Agent.id == Member.agent_id)
+                .where(
+                    Member.workspace_id == event.workspace_id,
+                    Member.agent_id == execution.agent_id,
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if member_snapshot is not None:
+            agent_member_id = member_snapshot.id
+            agent_name = member_snapshot.display_override or member_snapshot.name
+
+    # Mention rows expose only canonical TaskExecution ids. The pending outbox
+    # id lives in its dedicated correlation column and is replaced atomically
+    # here; an older delivery cannot overwrite a newer remove/re-add trigger.
+    if trigger == "mention" and comment_id is not None and agent_member_id is not None:
+        await session.execute(
+            update(CommentMention)
+            .where(
+                CommentMention.workspace_id == event.workspace_id,
+                CommentMention.comment_id == comment_id,
+                CommentMention.mentioned_id == agent_member_id,
+                CommentMention.pending_trigger_event_id == event.id,
+                CommentMention.deleted_at.is_(None),
+            )
+            .values(
+                triggered_execution_id=execution.id,
+                pending_trigger_event_id=None,
+            )
+        )
     # §3.6: every enqueue is observable on the workspace executions channel
     # (F10 — agent triggers additionally emit on issue:{id}:runs; integration
     # / manual / issue-less triggers are covered here).
-    await emit_realtime(
+    await emit_workspace_execution_event(
         session,
         workspace_id=event.workspace_id,
-        channel=f"workspace:{event.workspace_id}:executions",
+        issue_id=execution.issue_id,
         event="execution.queued",
         data={
             "execution_id": str(execution.id),
             "agent_id": str(execution.agent_id) if execution.agent_id else None,
+            "agent_member_id": str(agent_member_id) if agent_member_id else None,
+            "agent_name": agent_name,
             "issue_id": str(execution.issue_id) if execution.issue_id else None,
             "trigger": execution.trigger,
+            "comment_id": str(comment_id) if comment_id else None,
         },
         idempotency_key=f"enqueue:{execution.id}:execution-queued",
     )
+    await record_issue_execution_phase(
+        session,
+        workspace_id=event.workspace_id,
+        issue_id=execution.issue_id,
+        execution_id=execution.id,
+        agent_id=execution.agent_id,
+        phase="queued",
+        comment_id=comment_id,
+        agent_name=agent_name,
+    )
+    if execution.agent_id is not None:
+        await emit_agent_presence(
+            session,
+            workspace_id=event.workspace_id,
+            agent_id=execution.agent_id,
+            idempotency_key=f"execution:{execution.id}:presence:queued",
+        )
     await _emit_queue_depth(session, workspace_id=event.workspace_id)
     return None
 

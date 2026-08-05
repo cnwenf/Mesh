@@ -14,6 +14,7 @@ import uuid
 import pytest
 from sqlalchemy import select, text
 
+from mesh.db.models.agent import Agent
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
@@ -166,6 +167,33 @@ async def test_list_default_status_hides_removed(session_factory):
     assert [str(i["id"]) for i in removed_items] == [str(plain.id)]
     all_items, _ = await service.list_members(workspace_id=ws, status="all")
     assert len(all_items) == 2
+
+
+async def test_default_roster_hides_disabled_and_archived_agents_but_all_keeps_them_queryable(
+    session_factory,
+):
+    service, ws, _owner, _plain, _uid = await _setup(session_factory)
+    disabled_member_id = await _add_agent_member(session_factory, ws)
+    archived_member_id = await _add_agent_member(session_factory, ws)
+    async with session_factory() as session, session.begin():
+        disabled_member = await session.get(Member, disabled_member_id)
+        disabled_agent = await session.get(Agent, disabled_member.agent_id)
+        disabled_member.status = "disabled"
+        disabled_agent.lifecycle_status = "disabled"
+        archived_member = await session.get(Member, archived_member_id)
+        archived_agent = await session.get(Agent, archived_member.agent_id)
+        archived_agent.lifecycle_status = "archived"
+
+    default_items, _ = await service.list_members(workspace_id=ws)
+    all_items, _ = await service.list_members(workspace_id=ws, status="all")
+    disabled_items, _ = await service.list_members(workspace_id=ws, status="disabled")
+
+    default_ids = {str(item["id"]) for item in default_items}
+    all_ids = {str(item["id"]) for item in all_items}
+    assert str(disabled_member_id) not in default_ids
+    assert str(archived_member_id) not in default_ids
+    assert {str(disabled_member_id), str(archived_member_id)} <= all_ids
+    assert [str(item["id"]) for item in disabled_items] == [str(disabled_member_id)]
 
 
 async def test_list_role_filter_and_q_search(session_factory):

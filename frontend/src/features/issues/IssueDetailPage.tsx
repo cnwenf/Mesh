@@ -36,6 +36,7 @@ import {
 } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext } from '../../shortcuts';
 import { AttachmentPanel } from '../attachments';
@@ -59,8 +60,10 @@ import {
   listStatuses,
   movePreview,
   removeDependency as removeDependencyApi,
+  updateIssue,
 } from './api';
 import { IssueProperties } from './IssueProperties';
+import { IssueExecutionsPanel } from './IssueExecutionsPanel';
 import { focusIssueProperty, registerIssueContextShortcuts } from './issueShortcuts';
 import { categoryTone } from './issuePresentation';
 import {
@@ -204,6 +207,21 @@ interface ActivityListProps {
   readonly activity: readonly ActivityEntry[];
 }
 
+/** Execution activity has product meaning; do not render it as a generic field mutation. */
+export function activityDescription(entry: ActivityEntry, t: TranslateFn): string {
+  if (
+    entry.field === 'execution' &&
+    typeof entry.new_value === 'object' &&
+    entry.new_value !== null
+  ) {
+    const state = (entry.new_value as { state?: unknown }).state;
+    if (state === 'started') return t('issues.activity.executionStarted');
+    if (state === 'completed') return t('issues.activity.executionCompleted');
+    if (state === 'failed') return t('issues.activity.executionFailed');
+  }
+  return t('issues.activity.changed', { field: entry.field });
+}
+
 /** 原始活动流(评论区在另一 Tab 内交织呈现系统活动,§9.5)。 */
 function ActivityList(props: ActivityListProps): React.JSX.Element {
   const t = useT();
@@ -215,7 +233,7 @@ function ActivityList(props: ActivityListProps): React.JSX.Element {
       {props.activity.map((entry, index) => (
         <li key={entry.id ?? `act-${index}`}>
           <strong>{entry.actor !== null ? entry.actor.name : t('issues.systemActor')}</strong>
-          {t('issues.activity.changed', { field: entry.field })}
+          {activityDescription(entry, t)}
           <time>{new Date(entry.created_at).toLocaleString()}</time>
         </li>
       ))}
@@ -477,6 +495,69 @@ export function IssueDetailPage(): React.JSX.Element {
     [client, issue, toast, t],
   );
 
+  const approveExecutionOutput = useCallback(
+    async (executionId: string) => {
+      if (issue === null) return;
+      const doneStatus = statuses.find((status) => status.category === 'done');
+      if (doneStatus === undefined) {
+        toast.addToast(t('issues.executions.noDoneStatus'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
+        return;
+      }
+      const updated = await updateIssue(
+        client,
+        issue.id,
+        {
+          status_id: doneStatus.id,
+          review_execution_id: executionId,
+          review_decision: 'approved',
+          version: issue.version,
+        },
+        issue.updated_at,
+      );
+      setIssue((current) => (current === null ? current : { ...current, ...updated }));
+      toast.addToast(t('issues.savedToast'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
+      setReloadKey((key) => key + 1);
+    },
+    [client, issue, statuses, t, toast],
+  );
+
+  const requestExecutionChanges = useCallback(
+    async (executionId: string) => {
+      if (issue === null) return;
+      const updated = await updateIssue(
+        client,
+        issue.id,
+        {
+          review_execution_id: executionId,
+          review_decision: 'rejected',
+          version: issue.version,
+        },
+        issue.updated_at,
+      );
+      setIssue((current) => (current === null ? current : { ...current, ...updated }));
+      // “打回”由一条明确反馈评论 + 再次 @/分派触发返工组成。按钮将用户带到
+      // 权威评论输入；拒绝决定已绑定 execution 并持久化审计，不伪造状态迁移。
+      setActiveTab('comments');
+      window.requestAnimationFrame(() => {
+        const composer = window.document.querySelector<HTMLElement>(
+          '[data-testid="composer-input"]',
+        );
+        composer?.focus();
+      });
+      toast.addToast(t('issues.executions.requestChangesHint'), {
+        tone: 'info',
+        closeLabel: t('common.close'),
+      });
+    },
+    [client, issue, t, toast],
+  );
+
   if (error !== null) {
     return (
       <ErrorState
@@ -639,6 +720,15 @@ export function IssueDetailPage(): React.JSX.Element {
       />
 
       <AttachmentPanel workspaceId={issue.workspace_id} issueId={issue.id} />
+
+      <IssueExecutionsPanel
+        workspaceId={issue.workspace_id}
+        workspaceSlug={workspaceSlug}
+        issueId={issue.id}
+        reviewable={issue.state_category === 'in_review'}
+        onApprove={approveExecutionOutput}
+        onRequestChanges={requestExecutionChanges}
+      />
 
       {/* 讨论/活动切换(§3.2:活动/评论可切换;默认评论 —— 其已交织系统活动,§9.5)。
           仅渲染活动 Tab 内容;评论草稿经 localStorage 持久化,切换不丢(useCommentDraft)。 */}

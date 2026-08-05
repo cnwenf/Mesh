@@ -49,6 +49,12 @@ from mesh.member.display import resolve_display_name
 from mesh.member.owner_guard import LAST_OWNER_CODE, lock_active_owner_set
 from mesh.member.reassign import DEFAULT_REASSIGN_STATUSES, IssueReassigner, NullReassigner
 from mesh.outbox.service import emit_realtime
+from mesh.runtime.agent_presence import (
+    AgentPresenceSnapshot,
+    agent_presence_snapshot,
+    agent_presence_snapshots,
+    empty_agent_presence,
+)
 from mesh.search.projection import sync_member_search_name
 from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 from mesh.workspace.service import WORKSPACE_CHANNEL
@@ -91,7 +97,11 @@ def _human_profile(user: User | None) -> dict | None:
     }
 
 
-def _agent_profile(member: Member, agent: Agent | None = None) -> dict:
+def _agent_profile(
+    member: Member,
+    agent: Agent | None = None,
+    capacity: AgentPresenceSnapshot | None = None,
+) -> dict:
     # Roster rows render the agent profile via the agents table (agent.md
     # owns it); a missing agents row (defensive only — the composite FK
     # guarantees it exists) falls back to a null profile body.
@@ -104,6 +114,7 @@ def _agent_profile(member: Member, agent: Agent | None = None) -> dict:
             "is_active": None,
             "role_tag": None,
             "lifecycle_status": None,
+            "capacity": capacity if capacity is not None else empty_agent_presence(),
         }
     return {
         "id": agent.id,
@@ -114,6 +125,7 @@ def _agent_profile(member: Member, agent: Agent | None = None) -> dict:
         # H-F1:roster 行需要的生命周期与角色标签(§4.2/§4.5/§4.9)。
         "role_tag": agent.role_tag,
         "lifecycle_status": agent.lifecycle_status,
+        "capacity": capacity if capacity is not None else empty_agent_presence(),
     }
 
 
@@ -142,7 +154,13 @@ class MemberService:
 
     # -- serialization ----------------------------------------------------------
 
-    def render_row(self, member: Member, user: User | None, agent: Agent | None = None) -> dict:
+    def render_row(
+        self,
+        member: Member,
+        user: User | None,
+        agent: Agent | None = None,
+        capacity: AgentPresenceSnapshot | None = None,
+    ) -> dict:
         """Render one roster list item (member.md §3.2)."""
         return {
             "id": member.id,
@@ -156,7 +174,7 @@ class MemberService:
             "profile": (
                 _human_profile(user)
                 if member.member_type == "human"
-                else _agent_profile(member, agent)
+                else _agent_profile(member, agent, capacity)
             ),
         }
 
@@ -203,7 +221,18 @@ class MemberService:
             stmt = stmt.where(Member.member_type == member_type)
         if status == "default":
             # removed is a soft terminal state hidden from the default roster.
-            stmt = stmt.where(Member.status.in_(("active", "disabled")))
+            # Disabled/archived agents retain their member row for explicit
+            # filters and audit reads but disappear from the normal roster.
+            # Paused agents stay visible because resume is an ordinary roster
+            # action. Human disabled rows retain the long-standing default
+            # projection and remain reachable from the dedicated tab.
+            stmt = stmt.where(
+                Member.status.in_(("active", "disabled")),
+                or_(
+                    Member.member_type != "agent",
+                    Agent.lifecycle_status.in_(("active", "paused")),
+                ),
+            )
         elif status != "all":
             stmt = stmt.where(Member.status == status)
         if role is not None:
@@ -231,8 +260,26 @@ class MemberService:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
             rows = (await session.execute(stmt)).all()
+            page_rows = rows[:limit]
+            capacity_by_agent = await agent_presence_snapshots(
+                session,
+                workspace_id=workspace_id,
+                agent_ids=(
+                    agent.id
+                    for _, _, agent in page_rows
+                    if agent is not None
+                ),
+            )
 
-        items = [self.render_row(member, user, agent) for member, user, agent in rows[:limit]]
+        items = [
+            self.render_row(
+                member,
+                user,
+                agent,
+                capacity_by_agent.get(agent.id) if agent is not None else None,
+            )
+            for member, user, agent in page_rows
+        ]
         next_cursor = None
         if len(rows) > limit:
             last_member, _, _ = rows[limit - 1]
@@ -252,7 +299,16 @@ class MemberService:
             open_issues = await self._reassigner.open_issues_assigned(
                 session, workspace_id=workspace_id, member_id=member_id
             )
-            detail = self.render_row(member, user, agent)
+            capacity = (
+                await agent_presence_snapshot(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=agent.id,
+                )
+                if agent is not None
+                else None
+            )
+            detail = self.render_row(member, user, agent, capacity)
             detail.update(
                 {
                     "display_override": member.display_override,

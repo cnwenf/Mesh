@@ -17,7 +17,6 @@ import type {
   CredentialMeta,
   ExecutionDetail,
   ExecutionLogPage,
-  ExecutionSummary,
   RuntimeDetail,
   RuntimeKind,
   RuntimeStatus,
@@ -197,8 +196,8 @@ export async function listWorkspaceExecutions(
     readonly cursor?: string;
     readonly limit?: number;
   } = {},
-): Promise<{ data: ExecutionSummary[]; nextCursor: string | null }> {
-  const envelope = await client.list<ExecutionSummary>(workspaceExecutionsPath(workspaceId), {
+): Promise<{ data: ExecutionDetail[]; nextCursor: string | null }> {
+  const envelope = await client.list<ExecutionDetail>(workspaceExecutionsPath(workspaceId), {
     query: {
       status: params.status,
       agent_id: params.agent_id,

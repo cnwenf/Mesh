@@ -9,13 +9,18 @@ export function notificationTargetPath(
   notification: Notification,
   workspaceSlug: string | null = null,
 ): string | null {
+  // Failed/timeout execution notifications must land on the attempt/log audit,
+  // not merely the source issue. The issue remains the fallback for ordinary
+  // comment and assignment notifications.
+  if (notification.execution_id !== null) {
+    const suffix = `executions/${encodeURIComponent(notification.execution_id)}`;
+    return workspaceSlug === null ? `/${suffix}` : workspaceRoute(workspaceSlug, suffix);
+  }
   if (notification.issue_id === null) return null;
   const anchor = notification.latest_comment_id ?? notification.comment_id;
   const issuePath =
     workspaceSlug === null
       ? `/issues/${notification.issue_id}`
       : workspaceRoute(workspaceSlug, `issues/${notification.issue_id}`);
-  return anchor !== null
-    ? `${issuePath}#comment-${anchor}`
-    : issuePath;
+  return anchor !== null ? `${issuePath}#comment-${anchor}` : issuePath;
 }

@@ -4,13 +4,7 @@
  */
 
 export type StateCategory =
-  | 'backlog'
-  | 'todo'
-  | 'in_progress'
-  | 'in_review'
-  | 'blocked'
-  | 'done'
-  | 'cancelled';
+  'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'cancelled';
 
 export type IssuePriority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 
@@ -27,13 +21,7 @@ export const STATE_CATEGORY_ORDER: readonly StateCategory[] = [
   'cancelled',
 ];
 
-export const PRIORITY_ORDER: readonly IssuePriority[] = [
-  'urgent',
-  'high',
-  'medium',
-  'low',
-  'none',
-];
+export const PRIORITY_ORDER: readonly IssuePriority[] = ['urgent', 'high', 'medium', 'low', 'none'];
 
 /** 轻量成员引用(assignee/reporter):服务端解析显示名 + 类型快照(真源 members)。 */
 export interface IssueMemberRef {
@@ -147,6 +135,9 @@ export interface UpdateIssueBody {
   readonly assignee_id?: string | null;
   readonly due_date?: string | null;
   readonly start_date?: string | null;
+  /** 将产出评审绑定到当前 issue 的最新完成 execution；服务端拒绝旧运行。 */
+  readonly review_execution_id?: string;
+  readonly review_decision?: 'approved' | 'rejected';
   /** 乐观并发期望版本(§3.4;If-Match 另经 RequestOptions.ifMatch) */
   readonly version?: number;
 }

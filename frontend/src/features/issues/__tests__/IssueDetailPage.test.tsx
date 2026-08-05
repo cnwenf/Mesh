@@ -18,7 +18,7 @@ import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { useSettingsStore } from '../../../state/settingsStore';
 import type { RealtimeEventFrame } from '../../../types/realtime';
 import { IssueByIdRedirect } from '../IssueByIdRedirect';
-import { IssueDetailPage, categoryTone } from '../IssueDetailPage';
+import { IssueDetailPage, activityDescription, categoryTone } from '../IssueDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
@@ -337,6 +337,19 @@ function assignmentEmpty(): ReturnType<typeof fakeResponse> {
   return fakeResponse({ body: { data: null } });
 }
 
+/** Issue 运行反查面板列表；URL 感知返回，避免与详情并发队列竞争。 */
+function isIssueExecutionsCall(url: string, init?: RequestInit): boolean {
+  return (
+    (init?.method ?? 'GET') === 'GET' &&
+    url.includes('/workspaces/ws-1/executions') &&
+    url.includes('issue_id=iss-1')
+  );
+}
+
+function issueExecutionsEmpty(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: [], next_cursor: null } });
+}
+
 /**
  * URL 感知的顺序桩:附件列表 / 小队分派查询恒定回固定响应、**不消耗队列**
  * (消除与并行详情请求的到达顺序竞争 —— 盲队列在这些 fetch 插队时会整体错位,
@@ -351,6 +364,7 @@ function detailStub(...responses: Response[]): FetchStub {
     if (isAttachmentListCall(url, init)) return attachmentsEmpty();
     if (isAssignmentCall(url, init)) return assignmentEmpty();
     if (isVcsPanelCall(url, init)) return vcsPanelEmpty();
+    if (isIssueExecutionsCall(url, init)) return issueExecutionsEmpty();
     const response = responses[Math.min(index, responses.length - 1)];
     index += 1;
     return response;
@@ -396,6 +410,13 @@ describe('IssueDetailPage', () => {
     expect(screen.getByTestId('issue-detail-start')).toHaveAttribute('data-slot', 'input');
     expect(screen.getByTestId('issue-detail-due')).toHaveAttribute('data-slot', 'input');
     expect(screen.getByTestId('issue-detail-deps')).toBeTruthy();
+    expect(screen.getByTestId('issue-executions-panel')).toBeTruthy();
+    expect(
+      stub.calls.some(
+        (call) =>
+          call.url.includes('/workspaces/ws-1/executions') && call.url.includes('issue_id=iss-1'),
+      ),
+    ).toBe(true);
     expect(screen.getByText('WS-7')).toBeTruthy();
     expect(screen.getByTestId('dep-link-dep-1')).toHaveAttribute(
       'href',
@@ -1456,5 +1477,25 @@ describe('categoryTone(状态类别 → 徽标 tone 纯映射)', () => {
     expect(categoryTone('blocked')).toBe('danger');
     expect(categoryTone('done')).toBe('success');
     expect(categoryTone('cancelled')).toBe('neutral');
+  });
+});
+
+describe('activityDescription(execution activity projection)', () => {
+  it('renders the started-processing timeline copy instead of a generic field change', () => {
+    const t = (key: string): string => key;
+    expect(
+      activityDescription(
+        {
+          id: 'activity-run',
+          issue_id: 'iss-1',
+          actor: { id: 'agent-member', name: 'Builder', member_type: 'agent' },
+          field: 'execution',
+          old_value: null,
+          new_value: { state: 'started', execution_id: 'exec-1' },
+          created_at: '2026-08-05T08:00:00Z',
+        },
+        t,
+      ),
+    ).toBe('issues.activity.executionStarted');
   });
 });

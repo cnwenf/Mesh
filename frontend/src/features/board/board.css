@@ -586,6 +586,38 @@
   font-weight: var(--font-weight-medium);
 }
 
+.mesh-board__card-execution {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--space-1);
+  color: var(--color-status-info, var(--color-text));
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.mesh-board__card-execution-dot {
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  background: currentcolor;
+  animation: mesh-board-execution-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes mesh-board-execution-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-board__card-execution-dot {
+    animation: none;
+  }
+}
+
 .mesh-board__card-description {
   overflow: hidden;
   text-overflow: ellipsis;

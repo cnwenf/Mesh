@@ -2,6 +2,7 @@
  * 成员名册实体类型(member.md §2.2 / §3.2)。
  * `members.id` 为全系统统一引用键;`display_name` 为服务端按 §2.4 解析后的单一显示名。
  */
+import type { AgentCapacitySnapshot } from '../agents/runState';
 
 export type MemberType = 'human' | 'agent';
 export type MemberRole = 'owner' | 'admin' | 'member' | 'guest';
@@ -22,6 +23,7 @@ export interface AgentProfile {
   readonly is_active: boolean | null;
   readonly role_tag?: string | null;
   readonly lifecycle_status?: string | null;
+  readonly capacity?: AgentCapacitySnapshot;
 }
 
 export interface MemberSummary {

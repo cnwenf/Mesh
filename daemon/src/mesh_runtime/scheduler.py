@@ -26,8 +26,10 @@ logger = logging.getLogger("mesh_runtime.scheduler")
 
 OnClaimed = Callable[[ClaimResponse], Awaitable[None]]
 OnAttemptError = Callable[[ClaimResponse, BaseException], None]
+ClaimAllowed = Callable[[], bool]
 
 _CAPACITY_POLL_SECONDS = 0.05
+_ISOLATED_POLL_SECONDS = 1.0
 
 
 class ClaimScheduler:
@@ -40,6 +42,7 @@ class ClaimScheduler:
         clock: Clock | None = None,
         on_claimed: OnClaimed,
         on_attempt_error: OnAttemptError | None = None,
+        claim_allowed: ClaimAllowed | None = None,
         rand: Callable[[], float] | None = None,
     ) -> None:
         if max_concurrent < 1:
@@ -50,6 +53,7 @@ class ClaimScheduler:
         self._clock = clock or SystemClock()
         self._on_claimed = on_claimed
         self._on_attempt_error = on_attempt_error
+        self._claim_allowed = claim_allowed or (lambda: True)
         self._rand = rand or random.random
         self._inflight = 0
         self._empty_attempt = 0
@@ -78,7 +82,9 @@ class ClaimScheduler:
     async def step(self) -> tuple[str, float]:
         """One scheduling decision. Returns ``(outcome, sleep_seconds)`` where
         outcome ∈ {claimed, empty, rate_limited, server_error, fatal,
-        at_capacity}."""
+        at_capacity, isolated}."""
+        if not self._claim_allowed():
+            return "isolated", _ISOLATED_POLL_SECONDS
         if self._inflight >= self._max_concurrent:
             return "at_capacity", _CAPACITY_POLL_SECONDS
         try:

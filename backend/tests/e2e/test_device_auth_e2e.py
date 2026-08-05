@@ -11,6 +11,7 @@ unified Bearer representative endpoints over the wire.
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 
 import httpx
@@ -24,9 +25,12 @@ from tests.conftest import get_test_redis_url
 EMAIL = "device-e2e@corp.com"
 PASSWORD = "a-strong-passw0rd"
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
-# Mirrors MESH_DEVICE_CODE_PEPPER set for the e2e server (tests/e2e/conftest.py)
-# — needed to compute user_code hashes for surgical DB updates.
-_E2E_PEPPER = "e2e-device-code-pepper-0123456789"
+# Mirrors the effective MESH_DEVICE_CODE_PEPPER inherited by the real e2e
+# server. Isolated Compose runs supply a fresh strong value; the local fallback
+# matches tests/e2e/conftest.py for direct developer runs.
+_E2E_PEPPER = os.environ.get(
+    "MESH_DEVICE_CODE_PEPPER", "e2e-device-code-pepper-0123456789"
+)
 
 pytestmark = pytest.mark.e2e
 

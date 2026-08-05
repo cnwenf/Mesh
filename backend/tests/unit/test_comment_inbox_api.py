@@ -431,7 +431,9 @@ async def test_guest_cannot_trigger_agent_mention(env):
         f"[@reviewer-bot](mention://member/{agent.id})",
     )
     assert ok.status_code == 201
-    assert len(ok.json()["data"]["triggered_execution_ids"]) == 1
+    # The enqueue outbox id is correlation-only; the canonical id appears
+    # after runtime materialization via execution.queued.
+    assert ok.json()["data"]["triggered_execution_ids"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ interface BoardSwimlanesProps {
     subGroupKey: string,
   ) => void | Promise<void>;
   readonly highlightCardId?: string | null;
+  readonly executionStatusByIssueId?: Readonly<Record<string, string>>;
 }
 
 function cellKey(laneKey: string, groupKey: string): string {
@@ -62,6 +63,7 @@ export function BoardSwimlanes(props: BoardSwimlanesProps): React.JSX.Element {
     onDropCard,
     onQuickCreate,
     highlightCardId,
+    executionStatusByIssueId = {},
   } = props;
   const isCompact = useIsCompactViewport();
   const [activeLaneKey, setActiveLaneKey] = useState<string | null>(lanes[0]?.key ?? null);
@@ -162,6 +164,7 @@ export function BoardSwimlanes(props: BoardSwimlanesProps): React.JSX.Element {
                   onQuickCreate(groupKey, title, targetLaneKey ?? lane.key)
                 }
                 highlightCardId={highlightCardId}
+                executionStatusByIssueId={executionStatusByIssueId}
               />
             </section>
           );

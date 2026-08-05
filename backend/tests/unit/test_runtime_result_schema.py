@@ -30,7 +30,7 @@ from mesh.errors import BusinessRuleError
 from mesh.runtime.attempts import transition_attempt
 from mesh.runtime.claim import claim_execution
 from mesh.runtime.result_schema import validate_result_schema
-from mesh.runtime.schemas import MAX_JSON_FIELD_BYTES, AttemptTransitionRequest
+from mesh.runtime.schemas import MAX_JSON_FIELD_BYTES, AttemptTransitionRequest, HeartbeatRequest
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,
@@ -40,6 +40,49 @@ from tests.unit.runtime_support import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_heartbeat_operational_diagnostics_are_structured_and_fail_closed():
+    request = HeartbeatRequest(
+        current_load=0,
+        health="degraded",
+        operational_state="degraded",
+        diagnostics=[
+            {
+                "reason_code": "provider_unavailable",
+                "missing_capabilities": ["python", "version_control"],
+                "affected_task_types": ["provider:primary"],
+            }
+        ],
+    )
+    assert request.operational_state == "degraded"
+    assert request.diagnostics[0].reason_code == "provider_unavailable"
+
+    # Human-authored/raw failure strings, filesystem paths and arbitrary
+    # reason codes never enter the persisted/API diagnostic channel.
+    with pytest.raises(ValidationError):
+        HeartbeatRequest(
+            health="degraded",
+            operational_state="degraded",
+            diagnostics=[
+                {
+                    "reason_code": "provider_unavailable",
+                    "missing_capabilities": ["/srv/private/provider"],
+                    "affected_task_types": ["provider:primary"],
+                    "detail": "token=secret",
+                }
+            ],
+        )
+    with pytest.raises(ValidationError):
+        HeartbeatRequest(
+            health="degraded",
+            operational_state="isolated",
+            diagnostics=[{"reason_code": "arbitrary_daemon_text"}],
+        )
+
+    # A daemon may not claim Online while simultaneously reporting degraded.
+    with pytest.raises(ValidationError):
+        HeartbeatRequest(health="degraded", operational_state="online")
 
 
 async def _complete_with_result(session_factory, result):

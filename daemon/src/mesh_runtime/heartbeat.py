@@ -22,6 +22,7 @@ from mesh_runtime.timeutil import Clock, SystemClock
 
 OnCancel = Callable[[str, float], Awaitable[None]]
 InflightSource = Callable[[], list[str]]
+OnOperationalIncident = Callable[[str], None]
 
 
 class HeartbeatLoop:
@@ -33,6 +34,8 @@ class HeartbeatLoop:
         interval_seconds: float,
         clock: Clock | None = None,
         inventory=None,
+        operational_guard=None,
+        on_operational_incident: OnOperationalIncident | None = None,
         on_cancel: OnCancel | None = None,
         inflight_source: InflightSource | None = None,
         rand: Callable[[], float] | None = None,
@@ -44,6 +47,8 @@ class HeartbeatLoop:
         self._interval = interval_seconds
         self._clock = clock or SystemClock()
         self._inventory = inventory
+        self._operational_guard = operational_guard
+        self._on_operational_incident = on_operational_incident
         self._on_cancel = on_cancel
         self._inflight_source = inflight_source or (lambda: [])
         self._rand = rand or random.random
@@ -60,6 +65,8 @@ class HeartbeatLoop:
         return self._interval * (1.0 + jitter)
 
     def _health(self) -> str:
+        if self._operational_guard is not None:
+            return "healthy" if self._operational_guard.report()[0] == "online" else "degraded"
         if self._inventory is not None and not self._inventory.healthy():
             return "degraded"
         return "healthy"
@@ -69,6 +76,13 @@ class HeartbeatLoop:
             return {}
         return {"inventory_hash": self._inventory.inventory_hash()}
 
+    def _operational_report(self) -> tuple[str, list[dict]]:
+        if self._operational_guard is not None:
+            return self._operational_guard.report()
+        if self._inventory is None or self._inventory.healthy():
+            return "online", []
+        return "degraded", self._inventory.operational_diagnostics()
+
     async def beat_once(self) -> tuple[str, float]:
         """Send one heartbeat and dispatch downlink commands.
 
@@ -77,15 +91,20 @@ class HeartbeatLoop:
         the jittered interval; on a transient failure it sleeps ``sleep_seconds``.
         """
         try:
+            operational_state, diagnostics = self._operational_report()
             resp: HeartbeatResponse = await self._api.heartbeat(
                 self._runtime_id,
                 current_load=len(self._inflight_source()),
                 health=self._health(),
                 metrics=self._metrics(),
                 inflight=self._inflight_source(),
+                operational_state=operational_state,
+                diagnostics=diagnostics,
             )
         except FatalAuthError as exc:
             self.fatal = exc
+            if self._on_operational_incident is not None:
+                self._on_operational_incident("runtime_auth_failed")
             return "fatal", 0.0
         except RateLimitedError as exc:
             delay = capped_retry_after(exc.retry_after)

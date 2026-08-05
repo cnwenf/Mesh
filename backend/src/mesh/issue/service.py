@@ -44,7 +44,8 @@ from mesh.db.models.issue import (
     IssueStatus,
 )
 from mesh.db.models.member import Member, MemberProjectAccess
-from mesh.db.models.project import Cycle, Milestone, Project, ProjectMember
+from mesh.db.models.project import Cycle, Milestone, Project
+from mesh.db.models.runtime import TaskExecution
 from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
@@ -69,6 +70,7 @@ from mesh.issue.statuses import (
     resolve_status_in_scope,
 )
 from mesh.issue.triggers import apply_assign_triggers
+from mesh.issue.visibility import assert_member_can_view_issue, issue_visibility_clause
 from mesh.labels.required_fields import validate_required_field_values
 from mesh.member.display import resolve_display_name
 from mesh.outbox.service import emit_realtime
@@ -125,6 +127,8 @@ class IssuePatch:
     cycle_id: uuid.UUID | _Unset | None = UNSET
     parent_id: uuid.UUID | _Unset | None = UNSET
     position: float | _Unset = UNSET
+    review_execution_id: uuid.UUID | _Unset = UNSET
+    review_decision: str | _Unset = UNSET
 
 
 def _now(clock: Callable[[], datetime] | None) -> datetime:
@@ -200,12 +204,18 @@ class IssueService:
     # ------------------------------------------------------------------
 
     async def _member_summary(
-        self, session: AsyncSession, *, workspace_id: uuid.UUID, member_id: uuid.UUID | None
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        member_id: uuid.UUID | None,
     ) -> dict | None:
         if member_id is None:
             return None
         member = await session.scalar(
-            select(Member).where(Member.id == member_id, Member.workspace_id == workspace_id)
+            select(Member).where(
+                Member.id == member_id, Member.workspace_id == workspace_id
+            )
         )
         if member is None:
             return None
@@ -219,7 +229,11 @@ class IssueService:
         }
 
     async def render_issue(
-        self, session: AsyncSession, issue: Issue, *, with_children_progress: bool = False
+        self,
+        session: AsyncSession,
+        issue: Issue,
+        *,
+        with_children_progress: bool = False,
     ) -> dict:
         status = await session.scalar(
             select(IssueStatus).where(
@@ -231,7 +245,8 @@ class IssueService:
         if issue.project_id is not None:
             project_row = await session.scalar(
                 select(Project).where(
-                    Project.id == issue.project_id, Project.workspace_id == issue.workspace_id
+                    Project.id == issue.project_id,
+                    Project.workspace_id == issue.workspace_id,
                 )
             )
             if project_row is not None:
@@ -243,7 +258,9 @@ class IssueService:
         payload = {
             "id": str(issue.id),
             "workspace_id": str(issue.workspace_id),
-            "project_id": str(issue.project_id) if issue.project_id is not None else None,
+            "project_id": str(issue.project_id)
+            if issue.project_id is not None
+            else None,
             "project": project,
             "identifier_namespace_key": issue.identifier_namespace_key,
             "number": issue.number,
@@ -257,16 +274,22 @@ class IssueService:
             "assignee": await self._member_summary(
                 session, workspace_id=issue.workspace_id, member_id=issue.assignee_id
             ),
-            "assignee_id": str(issue.assignee_id) if issue.assignee_id is not None else None,
+            "assignee_id": str(issue.assignee_id)
+            if issue.assignee_id is not None
+            else None,
             "reporter": await self._member_summary(
                 session, workspace_id=issue.workspace_id, member_id=issue.reporter_id
             ),
-            "reporter_id": str(issue.reporter_id) if issue.reporter_id is not None else None,
+            "reporter_id": str(issue.reporter_id)
+            if issue.reporter_id is not None
+            else None,
             "estimate": float(issue.estimate) if issue.estimate is not None else None,
             "estimate_unit": issue.estimate_unit,
             "due_date": _isoformat(issue.due_date),
             "start_date": _isoformat(issue.start_date),
-            "milestone_id": str(issue.milestone_id) if issue.milestone_id is not None else None,
+            "milestone_id": str(issue.milestone_id)
+            if issue.milestone_id is not None
+            else None,
             "cycle_id": str(issue.cycle_id) if issue.cycle_id is not None else None,
             "parent_id": str(issue.parent_id) if issue.parent_id is not None else None,
             "position": issue.position,
@@ -337,32 +360,7 @@ class IssueService:
         that involve them (assignee/reporter). Invisible → 404 for guests,
         403 for other members (project.md §3.3 pattern).
         """
-        if role_satisfies(viewer.role, "project:manage"):
-            return
-        project = await self._project_of(session, issue)
-        if viewer.role == "guest":
-            if issue.assignee_id == viewer.id or issue.reporter_id == viewer.id:
-                return
-            if project is None:
-                raise NotFoundError(ISSUE_NOT_FOUND)
-            grant = await session.scalar(
-                select(MemberProjectAccess.id).where(
-                    MemberProjectAccess.project_id == project.id,
-                    MemberProjectAccess.member_id == viewer.id,
-                )
-            )
-            if grant is None:
-                raise NotFoundError(ISSUE_NOT_FOUND)
-            return
-        if project is None or project.visibility == "public":
-            return
-        role = await session.scalar(
-            select(ProjectMember.role).where(
-                ProjectMember.project_id == project.id, ProjectMember.member_id == viewer.id
-            )
-        )
-        if role is None:
-            raise ForbiddenError("project is private")
+        await assert_member_can_view_issue(session, viewer=viewer, issue=issue)
 
     async def assert_can_write_issue(
         self, session: AsyncSession, *, actor: Member, issue: Issue
@@ -391,7 +389,9 @@ class IssueService:
                 raise ForbiddenError("guests cannot modify this issue")
             return
         if project is not None:
-            await self._projects.assert_can_write(session, viewer=actor, project=project)
+            await self._projects.assert_can_write(
+                session, viewer=actor, project=project
+            )
 
     # ------------------------------------------------------------------
     # realtime + audit helpers
@@ -476,7 +476,9 @@ class IssueService:
     ) -> tuple[str, int, str]:
         """Row-locked namespace increment → (namespace_key, number, identifier)."""
         if project is not None:
-            number = await self._projects.next_issue_number(session, project_id=project.id)
+            number = await self._projects.next_issue_number(
+                session, project_id=project.id
+            )
             key = project.key
         else:
             number = await next_inbox_issue_number(session, workspace_id=workspace_id)
@@ -515,7 +517,11 @@ class IssueService:
         return member
 
     async def _validate_milestone(
-        self, session: AsyncSession, *, workspace_id: uuid.UUID, project_id: uuid.UUID | None,
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
         milestone_id: uuid.UUID,
     ) -> None:
         milestone = await session.scalar(
@@ -524,7 +530,9 @@ class IssueService:
             )
         )
         if milestone is None:
-            raise ValidationError("milestone not found", details={"milestone_id": str(milestone_id)})
+            raise ValidationError(
+                "milestone not found", details={"milestone_id": str(milestone_id)}
+            )
         if milestone.project_id != project_id:
             raise ValidationError(
                 "milestone belongs to another project",
@@ -535,10 +543,14 @@ class IssueService:
         self, session: AsyncSession, *, workspace_id: uuid.UUID, cycle_id: uuid.UUID
     ) -> None:
         cycle = await session.scalar(
-            select(Cycle).where(Cycle.id == cycle_id, Cycle.workspace_id == workspace_id)
+            select(Cycle).where(
+                Cycle.id == cycle_id, Cycle.workspace_id == workspace_id
+            )
         )
         if cycle is None:
-            raise ValidationError("cycle not found", details={"cycle_id": str(cycle_id)})
+            raise ValidationError(
+                "cycle not found", details={"cycle_id": str(cycle_id)}
+            )
 
     async def _create_issue_tx(
         self,
@@ -553,8 +565,13 @@ class IssueService:
     ) -> dict:
         assert_scope(actor, "issue:write")
         if body.priority not in ISSUE_PRIORITY_VALUES:
-            raise ValidationError("invalid priority", details={"priority": body.priority})
-        if body.estimate_unit is not None and body.estimate_unit not in ("points", "hours"):
+            raise ValidationError(
+                "invalid priority", details={"priority": body.priority}
+            )
+        if body.estimate_unit is not None and body.estimate_unit not in (
+            "points",
+            "hours",
+        ):
             raise ValidationError(
                 "invalid estimate_unit", details={"estimate_unit": body.estimate_unit}
             )
@@ -578,7 +595,9 @@ class IssueService:
                 workspace_id=workspace_id,
                 project_id=_parse_uuid(body.project_id, field="project_id"),
             )
-            await self._projects.assert_can_write(session, viewer=actor, project=project)
+            await self._projects.assert_can_write(
+                session, viewer=actor, project=project
+            )
         elif actor.role == "guest":
             raise ForbiddenError("guests cannot create issues without a project")
 
@@ -627,7 +646,9 @@ class IssueService:
             )
         cycle_id = _parse_uuid(body.cycle_id, field="cycle_id")
         if cycle_id is not None:
-            await self._validate_cycle(session, workspace_id=workspace_id, cycle_id=cycle_id)
+            await self._validate_cycle(
+                session, workspace_id=workspace_id, cycle_id=cycle_id
+            )
         parent_id = _parse_uuid(body.parent_id, field="parent_id")
         if parent_id is not None:
             parent = await self._load_issue(
@@ -781,7 +802,9 @@ class IssueService:
     ) -> dict:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            issue = await self._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
+            issue = await self._load_issue(
+                session, workspace_id=workspace_id, issue_id=issue_id
+            )
             await self.assert_can_view_issue(session, viewer=viewer, issue=issue)
             return await self.render_issue(session, issue, with_children_progress=True)
 
@@ -813,32 +836,7 @@ class IssueService:
         the outer ``Issue.workspace_id`` filter plus RLS already guarantee
         correctness — this also keeps the subqueries off cross-tenant scans.
         """
-        if role_satisfies(viewer.role, "project:manage"):
-            return None
-        if viewer.role == "guest":
-            granted = select(MemberProjectAccess.project_id).where(
-                MemberProjectAccess.member_id == viewer.id,
-                MemberProjectAccess.workspace_id == workspace_id,
-            )
-            return or_(
-                Issue.project_id.in_(granted),
-                Issue.assignee_id == viewer.id,
-                Issue.reporter_id == viewer.id,
-            )
-        member_projects = select(ProjectMember.project_id).where(
-            ProjectMember.member_id == viewer.id,
-            ProjectMember.workspace_id == workspace_id,
-        )
-        visible_projects = select(Project.id).where(
-            Project.workspace_id == workspace_id,
-            Project.visibility == "public",
-            Project.deleted_at.is_(None),
-        )
-        return or_(
-            Issue.project_id.is_(None),
-            Issue.project_id.in_(member_projects),
-            Issue.project_id.in_(visible_projects),
-        )
+        return issue_visibility_clause(viewer, workspace_id)
 
     async def list_issues(
         self,
@@ -875,20 +873,39 @@ class IssueService:
                     details={"group_by": group_by},
                 )
             if group_by not in GROUP_FIELDS:
-                raise ValidationError("invalid group_by", details={"group_by": group_by})
+                raise ValidationError(
+                    "invalid group_by", details={"group_by": group_by}
+                )
         if priority is not None and priority not in ISSUE_PRIORITY_VALUES:
             raise ValidationError("invalid priority", details={"priority": priority})
         if state_category is not None and state_category not in (
-            "backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"
+            "backlog",
+            "todo",
+            "in_progress",
+            "in_review",
+            "blocked",
+            "done",
+            "cancelled",
         ):
-            raise ValidationError("invalid state_category", details={"state_category": state_category})
+            raise ValidationError(
+                "invalid state_category", details={"state_category": state_category}
+            )
 
         flat_conditions = sum(
             1
             for value in (
-                status_id, state_category, priority, assignee_id, reporter_id,
-                project_id, cycle_id, milestone_id, parent_id, due_before,
-                due_after, q,
+                status_id,
+                state_category,
+                priority,
+                assignee_id,
+                reporter_id,
+                project_id,
+                cycle_id,
+                milestone_id,
+                parent_id,
+                due_before,
+                due_after,
+                q,
             )
             if value is not None
         )
@@ -1054,7 +1071,9 @@ class IssueService:
                     func.row(sort_column, Issue.id)
                     < func.row(position.sort_value, position.id)
                 )
-        rows = list((await session.execute(ordered.limit(page_limit + 1))).scalars().all())
+        rows = list(
+            (await session.execute(ordered.limit(page_limit + 1))).scalars().all()
+        )
         next_cursor = None
         if len(rows) > page_limit:
             rows = rows[:page_limit]
@@ -1111,12 +1130,16 @@ class IssueService:
         counts: dict[str, int] = {}
         count_rows = (
             await session.execute(
-                base_stmt.with_only_columns(group_column, func.count()).group_by(group_column)
+                base_stmt.with_only_columns(group_column, func.count()).group_by(
+                    group_column
+                )
             )
         ).all()
-        empty_key = {"assignee": "unassigned", "project": "no_project", "cycle": "no_cycle"}.get(
-            group_by
-        )
+        empty_key = {
+            "assignee": "unassigned",
+            "project": "no_project",
+            "cycle": "no_cycle",
+        }.get(group_by)
         for key, count in count_rows:
             counts[str(key) if key is not None else empty_key] = int(count)
 
@@ -1133,7 +1156,9 @@ class IssueService:
             )
         return {"groups": groups, "next_cursor": next_cursor}
 
-    async def _group_key_for(self, session: AsyncSession, row: Issue, group_by: str) -> str:
+    async def _group_key_for(
+        self, session: AsyncSession, row: Issue, group_by: str
+    ) -> str:
         if group_by == "assignee":
             return str(row.assignee_id) if row.assignee_id is not None else "unassigned"
         if group_by == "project":
@@ -1233,7 +1258,11 @@ class IssueService:
                 "updated_at": _isoformat(updated.updated_at),
             }
             realtime_event = await self._emit_issue_event(
-                session, issue=updated, event="issue.updated", data=payload, project=project
+                session,
+                issue=updated,
+                event="issue.updated",
+                data=payload,
+                project=project,
             )
             if "state_category" in changes or "status_id" in changes:
                 moved_payload = {
@@ -1275,7 +1304,9 @@ class IssueService:
                 actor=actor,
                 action="issue.updated",
                 resource_id=updated.id,
-                metadata={"changes": sorted(k for k in changes if not k.startswith("_"))},
+                metadata={
+                    "changes": sorted(k for k in changes if not k.startswith("_"))
+                },
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
@@ -1288,7 +1319,14 @@ class IssueService:
             # seeded subscription (I4).
             field_changed = any(
                 not key.startswith("_")
-                and key not in ("assignee_id", "status_id", "state_category", "assignee", "status")
+                and key
+                not in (
+                    "assignee_id",
+                    "status_id",
+                    "state_category",
+                    "assignee",
+                    "status",
+                )
                 for key in changes
             )
             await emit_issue_change_notifications(
@@ -1308,7 +1346,9 @@ class IssueService:
         """Display name for notification payloads (member.md §2.4 resolution)."""
         actor_user = None
         if actor.user_id is not None:
-            actor_user = await session.scalar(select(User).where(User.id == actor.user_id))
+            actor_user = await session.scalar(
+                select(User).where(User.id == actor.user_id)
+            )
         return resolve_display_name(member=actor, user=actor_user)
 
     @staticmethod
@@ -1350,7 +1390,9 @@ class IssueService:
                 IssueStatus.workspace_id == workspace_id,
             )
         )
-        allowed = [str(t) for t in (current.allowed_transitions or [])] if current else []
+        allowed = (
+            [str(t) for t in (current.allowed_transitions or [])] if current else []
+        )
         if str(target_status.id) not in allowed:
             raise ConflictError(
                 "status transition not allowed under strict mode",
@@ -1384,15 +1426,101 @@ class IssueService:
             if field not in _SILENT_ACTIVITY_FIELDS:
                 trail.append((field, _json_value(old_value), _json_value(new_value)))
 
+        review_requested = not isinstance(
+            patch.review_execution_id, _Unset
+        ) or not isinstance(patch.review_decision, _Unset)
+        if review_requested:
+            if isinstance(patch.review_execution_id, _Unset) or isinstance(
+                patch.review_decision, _Unset
+            ):
+                raise ValidationError(
+                    "execution output review requires an execution and decision",
+                    code="invalid_execution_output_review",
+                )
+            if patch.review_decision not in {"approved", "rejected"}:
+                raise ValidationError(
+                    "invalid execution output review decision",
+                    code="invalid_execution_output_review",
+                )
+            if issue.state_category != "in_review":
+                raise ConflictError(
+                    "issue is not awaiting execution output review",
+                    code="execution_output_not_reviewable",
+                )
+            latest_execution = await session.scalar(
+                select(TaskExecution)
+                .where(
+                    TaskExecution.workspace_id == issue.workspace_id,
+                    TaskExecution.issue_id == issue.id,
+                )
+                .order_by(TaskExecution.queued_at.desc(), TaskExecution.id.desc())
+                .limit(1)
+            )
+            if (
+                latest_execution is None
+                or latest_execution.id != patch.review_execution_id
+                or latest_execution.status != "completed"
+            ):
+                raise ConflictError(
+                    "execution output is stale or incomplete",
+                    code="stale_execution_output",
+                    details={"execution_id": str(patch.review_execution_id)},
+                )
+            previous_review = await session.scalar(
+                select(IssueActivity.id)
+                .where(
+                    IssueActivity.workspace_id == issue.workspace_id,
+                    IssueActivity.issue_id == issue.id,
+                    IssueActivity.field == "execution_output_review",
+                    IssueActivity.new_value["execution_id"].astext
+                    == str(patch.review_execution_id),
+                )
+                .limit(1)
+            )
+            if previous_review is not None:
+                raise ConflictError(
+                    "execution output was already reviewed",
+                    code="execution_output_already_reviewed",
+                    details={"execution_id": str(patch.review_execution_id)},
+                )
+            if patch.review_decision == "approved" and isinstance(
+                patch.status_id, _Unset
+            ):
+                raise ValidationError(
+                    "approving execution output requires a target status",
+                    code="execution_output_status_required",
+                )
+            if patch.review_decision == "rejected" and not isinstance(
+                patch.status_id, _Unset
+            ):
+                raise ValidationError(
+                    "rejecting execution output cannot close the issue",
+                    code="invalid_execution_output_review",
+                )
+            record(
+                "execution_output_review",
+                None,
+                {
+                    "execution_id": str(patch.review_execution_id),
+                    "decision": patch.review_decision,
+                },
+            )
+
         if not isinstance(patch.title, _Unset) and patch.title != issue.title:
             old = issue.title
             issue.title = patch.title
             record("title", old, patch.title)
-        if not isinstance(patch.description, _Unset) and patch.description != issue.description:
+        if (
+            not isinstance(patch.description, _Unset)
+            and patch.description != issue.description
+        ):
             old = issue.description
             issue.description = patch.description
             record("description", old, patch.description)
-        if not isinstance(patch.status_id, _Unset) and patch.status_id != issue.status_id:
+        if (
+            not isinstance(patch.status_id, _Unset)
+            and patch.status_id != issue.status_id
+        ):
             status = await resolve_status_in_scope(
                 session,
                 workspace_id=issue.workspace_id,
@@ -1409,6 +1537,15 @@ class IssueService:
                 current_status_id=issue.status_id,
                 target_status=status,
             )
+            if (
+                review_requested
+                and patch.review_decision == "approved"
+                and status.category != "done"
+            ):
+                raise ValidationError(
+                    "approving execution output must move the issue to done",
+                    code="invalid_execution_output_review",
+                )
             changes["_prev_category"] = issue.state_category
             old_status, old_category = issue.status_id, issue.state_category
             issue.status_id = status.id
@@ -1421,11 +1558,16 @@ class IssueService:
             record("state_category", old_category, status.category)
         if not isinstance(patch.priority, _Unset) and patch.priority != issue.priority:
             if patch.priority not in ISSUE_PRIORITY_VALUES:
-                raise ValidationError("invalid priority", details={"priority": patch.priority})
+                raise ValidationError(
+                    "invalid priority", details={"priority": patch.priority}
+                )
             old = issue.priority
             issue.priority = patch.priority
             record("priority", old, patch.priority)
-        if not isinstance(patch.assignee_id, _Unset) and patch.assignee_id != issue.assignee_id:
+        if (
+            not isinstance(patch.assignee_id, _Unset)
+            and patch.assignee_id != issue.assignee_id
+        ):
             if patch.assignee_id is not None:
                 await self._validate_member_ref(
                     session,
@@ -1439,7 +1581,10 @@ class IssueService:
             old = issue.assignee_id
             issue.assignee_id = patch.assignee_id
             record("assignee_id", old, patch.assignee_id)
-        if not isinstance(patch.reporter_id, _Unset) and patch.reporter_id != issue.reporter_id:
+        if (
+            not isinstance(patch.reporter_id, _Unset)
+            and patch.reporter_id != issue.reporter_id
+        ):
             if patch.reporter_id is not None:
                 await self._validate_member_ref(
                     session,
@@ -1457,32 +1602,54 @@ class IssueService:
         if not isinstance(patch.estimate_unit, _Unset) and (
             patch.estimate_unit != issue.estimate_unit
         ):
-            if patch.estimate_unit is not None and patch.estimate_unit not in ("points", "hours"):
+            if patch.estimate_unit is not None and patch.estimate_unit not in (
+                "points",
+                "hours",
+            ):
                 raise ValidationError(
-                    "invalid estimate_unit", details={"estimate_unit": patch.estimate_unit}
+                    "invalid estimate_unit",
+                    details={"estimate_unit": patch.estimate_unit},
                 )
             old = issue.estimate_unit
             issue.estimate_unit = patch.estimate_unit
             record("estimate_unit", old, patch.estimate_unit)
         if not isinstance(patch.due_date, _Unset) and patch.due_date != issue.due_date:
             next_start = (
-                patch.start_date if not isinstance(patch.start_date, _Unset) else issue.start_date
+                patch.start_date
+                if not isinstance(patch.start_date, _Unset)
+                else issue.start_date
             )
-            if patch.due_date is not None and next_start is not None and patch.due_date < next_start:
+            if (
+                patch.due_date is not None
+                and next_start is not None
+                and patch.due_date < next_start
+            ):
                 raise ValidationError("due_date must not be earlier than start_date")
             old = issue.due_date
             issue.due_date = patch.due_date
             record("due_date", old, patch.due_date)
-        if not isinstance(patch.start_date, _Unset) and patch.start_date != issue.start_date:
+        if (
+            not isinstance(patch.start_date, _Unset)
+            and patch.start_date != issue.start_date
+        ):
             next_due = (
-                patch.due_date if not isinstance(patch.due_date, _Unset) else issue.due_date
+                patch.due_date
+                if not isinstance(patch.due_date, _Unset)
+                else issue.due_date
             )
-            if next_due is not None and patch.start_date is not None and next_due < patch.start_date:
+            if (
+                next_due is not None
+                and patch.start_date is not None
+                and next_due < patch.start_date
+            ):
                 raise ValidationError("due_date must not be earlier than start_date")
             old = issue.start_date
             issue.start_date = patch.start_date
             record("start_date", old, patch.start_date)
-        if not isinstance(patch.milestone_id, _Unset) and patch.milestone_id != issue.milestone_id:
+        if (
+            not isinstance(patch.milestone_id, _Unset)
+            and patch.milestone_id != issue.milestone_id
+        ):
             if patch.milestone_id is not None:
                 await self._validate_milestone(
                     session,
@@ -1501,7 +1668,10 @@ class IssueService:
             old = issue.cycle_id
             issue.cycle_id = patch.cycle_id
             record("cycle_id", old, patch.cycle_id)
-        if not isinstance(patch.parent_id, _Unset) and patch.parent_id != issue.parent_id:
+        if (
+            not isinstance(patch.parent_id, _Unset)
+            and patch.parent_id != issue.parent_id
+        ):
             if patch.parent_id is not None:
                 parent = await self._load_issue(
                     session, workspace_id=issue.workspace_id, issue_id=patch.parent_id
@@ -1578,7 +1748,9 @@ class IssueService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            issue = await self._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
+            issue = await self._load_issue(
+                session, workspace_id=workspace_id, issue_id=issue_id
+            )
             await self.assert_can_write_issue(session, actor=actor, issue=issue)
             project = await self._project_of(session, issue)
             # Soft delete: the identifier stays permanently reserved — the
@@ -1617,7 +1789,9 @@ class IssueService:
         page_limit = _limit_page(limit)
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            parent = await self._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
+            parent = await self._load_issue(
+                session, workspace_id=workspace_id, issue_id=issue_id
+            )
             await self.assert_can_view_issue(session, viewer=viewer, issue=parent)
             stmt = (
                 select(Issue)
@@ -1634,7 +1808,9 @@ class IssueService:
                     func.row(Issue.created_at, Issue.id)
                     > func.row(position.sort_value, position.id)
                 )
-            rows = list((await session.execute(stmt.limit(page_limit + 1))).scalars().all())
+            rows = list(
+                (await session.execute(stmt.limit(page_limit + 1))).scalars().all()
+            )
             next_cursor = None
             if len(rows) > page_limit:
                 rows = rows[:page_limit]
@@ -1655,7 +1831,9 @@ class IssueService:
         page_limit = _limit_page(limit)
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            issue = await self._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
+            issue = await self._load_issue(
+                session, workspace_id=workspace_id, issue_id=issue_id
+            )
             await self.assert_can_view_issue(session, viewer=viewer, issue=issue)
             stmt = (
                 select(IssueActivity)
@@ -1671,7 +1849,9 @@ class IssueService:
                     func.row(IssueActivity.created_at, IssueActivity.id)
                     < func.row(position.sort_value, position.id)
                 )
-            rows = list((await session.execute(stmt.limit(page_limit + 1))).scalars().all())
+            rows = list(
+                (await session.execute(stmt.limit(page_limit + 1))).scalars().all()
+            )
             next_cursor = None
             if len(rows) > page_limit:
                 rows = rows[:page_limit]
@@ -1712,7 +1892,9 @@ class IssueService:
         Emits the same events/trail as the route-level update; returns
         (rendered, changes).
         """
-        updated, changes = await self._apply_patch_tx(session, actor=actor, issue=issue, patch=patch)
+        updated, changes = await self._apply_patch_tx(
+            session, actor=actor, issue=issue, patch=patch
+        )
         if not changes:
             return await self.render_issue(session, updated), {}
         rendered = await self.render_issue(session, updated)

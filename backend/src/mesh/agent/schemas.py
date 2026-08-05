@@ -94,7 +94,7 @@ class TransferRequest(BaseModel):
     new_owner_user_id: str
 
 
-AGENT_LIFECYCLE_FILTERS = ("all", *AGENT_LIFECYCLE_VALUES)
+AGENT_LIFECYCLE_FILTERS = ("default", "all", *AGENT_LIFECYCLE_VALUES)
 AGENT_VISIBILITY_FILTERS = ("all", *AGENT_VISIBILITY_VALUES)
 
 __all__ = [

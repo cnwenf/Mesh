@@ -494,7 +494,7 @@ async def test_distill_to_comment_triggers_execution_e2e(env, relay, owner_facto
     )
     assert comment_resp.status_code == 201, comment_resp.text
     comment = comment_resp.json()["data"]
-    assert len(comment["triggered_execution_ids"]) == 1
+    assert comment["triggered_execution_ids"] == []
     await _drain(relay)
     async with owner_factory() as dbs:
         mention = (
@@ -513,8 +513,9 @@ async def test_distill_to_comment_triggers_execution_e2e(env, relay, owner_facto
             )
         ).scalars().all()
     assert len(mention) == 1
-    assert mention[0].triggered_execution_id is not None
     assert len(execution) == 1
+    assert mention[0].triggered_execution_id == execution[0].id
+    assert mention[0].pending_trigger_event_id is None
     assert execution[0].status == "queued"  # no runtime claims it in e2e
 
 

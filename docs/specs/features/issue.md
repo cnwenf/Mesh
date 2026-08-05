@@ -774,6 +774,7 @@ Issue 详情(全屏或右侧抽屉)
 - **子 issue 区**:树状展示,父显示完成进度(如"3/5");支持就地新增子任务。
 - **依赖区**:列出 blocks / blocked_by,点击跳转;阻塞项未完成时给出视觉提示("还差 2 个前置")。
 - **批量操作工具条**:勾选后浮出底栏(改状态/优先级/assignee/标签/删除/取消选),提交后展示成功/失败计数。
+- **执行反查与产出评审**：详情内执行列表按服务端 newest-first 游标持续加载，所有历史 execution 均可达。仅最新 execution 为 `completed` 且 issue 为 `in_review` 时显示「批准产物/要求修改」；PATCH 必须同时携带 `review_execution_id` 与 `review_decision`，服务端锁 issue 后再次确认它仍是最新完成运行并写入 `issue_activity.execution_output_review`。批准必须同时流转到 `done`；拒绝只记录决定并引导填写反馈，不伪造状态迁移。
 
 issue 列表、快速创建与详情遵循 design-quality.md §11 的 Mesh 适配层边界：搜索/排序、选择、标题/描述、依赖目标、属性编辑、批量动作、评论与附件反馈统一复用共享设计组件；feature 不直接依赖底层组件库。迁移不得改变 `/w/:workspaceSlug/issues...` 深链、URL 筛选/排序参数、API/Realtime 数据流、乐观更新、权限或键盘语义。列表、状态、名册、快速创建、Realtime 频道与行内深链只使用路由下 `WorkspaceProvider` 的当前工作区；有 slug 时严禁回退 `memberships[0]`。Realtime 列表只接收当前工作区频道且载荷 `workspace_id` 必须一致；切换工作区后的旧列表、分页成功或失败写回必须丢弃。
 
@@ -886,6 +887,7 @@ issue 列表、快速创建与详情遵循 design-quality.md §11 的 Mesh 适�
 - [ ] 自定义字段可作为过滤/分组/排序条件(经 label-property.md 值表)。
 - [ ] 每次成功 PATCH 写入 `issue_activity` diff(field/old/new/actor)。
 - [ ] 乐观并发:携带过期 `version` 的更新返回 409 `conflict`。
+- [ ] 产出评审精确绑定最新 `completed` execution 并追加审计；旧运行、较新运行存在、非 `in_review`、重复决定均返回 409，拒绝不会把 issue 误置为 done；执行反查面板可沿 `next_cursor` 访问全部运行。
 
 ### 5.7 功能性 —— 跨项目迁移(R2,README §9 T22)
 

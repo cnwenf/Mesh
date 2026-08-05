@@ -17,6 +17,7 @@ import {
   getComment,
   issueChannel,
   listComments,
+  listReplies,
   removeReaction as removeReactionApi,
   reopenThread,
   resolveThread,
@@ -30,6 +31,7 @@ import {
   executionChannel,
 } from './realtime';
 import type { ExecutionPlaceholder } from './realtime';
+import { isComment } from './types';
 import type { Comment, CommentMemberRef, ReactionSummary } from './types';
 import { UNDO_WINDOW_MS, useDeferredDelete } from './useDeferredDelete';
 
@@ -64,7 +66,7 @@ export function patchCommentById(
 /**
  * 纯函数:按 id 从顶层列表(含内嵌 preview_replies)中移除一条评论。
  * 顶层命中 → 直接过滤;嵌套命中 → 从所属线程根 preview_replies 移除并递减 reply_count。
- * 未命中原样返回(同引用)。用于延迟删除的乐观隐藏(§9.5.5),撤销经快照整体恢复。
+ * 未命中原样返回(同引用)。保留为列表归并工具；删除状态机本身使用 tombstone。
  */
 export function removeCommentById(comments: readonly Comment[], id: string): Comment[] {
   if (comments.some((comment) => comment.id === id)) {
@@ -121,6 +123,86 @@ function localId(): string {
   return LOCAL_ID_PREFIX + uuidv4();
 }
 
+function mergeServerSnapshot(current: Comment, incoming: Comment): Comment {
+  const newer =
+    current.id === incoming.id && incoming.updated_at < current.updated_at ? current : incoming;
+  return {
+    ...current,
+    ...newer,
+    id: incoming.id,
+    reply_count: incoming.reply_count ?? current.reply_count,
+    preview_replies: incoming.preview_replies ?? current.preview_replies,
+    delivery_state: 'sent',
+    client_request_id: undefined,
+    suppress_triggers: undefined,
+  };
+}
+
+function reconcileTopLevel(
+  comments: readonly Comment[],
+  optimisticId: string,
+  incoming: Comment,
+): Comment[] {
+  const serverCopy = comments.find((comment) => comment.id === incoming.id);
+  const optimistic = comments.find((comment) => comment.id === optimisticId);
+  const canonical = mergeServerSnapshot(serverCopy ?? optimistic ?? incoming, incoming);
+  const next: Comment[] = [];
+  let inserted = false;
+  for (const comment of comments) {
+    if (comment.id === optimisticId || comment.id === incoming.id) {
+      if (!inserted) {
+        next.push(canonical);
+        inserted = true;
+      }
+    } else {
+      next.push(comment);
+    }
+  }
+  if (!inserted) next.push(canonical);
+  return next;
+}
+
+function reconcileReply(root: Comment, optimisticId: string, incoming: Comment): Comment {
+  const replies = root.preview_replies ?? [];
+  const serverCopy = replies.find((reply) => reply.id === incoming.id);
+  const optimistic = replies.find((reply) => reply.id === optimisticId);
+  const canonical = mergeServerSnapshot(serverCopy ?? optimistic ?? incoming, incoming);
+  const next: Comment[] = [];
+  let inserted = false;
+  let matched = 0;
+  for (const reply of replies) {
+    if (reply.id === optimisticId || reply.id === incoming.id) {
+      matched += 1;
+      if (!inserted) {
+        next.push(canonical);
+        inserted = true;
+      }
+    } else {
+      next.push(reply);
+    }
+  }
+  if (!inserted) next.push(canonical);
+  return {
+    ...root,
+    preview_replies: next,
+    reply_count: Math.max(next.length, root.reply_count - Math.max(0, matched - 1)),
+  };
+}
+
+function failedSubmissionMatches(
+  comment: Comment,
+  body: string,
+  parentId: string | null,
+  suppressTriggers: boolean,
+): boolean {
+  return (
+    comment.delivery_state === 'failed' &&
+    comment.body_markdown === body &&
+    comment.parent_id === parentId &&
+    comment.suppress_triggers === suppressTriggers
+  );
+}
+
 export interface SubmitOptions {
   readonly suppressTriggers: boolean;
 }
@@ -135,9 +217,14 @@ export interface UseCommentsData {
   readonly reload: () => void;
   readonly createTopLevel: (body: string, opts: SubmitOptions) => Promise<Comment>;
   readonly createReply: (parent: Comment, body: string, opts: SubmitOptions) => Promise<Comment>;
+  readonly retrySend: (comment: Comment) => Promise<Comment>;
+  /** 深链目标不在首屏时按单条/线程回补，供视图展开并定位。 */
+  readonly locateComment: (commentId: string) => Promise<void>;
+  /** 将完整回复列表并入线程实体；之后 WS patch 与页面读取共享同一状态源。 */
+  readonly loadReplies: (root: Comment) => Promise<void>;
   readonly toggleReaction: (comment: Comment, emoji: string) => Promise<void>;
   readonly setResolved: (comment: Comment, resolved: boolean) => Promise<void>;
-  /** 延迟删除(§9.5.5):乐观隐藏 + 撤销 toast;窗口到期才真正调用 DELETE。 */
+  /** 延迟删除(§9.5.5):乐观 tombstone + 撤销 toast;窗口到期才真正调用 DELETE。 */
   readonly remove: (comment: Comment) => void;
   /** 编辑评论(If-Match: updated_at 乐观锁;409 conflict 抛给调用方提示)。 */
   readonly saveEdit: (comment: Comment, bodyMarkdown: string) => Promise<Comment>;
@@ -156,7 +243,11 @@ export function useCommentsData(
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  // 延迟删除快照:乐观隐藏前的完整列表,撤销/失败时整体恢复。
+  const commentsRef = useRef<readonly Comment[]>(comments);
+  commentsRef.current = comments;
+  const pendingRequestIdsRef = useRef<Set<string>>(new Set());
+  const realtimeCommitsRef = useRef<Map<string, Comment>>(new Map());
+  // 延迟删除快照:乐观 tombstone 前的完整列表,撤销/失败时整体恢复。
   const deleteSnapshotRef = useRef<readonly Comment[] | null>(null);
 
   useEffect(() => {
@@ -165,7 +256,11 @@ export function useCommentsData(
     setError(null);
     void (async () => {
       try {
-        const page = await listComments(client, issueId, { include: 'replies', order: 'asc', limit: 50 });
+        const page = await listComments(client, issueId, {
+          include: 'replies',
+          order: 'asc',
+          limit: 50,
+        });
         if (cancelled) return;
         setComments([...page.data]);
       } catch (err: unknown) {
@@ -187,8 +282,23 @@ export function useCommentsData(
     realtime.client.subscribe(channel);
     const off = realtime.client.onFrame((frame) => {
       if (frame.channel !== channel) return;
+      if (frame.event === 'comment.created') {
+        const nested = frame.payload.comment;
+        const candidate = isComment(nested) ? nested : frame.payload;
+        if (
+          isComment(candidate) &&
+          typeof candidate.client_request_id === 'string' &&
+          pendingRequestIdsRef.current.has(candidate.client_request_id)
+        ) {
+          // Record before scheduling React state so an immediately lost HTTP
+          // response can still resolve from the already-committed WS entity.
+          realtimeCommitsRef.current.set(candidate.client_request_id, candidate);
+        }
+      }
       setComments((prev) => applyCommentsFrame(prev, frame));
-      setPlaceholders((prev) => clearPlaceholdersForAgentComment(applyExecutionFrame(prev, frame), frame));
+      setPlaceholders((prev) =>
+        clearPlaceholdersForAgentComment(applyExecutionFrame(prev, frame), frame),
+      );
     });
     return () => {
       off();
@@ -232,10 +342,13 @@ export function useCommentsData(
         // 移除失败占位;新执行的 queued 帧会追加新占位。
         setPlaceholders((prev) => prev.filter((item) => item.execution_id !== executionId));
       } catch (err: unknown) {
-        toast.addToast(t(err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError'), {
-          tone: 'danger',
-          closeLabel: t('common.close'),
-        });
+        toast.addToast(
+          t(err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError'),
+          {
+            tone: 'danger',
+            closeLabel: t('common.close'),
+          },
+        );
       }
     },
     [client, issueId, toast, t],
@@ -244,7 +357,12 @@ export function useCommentsData(
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
   const buildOptimistic = useCallback(
-    (body: string, parentId: string | null, threadRootId: string | null): Comment => {
+    (
+      body: string,
+      parentId: string | null,
+      threadRootId: string | null,
+      opts: SubmitOptions,
+    ): Comment => {
       const now = new Date().toISOString();
       return {
         id: localId(),
@@ -266,34 +384,133 @@ export function useCommentsData(
         created_at: now,
         updated_at: now,
         edited_at: null,
+        delivery_state: 'sending',
+        client_request_id: uuidv4(),
+        suppress_triggers: opts.suppressTriggers,
       };
     },
     [currentMember, issueId],
   );
 
-  const createTopLevel = useCallback(
-    async (body: string, opts: SubmitOptions): Promise<Comment> => {
-      const optimistic = buildOptimistic(body, null, null);
-      setComments((prev) => [...prev, optimistic]);
+  const sendTopLevel = useCallback(
+    async (optimistic: Comment): Promise<Comment> => {
+      const requestId = optimistic.client_request_id;
+      if (typeof requestId === 'string') pendingRequestIdsRef.current.add(requestId);
+      setComments((prev) =>
+        patchCommentById(prev, optimistic.id, (target) => ({
+          ...target,
+          delivery_state: 'sending',
+        })),
+      );
       try {
-        const created = await createComment(client, issueId, {
-          body_markdown: body,
-          suppress_triggers: opts.suppressTriggers,
-        });
-        setComments((prev) => prev.map((comment) => (comment.id === optimistic.id ? created : comment)));
+        const created = await createComment(
+          client,
+          issueId,
+          {
+            body_markdown: optimistic.body_markdown,
+            suppress_triggers: optimistic.suppress_triggers ?? false,
+          },
+          requestId ?? undefined,
+        );
+        if (typeof requestId === 'string') {
+          pendingRequestIdsRef.current.delete(requestId);
+          realtimeCommitsRef.current.delete(requestId);
+        }
+        setComments((prev) => reconcileTopLevel(prev, optimistic.id, created));
         return created;
       } catch (err) {
-        setComments((prev) => prev.filter((comment) => comment.id !== optimistic.id));
+        const committed =
+          typeof requestId === 'string' ? realtimeCommitsRef.current.get(requestId) : undefined;
+        if (typeof requestId === 'string') {
+          pendingRequestIdsRef.current.delete(requestId);
+          realtimeCommitsRef.current.delete(requestId);
+        }
+        if (committed !== undefined) return committed;
+        setComments((prev) =>
+          patchCommentById(prev, optimistic.id, (target) => ({
+            ...target,
+            delivery_state: 'failed',
+          })),
+        );
         throw err;
       }
     },
-    [buildOptimistic, client, issueId],
+    [client, issueId],
+  );
+
+  const createTopLevel = useCallback(
+    async (body: string, opts: SubmitOptions): Promise<Comment> => {
+      const failed = commentsRef.current.find((comment) =>
+        failedSubmissionMatches(comment, body, null, opts.suppressTriggers),
+      );
+      if (failed !== undefined) return sendTopLevel(failed);
+
+      const optimistic = buildOptimistic(body, null, null, opts);
+      setComments((prev) => [...prev, optimistic]);
+      return sendTopLevel(optimistic);
+    },
+    [buildOptimistic, sendTopLevel],
+  );
+
+  const sendReply = useCallback(
+    async (rootId: string, optimistic: Comment): Promise<Comment> => {
+      const requestId = optimistic.client_request_id;
+      if (typeof requestId === 'string') pendingRequestIdsRef.current.add(requestId);
+      setComments((prev) =>
+        patchCommentById(prev, optimistic.id, (target) => ({
+          ...target,
+          delivery_state: 'sending',
+        })),
+      );
+      try {
+        const created = await createComment(
+          client,
+          issueId,
+          {
+            body_markdown: optimistic.body_markdown,
+            parent_id: rootId,
+            suppress_triggers: optimistic.suppress_triggers ?? false,
+          },
+          requestId ?? undefined,
+        );
+        if (typeof requestId === 'string') {
+          pendingRequestIdsRef.current.delete(requestId);
+          realtimeCommitsRef.current.delete(requestId);
+        }
+        setComments((prev) =>
+          patchCommentById(prev, rootId, (root) => reconcileReply(root, optimistic.id, created)),
+        );
+        return created;
+      } catch (err) {
+        const committed =
+          typeof requestId === 'string' ? realtimeCommitsRef.current.get(requestId) : undefined;
+        if (typeof requestId === 'string') {
+          pendingRequestIdsRef.current.delete(requestId);
+          realtimeCommitsRef.current.delete(requestId);
+        }
+        if (committed !== undefined) return committed;
+        setComments((prev) =>
+          patchCommentById(prev, optimistic.id, (target) => ({
+            ...target,
+            delivery_state: 'failed',
+          })),
+        );
+        throw err;
+      }
+    },
+    [client, issueId],
   );
 
   const createReply = useCallback(
     async (parent: Comment, body: string, opts: SubmitOptions): Promise<Comment> => {
       const rootId = parent.thread_root_id ?? parent.id;
-      const optimistic = buildOptimistic(body, parent.id === rootId ? parent.id : rootId, rootId);
+      const root = commentsRef.current.find((comment) => comment.id === rootId);
+      const failed = root?.preview_replies?.find((reply) =>
+        failedSubmissionMatches(reply, body, rootId, opts.suppressTriggers),
+      );
+      if (failed !== undefined) return sendReply(rootId, failed);
+
+      const optimistic = buildOptimistic(body, rootId, rootId, opts);
       setComments((prev) =>
         patchCommentById(prev, rootId, (root) => ({
           ...root,
@@ -301,33 +518,99 @@ export function useCommentsData(
           reply_count: root.reply_count + 1,
         })),
       );
-      try {
-        const created = await createComment(client, issueId, {
-          body_markdown: body,
-          parent_id: rootId,
-          suppress_triggers: opts.suppressTriggers,
-        });
-        setComments((prev) =>
-          patchCommentById(prev, rootId, (root) => ({
-            ...root,
-            preview_replies: (root.preview_replies ?? []).map((reply) =>
-              reply.id === optimistic.id ? created : reply,
-            ),
-          })),
-        );
-        return created;
-      } catch (err) {
-        setComments((prev) =>
-          patchCommentById(prev, rootId, (root) => ({
-            ...root,
-            preview_replies: (root.preview_replies ?? []).filter((reply) => reply.id !== optimistic.id),
-            reply_count: Math.max(0, root.reply_count - 1),
-          })),
-        );
-        throw err;
-      }
+      return sendReply(rootId, optimistic);
     },
-    [buildOptimistic, client, issueId],
+    [buildOptimistic, sendReply],
+  );
+
+  const retrySend = useCallback(
+    async (comment: Comment): Promise<Comment> => {
+      if (comment.delivery_state !== 'failed') return comment;
+      const retryable =
+        comment.client_request_id == null ? { ...comment, client_request_id: uuidv4() } : comment;
+      const rootId = retryable.thread_root_id ?? retryable.parent_id;
+      return rootId === null ? sendTopLevel(retryable) : sendReply(rootId, retryable);
+    },
+    [sendReply, sendTopLevel],
+  );
+
+  const loadReplies = useCallback(
+    async (root: Comment): Promise<void> => {
+      const fetched: Comment[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await listReplies(client, root.id, { limit: 200, cursor });
+        fetched.push(...page.data);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+
+      setComments((prev) =>
+        patchCommentById(prev, root.id, (currentRoot) => {
+          const currentReplies = currentRoot.preview_replies ?? [];
+          const currentById = new Map(currentReplies.map((reply) => [reply.id, reply]));
+          const merged = fetched.map((reply) => {
+            const current = currentById.get(reply.id);
+            currentById.delete(reply.id);
+            return current === undefined ? reply : mergeServerSnapshot(current, reply);
+          });
+          merged.push(...currentById.values());
+          return {
+            ...currentRoot,
+            preview_replies: merged,
+            reply_count: Math.max(currentRoot.reply_count, merged.length),
+          };
+        }),
+      );
+    },
+    [client],
+  );
+
+  const locateComment = useCallback(
+    async (commentId: string): Promise<void> => {
+      for (const comment of commentsRef.current) {
+        if (
+          comment.id === commentId ||
+          comment.preview_replies?.some((reply) => reply.id === commentId) === true
+        ) {
+          return;
+        }
+      }
+
+      const target = await getComment(client, commentId);
+      if (target.issue_id !== issueId) return;
+      const rootId = target.thread_root_id ?? target.parent_id;
+      if (rootId === null) {
+        setComments((prev) =>
+          prev.some((comment) => comment.id === target.id) ? prev : [...prev, target],
+        );
+        return;
+      }
+
+      const root = await getComment(client, rootId);
+      if (root.issue_id !== issueId) return;
+      const replies: Comment[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await listReplies(client, root.id, { limit: 200, cursor });
+        replies.push(...page.data);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      if (!replies.some((reply) => reply.id === target.id)) replies.push(target);
+
+      setComments((prev) => {
+        const hydratedRoot: Comment = {
+          ...root,
+          preview_replies: replies,
+          reply_count: Math.max(root.reply_count, replies.length),
+        };
+        const index = prev.findIndex((comment) => comment.id === root.id);
+        if (index === -1) return [...prev, hydratedRoot];
+        return prev.map((comment, current) =>
+          current === index ? mergeServerSnapshot(comment, hydratedRoot) : comment,
+        );
+      });
+    },
+    [client, issueId],
   );
 
   const toggleReaction = useCallback(
@@ -355,8 +638,12 @@ export function useCommentsData(
     async (comment: Comment, resolved: boolean): Promise<void> => {
       const snapshot = comments;
       try {
-        const updated = resolved ? await resolveThread(client, comment.id) : await reopenThread(client, comment.id);
-        setComments((prev) => patchCommentById(prev, comment.id, () => updated));
+        const updated = resolved
+          ? await resolveThread(client, comment.id)
+          : await reopenThread(client, comment.id);
+        setComments((prev) =>
+          patchCommentById(prev, comment.id, (current) => mergeServerSnapshot(current, updated)),
+        );
       } catch {
         setComments(snapshot);
       }
@@ -385,7 +672,17 @@ export function useCommentsData(
       // 双重删除守卫:已有一条待删除则忽略。
       if (pendingDelete !== null) return;
       deleteSnapshotRef.current = comments;
-      setComments((prev) => removeCommentById(prev, comment.id));
+      const deletedAt = new Date().toISOString();
+      setComments((prev) =>
+        patchCommentById(prev, comment.id, (target) => ({
+          ...target,
+          body_markdown: '',
+          body_html: '',
+          body_text: '',
+          deleted_at: deletedAt,
+          updated_at: deletedAt,
+        })),
+      );
       requestDelete(comment);
       // 撤销 toast:与撤销窗口等长,action 在窗口内可恢复。
       toast.addToast(t('comments.deletedToast'), {
@@ -423,6 +720,9 @@ export function useCommentsData(
     reload,
     createTopLevel,
     createReply,
+    retrySend,
+    locateComment,
+    loadReplies,
     toggleReaction,
     setResolved,
     remove,

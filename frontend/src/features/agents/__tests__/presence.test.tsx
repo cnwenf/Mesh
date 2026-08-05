@@ -74,16 +74,23 @@ function makeFakeRealtime() {
 }
 
 /** 组件内消费 hook,把映射序列化为 JSON 供断言(沿用仓库「组件内测 hook」模式)。 */
-function PresenceProbe(props: { ids: readonly string[] }): React.JSX.Element {
-  const map = useAgentPresenceMap(props.ids);
+function PresenceProbe(props: {
+  ids: readonly string[];
+  initial?: ReadonlyMap<string, { running: number; queued: number; awaiting: number }>;
+}): React.JSX.Element {
+  const map = useAgentPresenceMap(props.ids, props.initial);
   return <div data-testid="presence-probe">{JSON.stringify([...map.entries()])}</div>;
 }
 
-function renderWithRealtime(realtime: unknown, ids: readonly string[]) {
+function renderWithRealtime(
+  realtime: unknown,
+  ids: readonly string[],
+  initial?: ReadonlyMap<string, { running: number; queued: number; awaiting: number }>,
+) {
   return renderWithProviders(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试替身,非生产形状
     <RealtimeContext.Provider value={realtime as any}>
-      <PresenceProbe ids={ids} />
+      <PresenceProbe ids={ids} initial={initial} />
     </RealtimeContext.Provider>,
   );
 }
@@ -92,6 +99,27 @@ describe('useAgentPresenceMap', () => {
   it('shell 外(realtime 为 null)→ 恒空映射', () => {
     renderWithProviders(<PresenceProbe ids={['agt-1']} />);
     expect(screen.getByTestId('presence-probe').textContent).toBe('[]');
+  });
+
+  it('REST 初始快照立即可用,实时绝对帧随后整体覆盖', async () => {
+    const rt = makeFakeRealtime();
+    const initial = new Map([['agt-1', { running: 4, queued: 5, awaiting: 6 }]]);
+    renderWithRealtime(rt, ['agt-1'], initial);
+    expect(screen.getByTestId('presence-probe').textContent).toBe(
+      JSON.stringify([['agt-1', { running: 4, queued: 5, awaiting: 6 }]]),
+    );
+
+    act(() => {
+      rt.emit({
+        channel: 'agent:agt-1:presence',
+        payload: { running: 1, queued: 2, awaiting_approval: 3 },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('presence-probe').textContent).toBe(
+        JSON.stringify([['agt-1', { running: 1, queued: 2, awaiting: 3 }]]),
+      ),
+    );
   });
 
   it('空 id 列表 → 空映射且不订阅', () => {
@@ -112,7 +140,10 @@ describe('useAgentPresenceMap', () => {
     const rt = makeFakeRealtime();
     renderWithRealtime(rt, ['agt-1']);
     act(() => {
-      rt.emit({ channel: 'agent:agt-1:presence', payload: { running: 1, queued: 2, awaiting_approval: 3 } });
+      rt.emit({
+        channel: 'agent:agt-1:presence',
+        payload: { running: 1, queued: 2, awaiting_approval: 3 },
+      });
     });
     await waitFor(() =>
       expect(screen.getByTestId('presence-probe').textContent).toBe(

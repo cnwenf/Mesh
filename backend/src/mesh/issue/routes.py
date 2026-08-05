@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
 from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
-from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
+from mesh.auth.rbac import (
+    WorkspaceContext,
+    require_workspace,
+    resolve_workspace_context,
+)
 from mesh.errors import NotFoundError, ValidationError
 from mesh.issue.schemas import (
     BulkRequest,
@@ -193,7 +197,9 @@ async def list_issues(
         try:
             return _date.fromisoformat(raw)
         except ValueError as exc:
-            raise ValidationError(f"invalid {field}", details={field: raw[:32]}) from exc
+            raise ValidationError(
+                f"invalid {field}", details={field: raw[:32]}
+            ) from exc
 
     result = await _issues(request).list_issues(
         viewer=context.member,
@@ -281,9 +287,18 @@ def _issue_patch_from(body: UpdateIssueRequest) -> tuple[IssuePatch, int | None]
             _body_uuid(body.milestone_id, field="milestone_id"),
             "milestone_id" in fields,
         ),
-        cycle_id=_tri(_body_uuid(body.cycle_id, field="cycle_id"), "cycle_id" in fields),
-        parent_id=_tri(_body_uuid(body.parent_id, field="parent_id"), "parent_id" in fields),
+        cycle_id=_tri(
+            _body_uuid(body.cycle_id, field="cycle_id"), "cycle_id" in fields
+        ),
+        parent_id=_tri(
+            _body_uuid(body.parent_id, field="parent_id"), "parent_id" in fields
+        ),
         position=_tri(body.position, "position" in fields),
+        review_execution_id=_tri(
+            _body_uuid(body.review_execution_id, field="review_execution_id"),
+            "review_execution_id" in fields,
+        ),
+        review_decision=_tri(body.review_decision, "review_decision" in fields),
     )
     return patch, body.version if "version" in fields else None
 
@@ -642,7 +657,9 @@ async def update_status(
         position=_tri(body.position, "position" in fields),
         category=_tri(body.category, "category" in fields),
         is_default=_tri(body.is_default, "is_default" in fields),
-        allowed_transitions=_tri(body.allowed_transitions, "allowed_transitions" in fields),
+        allowed_transitions=_tri(
+            body.allowed_transitions, "allowed_transitions" in fields
+        ),
     )
     from mesh.issue.service import _Unset
 

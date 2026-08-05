@@ -42,8 +42,9 @@ export async function createComment(
   client: MeshApiClient,
   issueId: string,
   body: CreateCommentBody,
+  idempotencyKey?: string,
 ): Promise<Comment> {
-  return client.request<Comment>('POST', issueCommentsPath(issueId), { body });
+  return client.request<Comment>('POST', issueCommentsPath(issueId), { body, idempotencyKey });
 }
 
 /** 取单条评论。 */

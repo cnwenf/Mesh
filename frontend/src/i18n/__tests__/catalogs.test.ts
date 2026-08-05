@@ -251,6 +251,7 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
 describe('ICU MessageFormat 可渲染性(§2.4)', () => {
   const dummyValues = {
     count: 3,
+    number: 3,
     minutes: 3,
     name: 'Mesh',
     date: new Date('2026-07-25T08:00:00Z'),

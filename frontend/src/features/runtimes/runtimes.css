@@ -256,6 +256,119 @@
   gap: var(--space-2);
 }
 
+.mesh-runtimes-detail__operational {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-inline-start-width: var(--space-1);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.mesh-runtimes-detail__operational--online {
+  border-inline-start-color: var(--color-success);
+}
+
+.mesh-runtimes-detail__operational--degraded,
+.mesh-runtimes-detail__operational--paused {
+  border-inline-start-color: var(--color-warn);
+}
+
+.mesh-runtimes-detail__operational--isolated {
+  border-inline-start-color: var(--color-danger);
+}
+
+.mesh-runtimes-detail__operational-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.mesh-runtimes-detail__operational h2,
+.mesh-runtimes-detail__operational h3,
+.mesh-runtimes-detail__operational p {
+  margin: 0;
+}
+
+.mesh-runtimes-detail__operational h2 {
+  color: var(--color-text-strong);
+  font-size: var(--font-size-md);
+}
+
+.mesh-runtimes-detail__operational h3 {
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  text-transform: capitalize;
+}
+
+.mesh-runtimes-detail__operational p {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-runtimes-detail__diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--space-2);
+}
+
+.mesh-runtimes-detail__diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.mesh-runtimes-detail__diagnostic dl {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-runtimes-detail__diagnostic dt {
+  color: var(--color-text-muted);
+}
+
+.mesh-runtimes-detail__diagnostic dd {
+  margin: 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.mesh-runtimes-detail__repair,
+.mesh-runtimes-detail__isolation-actions,
+.mesh-runtimes-detail__isolation-actions > div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mesh-runtimes-detail__repair code,
+.mesh-runtimes-detail__isolation-actions code {
+  flex: 1 1 20rem;
+  min-inline-size: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.mesh-runtimes-detail__isolation-actions {
+  align-items: stretch;
+  flex-direction: column;
+}
+
 .mesh-runtimes-detail__meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
@@ -652,6 +765,155 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.mesh-executions__audit-summary,
+.mesh-executions__audit-attempts,
+.mesh-executions__approval-audits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-executions__audit-summary h2,
+.mesh-executions__audit-attempts h2,
+.mesh-executions__approval-audits h2,
+.mesh-executions__audit-card h3,
+.mesh-executions__approval-card h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+}
+
+.mesh-executions__audit-summary h2,
+.mesh-executions__audit-attempts h2,
+.mesh-executions__approval-audits h2 {
+  font-size: var(--font-size-md);
+}
+
+.mesh-executions__audit-card h3,
+.mesh-executions__approval-card h3 {
+  font-size: var(--font-size-sm);
+}
+
+.mesh-executions__audit-summary dl,
+.mesh-executions__audit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(7rem, 1fr));
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.mesh-executions__audit-summary dt,
+.mesh-executions__audit-grid dt,
+.mesh-executions__approval-step dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-executions__audit-summary dd,
+.mesh-executions__audit-grid dd,
+.mesh-executions__approval-step dd {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.mesh-executions__audit-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.mesh-executions__audit-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.mesh-executions__audit-redaction {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-executions__audit-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+.mesh-executions__audit-timeline li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-executions__audit-timeline code {
+  color: var(--color-text-strong);
+}
+
+.mesh-executions__approval-card {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.mesh-executions__approval-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-executions__approval-step dl,
+.mesh-executions__approval-step dl > div {
+  display: grid;
+  grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+}
+
+.mesh-executions__approval-arrow {
+  align-self: center;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 1023px) {
+  .mesh-executions__audit-summary dl,
+  .mesh-executions__audit-grid {
+    grid-template-columns: repeat(2, minmax(7rem, 1fr));
+  }
+
+  .mesh-executions__approval-card {
+    grid-template-columns: 1fr;
+  }
+
+  .mesh-executions__approval-arrow {
+    transform: rotate(90deg);
+    justify-self: center;
+  }
 }
 
 .mesh-executions__log-toolbar {

@@ -94,6 +94,21 @@ describe('endpoint surface', () => {
     expect(headers['If-Match']).toBe('2026-07-01T00:00:00Z');
   });
 
+  it('binds an output review decision to its execution', async () => {
+    await updateIssue(client, 'iss-1', {
+      status_id: 'done-1',
+      review_execution_id: 'exec-1',
+      review_decision: 'approved',
+      version: 4,
+    });
+    expect(JSON.parse(String(stub.calls[0].init?.body))).toEqual({
+      status_id: 'done-1',
+      review_execution_id: 'exec-1',
+      review_decision: 'approved',
+      version: 4,
+    });
+  });
+
   it('children / activity / dependencies paths', async () => {
     await listChildren(client, 'iss-1');
     await listActivity(client, 'iss-1');

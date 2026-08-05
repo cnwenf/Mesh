@@ -57,6 +57,7 @@ from mesh.db.models.notification import (
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.user import User
 from mesh.db.tenant import set_tenant_context
+from mesh.issue.visibility import issue_visibility_clause
 from mesh.outbox.service import emit_event, emit_realtime
 
 logger = logging.getLogger("mesh.comment_inbox.notifications")
@@ -451,6 +452,40 @@ async def _human_active_members(
     return list(rows)
 
 
+async def _issue_visible_members(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    issue_id: uuid.UUID | None,
+    members: list[Member],
+) -> list[Member]:
+    """Re-check current issue ACL immediately before inbox/email delivery.
+
+    Subscription and assignment rows are historical routing hints, never an
+    authorization grant. Removing a member from a private project must stop
+    future notification previews and terminal log tails immediately.
+    """
+    if issue_id is None or not members:
+        return members
+    visible: list[Member] = []
+    for member in members:
+        clause = issue_visibility_clause(member, workspace_id)
+        if clause is None:
+            visible.append(member)
+            continue
+        allowed = await session.scalar(
+            select(Issue.id).where(
+                Issue.workspace_id == workspace_id,
+                Issue.id == issue_id,
+                Issue.deleted_at.is_(None),
+                clause,
+            )
+        )
+        if allowed is not None:
+            visible.append(member)
+    return visible
+
+
 async def _unread_count(session: AsyncSession, *, workspace_id: uuid.UUID, recipient_id: uuid.UUID) -> int:
     count = await session.scalar(
         select(func.count())
@@ -539,6 +574,12 @@ class NotificationFanoutHandler:
             candidates.discard(actor_id)  # self-suppression (§6.13)
         candidates -= exclude  # explicit exclusions (e.g. author on subscribed_update)
         recipients = await _human_active_members(session, workspace_id=workspace_id, member_ids=candidates)
+        recipients = await _issue_visible_members(
+            session,
+            workspace_id=workspace_id,
+            issue_id=issue_id,
+            members=recipients,
+        )
 
         now = self._clock()
         for recipient in recipients:
@@ -834,6 +875,20 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
     legacy rows or non-issue notifications.
     """
     payload = notification.payload or {}
+    actor_name = payload.get("actor_name")
+    actor_member_type = payload.get("actor_member_type")
+    actor: dict[str, str] | None = None
+    if (
+        notification.actor_id is not None
+        and actor_member_type in {"human", "agent"}
+        and isinstance(actor_name, str)
+        and actor_name.strip()
+    ):
+        actor = {
+            "id": str(notification.actor_id),
+            "member_type": actor_member_type,
+            "name": actor_name,
+        }
     issue: dict[str, Any] | None = None
     if notification.issue_id is not None:
         issue = {
@@ -850,11 +905,7 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
         "comment_id": str(notification.comment_id) if notification.comment_id else None,
         "execution_id": str(notification.execution_id) if notification.execution_id else None,
         "group_key": notification.group_key,
-        "actor": {
-            "id": str(notification.actor_id) if notification.actor_id else None,
-            "member_type": payload.get("actor_member_type"),
-            "name": payload.get("actor_name"),
-        },
+        "actor": actor,
         "preview": payload.get("preview"),
         "title": payload.get("title"),
         "count": payload.get("count") or 1,

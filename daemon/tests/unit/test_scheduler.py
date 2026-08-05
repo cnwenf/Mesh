@@ -23,14 +23,14 @@ def claim_body(attempt_id="a1", lease_seq=1):
 
 
 def make_scheduler(server, *, on_claimed, max_concurrent=1, rand=None, clock=None,
-                   on_attempt_error=None):
+                   on_attempt_error=None, claim_allowed=None):
     api = RuntimeApiClient("https://x.example", TOKEN, transport=server.transport())
     from mesh_runtime.timeutil import FakeClock
 
     return ClaimScheduler(
         api, RUNTIME_ID, max_concurrent=max_concurrent,
         clock=clock or FakeClock(), on_claimed=on_claimed, rand=rand,
-        on_attempt_error=on_attempt_error,
+        on_attempt_error=on_attempt_error, claim_allowed=claim_allowed,
     )
 
 
@@ -40,6 +40,20 @@ async def drain():
 
 
 class TestStep:
+    async def test_isolated_gate_blocks_claim_without_calling_server(self, fake_server):
+        fake_server.enqueue(CLAIM_KEY, 200, claim_body("must-not-be-claimed"))
+        sched = make_scheduler(
+            fake_server,
+            on_claimed=lambda c: None,
+            claim_allowed=lambda: False,
+        )
+
+        outcome, delay = await sched.step()
+
+        assert outcome == "isolated"
+        assert delay > 0
+        assert fake_server.calls_for(CLAIM_KEY) == []
+
     async def test_204_returns_empty_with_full_jitter_backoff(self, fake_server):
         fake_server.default_status = 204
         sched = make_scheduler(fake_server, on_claimed=lambda c: None, rand=make_rand([0.5, 0.5]))

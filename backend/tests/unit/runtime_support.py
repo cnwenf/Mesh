@@ -157,6 +157,7 @@ async def make_runtime(
     current_load: int = 0,
     last_heartbeat_at: datetime | None = None,
     created_by: uuid.UUID | None = None,
+    provider_manifest: dict | None = None,
 ) -> Runtime:
     runtime = Runtime(
         workspace_id=workspace_id,
@@ -169,6 +170,7 @@ async def make_runtime(
         current_load=current_load,
         last_heartbeat_at=last_heartbeat_at or datetime.now(UTC),
         created_by=created_by,
+        provider_manifest=provider_manifest,
     )
     async with session_factory() as session, session.begin():
         session.add(runtime)
