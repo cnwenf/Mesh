@@ -481,7 +481,10 @@ class AttemptSupervisor:
     async def _report_cancelled(self, ctx: AttemptContext) -> None:
         if self._terminal_reported or self._lease_lost:
             return
-        await self._send_terminal(ctx, "cancelled", "cancelled", result=None)
+        # Cancellation is an acknowledgement. The server owns the durable
+        # reason (for example agent_paused, superseded, or an explicit user
+        # action) because the downlink intentionally carries no policy data.
+        await self._send_terminal(ctx, "cancelled", None, result=None)
 
     async def _report_terminal(self, ctx, outcome, session_id, usage, summary, exit_code, hit_count) -> None:
         status = outcome.status if outcome.status in TERMINATIONS else "failed"

@@ -108,12 +108,11 @@ async def make_mention_execution(
     issue,
     status="completed",
 ):
-    """A mention-triggered execution with the full skeleton chain.
+    """A materialized mention execution with its canonical comment link.
 
-    Mirrors production: the ``execution.enqueue`` outbox event carries the
-    scoped idempotency key; ``comment_mentions.triggered_execution_id``
-    stores that OUTBOX EVENT id; the materialized execution carries the
-    unscoped key.
+    The pending outbox id is only a relay correlation.  Once materialized,
+    ``comment_mentions.triggered_execution_id`` stores the logical execution
+    id and ``pending_trigger_event_id`` is clear.
     """
     key = f"mention-{uuid.uuid4().hex}"
     async with session_factory() as session, session.begin():
@@ -125,13 +124,6 @@ async def make_mention_execution(
         )
         session.add(outbox_event)
         await session.flush()
-        mention = CommentMention(
-            workspace_id=workspace.id,
-            comment_id=comment.id,
-            mentioned_id=mentioned_agent_member.id,
-            triggered_execution_id=outbox_event.id,
-        )
-        session.add(mention)
         execution = TaskExecution(
             workspace_id=workspace.id,
             agent_id=agent.id,
@@ -141,6 +133,15 @@ async def make_mention_execution(
             idempotency_key=key,
         )
         session.add(execution)
+        await session.flush()
+        mention = CommentMention(
+            workspace_id=workspace.id,
+            comment_id=comment.id,
+            mentioned_id=mentioned_agent_member.id,
+            triggered_execution_id=execution.id,
+            pending_trigger_event_id=None,
+        )
+        session.add(mention)
     return execution, outbox_event
 
 

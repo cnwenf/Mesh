@@ -11,7 +11,7 @@ from meshcli.errors import EXIT_INTERRUPTED
 from meshcli.main import cli as root
 from meshcli.sse import fetch_history, follow_logs
 
-EXECUTION_COLUMNS = ["id", "status", "trigger_kind", "created_at", "finished_at"]
+EXECUTION_COLUMNS = ["id", "status", "trigger", "queued_at", "finished_at"]
 
 
 @root.group()

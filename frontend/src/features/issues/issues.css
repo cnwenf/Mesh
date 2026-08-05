@@ -717,7 +717,7 @@ textarea.mesh-issues-detail__description {
 .mesh-issue-executions {
   display: grid;
   gap: var(--space-3);
-  margin-block: var(--space-5);
+  margin-block: calc(var(--space-4) + var(--space-2));
 }
 
 .mesh-issue-executions__header,
@@ -836,7 +836,7 @@ textarea.mesh-issues-detail__description {
 
 .mesh-issue-executions__failure {
   margin: 0;
-  color: var(--color-danger);
+  color: var(--error);
   font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
 }

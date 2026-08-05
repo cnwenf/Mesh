@@ -326,7 +326,9 @@ async def _sync_execution_status(
             # approvals.py drives execution → awaiting_approval in its own txn.
             return execution.status
         new_status = "cancelled"
-        execution.failure_reason = failure_reason
+        # Console policy owns the cancellation cause. A daemon only
+        # acknowledges the stop and must not erase agent_paused/superseded.
+        execution.failure_reason = execution.failure_reason or failure_reason
         execution.finished_at = now
         await emit_realtime(
             session,
@@ -335,7 +337,7 @@ async def _sync_execution_status(
             event="execution.cancelled",
             data={
                 "execution_id": str(execution.id),
-                "failure_reason": failure_reason,
+                "failure_reason": execution.failure_reason,
             },
             idempotency_key=f"execution:{execution.id}:cancelled",
         )
@@ -742,6 +744,8 @@ async def request_execution_cancel_tx(
 
     execution.cancel_requested_by = member_id
     execution.cancel_requested_at = now
+    if failure_reason is not None:
+        execution.failure_reason = failure_reason
     execution.updated_at = now
 
     if execution.status == "queued":
@@ -883,7 +887,9 @@ async def cancel_in_flight_for_agent(
         .where(
             TaskExecution.workspace_id == workspace_id,
             TaskExecution.agent_id == agent_id,
-            TaskExecution.status.in_(["queued", "claimed", "running", "cancelling"]),
+            TaskExecution.status.in_(
+                ["queued", "claimed", "running", "cancelling", "awaiting_approval"]
+            ),
         )
         .with_for_update()
     )
@@ -892,7 +898,16 @@ async def cancel_in_flight_for_agent(
     executions = (await session.execute(stmt)).scalars().all()
     now = _now()
     for execution in executions:
-        if execution.status == "queued":
+        if execution.status in {"queued", "awaiting_approval"}:
+            if execution.status == "awaiting_approval":
+                from mesh.runtime.approvals import cancel_pending_approvals
+
+                await cancel_pending_approvals(
+                    session,
+                    workspace_id=workspace_id,
+                    execution_id=execution.id,
+                    now=now,
+                )
             execution.status = "cancelled"
             execution.failure_reason = failure_reason
             execution.finished_at = now
@@ -911,6 +926,7 @@ async def cancel_in_flight_for_agent(
         else:
             execution.status = "cancelling"
             execution.cancel_requested_at = now
+            execution.failure_reason = execution.failure_reason or failure_reason
             execution.updated_at = now
             attempts = (
                 await session.execute(

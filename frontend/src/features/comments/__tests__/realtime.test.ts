@@ -11,6 +11,7 @@ import {
   applyExecutionLifecycleFrame,
   clearPlaceholdersForAgentComment,
   executionChannel,
+  restoreExecutionPlaceholders,
 } from '../realtime';
 import type { ExecutionPlaceholder } from '../realtime';
 import type { Comment } from '../types';
@@ -247,8 +248,19 @@ describe('execution placeholders', () => {
     expect(applyExecutionFrame([], frame('other.event', {}))).toEqual([]);
   });
 
-  it('clears placeholders when the agent comment arrives', () => {
-    const placeholders = applyExecutionFrame([], queued);
+  it('only clears the execution explicitly linked by an agent comment', () => {
+    const placeholders = [
+      ...applyExecutionFrame([], queued),
+      ...applyExecutionFrame(
+        [],
+        frame('execution.queued', {
+          execution_id: 'exec-2',
+          agent_member_id: 'mem-agent',
+          agent_name: 'reviewer',
+          comment_id: 'c-2',
+        }),
+      ),
+    ];
     const agentComment = {
       ...ROOT,
       id: 'c-9',
@@ -256,9 +268,15 @@ describe('execution placeholders', () => {
     };
     const cleared = clearPlaceholdersForAgentComment(
       placeholders,
-      frame('comment.created', agentComment),
+      frame('comment.created', { comment: agentComment, execution_id: 'exec-1' }),
     );
-    expect(cleared).toEqual([]);
+    expect(cleared.map((item) => item.execution_id)).toEqual(['exec-2']);
+
+    // No execution/comment correlation means no destructive guess, even when
+    // both in-flight executions belong to the same agent.
+    expect(
+      clearPlaceholdersForAgentComment(placeholders, frame('comment.created', agentComment)),
+    ).toBe(placeholders);
     // non-agent comment / non-created frames keep placeholders
     expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.created', ROOT))).toBe(
       placeholders,
@@ -266,6 +284,39 @@ describe('execution placeholders', () => {
     expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.updated', {}))).toBe(
       placeholders,
     );
+  });
+
+  it('uses an agent reply parent as an exact trigger-comment correlation', () => {
+    const placeholders: ExecutionPlaceholder[] = [
+      {
+        execution_id: 'exec-1',
+        comment_id: 'c-1',
+        agent_id: 'mem-agent',
+        agent_name: 'reviewer',
+        status: 'running',
+        failure_reason: null,
+      },
+      {
+        execution_id: 'exec-2',
+        comment_id: 'c-2',
+        agent_id: 'mem-agent',
+        agent_name: 'reviewer',
+        status: 'running',
+        failure_reason: null,
+      },
+    ];
+    const reply: Comment = {
+      ...ROOT,
+      id: 'agent-reply',
+      parent_id: 'c-1',
+      thread_root_id: 'c-1',
+      author: { id: 'mem-agent', member_type: 'agent', name: 'reviewer' },
+    };
+    expect(
+      clearPlaceholdersForAgentComment(placeholders, frame('comment.created', reply)).map(
+        (item) => item.execution_id,
+      ),
+    ).toEqual(['exec-2']);
   });
 });
 
@@ -302,6 +353,64 @@ describe('applyExecutionLifecycleFrame 五态迁移', () => {
       lifecycleFrame('execution.awaiting_approval', { execution_id: 'e1' }),
     );
     expect(waiting[0].status).toBe('waiting');
+  });
+
+  it('issue channel drives queued/claimed/started/awaiting/requeued/terminal on one placeholder', () => {
+    let state = applyExecutionFrame(
+      [],
+      frame('execution.queued', {
+        execution_id: 'e1',
+        agent_member_id: 'mem-agent',
+        agent_name: 'reviewer',
+        comment_id: 'c-1',
+      }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('queued');
+
+    state = applyExecutionFrame(
+      state,
+      frame('execution.claimed', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('running');
+
+    state = applyExecutionFrame(
+      state,
+      frame('execution.started', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('running');
+
+    state = applyExecutionFrame(
+      state,
+      frame('execution.awaiting_approval', {
+        execution_id: 'e1',
+        agent_member_id: 'mem-agent',
+      }),
+    );
+    expect(state[0].status).toBe('waiting');
+
+    // Approval resume/reaper requeue must update the existing id, not dedupe it.
+    state = applyExecutionFrame(
+      state,
+      frame('execution.requeued', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('queued');
+
+    state = applyExecutionFrame(state, frame('execution.completed', { execution_id: 'e1' }));
+    expect(state).toEqual([]);
+  });
+
+  it('execution.queued resumes an existing waiting placeholder', () => {
+    const waiting: ExecutionPlaceholder = { ...PLACEHOLDER, status: 'waiting' };
+    const resumed = applyExecutionFrame(
+      [waiting],
+      frame('execution.queued', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0].status).toBe('queued');
   });
 
   it('failed / timeout → failed + failure_reason(留失败占位供重试,§4.1)', () => {
@@ -348,5 +457,68 @@ describe('applyExecutionLifecycleFrame 五态迁移', () => {
 
   it('executionChannel 按执行 id 组装频道名', () => {
     expect(executionChannel('e1')).toBe('execution:e1');
+  });
+});
+
+describe('restoreExecutionPlaceholders', () => {
+  it('rebuilds active placeholders from issue executions and comment trigger correlations', () => {
+    const triggeringComment: Comment = {
+      ...ROOT,
+      mentions: [{ id: 'mem-agent', member_type: 'agent', name: 'reviewer' }],
+      triggered_execution_ids: ['e-waiting'],
+    };
+    const restored = restoreExecutionPlaceholders(
+      [triggeringComment],
+      [
+        {
+          id: 'e-waiting',
+          issue_id: 'iss-1',
+          agent_id: 'agent-entity',
+          status: 'awaiting_approval',
+          failure_reason: null,
+        },
+        {
+          id: 'e-assigned',
+          issue_id: 'iss-1',
+          agent_id: 'agent-assigned',
+          status: 'running',
+          failure_reason: null,
+        },
+        {
+          id: 'e-completed',
+          issue_id: 'iss-1',
+          agent_id: 'agent-entity',
+          status: 'completed',
+          failure_reason: null,
+        },
+        {
+          id: 'other-issue',
+          issue_id: 'iss-2',
+          agent_id: 'agent-other',
+          status: 'queued',
+          failure_reason: null,
+        },
+      ],
+      'iss-1',
+    );
+
+    expect(restored).toEqual([
+      {
+        execution_id: 'e-waiting',
+        comment_id: 'c-1',
+        agent_id: 'mem-agent',
+        agent_name: 'reviewer',
+        status: 'waiting',
+        failure_reason: null,
+      },
+      {
+        execution_id: 'e-assigned',
+        comment_id: null,
+        agent_id: 'agent-assigned',
+        agent_name: 'agent-assigned',
+        status: 'running',
+        failure_reason: null,
+      },
+    ]);
   });
 });

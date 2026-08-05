@@ -52,6 +52,46 @@ def _parse_uuid(value: object) -> uuid.UUID | None:
         return None
 
 
+async def _bind_mention_execution(
+    session: AsyncSession,
+    *,
+    event: OutboxEvent,
+    execution: TaskExecution,
+    payload: dict,
+    agent_member_id: uuid.UUID | None = None,
+) -> None:
+    """Replace one pending outbox correlation with its logical execution id."""
+    if payload.get("trigger") != "mention":
+        return
+    comment_id = _parse_uuid(payload.get("comment_id") or payload.get("trigger_comment_id"))
+    member_id = agent_member_id or _parse_uuid(payload.get("agent_member_id"))
+    if member_id is None and execution.agent_id is not None:
+        member_id = await session.scalar(
+            select(Member.id)
+            .where(
+                Member.workspace_id == event.workspace_id,
+                Member.agent_id == execution.agent_id,
+            )
+            .limit(1)
+        )
+    if comment_id is None or member_id is None:
+        return
+    await session.execute(
+        update(CommentMention)
+        .where(
+            CommentMention.workspace_id == event.workspace_id,
+            CommentMention.comment_id == comment_id,
+            CommentMention.mentioned_id == member_id,
+            CommentMention.pending_trigger_event_id == event.id,
+            CommentMention.deleted_at.is_(None),
+        )
+        .values(
+            triggered_execution_id=execution.id,
+            pending_trigger_event_id=None,
+        )
+    )
+
+
 async def enqueue_execution_handler(
     session: AsyncSession, event: OutboxEvent
 ) -> list[tuple[str, dict]] | None:
@@ -79,13 +119,19 @@ async def enqueue_execution_handler(
     if idempotency_key:
         existing = (
             await session.execute(
-                select(TaskExecution.id).where(
+                select(TaskExecution).where(
                     TaskExecution.workspace_id == event.workspace_id,
                     TaskExecution.idempotency_key == idempotency_key,
                 )
             )
         ).scalar_one_or_none()
         if existing is not None:
+            await _bind_mention_execution(
+                session,
+                event=event,
+                execution=existing,
+                payload=payload,
+            )
             return None  # at-least-once redelivery: first result wins
 
     trigger = payload.get("trigger", "assign")
@@ -199,24 +245,15 @@ async def enqueue_execution_handler(
             agent_member_id = member_snapshot.id
             agent_name = member_snapshot.display_override or member_snapshot.name
 
-    # Mention rows expose only canonical TaskExecution ids. The pending outbox
-    # id lives in its dedicated correlation column and is replaced atomically
-    # here; an older delivery cannot overwrite a newer remove/re-add trigger.
-    if trigger == "mention" and comment_id is not None and agent_member_id is not None:
-        await session.execute(
-            update(CommentMention)
-            .where(
-                CommentMention.workspace_id == event.workspace_id,
-                CommentMention.comment_id == comment_id,
-                CommentMention.mentioned_id == agent_member_id,
-                CommentMention.pending_trigger_event_id == event.id,
-                CommentMention.deleted_at.is_(None),
-            )
-            .values(
-                triggered_execution_id=execution.id,
-                pending_trigger_event_id=None,
-            )
-        )
+    # An older delivery cannot overwrite a newer remove/re-add trigger because
+    # the pending event id is part of the update predicate.
+    await _bind_mention_execution(
+        session,
+        event=event,
+        execution=execution,
+        payload=payload,
+        agent_member_id=agent_member_id,
+    )
     # §3.6: every enqueue is observable on the workspace executions channel
     # (F10 — agent triggers additionally emit on issue:{id}:runs; integration
     # / manual / issue-less triggers are covered here).

@@ -346,6 +346,7 @@ class ClaudeCodeAdapter:
             binary_sha256=self._manifest.binary_sha256,
             capabilities=(),
             reason=reason,
+            required_capabilities=self._manifest.capabilities(),
         )
 
     # -- run (§1.4 fixed argv + §3.9 stream parsing + §3.5 live budget) ------

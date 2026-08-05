@@ -2,8 +2,30 @@
 # datastore ports remain un-published and credentials stay in the caller's
 # generated env file.
 services:
+  postgres:
+    # Test-only durability trade-off: the suite truncates every table before
+    # each of thousands of tests. Keep genuine PostgreSQL locking/constraint
+    # semantics while avoiding synchronous disk flushes for disposable data.
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    environment:
+      PGDATA: /var/lib/postgresql/testdata
+    tmpfs:
+      - /var/lib/postgresql/testdata
+
   api:
     build:
-      context: ./backend
-      dockerfile: Dockerfile.test
+      context: .
+      dockerfile: backend/Dockerfile.test
     command: ["python", "-m", "pytest"]
+    environment:
+      MESH_TEST_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_TEST_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required}@redis:6379/1
+      MESH_TEST_STORAGE_ENDPOINT: http://minio:9000
+      MESH_TEST_STORAGE_BUCKET: mesh-e2e

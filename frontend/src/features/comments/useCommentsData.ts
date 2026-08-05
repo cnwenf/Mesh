@@ -10,12 +10,14 @@ import { useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import type { RealtimeEventFrame } from '../../types/realtime';
 import {
   addReaction as addReactionApi,
   createComment,
   deleteComment,
   getComment,
   issueChannel,
+  listCommentIssueExecutions,
   listComments,
   listReplies,
   removeReaction as removeReactionApi,
@@ -26,13 +28,13 @@ import {
 import {
   applyCommentsFrame,
   applyExecutionFrame,
-  applyExecutionLifecycleFrame,
   clearPlaceholdersForAgentComment,
   executionChannel,
+  restoreExecutionPlaceholders,
 } from './realtime';
 import type { ExecutionPlaceholder } from './realtime';
 import { isComment } from './types';
-import type { Comment, CommentMemberRef, ReactionSummary } from './types';
+import type { Comment, CommentExecutionSnapshot, CommentMemberRef, ReactionSummary } from './types';
 import { UNDO_WINDOW_MS, useDeferredDelete } from './useDeferredDelete';
 
 /** 纯函数:按 id 在顶层列表(含内嵌 preview_replies)中 patch 一条评论;未命中原样返回。 */
@@ -233,6 +235,7 @@ export interface UseCommentsData {
 export function useCommentsData(
   issueId: string,
   currentMember: CommentMemberRef | null,
+  workspaceId?: string,
 ): UseCommentsData {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
@@ -247,11 +250,14 @@ export function useCommentsData(
   commentsRef.current = comments;
   const pendingRequestIdsRef = useRef<Set<string>>(new Set());
   const realtimeCommitsRef = useRef<Map<string, Comment>>(new Map());
+  // REST 首屏在途时到达的帧，待快照返回后依序重放，避免旧 REST 覆盖新实时态。
+  const placeholderFramesRef = useRef<RealtimeEventFrame[]>([]);
   // 延迟删除快照:乐观 tombstone 前的完整列表,撤销/失败时整体恢复。
   const deleteSnapshotRef = useRef<readonly Comment[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const replayFrom = placeholderFramesRef.current.length;
     setIsLoading(true);
     setError(null);
     void (async () => {
@@ -261,8 +267,39 @@ export function useCommentsData(
           order: 'asc',
           limit: 50,
         });
+        let executionSnapshots: CommentExecutionSnapshot[] | null = null;
+        if (workspaceId !== undefined) {
+          executionSnapshots = [];
+          try {
+            let cursor: string | undefined;
+            do {
+              const executionPage = await listCommentIssueExecutions(client, workspaceId, issueId, {
+                limit: 100,
+                cursor,
+              });
+              executionSnapshots.push(...executionPage.data);
+              cursor = executionPage.nextCursor ?? undefined;
+            } while (cursor !== undefined);
+          } catch {
+            // 评论仍可用；执行快照失败时继续依赖已订阅的 issue/execution 帧。
+            executionSnapshots = null;
+          }
+        }
         if (cancelled) return;
         setComments([...page.data]);
+        if (executionSnapshots !== null) {
+          let restored = restoreExecutionPlaceholders(page.data, executionSnapshots, issueId);
+          for (const frame of placeholderFramesRef.current.slice(replayFrom)) {
+            restored = clearPlaceholdersForAgentComment(
+              applyExecutionFrame(restored, frame),
+              frame,
+            );
+          }
+          setPlaceholders(restored);
+        }
+        // All frames observed during this request are now represented either by
+        // the replayed snapshot or by their already-applied state updates.
+        placeholderFramesRef.current = [];
       } catch (err: unknown) {
         if (cancelled) return;
         setError(err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription');
@@ -273,7 +310,7 @@ export function useCommentsData(
     return () => {
       cancelled = true;
     };
-  }, [client, issueId, reloadKey]);
+  }, [client, issueId, reloadKey, workspaceId]);
 
   // issue:{id} 频道实时合并(与详情页共享频道;Set 去重,生命周期随面板)。
   useEffect(() => {
@@ -282,6 +319,9 @@ export function useCommentsData(
     realtime.client.subscribe(channel);
     const off = realtime.client.onFrame((frame) => {
       if (frame.channel !== channel) return;
+      if (frame.event.startsWith('execution.') || frame.event === 'comment.created') {
+        placeholderFramesRef.current.push(frame);
+      }
       if (frame.event === 'comment.created') {
         const nested = frame.payload.comment;
         const candidate = isComment(nested) ? nested : frame.payload;
@@ -306,17 +346,17 @@ export function useCommentsData(
     };
   }, [realtime, issueId]);
 
-  // 执行生命周期频道订阅(验收必修 3):execution.queued 发布于 issue 频道,
-  // 而 started/awaiting_approval/failed/timeout/completed 发布于 execution:{id}
-  // 自身频道(后端 attempts/reaper),须按占位逐一订阅消费,驱动五态迁移,
-  // 否则失败/等待确认的执行永远停在「运行中」(§9.8)。占位集合变化 → 重订阅。
+  // execution:{id} 是终态/重排补充频道。非终态在 issue 频道已直接驱动同一
+  // 状态机；逐 execution 订阅确保 terminal 即使 issue 投影延迟也能及时收敛。
   const placeholderIdsKey = placeholders.map((item) => item.execution_id).join('|');
   useEffect(() => {
     if (realtime === null || placeholders.length === 0) return;
     const channels = placeholders.map((item) => executionChannel(item.execution_id));
     channels.forEach((ch) => realtime.client.subscribe(ch));
     const offFrames = realtime.client.onFrame((frame) => {
-      setPlaceholders((prev) => applyExecutionLifecycleFrame(prev, frame));
+      if (!channels.includes(frame.channel)) return;
+      placeholderFramesRef.current.push(frame);
+      setPlaceholders((prev) => applyExecutionFrame(prev, frame));
     });
     return () => {
       offFrames();

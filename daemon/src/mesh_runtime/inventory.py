@@ -118,6 +118,7 @@ class ProviderStatus:
     binary_sha256: str | None
     capabilities: tuple[str, ...]
     reason: str | None
+    required_capabilities: tuple[str, ...] = ()
 
 
 class Inventory:
@@ -139,6 +140,10 @@ class Inventory:
                     binary_sha256=result.binary_sha256,
                     capabilities=tuple(result.capabilities),
                     reason=result.reason,
+                    required_capabilities=(
+                        tuple(result.required_capabilities)
+                        or tuple(result.capabilities)
+                    ),
                 )
             )
         return cls(statuses)
@@ -183,7 +188,9 @@ class Inventory:
             capabilities = sorted(
                 {
                     capability
-                    for capability in status.capabilities
+                    for capability in (
+                        status.required_capabilities or status.capabilities
+                    )
                     if _SAFE_DIAGNOSTIC_NAME.fullmatch(capability)
                 }
             )

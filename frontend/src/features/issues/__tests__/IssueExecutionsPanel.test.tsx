@@ -61,6 +61,14 @@ const COMPLETED = {
   ],
 };
 
+const PRIVATE_QUEUED = {
+  ...RUNNING,
+  id: 'exec-private',
+  status: 'queued',
+  queued_at: '2026-08-05T09:00:00Z',
+  attempts: [],
+};
+
 const FAILED_WITHOUT_ATTEMPTS = {
   ...RUNNING,
   id: 'exec-failed',
@@ -370,6 +378,7 @@ describe('IssueExecutionsPanel', () => {
     await screen.findByTestId('issue-execution-link-exec-running');
     await waitFor(() => {
       expect(client.subscribe).toHaveBeenCalledWith('workspace:ws-1:executions');
+      expect(client.subscribe).toHaveBeenCalledWith('issue:issue-1');
       expect(client.subscribe).toHaveBeenCalledWith('execution:exec-running');
     });
     const initialCalls = fetchMock.mock.calls.length;
@@ -417,6 +426,61 @@ describe('IssueExecutionsPanel', () => {
 
     rendered.unmount();
     expect(client.unsubscribe).toHaveBeenCalledWith('workspace:ws-1:executions');
+    expect(client.unsubscribe).toHaveBeenCalledWith('issue:issue-1');
     expect(client.unsubscribe).toHaveBeenCalledWith('execution:exec-running');
+  });
+
+  it('discovers private issue executions without discarding already loaded cursor pages', async () => {
+    let frameListener: ((frame: RealtimeEventFrame) => void) | null = null;
+    const client = {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(),
+      onFrame: vi.fn((listener: (frame: RealtimeEventFrame) => void) => {
+        frameListener = listener;
+        return vi.fn();
+      }),
+    };
+    let firstPageCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('cursor=page-2')) {
+          return fakeResponse({ body: { data: [COMPLETED], next_cursor: null } });
+        }
+        firstPageCalls += 1;
+        return fakeResponse({
+          body: {
+            data: firstPageCalls === 1 ? [RUNNING] : [PRIVATE_QUEUED, RUNNING],
+            next_cursor: 'page-2',
+          },
+        });
+      }),
+    );
+
+    renderPanel({ reviewable: false }, {
+      state: 'connected',
+      client: client as never,
+    } as RealtimeContextValue);
+
+    fireEvent.click(await screen.findByTestId('issue-executions-load-more'));
+    expect(await screen.findByTestId('issue-execution-link-exec-completed')).toBeTruthy();
+    expect(screen.queryByTestId('issue-executions-load-more')).toBeNull();
+    await waitFor(() => expect(client.subscribe).toHaveBeenCalledWith('issue:issue-1'));
+
+    act(() => {
+      frameListener?.({
+        op: 'event',
+        channel: 'issue:issue-1',
+        seq: 20,
+        event: 'execution.queued',
+        payload: { execution_id: 'exec-private', issue_id: 'issue-1' },
+      });
+    });
+
+    expect(await screen.findByTestId('issue-execution-link-exec-private')).toBeTruthy();
+    expect(screen.getByTestId('issue-execution-link-exec-completed')).toBeTruthy();
+    expect(screen.getByTestId('issue-executions-count')).toHaveTextContent('3');
+    expect(screen.queryByTestId('issue-executions-load-more')).toBeNull();
   });
 });

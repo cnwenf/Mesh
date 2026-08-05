@@ -74,6 +74,18 @@ export interface ListCommentsParams {
   readonly order?: 'asc' | 'desc';
 }
 
+/**
+ * 评论占位恢复所需的最小 execution REST 投影。完整执行详情属于 runtime 模块；
+ * 评论区只依赖这些稳定字段，避免复制或猜测 attempt/runtime 数据。
+ */
+export interface CommentExecutionSnapshot {
+  readonly id: string;
+  readonly issue_id: string | null;
+  readonly agent_id: string | null;
+  readonly status: string;
+  readonly failure_reason: string | null;
+}
+
 /** 反应人运行时结构守卫(边界处校验,不信任外部载荷)。 */
 export function isCommentMemberRef(value: unknown): value is CommentMemberRef {
   if (typeof value !== 'object' || value === null) return false;

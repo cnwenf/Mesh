@@ -41,11 +41,23 @@ RuntimeDiagnosticReason = Literal[
     "egress_blocked",
     "budget_unavailable",
     "cleanup_failed",
+    "provider_isolation_failed",
+    "runtime_auth_failed",
+    "sandbox_security_failed",
     "security_anomaly",
+    "usage_invariant_failed",
     "usage_anomaly",
 ]
 ISOLATION_DIAGNOSTIC_REASONS = frozenset(
-    {"cleanup_failed", "security_anomaly", "usage_anomaly"}
+    {
+        "cleanup_failed",
+        "provider_isolation_failed",
+        "runtime_auth_failed",
+        "sandbox_security_failed",
+        "security_anomaly",
+        "usage_invariant_failed",
+        "usage_anomaly",
+    }
 )
 
 

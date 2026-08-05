@@ -997,6 +997,7 @@ stateDiagram-v2
 要点说明：
 - 核心终态为 `completed` / `failed` / `cancelled`；`timeout` 是失败类的独立终态（UX 上单独呈现，`failure_reason='timeout'`）。
 - `cancelling` 是显式中间态，让「取消请求已发出但进程未退」这段时间可见；取消两段式：SIGTERM + 宽限期 → SIGKILL，取消幂等（对已结束执行为 no-op）。
+- 取消原因由发起取消的服务端策略在进入 `cancelling/cancelled` 时持久化（如 `agent_paused` / `superseded`）；daemon 的 `cancelled` 上报只是终止 ACK，不携带策略原因，也不得以泛化 `cancelled` 覆盖已保存原因。`awaiting_approval` 被 agent 生命周期策略取消时，同事务撤销 pending approval 后直接终态，后续决定请求必须失败。
 - 失败分类新增 `superseded`（被替换分派取消）、`agent_paused`（agent 暂停取消在途）、`awaiting_approval`（审批挂起时当前 attempt）、`approval_rejected` / `approval_expired`（README §6.9/§6.10）。
 - **审批挂起唯一协议（R2，README §6.4/§6.10）**：审批挂起只能从 `running` 进入（不存在 `queued → awaiting_approval`）。进入 `awaiting_approval` 时当前 attempt 置 `cancelled(failure_reason='awaiting_approval')`——**attempt 不保留在途态**（审计行保留）、**租约不继续**（随 attempt 终态结束）、**容量不占用**（幂等释放）；批准后执行回 `queued`，由新 attempt #N+1 凭 `resume_context` 从审批点续跑；拒绝/过期 → `cancelled`。该协议不存在"暂停租约导致永久卡死"的路径，每一环皆可测试（T21）。
 - 所有 daemon 迁移走 `PATCH` 带 `lease_seq` / 状态前置校验，非法迁移返回 `409` / `422`。

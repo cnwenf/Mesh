@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.db.models.issue import Issue, IssueActivity
 from mesh.db.models.member import Member
 from mesh.db.models.project import Project
+from mesh.db.models.runtime import TaskExecution
 from mesh.issue.statuses import resolve_default_status
 from mesh.outbox.service import emit_realtime
 
@@ -245,12 +246,22 @@ async def record_issue_execution_phase(
             )
         )
     elif phase == "completed":
-        await _move_semantic_status(
-            session,
-            issue=issue,
-            target_category="in_review",
-            actor_member_id=member_id,
+        latest_execution_id = await session.scalar(
+            select(TaskExecution.id)
+            .where(
+                TaskExecution.workspace_id == workspace_id,
+                TaskExecution.issue_id == issue.id,
+            )
+            .order_by(TaskExecution.queued_at.desc(), TaskExecution.id.desc())
+            .limit(1)
         )
+        if latest_execution_id == execution_id:
+            await _move_semantic_status(
+                session,
+                issue=issue,
+                target_category="in_review",
+                actor_member_id=member_id,
+            )
 
     payload = {
         "execution_id": str(execution_id),

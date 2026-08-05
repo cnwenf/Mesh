@@ -140,7 +140,6 @@ src/features/chat/__tests__/distill.test.ts
 src/features/chat/api.ts
 src/features/chat/types.ts
 src/features/comments/__tests__/ReactionBar.test.tsx
-src/features/comments/__tests__/api.test.ts
 src/features/comments/__tests__/commentCoverageExtra.test.tsx
 src/features/comments/__tests__/mentions.test.ts
 src/features/comments/__tests__/useDeferredDelete.test.ts

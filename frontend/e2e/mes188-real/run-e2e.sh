@@ -69,4 +69,6 @@ fi
 MES188_FRONTEND_PORT="${MES188_FRONTEND_PORT}" \
 MES188_API_CONTAINER="${MES188_PROJECT}-api-1" \
 MES188_PG_CONTAINER="${MES188_PROJECT}-postgres-1" \
-  npx playwright test --config playwright.mes188.config.ts "${MES188_PLAYWRIGHT_ARGS[@]}"
+  npx --yes --package=node@22.22.0 -- \
+    node ./node_modules/@playwright/test/cli.js test \
+    --config playwright.mes188.config.ts "${MES188_PLAYWRIGHT_ARGS[@]}"

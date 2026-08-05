@@ -244,15 +244,21 @@ class AgentService:
     # -- loading ----------------------------------------------------------------
 
     async def _load_agent(
-        self, session: AsyncSession, workspace_id: uuid.UUID, agent_id: uuid.UUID
+        self,
+        session: AsyncSession,
+        workspace_id: uuid.UUID,
+        agent_id: uuid.UUID,
+        *,
+        for_update: bool = False,
     ) -> Agent:
-        agent = await session.scalar(
-            select(Agent).where(
-                Agent.workspace_id == workspace_id,
-                Agent.id == agent_id,
-                Agent.deleted_at.is_(None),
-            )
+        stmt = select(Agent).where(
+            Agent.workspace_id == workspace_id,
+            Agent.id == agent_id,
+            Agent.deleted_at.is_(None),
         )
+        if for_update:
+            stmt = stmt.with_for_update()
+        agent = await session.scalar(stmt)
         if agent is None:
             raise NotFoundError(_NOT_FOUND)
         return agent
@@ -603,7 +609,9 @@ class AgentService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            agent = await self._load_agent(session, workspace_id, agent_id)
+            agent = await self._load_agent(
+                session, workspace_id, agent_id, for_update=True
+            )
             self._assert_can_manage(actor, agent)
             now = _now(self._clock)
             changed: dict = {}
@@ -699,7 +707,9 @@ class AgentService:
             )
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            agent = await self._load_agent(session, workspace_id, agent_id)
+            agent = await self._load_agent(
+                session, workspace_id, agent_id, for_update=True
+            )
             self._assert_can_manage(actor, agent)
             now = _now(self._clock)
 
@@ -840,7 +850,9 @@ class AgentService:
         """
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            agent = await self._load_agent(session, workspace_id, agent_id)
+            agent = await self._load_agent(
+                session, workspace_id, agent_id, for_update=True
+            )
             self._assert_can_manage(actor, agent)
             target = await session.scalar(
                 select(AgentConfigVersion).where(
@@ -915,7 +927,9 @@ class AgentService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            agent = await self._load_agent(session, workspace_id, agent_id)
+            agent = await self._load_agent(
+                session, workspace_id, agent_id, for_update=True
+            )
             self._assert_can_manage(actor, agent)
 
             allowed = AGENT_LIFECYCLE_TRANSITIONS.get(agent.lifecycle_status, {})
@@ -1023,7 +1037,9 @@ class AgentService:
     ) -> None:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            agent = await self._load_agent(session, workspace_id, agent_id)
+            agent = await self._load_agent(
+                session, workspace_id, agent_id, for_update=True
+            )
             self._assert_can_manage(actor, agent)
             now = _now(self._clock)
             agent.deleted_at = now
@@ -1079,7 +1095,9 @@ class AgentService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            agent = await self._load_agent(session, workspace_id, agent_id)
+            agent = await self._load_agent(
+                session, workspace_id, agent_id, for_update=True
+            )
             # Only the current owner or a workspace admin may transfer (§3.5).
             is_owner = agent.owner_user_id == actor.user_id
             if not is_owner and not role_satisfies(actor.role, "agent:manage"):

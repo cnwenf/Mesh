@@ -428,6 +428,12 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 
 不得用“运行失败”一个泛化状态掩盖 provider 版本不兼容、egress 不可强制、token 文件权限错误或 sandbox 不可用。
 
+daemon 与 server 共用固定诊断原因码。隔离类至少包括 `cleanup_failed`、
+`provider_isolation_failed`、`runtime_auth_failed`、`sandbox_security_failed`、
+`security_anomaly`、`usage_invariant_failed`、`usage_anomaly`；这些码只决定安全状态与修复
+入口，不承载异常原文。provider 探测失败时诊断中的缺失能力取钉死 manifest 的期望清单，
+但 claim 能力仍只取实际探测成功清单，二者不得混用。
+
 ### 4.2 执行详情
 
 执行详情按 attempt 展示：

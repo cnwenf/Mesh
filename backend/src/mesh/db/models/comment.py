@@ -14,13 +14,11 @@ snapshot, labelled as such). ``author_kind ∈ {member, system}`` is the
 §6.1-permitted CHECK + NULL FK exception for system-activity comments, NOT a
 human/agent discriminator.
 
-Deferred composite FKs (codebase precedent — ``members.agent_id``):
 ``comment_mentions.triggered_execution_id`` references
-``task_executions(workspace_id, id)`` once runtime.md lands. The enqueue
-itself already travels through the transactional outbox (README §6.6) as an
-``execution.enqueue`` event with the §6.5 idempotency key; the column stores
-that enqueue event id as the skeleton trace until the executions table
-exists.
+``task_executions(workspace_id, id)`` through a tenant-overlapping composite
+FK. The enqueue travels through the transactional outbox (README §6.6);
+``pending_trigger_event_id`` stores that temporary correlation until the relay
+atomically replaces it with the canonical logical execution id.
 
 ``comments.idempotency_key`` implements the receiver-side de-duplication for
 agent comment reflow (README §6.5 / §6.14 幂等写): the agent runtime sends
@@ -193,6 +191,12 @@ class CommentMention(Base):
         Index("uq_mentions", "comment_id", "mentioned_id", unique=True),
         Index("idx_mentions_target", "mentioned_id", "created_at"),
         Index("idx_mentions_chain", "workspace_id", "mentioned_id", "created_at"),
+        Index(
+            "idx_mentions_pending_trigger",
+            "workspace_id",
+            "pending_trigger_event_id",
+            postgresql_where=text("pending_trigger_event_id IS NOT NULL"),
+        ),
         ForeignKeyConstraint(
             ("workspace_id", "comment_id"),
             ("comments.workspace_id", "comments.id"),
@@ -204,6 +208,12 @@ class CommentMention(Base):
             ("members.workspace_id", "members.id"),
             ondelete="RESTRICT",
             name="comment_mentions_mentioned_id_members",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "triggered_execution_id"),
+            ("task_executions.workspace_id", "task_executions.id"),
+            ondelete="SET NULL (triggered_execution_id)",
+            name="comment_mentions_triggered_execution_id_task_executions",
         ),
     )
 

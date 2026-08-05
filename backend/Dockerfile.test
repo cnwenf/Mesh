@@ -3,15 +3,29 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-WORKDIR /app
+WORKDIR /repo/backend
 
-COPY pyproject.toml README.md requirements-dev.lock ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/pyproject.toml backend/README.md backend/requirements-dev.lock ./
 RUN pip install --no-cache-dir -r requirements-dev.lock
 
-COPY src ./src
-COPY migrations ./migrations
-COPY tests ./tests
-COPY alembic.ini ./
+COPY backend/src ./src
+COPY backend/migrations ./migrations
+COPY backend/tests ./tests
+COPY backend/alembic.ini ./
+COPY backend/Dockerfile ./Dockerfile
+
+# A small number of contract tests intentionally validate repository-level
+# artifacts. Preserve the real repository layout without copying frontend
+# dependencies or other build outputs into the test image.
+COPY cli/src /repo/cli/src
+COPY docs /repo/docs
+COPY tests/docs /repo/tests/docs
+COPY docker-compose.yml /repo/docker-compose.yml
+COPY frontend/package.json frontend/Dockerfile frontend/nginx.conf /repo/frontend/
 
 RUN pip install --no-cache-dir --no-deps -e . \
     && pip check

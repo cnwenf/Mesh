@@ -195,6 +195,16 @@ export interface ApprovalAudit {
   } | null;
 }
 
+/** 执行详情中最新 attempt 的 checkout 元数据；UI 只公开 diff_ref 深链标识。 */
+export interface ExecutionCheckout {
+  readonly repo_url?: string;
+  readonly base_ref?: string;
+  readonly working_branch?: string;
+  readonly commit_sha?: string | null;
+  readonly status?: string;
+  readonly diff_ref: string | null;
+}
+
 /**
  * 逻辑执行摘要(runtime.md §2.2 task_executions)。
  *
@@ -225,6 +235,7 @@ export interface ExecutionDetail extends ExecutionSummary {
   readonly frozen_budget?: FrozenBudget;
   readonly retry_count?: number;
   readonly approval_audits?: readonly ApprovalAudit[];
+  readonly checkout?: ExecutionCheckout | null;
   readonly cancel_requested_at?: string | null;
   readonly output_review?: {
     readonly decision: 'approved' | 'rejected';

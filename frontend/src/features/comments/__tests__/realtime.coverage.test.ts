@@ -132,7 +132,7 @@ describe('realtime branch fill', () => {
     );
   });
 
-  it('clears placeholders when the agent comment is wrapped in payload.comment', () => {
+  it('clears an explicitly linked placeholder when the agent comment is wrapped', () => {
     const placeholders = applyExecutionFrame(
       [],
       frame('execution.queued', {
@@ -147,7 +147,7 @@ describe('realtime branch fill', () => {
     };
     const cleared = clearPlaceholdersForAgentComment(
       placeholders,
-      frame('comment.created', { comment: agentComment }),
+      frame('comment.created', { comment: agentComment, execution_id: 'e1' }),
     );
     expect(cleared).toEqual([]);
   });

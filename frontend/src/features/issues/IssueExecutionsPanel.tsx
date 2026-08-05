@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { Button, ErrorState, Skeleton, StatusDot, useToast } from '../../design';
@@ -77,9 +77,20 @@ export function IssueExecutionsPanel(props: IssueExecutionsPanelProps): React.JS
   const [locallyReviewedExecutionIds, setLocallyReviewedExecutionIds] = useState<
     ReadonlySet<string>
   >(new Set());
+  const loadedIssueKeyRef = useRef<string | null>(null);
+  const hasLoadedFirstPageRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    const issueKey = `${props.workspaceId}:${props.issueId}`;
+    const replaceFirstPage =
+      loadedIssueKeyRef.current !== issueKey || !hasLoadedFirstPageRef.current;
+    if (loadedIssueKeyRef.current !== issueKey) {
+      loadedIssueKeyRef.current = issueKey;
+      hasLoadedFirstPageRef.current = false;
+      setExecutions([]);
+      setNextCursor(null);
+    }
     setIsLoading(true);
     setError(null);
     void listWorkspaceExecutions(client, props.workspaceId, {
@@ -88,8 +99,21 @@ export function IssueExecutionsPanel(props: IssueExecutionsPanelProps): React.JS
     })
       .then((page) => {
         if (!cancelled) {
-          setExecutions([...page.data] as ExecutionDetail[]);
-          setNextCursor(page.nextCursor);
+          if (replaceFirstPage) {
+            setExecutions([...page.data] as ExecutionDetail[]);
+            setNextCursor(page.nextCursor);
+          } else {
+            // 实时对账只刷新第一页。把权威第一页放回顶部，同时保留用户已经
+            // 翻到的后续页与其 cursor 水位，避免新帧令历史记录突然消失。
+            setExecutions((current) => {
+              const firstPageIds = new Set(page.data.map((execution) => execution.id));
+              return [
+                ...(page.data as ExecutionDetail[]),
+                ...current.filter((execution) => !firstPageIds.has(execution.id)),
+              ];
+            });
+          }
+          hasLoadedFirstPageRef.current = true;
         }
       })
       .catch((err: unknown) => {
@@ -130,19 +154,31 @@ export function IssueExecutionsPanel(props: IssueExecutionsPanelProps): React.JS
     }
   }, [client, isLoadingMore, nextCursor, props.issueId, props.workspaceId, t, toast]);
 
-  // queued/started 走工作区频道，terminal 走 execution 频道。任一权威帧只触发一次
-  // REST 对账；展示不依赖不完整的实时 payload，也不会把旧帧覆盖到新 attempt 上。
+  // public queued/started 走工作区频道，private issue execution 只在 issue 频道；
+  // terminal 走 execution 频道。任一权威帧只触发 REST 对账，不消费不完整 payload。
   useEffect(() => {
     if (realtime === null) return;
     const workspaceChannel = workspaceExecutionsChannel(props.workspaceId);
+    const issueChannel = `issue:${props.issueId}`;
     const executionChannels = executions.map((execution) => `execution:${execution.id}`);
+    const executionChannelSet = new Set(executionChannels);
     realtime.client.subscribe(workspaceChannel);
+    realtime.client.subscribe(issueChannel);
     for (const channel of executionChannels) realtime.client.subscribe(channel);
     const off = realtime.client.onFrame((frame) => {
       if (!frame.event.startsWith('execution.')) return;
+      if (
+        frame.channel !== workspaceChannel &&
+        frame.channel !== issueChannel &&
+        !executionChannelSet.has(frame.channel)
+      ) {
+        return;
+      }
       const payload = frame.payload as { execution_id?: unknown; issue_id?: unknown };
       const executionId = typeof payload.execution_id === 'string' ? payload.execution_id : null;
-      const belongsToIssue = payload.issue_id === props.issueId;
+      const belongsToIssue =
+        payload.issue_id === props.issueId ||
+        (frame.channel === issueChannel && payload.issue_id === undefined);
       const isKnown =
         executionId !== null && executions.some((execution) => execution.id === executionId);
       if (belongsToIssue || isKnown) setReloadKey((value) => value + 1);
@@ -150,6 +186,7 @@ export function IssueExecutionsPanel(props: IssueExecutionsPanelProps): React.JS
     return () => {
       off();
       realtime.client.unsubscribe(workspaceChannel);
+      realtime.client.unsubscribe(issueChannel);
       for (const channel of executionChannels) realtime.client.unsubscribe(channel);
     };
   }, [executions, props.issueId, props.workspaceId, realtime]);

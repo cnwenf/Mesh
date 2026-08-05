@@ -246,6 +246,7 @@ async def update_comment(
         is_manager=_is_manager(context),
         body_markdown=body.body_markdown,
         expected_updated_at=if_match,
+        suppress_triggers=body.suppress_triggers,
         can_trigger_agents=role_satisfies(context.member.role, "agent:trigger"),
     )
     return {"data": updated}

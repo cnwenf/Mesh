@@ -1,6 +1,6 @@
 # MES-188 Agent、Runtime 与评论闭环实施计划
 
-> 日期：2026-08-05  
+> 日期：2026-08-05
 > 依据：`comment-inbox.md` §4.1/§4.3、`agent.md` §4.7–§4.10、
 > `runtime.md` §4.5、`runtime-executor.md` §4.1/§4.2，以及前端 parity 清单。
 

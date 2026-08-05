@@ -49,7 +49,7 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
     setResolved,
     remove,
     saveEdit,
-  } = useCommentsData(props.issueId, props.currentMember);
+  } = useCommentsData(props.issueId, props.currentMember, props.workspaceId);
 
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [loadedThreadIds, setLoadedThreadIds] = useState<ReadonlySet<string>>(new Set());

@@ -448,6 +448,53 @@ describe('RuntimeDetailPage', () => {
     expect(titles.length).toBeGreaterThanOrEqual(2); // 无在途 + 无历史
   });
 
+  it('订阅当前列表 execution 终态并把完成项从在途迁入历史', async () => {
+    let terminal = false;
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/runtimes/r-1/executions')) {
+        return fakeResponse({
+          body: {
+            data: [
+              terminal
+                ? {
+                    ...INFLIGHT,
+                    status: 'completed',
+                    finished_at: '2026-07-27T12:00:00Z',
+                  }
+                : INFLIGHT,
+              HISTORY,
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ body: { data: RUNTIME } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    const realtime = makeRealtime();
+    renderPage(realtime);
+
+    expect(await screen.findByTestId('runtime-inflight-e-1')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(realtime.subscribed).toContain('execution:e-1');
+      expect(realtime.subscribed).toContain('execution:e-2');
+    });
+
+    terminal = true;
+    realtime.emit({
+      op: 'event',
+      channel: 'execution:e-1',
+      seq: 8,
+      event: 'execution.completed',
+      payload: { execution_id: 'e-1' },
+    });
+
+    expect(await screen.findByTestId('runtime-history-e-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('runtime-inflight-e-1')).toBeNull();
+  });
+
   it('稀疏元数据呈现「—」回退(主机 / OS / CPU / 内存 / 版本 / 标签 / 能力)', async () => {
     const sparse = {
       ...RUNTIME,

@@ -93,6 +93,31 @@ class TestInventory:
         assert not inv.healthy()
         assert "missing" in inv.degraded_reasons()
 
+    async def test_degraded_diagnostics_lists_required_missing_capabilities(self):
+        bad = FakeProvider(
+            events=[],
+            probe_result=ProbeResult(
+                available=False,
+                name="claude-code",
+                version=None,
+                binary_sha256=None,
+                capabilities=(),
+                reason="missing",
+                required_capabilities=("coding_cli.claude", "usage.cost"),
+            ),
+        )
+
+        inventory = await Inventory.probe([bad])
+
+        assert inventory.capability_keys() == []
+        assert inventory.operational_diagnostics() == [
+            {
+                "reason_code": "provider_unavailable",
+                "missing_capabilities": ["coding_cli.claude", "usage.cost"],
+                "affected_task_types": ["provider:claude-code"],
+            }
+        ]
+
     async def test_capability_keys_sorted_union(self):
         a = FakeProvider(
             events=[],

@@ -85,6 +85,33 @@ def test_heartbeat_operational_diagnostics_are_structured_and_fail_closed():
         HeartbeatRequest(health="degraded", operational_state="online")
 
 
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "cleanup_failed",
+        "provider_isolation_failed",
+        "runtime_auth_failed",
+        "sandbox_security_failed",
+        "usage_invariant_failed",
+    ],
+)
+def test_heartbeat_accepts_every_daemon_isolation_reason(reason_code):
+    """The daemon's persisted safety latch must cross the heartbeat boundary."""
+    request = HeartbeatRequest(
+        health="degraded",
+        operational_state="isolated",
+        diagnostics=[
+            {
+                "reason_code": reason_code,
+                "missing_capabilities": [],
+                "affected_task_types": ["all"],
+            }
+        ],
+    )
+
+    assert request.diagnostics[0].reason_code == reason_code
+
+
 async def _complete_with_result(session_factory, result):
     """Drive the real daemon path: claim → running → completed(result)."""
     world = await seed_world(session_factory)

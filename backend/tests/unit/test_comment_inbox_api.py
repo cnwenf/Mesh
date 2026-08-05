@@ -238,16 +238,20 @@ async def test_reply_and_thread_ops(env):
         await _post_comment(client, token, issue["id"], "reply", parent_id=root["id"])
     ).json()["data"]
     assert reply["thread_root_id"] == root["id"]
-    deep = await _post_comment(
-        client, token, issue["id"], "too deep", parent_id=reply["id"]
+    nested = await _post_comment(
+        client, token, issue["id"], "normalized", parent_id=reply["id"]
     )
-    assert deep.status_code == 422
-    assert deep.json()["error"]["code"] == "reply_depth_exceeded"
+    assert nested.status_code == 201
+    assert nested.json()["data"]["parent_id"] == root["id"]
+    assert nested.json()["data"]["thread_root_id"] == root["id"]
 
     replies = await client.get(
         f"/api/v1/comments/{root['id']}/replies", headers=_auth(token)
     )
-    assert [row["id"] for row in replies.json()["data"]] == [reply["id"]]
+    assert [row["id"] for row in replies.json()["data"]] == [
+        reply["id"],
+        nested.json()["data"]["id"],
+    ]
 
     resolved = await client.post(
         f"/api/v1/comments/{root['id']}/resolve", headers=_auth(token)

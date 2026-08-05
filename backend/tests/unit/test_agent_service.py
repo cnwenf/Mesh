@@ -672,9 +672,18 @@ async def test_pause_cancel_current_cancels_agent_inflight_executions(
     async with session_factory() as session, session.begin():
         queued = TaskExecution(workspace_id=workspace.id, agent_id=agent_id, status="queued")
         running = TaskExecution(workspace_id=workspace.id, agent_id=agent_id, status="running")
-        session.add_all([queued, running])
+        awaiting_approval = TaskExecution(
+            workspace_id=workspace.id,
+            agent_id=agent_id,
+            status="awaiting_approval",
+        )
+        session.add_all([queued, running, awaiting_approval])
         await session.flush()
-        queued_id, running_id = queued.id, running.id
+        queued_id, running_id, awaiting_approval_id = (
+            queued.id,
+            running.id,
+            awaiting_approval.id,
+        )
 
     paused = await agent_service.transition_lifecycle(
         actor=owner,
@@ -684,13 +693,17 @@ async def test_pause_cancel_current_cancels_agent_inflight_executions(
         in_flight_policy="cancel_current",
     )
 
-    assert paused["affected_executions"] == 2
+    assert paused["affected_executions"] == 3
     async with session_factory() as session:
         stored_queued = await session.get(TaskExecution, queued_id)
         stored_running = await session.get(TaskExecution, running_id)
+        stored_awaiting_approval = await session.get(TaskExecution, awaiting_approval_id)
     assert stored_queued.status == "cancelled"
     assert stored_queued.failure_reason == "agent_paused"
     assert stored_running.status == "cancelling"
+    assert stored_running.failure_reason == "agent_paused"
+    assert stored_awaiting_approval.status == "cancelled"
+    assert stored_awaiting_approval.failure_reason == "agent_paused"
 
 
 @pytest.mark.unit

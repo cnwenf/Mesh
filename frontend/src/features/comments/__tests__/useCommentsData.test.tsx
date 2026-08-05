@@ -57,14 +57,19 @@ interface RecordedCall {
 let calls: RecordedCall[] = [];
 let failNext = false;
 let frameListener: ((frame: RealtimeEventFrame) => void) | null = null;
+const frameListeners = new Set<(frame: RealtimeEventFrame) => void>();
 
 const fakeClient = {
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   onFrame: (cb: (frame: RealtimeEventFrame) => void) => {
-    frameListener = cb;
+    frameListeners.add(cb);
+    frameListener = (frame) => {
+      for (const listener of [...frameListeners]) listener(frame);
+    };
     return () => {
-      frameListener = null;
+      frameListeners.delete(cb);
+      if (frameListeners.size === 0) frameListener = null;
     };
   },
 };
@@ -127,6 +132,7 @@ beforeEach(() => {
   calls = [];
   failNext = false;
   frameListener = null;
+  frameListeners.clear();
   vi.stubGlobal('fetch', mockFetch());
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -544,6 +550,81 @@ describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inb
     event: 'execution.failed',
     payload: { execution_id: 'e1', failure_reason: 'nonzero_exit' },
   } as RealtimeEventFrame;
+
+  it('applies the complete non-terminal state machine directly from the issue channel', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => frameListener?.(queuedFrame));
+    expect(result.current.placeholders[0]?.status).toBe('queued');
+
+    for (const [event, expected] of [
+      ['execution.claimed', 'running'],
+      ['execution.awaiting_approval', 'waiting'],
+      ['execution.queued', 'queued'],
+      ['execution.started', 'running'],
+    ] as const) {
+      act(() =>
+        frameListener?.({
+          ...queuedFrame,
+          event,
+          payload: { ...queuedFrame.payload, execution_id: 'e1' },
+        }),
+      );
+      expect(result.current.placeholders).toHaveLength(1);
+      expect(result.current.placeholders[0]?.status).toBe(expected);
+    }
+
+    act(() =>
+      frameListener?.({
+        ...queuedFrame,
+        event: 'execution.completed',
+        payload: { execution_id: 'e1' },
+      }),
+    );
+    expect(result.current.placeholders).toEqual([]);
+  });
+
+  it('restores active placeholders from the existing issue execution REST list', async () => {
+    const triggered: Comment = {
+      ...ROOT,
+      mentions: [{ id: 'mem-agent', member_type: 'agent', name: 'rev' }],
+      triggered_execution_ids: ['e-restored'],
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/workspaces/ws-1/executions')) {
+        return fakeResponse({
+          body: {
+            data: [
+              {
+                id: 'e-restored',
+                issue_id: 'iss-1',
+                agent_id: 'agent-entity',
+                status: 'awaiting_approval',
+                failure_reason: null,
+              },
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ body: { data: [triggered], next_cursor: null } });
+    }) as typeof fetch);
+
+    const { result } = renderHook(() => useCommentsData('iss-1', ME, 'ws-1'), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.placeholders).toEqual([
+      {
+        execution_id: 'e-restored',
+        comment_id: 'c-1',
+        agent_id: 'mem-agent',
+        agent_name: 'rev',
+        status: 'waiting',
+        failure_reason: null,
+      },
+    ]);
+  });
 
   async function seedFailedPlaceholder() {
     const utils = render();

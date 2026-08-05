@@ -168,6 +168,7 @@ class TestSupervise:
         assert outcome.status == "cancelled"
         assert outcome.terminal_reported is True
         assert [t["status"] for t in api.transitions] == ["running", "cancelled"]
+        assert api.transitions[-1]["failure_reason"] is None
 
     async def test_terminal_409_becomes_lease_lost(self, journal, ctx):
         api = StubApi(fail_terminal=True)  # completed transition -> 409

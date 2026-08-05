@@ -17,6 +17,7 @@ from sqlalchemy import select
 from mesh.comment_inbox.mentions import EXECUTION_ENQUEUE_EVENT
 from mesh.comment_inbox.service import CommentService
 from mesh.db.models.agent import Agent
+from mesh.db.models.audit import AuditLog
 from mesh.db.models.comment import Comment, CommentMention
 from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.member import Member
@@ -196,27 +197,30 @@ async def test_reply_threading_depth_one(env):
         body_markdown="reply", parent_id=uuid.UUID(root["id"]),
     )
     assert reply["thread_root_id"] == root["id"]
-    # replying to a reply is rejected (depth is exactly 1)
-    with pytest.raises(BusinessRuleError) as exc:
-        await service.create_comment(
-            workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
-            body_markdown="reply2", parent_id=uuid.UUID(reply["id"]),
-        )
-    assert exc.value.code == "reply_depth_exceeded"
+    # Replying to a reply is normalized to the root so storage remains one level.
+    reply2 = await service.create_comment(
+        workspace_id=env["workspace"].id,
+        issue_id=issue.id,
+        author_member=author,
+        body_markdown="reply2",
+        parent_id=uuid.UUID(reply["id"]),
+    )
+    assert reply2["parent_id"] == root["id"]
+    assert reply2["thread_root_id"] == root["id"]
 
     items, _ = await service.list_comments(
         workspace_id=env["workspace"].id, issue_id=issue.id,
         viewer_member_id=author.id, member=author,
     )
     assert len(items) == 1  # top-level only
-    assert items[0]["reply_count"] == 1
+    assert items[0]["reply_count"] == 2
     assert items[0]["preview_replies"][0]["id"] == reply["id"]
 
     replies, _ = await service.list_replies(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(root["id"]),
         viewer_member_id=author.id,
     )
-    assert [r["id"] for r in replies] == [reply["id"]]
+    assert [r["id"] for r in replies] == [reply["id"], reply2["id"]]
 
 
 async def test_edit_sets_edited_and_optimistic_lock(env):
@@ -315,6 +319,29 @@ async def test_resolve_reopen_only_thread_root(env):
     assert reopened["resolved_by"] is None
     assert reopened["reply_count"] == 1
     assert [item["id"] for item in reopened["preview_replies"]] == [reply["id"]]
+    async with env["factory"]() as session:
+        history = list(
+            (
+                await session.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.workspace_id == env["workspace"].id,
+                        AuditLog.resource_type == "comment_thread",
+                        AuditLog.resource_id == uuid.UUID(root["id"]),
+                    )
+                    .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert [entry.action for entry in history] == [
+        "comment.thread_resolved",
+        "comment.thread_reopened",
+    ]
+    assert history[0].metadata_["resolved_by_id"] == str(author.id)
+    assert history[1].metadata_["previous_resolved_by_id"] == str(author.id)
+    assert history[1].metadata_["previous_resolved_at"] == history[0].metadata_["resolved_at"]
 
 
 # ---------------------------------------------------------------------------

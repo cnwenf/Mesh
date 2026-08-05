@@ -11,6 +11,7 @@ import {
   deleteComment,
   getComment,
   issueChannel,
+  listCommentIssueExecutions,
   listComments,
   listReactions,
   listReplies,
@@ -36,12 +37,26 @@ it('builds the issue channel name', () => {
 
 describe('endpoint surface', () => {
   it('lists comments with query params', async () => {
-    await listComments(client, 'iss-1', { limit: 10, include: 'replies', order: 'asc', cursor: 'c' });
+    await listComments(client, 'iss-1', {
+      limit: 10,
+      include: 'replies',
+      order: 'asc',
+      cursor: 'c',
+    });
     const url = stub.calls[0].url;
     expect(url).toContain('/api/v1/issues/iss-1/comments');
     expect(url).toContain('include=replies');
     expect(url).toContain('order=asc');
     expect(url).toContain('cursor=c');
+  });
+
+  it('lists issue executions for placeholder restoration with a cursor', async () => {
+    await listCommentIssueExecutions(client, 'ws-1', 'iss-1', { limit: 100, cursor: 'next' });
+    const url = stub.calls[0].url;
+    expect(url).toContain('/api/v1/workspaces/ws-1/executions');
+    expect(url).toContain('issue_id=iss-1');
+    expect(url).toContain('limit=100');
+    expect(url).toContain('cursor=next');
   });
 
   it('creates a comment (POST) with suppress_triggers', async () => {

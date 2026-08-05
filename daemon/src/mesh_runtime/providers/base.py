@@ -35,6 +35,9 @@ class ProbeResult:
     binary_sha256: str | None
     capabilities: tuple[str, ...] = ()
     reason: str | None = None
+    # Immutable manifest expectations remain safe to report when a probe
+    # fails; unlike ``capabilities`` they are never used for claim admission.
+    required_capabilities: tuple[str, ...] = ()
 
 
 # -- unified events ----------------------------------------------------------

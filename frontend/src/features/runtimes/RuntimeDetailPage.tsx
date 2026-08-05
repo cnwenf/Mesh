@@ -26,6 +26,7 @@ import { useRealtimeContext } from '../../shell/AppShell';
 import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   cancelExecution,
+  executionChannel,
   getRuntime,
   listRuntimeExecutions,
   pauseRuntime,
@@ -102,6 +103,13 @@ const RUNTIME_DETAIL_EVENTS: ReadonlySet<string> = new Set([
   'runtime.paused',
 ]);
 
+const EXECUTION_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
+  'execution.completed',
+  'execution.failed',
+  'execution.timeout',
+  'execution.cancelled',
+]);
+
 export function RuntimeDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
@@ -147,13 +155,17 @@ export function RuntimeDetailPage(): React.JSX.Element {
     return () => clearInterval(id);
   }, []);
 
-  // 实时重拉:本 runtime 的生命周期帧 + 工作区执行帧(领取 / 启动 / 终态)。
+  // 实时重拉:本 runtime 生命周期 + broad 工作区非终态 + 当前列表 execution 终态。
+  // 私有 issue 的终态不会进入 broad workspace 频道，因此必须按已知 execution 订阅。
   useEffect(() => {
     if (realtime === null || workspace === null) return;
     const runtimesChannel = workspaceRuntimesChannel(workspace.workspace_id);
     const executionsChannel = workspaceExecutionsChannel(workspace.workspace_id);
+    const detailChannels = executions.map((execution) => executionChannel(execution.id));
+    const detailChannelSet = new Set(detailChannels);
     realtime.client.subscribe(runtimesChannel);
     realtime.client.subscribe(executionsChannel);
+    for (const channel of detailChannels) realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (frame.channel === runtimesChannel) {
         if (!RUNTIME_DETAIL_EVENTS.has(frame.event)) return;
@@ -163,14 +175,21 @@ export function RuntimeDetailPage(): React.JSX.Element {
         setReloadKey((key) => key + 1);
         return;
       }
-      if (frame.channel === executionsChannel) setReloadKey((key) => key + 1);
+      if (frame.channel === executionsChannel) {
+        setReloadKey((key) => key + 1);
+        return;
+      }
+      if (detailChannelSet.has(frame.channel) && EXECUTION_TERMINAL_EVENTS.has(frame.event)) {
+        setReloadKey((key) => key + 1);
+      }
     });
     return () => {
       unsubscribe();
       realtime.client.unsubscribe(runtimesChannel);
       realtime.client.unsubscribe(executionsChannel);
+      for (const channel of detailChannels) realtime.client.unsubscribe(channel);
     };
-  }, [realtime, workspace, runtimeId]);
+  }, [executions, realtime, workspace, runtimeId]);
 
   const act = async (action: () => Promise<unknown>, successMessage: string): Promise<void> => {
     try {

@@ -221,12 +221,12 @@ class CommentService:
                     session, workspace_id, parent_id, issue_id=issue_id
                 )
                 if parent.parent_id is not None:
-                    # Depth is exactly 1: replies attach to the thread root.
-                    raise BusinessRuleError(
-                        "cannot reply to a reply (thread depth is 1)",
-                        code="reply_depth_exceeded",
-                    )
-                thread_root_id = parent.id
+                    # The API accepts a reply id for ergonomic clients, but
+                    # canonical storage stays exactly one level deep.
+                    parent_id = parent.thread_root_id or parent.parent_id
+                    thread_root_id = parent_id
+                else:
+                    thread_root_id = parent.id
 
             comment = Comment(
                 workspace_id=workspace_id,
@@ -655,14 +655,40 @@ class CommentService:
                     "only a thread root can be resolved", code="not_thread_root"
                 )
             now = self._clock()
+            previous_resolved_at = comment.resolved_at
+            previous_resolved_by_id = comment.resolved_by_id
             if resolved:
                 comment.resolved_at = now
                 comment.resolved_by_id = actor_member.id
+                action = "comment.thread_resolved"
+                audit_metadata = {
+                    "issue_id": str(comment.issue_id),
+                    "resolved_at": _isoformat(now),
+                    "resolved_by_id": str(actor_member.id),
+                }
             else:
                 comment.resolved_at = None
                 comment.resolved_by_id = None
+                action = "comment.thread_reopened"
+                audit_metadata = {
+                    "issue_id": str(comment.issue_id),
+                    "previous_resolved_at": _isoformat(previous_resolved_at),
+                    "previous_resolved_by_id": (
+                        str(previous_resolved_by_id) if previous_resolved_by_id else None
+                    ),
+                }
             comment.updated_at = now
             await session.flush()
+            await write_audit(
+                session,
+                workspace_id=workspace_id,
+                actor_member_id=actor_member.id,
+                actor_kind="member",
+                action=action,
+                resource_type="comment_thread",
+                resource_id=comment.id,
+                metadata=audit_metadata,
+            )
             rendered_dict = await self._render_comment(
                 session, comment, viewer_member_id=actor_member.id, with_counts=True
             )
