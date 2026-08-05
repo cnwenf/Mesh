@@ -20,6 +20,7 @@ interface BoardSwimlanesProps {
   readonly groupBy: string;
   readonly subGroupBy: string;
   readonly collapsedColumns: readonly string[];
+  readonly cardFields?: readonly string[];
   readonly canWrite: boolean;
   readonly dragEnabled: boolean;
   readonly onToggleCollapse: (key: string) => void;
@@ -54,6 +55,7 @@ export function BoardSwimlanes(props: BoardSwimlanesProps): React.JSX.Element {
     groupBy,
     subGroupBy,
     collapsedColumns,
+    cardFields,
     canWrite,
     dragEnabled,
     onToggleCollapse,
@@ -145,6 +147,7 @@ export function BoardSwimlanes(props: BoardSwimlanesProps): React.JSX.Element {
                 columns={laneColumns}
                 groupBy={groupBy}
                 cardsByKey={cardsByKey}
+                cardFields={cardFields}
                 canWrite={canWrite}
                 dragEnabled={dragEnabled}
                 subGroupKey={lane.key}

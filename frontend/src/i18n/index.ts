@@ -5,5 +5,6 @@
 export * from './negotiate';
 export * from './catalogLoader';
 export * from './format';
+export * from './RelativeTime';
 export * from './missing';
 export * from './I18nProvider';

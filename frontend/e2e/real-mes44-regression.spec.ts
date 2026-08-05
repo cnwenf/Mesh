@@ -42,7 +42,9 @@ function bearer(jwt: string): Record<string, string> {
 function str(obj: Json, key: string): string {
   const value = obj[key];
   if (typeof value !== 'string') {
-    throw new Error(`expected string field "${key}" (got ${typeof value}; keys=${Object.keys(obj).join(',')})`);
+    throw new Error(
+      `expected string field "${key}" (got ${typeof value}; keys=${Object.keys(obj).join(',')})`,
+    );
   }
   return value;
 }
@@ -61,7 +63,9 @@ function payload(res: Json): Json {
 function payloadList(res: Json): Json[] {
   const data = res.data;
   if (Array.isArray(data)) return data as Json[];
-  throw new Error(`unexpected list shape (data type=${typeof data}; keys=${Object.keys(res).join(',')})`);
+  throw new Error(
+    `unexpected list shape (data type=${typeof data}; keys=${Object.keys(res).join(',')})`,
+  );
 }
 
 async function json(res: { status(): number; text(): Promise<string> }): Promise<Json> {
@@ -116,7 +120,11 @@ async function registerAndLogin(page: Page): Promise<string> {
 }
 
 async function setup(request: APIRequestContext, jwt: string): Promise<Ctx> {
-  const api = async (method: string, path: string, body?: Record<string, unknown>): Promise<Json> => {
+  const api = async (
+    method: string,
+    path: string,
+    body?: Record<string, unknown>,
+  ): Promise<Json> => {
     const res = await request.fetch(`${BACKEND}${path}`, {
       method,
       headers: bearer(jwt),
@@ -127,43 +135,68 @@ async function setup(request: APIRequestContext, jwt: string): Promise<Ctx> {
     return data;
   };
 
-  const ws = str(payload(await api('POST', '/api/v1/workspaces', {
-    name: 'MES44 UI WS',
-    slug: SLUG,
-    settings: { status_strict_mode: true },
-  })), 'id');
+  const ws = str(
+    payload(
+      await api('POST', '/api/v1/workspaces', {
+        name: 'MES44 UI WS',
+        slug: SLUG,
+        settings: { status_strict_mode: true },
+      }),
+    ),
+    'id',
+  );
 
-  const prjA = str(payload(await api('POST', `/api/v1/workspaces/${ws}/projects`, {
-    name: 'Source',
-    key: 'SRC',
-    visibility: 'public',
-  })), 'id');
-  const prjB = str(payload(await api('POST', `/api/v1/workspaces/${ws}/projects`, {
-    name: 'Target',
-    key: 'TGT',
-    visibility: 'public',
-  })), 'id');
+  const prjA = str(
+    payload(
+      await api('POST', `/api/v1/workspaces/${ws}/projects`, {
+        name: 'Source',
+        key: 'SRC',
+        visibility: 'public',
+      }),
+    ),
+    'id',
+  );
+  const prjB = str(
+    payload(
+      await api('POST', `/api/v1/workspaces/${ws}/projects`, {
+        name: 'Target',
+        key: 'TGT',
+        visibility: 'public',
+      }),
+    ),
+    'id',
+  );
 
   // 工作区级严格源状态:不配置任何允许的下一步 → 严格模式下不可转出(§4.4/§5.2)。
-  const strictStatus = str(payload(await api('POST', `/api/v1/workspaces/${ws}/statuses`, {
-    name: 'Frozen',
-    category: 'in_progress',
-    color: '#9b59b6',
-    position: 50,
-    is_default: false,
-    allowed_transitions: [],
-  })), 'id');
+  const strictStatus = str(
+    payload(
+      await api('POST', `/api/v1/workspaces/${ws}/statuses`, {
+        name: 'Frozen',
+        category: 'in_progress',
+        color: '#9b59b6',
+        position: 50,
+        is_default: false,
+        allowed_transitions: [],
+      }),
+    ),
+    'id',
+  );
 
   // prjA 项目私有 todo 状态:迁移到 prjB 时该状态在目标不存在 → 触发映射(§3.8)。
-  const privateTodo = str(payload(await api('POST', `/api/v1/workspaces/${ws}/statuses`, {
-    name: 'Dev-A',
-    category: 'todo',
-    color: '#27ae60',
-    position: 10,
-    is_default: true,
-    project_id: prjA,
-    allowed_transitions: [],
-  })), 'id');
+  const privateTodo = str(
+    payload(
+      await api('POST', `/api/v1/workspaces/${ws}/statuses`, {
+        name: 'Dev-A',
+        category: 'todo',
+        color: '#27ae60',
+        position: 10,
+        is_default: true,
+        project_id: prjA,
+        allowed_transitions: [],
+      }),
+    ),
+    'id',
+  );
 
   // 项目私有里程碑(供「仅清除/含映射」场景的 cleared 清单)。
   await api('POST', `/api/v1/projects/${prjA}/milestones`, {
@@ -189,19 +222,27 @@ test.describe('MES-44 真实 UI 回归(§4.3/§3.8 + §4.4/§5.2)', () => {
     const jwt = await registerAndLogin(page);
     const ctx = await setup(page.request, jwt);
 
-    const api = async (method: string, path: string, body?: Record<string, unknown>): Promise<Json> => {
+    const api = async (
+      method: string,
+      path: string,
+      body?: Record<string, unknown>,
+    ): Promise<Json> => {
       const res = await page.request.fetch(`${BACKEND}${path}`, {
         method,
         headers: bearer(jwt),
         data: body === undefined ? undefined : JSON.stringify(body),
       });
       const data = await json(res);
-      if (!res.ok()) throw new Error(`${method} ${path} -> ${res.status()}: ${JSON.stringify(data)}`);
+      if (!res.ok())
+        throw new Error(`${method} ${path} -> ${res.status()}: ${JSON.stringify(data)}`);
       return data;
     };
 
     // 项目私有里程碑(供 cleared 清单)。
-    const milestoneId = str(payloadList(await api('GET', `/api/v1/projects/${ctx.prjA}/milestones`))[0], 'id');
+    const milestoneId = str(
+      payloadList(await api('GET', `/api/v1/projects/${ctx.prjA}/milestones`))[0],
+      'id',
+    );
     // 工作区级默认 todo 状态(显式传入,规避默认解析歧义)。
     const wsTodo = payloadList(await api('GET', `/api/v1/workspaces/${ctx.ws}/statuses`)).find(
       (s) => s.category === 'todo' && s.is_default === true && s.project_id === null,
@@ -210,25 +251,40 @@ test.describe('MES-44 真实 UI 回归(§4.3/§3.8 + §4.4/§5.2)', () => {
     const wsTodoId = str(wsTodo as Json, 'id');
 
     // 工作项 M1:项目私有 todo 状态 + 私有里程碑 → 预览应含 mapped(status) + cleared(milestone)。
-    const m1 = str(payload(await api('POST', `/api/v1/workspaces/${ctx.ws}/issues`, {
-      title: 'mv-mapped',
-      project_id: ctx.prjA,
-      status_id: ctx.privateTodo,
-      milestone_id: milestoneId,
-    })), 'id');
+    const m1 = str(
+      payload(
+        await api('POST', `/api/v1/workspaces/${ctx.ws}/issues`, {
+          title: 'mv-mapped',
+          project_id: ctx.prjA,
+          status_id: ctx.privateTodo,
+          milestone_id: milestoneId,
+        }),
+      ),
+      'id',
+    );
     // 工作项 M2:工作区级状态 + 私有里程碑 → 预览应仅 cleared(无 mapped),复现截图 ev-m5。
-    const m2 = str(payload(await api('POST', `/api/v1/workspaces/${ctx.ws}/issues`, {
-      title: 'mv-cleared-only',
-      project_id: ctx.prjA,
-      status_id: wsTodoId,
-      milestone_id: milestoneId,
-    })), 'id');
+    const m2 = str(
+      payload(
+        await api('POST', `/api/v1/workspaces/${ctx.ws}/issues`, {
+          title: 'mv-cleared-only',
+          project_id: ctx.prjA,
+          status_id: wsTodoId,
+          milestone_id: milestoneId,
+        }),
+      ),
+      'id',
+    );
     // 工作项 S1:工作区级严格源状态 → 严格模式下任意转出被拒。
-    const s1 = str(payload(await api('POST', `/api/v1/workspaces/${ctx.ws}/issues`, {
-      title: 'strict-frozen',
-      project_id: ctx.prjA,
-      status_id: ctx.strictStatus,
-    })), 'id');
+    const s1 = str(
+      payload(
+        await api('POST', `/api/v1/workspaces/${ctx.ws}/issues`, {
+          title: 'strict-frozen',
+          project_id: ctx.prjA,
+          status_id: ctx.strictStatus,
+        }),
+      ),
+      'id',
+    );
 
     // ---- 点 1a:确有状态映射场景 ----
     await openIssue(page, m1);
@@ -256,13 +312,16 @@ test.describe('MES-44 真实 UI 回归(§4.3/§3.8 + §4.4/§5.2)', () => {
 
     // ---- 点 2a:严格模式 ON,被禁转换 → 中文 toast + 就地回滚 + 无整页 reload ----
     // 切到 zh-CN 验证 i18n(账号偏好,即时生效无刷新)。
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.waitForLoadState('networkidle');
     const zhOption = page.getByRole('option', { name: /中文|Chinese|zh/ }).first();
     if (await zhOption.count()) {
       // 语言选择器存在则切换;否则经 store 直接设置。
       try {
-        await page.getByText(/语言|Language/).first().click({ timeout: 2_000 });
+        await page
+          .getByText(/语言|Language/)
+          .first()
+          .click({ timeout: 2_000 });
         await zhOption.click({ timeout: 2_000 });
       } catch {
         /* 选择器形态不一,回退 store 注入 */
@@ -302,7 +361,9 @@ test.describe('MES-44 真实 UI 回归(§4.3/§3.8 + §4.4/§5.2)', () => {
     await expect(statusSelect).toHaveValue(ctx.strictStatus);
     await page.screenshot({ path: 'e2e/evidence/mes44-strict-rollback-zh.png' });
     // 服务端确未变
-    expect(str(payload(await api('GET', `/api/v1/issues/${s1}`)), 'status_id')).toBe(ctx.strictStatus);
+    expect(str(payload(await api('GET', `/api/v1/issues/${s1}`)), 'status_id')).toBe(
+      ctx.strictStatus,
+    );
     // 无 unhandled rejection
     expect(consoleErrors).toEqual([]);
 

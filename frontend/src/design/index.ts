@@ -115,6 +115,10 @@ export type {
   SettingsNavItem,
 } from './patterns/SettingsLayout';
 export { SettingsSection } from './patterns/SettingsSection';
-export type { SettingsSectionProps, SettingsSectionTone } from './patterns/SettingsSection';
+export type {
+  SettingsSectionLayout,
+  SettingsSectionProps,
+  SettingsSectionTone,
+} from './patterns/SettingsSection';
 export { SettingsFieldRow } from './patterns/SettingsFieldRow';
 export type { SettingsFieldRowProps } from './patterns/SettingsFieldRow';

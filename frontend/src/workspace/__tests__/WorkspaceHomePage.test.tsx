@@ -18,6 +18,7 @@ function jsonResponse(status: number, body: unknown): Response {
 
 function stubClient(...responses: Array<{ status: number; body: unknown }>) {
   const fetchImpl = vi.fn();
+  const list = vi.fn().mockResolvedValue({ data: [], next_cursor: null });
   for (const response of responses) {
     fetchImpl.mockImplementationOnce(() =>
       Promise.resolve(jsonResponse(response.status, response.body)),
@@ -26,6 +27,7 @@ function stubClient(...responses: Array<{ status: number; body: unknown }>) {
   return {
     fetchImpl,
     client: {
+      list,
       request: async (method: string, path: string) => {
         const response = await fetchImpl(`http://localhost${path}`, { method });
         const body = (await response.json()) as {
@@ -42,6 +44,7 @@ function stubClient(...responses: Array<{ status: number; body: unknown }>) {
         return body.data;
       },
     },
+    list,
   };
 }
 
@@ -68,7 +71,10 @@ function renderHome(client: unknown): ReturnType<typeof render> {
           <ToastProvider regionLabel="notifications">
             <WorkspaceProvider slug="acme" client={client as never}>
               <Routes>
-                <Route path="/w/:workspaceSlug" element={<WorkspaceHomePage />} />
+                <Route
+                  path="/w/:workspaceSlug"
+                  element={<WorkspaceHomePage client={client as never} />}
+                />
               </Routes>
             </WorkspaceProvider>
           </ToastProvider>
@@ -117,6 +123,152 @@ describe('WorkspaceHomePage(工作区概览,§4.1)', () => {
       'href',
       '/w/acme/members',
     );
+  });
+
+  it('用真实列表端点呈现最近项目、issue、收件箱与运行摘要', async () => {
+    const { client, list } = stubClient({ status: 200, body: { data: DETAIL } });
+    list.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/workspaces/ws-1/projects') {
+        return {
+          data: [{ id: 'project-1', name: 'Launch plan', key: 'LAUNCH', open_issues: 3 }],
+          next_cursor: null,
+        };
+      }
+      if (path === '/api/v1/workspaces/ws-1/issues') {
+        return {
+          data: [{ id: 'issue-1', identifier: 'LAUNCH-12', title: 'Prepare release notes' }],
+          next_cursor: null,
+        };
+      }
+      if (path === '/api/v1/inbox') {
+        return {
+          data: [
+            {
+              id: 'notification-1',
+              title: 'Review requested',
+              preview: 'Please review LAUNCH-12',
+              read_at: null,
+              archived_at: null,
+            },
+          ],
+          next_cursor: null,
+        };
+      }
+      if (path === '/api/v1/workspaces/ws-1/executions') {
+        return {
+          data: [{ id: 'execution-123456', trigger: 'assign', status: 'running' }],
+          next_cursor: null,
+        };
+      }
+      throw new Error(`Unexpected list path: ${path}`);
+    });
+
+    renderHome(client);
+
+    expect(await screen.findByRole('heading', { name: 'Workspace activity' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Recent project Launch plan/ })).toHaveAttribute(
+      'href',
+      '/w/acme/projects/project-1',
+    );
+    expect(screen.getByText(/3 open/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /Recent issue LAUNCH-12 Prepare release notes/ }),
+    ).toHaveAttribute('href', '/w/acme/issues/issue-1');
+    expect(screen.getByRole('link', { name: /Recent inbox Review requested/ })).toHaveAttribute(
+      'href',
+      '/w/acme/inbox/notification-1',
+    );
+    expect(screen.getByText('Unread')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /Recent run Assign · executio Running/ }),
+    ).toHaveAttribute('href', '/w/acme/executions/execution-123456');
+
+    expect(list).toHaveBeenCalledWith(
+      '/api/v1/workspaces/ws-1/projects',
+      expect.objectContaining({ query: expect.objectContaining({ limit: 1 }) }),
+    );
+    expect(list).toHaveBeenCalledWith(
+      '/api/v1/workspaces/ws-1/issues',
+      expect.objectContaining({
+        query: expect.objectContaining({ sort: 'created_at', order: 'desc', limit: 1 }),
+      }),
+    );
+    expect(list).toHaveBeenCalledWith(
+      '/api/v1/inbox',
+      expect.objectContaining({
+        query: expect.objectContaining({ workspace_id: 'ws-1', limit: 1 }),
+      }),
+    );
+    expect(list).toHaveBeenCalledWith(
+      '/api/v1/workspaces/ws-1/executions',
+      expect.objectContaining({ query: expect.objectContaining({ limit: 1 }) }),
+    );
+  });
+
+  it('区分空数据、已读数据与端点失败,不虚构零值', async () => {
+    const { client, list } = stubClient({ status: 200, body: { data: DETAIL } });
+    list.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/workspaces/ws-1/projects') {
+        throw new Error('projects unavailable');
+      }
+      if (path === '/api/v1/inbox') {
+        return {
+          data: [
+            {
+              id: 'notification-read',
+              title: 'Release published',
+              preview: 'The release is already live',
+              read_at: '2026-08-05T00:00:00Z',
+              archived_at: null,
+            },
+          ],
+          next_cursor: null,
+        };
+      }
+      return { data: [], next_cursor: null };
+    });
+
+    renderHome(client);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ws-activity-project')).toHaveTextContent('Unavailable right now'),
+    );
+    expect(screen.getByTestId('ws-activity-project')).toHaveAttribute('href', '/w/acme/projects');
+    expect(screen.getByTestId('ws-activity-issue')).toHaveTextContent('No recent issues');
+    expect(screen.getByTestId('ws-activity-execution')).toHaveTextContent('No recent runs');
+    expect(screen.getByTestId('ws-activity-execution')).toHaveAttribute('href', '/w/acme/runtimes');
+    expect(screen.getByRole('link', { name: /Recent inbox Release published/ })).toHaveAttribute(
+      'href',
+      '/w/acme/inbox/notification-read',
+    );
+    expect(screen.queryByText('Unread')).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 open/)).not.toBeInTheDocument();
+  });
+
+  it('每张活动卡独立落定,单个挂起端点不阻塞其他卡', async () => {
+    const { client, list } = stubClient({ status: 200, body: { data: DETAIL } });
+    list.mockImplementation((path: string) => {
+      if (path === '/api/v1/workspaces/ws-1/projects') {
+        return Promise.resolve({
+          data: [{ id: 'project-1', name: 'Independent result', key: 'IR', open_issues: 1 }],
+          next_cursor: null,
+        });
+      }
+      if (path === '/api/v1/workspaces/ws-1/executions') {
+        return new Promise(() => {});
+      }
+      return Promise.resolve({ data: [], next_cursor: null });
+    });
+
+    const { container } = renderHome(client);
+
+    expect(await screen.findByText('Independent result')).toBeInTheDocument();
+    expect(screen.getByTestId('ws-activity-issue')).toHaveTextContent('No recent issues');
+    expect(screen.getByTestId('ws-activity-inbox')).toHaveTextContent('No recent notifications');
+    expect(
+      screen.getByTestId('ws-activity-execution').querySelector('.mesh-skeleton'),
+    ).not.toBeNull();
+    expect(container.querySelectorAll('.mesh-skeleton')).toHaveLength(1);
   });
 
   it('快速入口逐段编码 workspace slug 中的保留字符', async () => {

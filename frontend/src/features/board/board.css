@@ -2,10 +2,9 @@
    暗色模式以暗色 token 集整体替换)。 */
 
 .mesh-board {
-  display: grid;
-  grid-template-columns: minmax(0, var(--shell-sidebar-expanded)) minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   min-inline-size: 0;
   max-inline-size: 100%;
   min-height: 60vh;
@@ -23,14 +22,23 @@
   min-height: 40vh;
 }
 
-/* --- 视图切换器(左栏) --- */
+/* --- 视图切换器(横向导轨) --- */
+.mesh-view-switcher {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
 .mesh-view-switcher__list {
   list-style: none;
-  margin: 0 0 var(--space-3);
+  margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: var(--space-1);
+  min-inline-size: 0;
+  overflow-x: auto;
 }
 
 .mesh-view-switcher__item {
@@ -38,6 +46,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  flex: 0 0 auto;
 }
 
 .mesh-view-switcher__entry {
@@ -156,14 +165,16 @@
 .mesh-board__toolbar {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--space-3);
-  padding-bottom: var(--space-3);
+  padding: 0 var(--page-gutter-medium) var(--space-3);
   border-bottom: 1px solid var(--color-border);
 }
 
 .mesh-board__title {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-medium);
   margin: 0;
 }
 
@@ -288,7 +299,7 @@
 /* 顶部外边距由 .mesh-board__columns-wrap 统一承担(紧凑/完整两分支共用)。 */
 .mesh-board__columns {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-4);
   inline-size: 100%;
   min-inline-size: 0;
   max-inline-size: 100%;
@@ -307,12 +318,13 @@
 
 .mesh-board__column {
   /* 列宽钳制:极窄视口下至少完整呈现一列,列容器内部横滚,不溢出页面(A-04) */
-  min-width: min(260px, 85vw);
-  max-width: 300px;
-  flex: 1 0 min(260px, 85vw);
+  inline-size: 280px;
+  min-width: min(280px, 85vw);
+  max-width: 280px;
+  flex: 0 0 280px;
   background: var(--color-neutral-bg);
   border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -359,10 +371,6 @@
 /* 手机(0–599px):视图导轨堆叠为横向滚动条,看板单列工作区(design-quality §8.3
    完整单泳道模式由逐页批次实施;本阶段先消除页面级横向溢出,A-04 退出条件) */
 @media (max-width: 599px) {
-  .mesh-board {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .mesh-view-switcher__list {
     flex-direction: row;
     overflow-x: auto;
@@ -524,18 +532,32 @@
 /* 投影层:卡片 + 拖拽落点 + 快速创建 + 重同步横幅(kanban §4.2/§4.3,§6.12)。 */
 .mesh-board__card {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--space-2);
+  min-block-size: 140px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3);
   cursor: grab;
   transition:
     background-color var(--motion-fast) var(--ease-enter),
     border-color var(--motion-fast) var(--ease-enter),
     color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-board__card-head,
+.mesh-board__card-meta,
+.mesh-board__card-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.mesh-board__card-head .mesh-board__card-priority {
+  margin-inline-start: auto;
 }
 
 .mesh-board__card:hover {
@@ -554,13 +576,37 @@
 }
 
 .mesh-board__card-title {
-  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.mesh-board__card-description {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-body-sm);
-  line-height: var(--line-height-body-sm);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+
+.mesh-board__card-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-micro);
+  line-height: var(--line-height-micro);
+}
+
+.mesh-board__card-footer {
+  margin-block-start: auto;
+  justify-content: space-between;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
 }
 
 .mesh-board__card-priority {
@@ -639,8 +685,11 @@
 
 .mesh-board__columns-wrap {
   margin-top: var(--space-4);
+  margin-inline: calc(0px - var(--space-4));
+  padding-inline: var(--space-2);
+  inline-size: calc(100% + var(--space-8));
   min-inline-size: 0;
-  max-inline-size: 100%;
+  max-inline-size: none;
   overflow: hidden;
 }
 
@@ -699,6 +748,9 @@
 
 .mesh-board__swimlane .mesh-board__columns-wrap {
   margin-top: 0;
+  margin-inline: 0;
+  padding-inline: 0;
+  inline-size: auto;
   max-inline-size: none;
   overflow: visible;
 }
@@ -739,14 +791,27 @@
   }
 }
 
-/* 卡片固定高度(虚拟化前提):72px 卡 + 12px gap(--space-3)= 84px = CARD_HEIGHT。
-   与 useVirtualWindow.ts CARD_HEIGHT=84 对齐;标题单行截断保证等高。 */
-.mesh-board__card {
+/* 大列表虚拟化维持 72px 紧凑卡 + 12px gap = 84px CARD_HEIGHT；普通看板
+   使用上方的信息卡高度，兼顾逐页信息密度与千卡性能线。 */
+.mesh-board__virtual .mesh-board__card {
+  min-block-size: 0;
   block-size: 72px;
   box-sizing: border-box;
   overflow: hidden;
-  flex-wrap: nowrap;
   touch-action: pan-y; /* 纵向滚动优先,横向/长按交给拖拽与触摸 sheet */
+}
+
+.mesh-board__virtual .mesh-board__card-description,
+.mesh-board__virtual .mesh-board__card-meta,
+.mesh-board__virtual .mesh-board__card-footer {
+  display: none;
+}
+
+.mesh-board__virtual .mesh-board__card-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 拖拽手柄:触摸长按区(touch-action none),鼠标下grab 光标。 */

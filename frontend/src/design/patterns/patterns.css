@@ -327,14 +327,22 @@
 
 /* ── SettingsLayout:二级导航 + 内容列 ─────────────────────────────── */
 
+/* 设置是应用级工作区，不使用正文页的 720px 外层约束。抵消 AppShell 主区
+   的统一 16px 内边距，让二级导航与内框边缘对齐；内容列在剩余空间居中。 */
+.mesh-settings-page {
+  margin: calc(0px - var(--space-4));
+  min-block-size: calc(100dvh - var(--shell-frame-gap) - var(--shell-frame-gap));
+}
+
 .mesh-settings-layout {
   /* 内容约束:设置导航列固定宽(布局常量,非颜色)。 */
   --settings-nav-width: 224px;
 
   display: grid;
   grid-template-columns: var(--settings-nav-width) minmax(0, 1fr);
-  gap: var(--space-6);
+  gap: 0;
   align-items: start;
+  min-block-size: inherit;
 }
 
 .mesh-settings-layout__nav {
@@ -344,6 +352,9 @@
   flex-direction: column;
   gap: var(--space-4);
   min-inline-size: 0;
+  align-self: stretch;
+  padding: var(--space-4);
+  border-inline-end: 1px solid var(--color-border-subtle);
 }
 
 .mesh-settings-layout__header {
@@ -353,8 +364,8 @@
 }
 
 .mesh-settings-layout__title {
-  font-size: var(--font-size-title-2);
-  line-height: var(--line-height-title-2);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-strong);
   margin: 0;
@@ -436,43 +447,114 @@
 }
 
 .mesh-settings-layout__content {
+  inline-size: 100%;
   min-inline-size: 0;
-  max-inline-size: var(--content-form, 640px);
+  max-inline-size: var(--content-settings);
+  margin-inline: auto;
+  padding-block: var(--page-gutter-wide);
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
 }
 
+.mesh-settings-content-title {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-title-1);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.025em;
+}
+
 /* ── 手机(≤599px,§8.1 compact / §8.3):导航折叠为内容上方分组列表 ── */
 
 @media (max-width: 599px) {
+  .mesh-settings-page {
+    margin: calc(0px - var(--space-4));
+  }
+
   .mesh-settings-layout {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-4);
+    gap: 0;
+    align-content: start;
   }
 
   .mesh-settings-layout__nav {
     position: static;
     inset-block-start: auto;
-    padding-block-end: var(--space-3);
+    padding: 0;
     border-block-end: 1px solid var(--color-border-subtle);
+    border-inline-end: 0;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  .mesh-settings-layout__header,
+  .mesh-settings-layout__group-label {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .mesh-settings-layout__group {
+    display: block;
+    min-inline-size: 0;
+  }
+
+  .mesh-settings-layout__list {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-4);
+    scrollbar-width: none;
+  }
+
+  .mesh-settings-layout__list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mesh-settings-layout__item {
+    flex: 0 0 auto;
+  }
+
+  .mesh-settings-layout__link {
+    border-inline-start: 0;
+    border-block-end: 2px solid transparent;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  }
+
+  .mesh-settings-layout__link.is-active {
+    border-inline-start-color: transparent;
+    border-block-end-color: var(--color-accent);
   }
 
   .mesh-settings-layout__content {
+    inline-size: auto;
     max-inline-size: none;
+    margin-inline: 0;
+    padding: var(--space-4);
   }
 }
 
 /* ── SettingsSection:卡片表面分区(默认 / danger 两态)────────────── */
 
 .mesh-settings-section {
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
+}
+
+.mesh-settings-section__panel {
+  overflow: hidden;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
 }
 
 .mesh-settings-section__header {
@@ -499,24 +581,106 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  padding: var(--page-gutter-medium);
 }
 
 .mesh-settings-section__footer {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding-block-start: var(--space-3);
+  padding: var(--space-3) var(--page-gutter-medium);
   border-block-start: 1px solid var(--color-border-subtle);
 }
 
 /* danger 分区(design-quality §3.2:危险区与普通偏好距离不足 → 语义边界 +
    标题着危险色;颜色不作唯一信号,调用方配图标/文案与确认流程)。 */
 .mesh-settings-section--danger {
-  border-color: var(--color-danger-border);
+  --settings-section-border: var(--color-danger-border);
+}
+
+.mesh-settings-section--danger .mesh-settings-section__panel {
+  border-color: var(--settings-section-border);
 }
 
 .mesh-settings-section--danger .mesh-settings-section__title {
   color: var(--color-danger-fg);
+}
+
+/* 运行态设置页使用紧凑行：桌面 label/hint 左、控件右；compact 自然堆叠。 */
+.mesh-settings-section--rows .mesh-settings-section__body {
+  gap: 0;
+  padding: 0;
+}
+
+.mesh-settings-section--rows .mesh-field,
+.mesh-settings-section__identity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.7fr);
+  align-items: center;
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+  min-block-size: 64px;
+  padding: var(--space-3) var(--space-4);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-settings-section--rows .mesh-field:last-child,
+.mesh-settings-section__identity-row:last-child {
+  border-block-end: 0;
+}
+
+.mesh-settings-section--rows .mesh-field__label {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.mesh-settings-section--rows .mesh-field__control {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.mesh-settings-section--rows .mesh-field__hint,
+.mesh-settings-section--rows .mesh-field__error {
+  grid-column: 1;
+  margin: 0;
+}
+
+.mesh-settings-section__identity-copy {
+  min-inline-size: 0;
+}
+
+.mesh-settings-section__identity-copy strong,
+.mesh-settings-section__identity-copy span {
+  display: block;
+}
+
+.mesh-settings-section__identity-copy span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.mesh-settings-section__identity-preview {
+  justify-self: end;
+}
+
+@media (max-width: 599px) {
+  .mesh-settings-section--rows .mesh-field,
+  .mesh-settings-section__identity-row {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--space-4);
+  }
+
+  .mesh-settings-section--rows .mesh-field__label,
+  .mesh-settings-section--rows .mesh-field__control,
+  .mesh-settings-section--rows .mesh-field__hint,
+  .mesh-settings-section--rows .mesh-field__error {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .mesh-settings-section__identity-preview {
+    justify-self: start;
+  }
 }
 
 /* ── SettingsFieldRow:label + control + hint 行(§7.4 表单)────────── */

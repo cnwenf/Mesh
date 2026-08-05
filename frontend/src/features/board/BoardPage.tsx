@@ -1463,6 +1463,7 @@ export function BoardPage(): React.JSX.Element {
               groupBy={effectiveGroupBy}
               subGroupBy={selectedView.sub_group_by}
               collapsedColumns={draft.board_settings.collapsed_columns ?? []}
+              cardFields={draft.board_settings.card_fields}
               canWrite={canWrite}
               dragEnabled={canWrite && !dirty}
               onToggleCollapse={toggleCollapse}
@@ -1479,6 +1480,7 @@ export function BoardPage(): React.JSX.Element {
               columns={columns}
               groupBy={effectiveGroupBy}
               cardsByKey={cardsByKey}
+              cardFields={draft.board_settings.card_fields}
               canWrite={canWrite}
               dragEnabled={canWrite && !dirty}
               onToggleCollapse={toggleCollapse}

@@ -132,6 +132,8 @@
   --page-gutter-compact: 16px;
   --page-gutter-medium: 24px;
   --page-gutter-wide: 32px;
+  --content-public-flow: 384px;
+  --content-settings: 704px;
   --content-readable: 720px;
   --content-form: 640px;
   --content-standard: 1120px;
@@ -156,6 +158,7 @@
   --font-size-title-1: 1rem;
   --font-size-title-2: 1rem;
   --font-size-title-3: 0.875rem;
+  --font-size-public-flow-title: 1.5rem;
   --font-size-body-lg: 0.875rem;
   --font-size-body: 0.875rem;
   --font-size-body-sm: 0.8125rem;
@@ -169,6 +172,7 @@
   --line-height-title-1: 1.5rem;
   --line-height-title-2: 1.5rem;
   --line-height-title-3: 1.25rem;
+  --line-height-public-flow-title: 2rem;
   --line-height-body-lg: 1.25rem;
   --line-height-body: 1.25rem;
   --line-height-body-sm: 1rem;

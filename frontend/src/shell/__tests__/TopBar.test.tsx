@@ -7,11 +7,13 @@
 import { useState } from 'react';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useLocation } from 'react-router';
 import { resetApiClient } from '../../api/instance';
 import { fakeResponse } from '../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../test-utils/render';
 import { useShortcutRegistry } from '../../shortcuts';
 import { useAuthStore } from '../../state/authStore';
+import { useSettingsStore } from '../../state/settingsStore';
 import { resetPaletteContextCache } from '../../shortcuts/usePaletteContext';
 import { setRecentsScope } from '../../shortcuts/recents';
 import { TopBar } from '../TopBar';
@@ -57,17 +59,58 @@ function stubNetwork(): void {
   );
 }
 
-function renderTopBar(props: Partial<React.ComponentProps<typeof TopBar>> = {}) {
+function LocationProbe(): React.JSX.Element {
+  const location = useLocation();
+  return <output data-testid="current-location">{location.pathname}</output>;
+}
+
+function renderTopBar(props: Partial<React.ComponentProps<typeof TopBar>> = {}, route = '/') {
   return renderWithProviders(
-    <TopBar
-      state="idle"
-      onOpenPalette={props.onOpenPalette ?? vi.fn()}
-      onOpenHelp={props.onOpenHelp ?? vi.fn()}
-      onOpenSearch={props.onOpenSearch ?? vi.fn()}
-      favoritesProvider={props.favoritesProvider ?? (async () => [])}
-      {...props}
-    />,
+    <>
+      <TopBar
+        state="idle"
+        onOpenPalette={props.onOpenPalette ?? vi.fn()}
+        onOpenHelp={props.onOpenHelp ?? vi.fn()}
+        onOpenSearch={props.onOpenSearch ?? vi.fn()}
+        favoritesProvider={props.favoritesProvider ?? (async () => [])}
+        {...props}
+      />
+      <LocationProbe />
+    </>,
+    { route },
   );
+}
+
+function stubColorScheme(initialDark: boolean): { setDark: (dark: boolean) => void } {
+  let matches = initialDark;
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const media = {
+    get matches() {
+      return matches;
+    },
+    media: '(prefers-color-scheme: dark)',
+    onchange: null,
+    addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+      listeners.add(listener);
+    },
+    removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+      listeners.delete(listener);
+    },
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(() => true),
+  } as MediaQueryList;
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => media),
+  );
+  return {
+    setDark: (dark) => {
+      matches = dark;
+      const event = { matches: dark, media: media.media } as MediaQueryListEvent;
+      listeners.forEach((listener) => listener(event));
+    },
+  };
 }
 
 function SearchModeHarness(props: { onOpenSearch: (query: string) => void }): React.JSX.Element {
@@ -101,6 +144,11 @@ beforeEach(() => {
       .registerCommand({ id: 'cmd-beta', label: 'Beta command', group: 'global', run: vi.fn() });
   });
   window.localStorage.clear();
+  useSettingsStore.setState({
+    preferences: { theme: null, locale: null, timezone: 'UTC' },
+    lastSyncError: null,
+    sessionProbed: false,
+  });
   setRecentsScope({ userId: 'u-1', workspaceId: 'ws-1' });
   resetPaletteContextCache();
   resetApiClient();
@@ -108,7 +156,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useAuthStore.getState().clearToken();
+  act(() => useAuthStore.getState().clearToken());
   vi.unstubAllGlobals();
   resetPaletteContextCache();
   resetApiClient();
@@ -156,6 +204,130 @@ describe('TopBar', () => {
     fireEvent.click(screen.getByTestId('open-help'));
     expect(onOpenPalette).toHaveBeenCalledTimes(1);
     expect(onOpenHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it('用户菜单包含个人设置、三态主题、帮助快捷键与登出入口', () => {
+    stubColorScheme(false);
+    renderTopBar({ state: 'connected' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Personal settings' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Theme · Light' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Theme · Dark' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Theme · System (Light)' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Help & keyboard shortcuts' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Sign out' })).toHaveClass(
+      'mesh-menu__item--danger',
+    );
+  });
+
+  it('个人设置导航到账号设置；菜单内帮助复用同一帮助层回调', () => {
+    const onOpenHelp = vi.fn();
+    renderTopBar({ state: 'connected', onOpenHelp }, '/w/ws/issues');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Personal settings' }));
+    expect(screen.getByTestId('current-location')).toHaveTextContent('/settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Help & keyboard shortcuts' }));
+    expect(onOpenHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it('主题快捷项即时写入偏好，并实时更新 system 的当前解析值', async () => {
+    const colorScheme = stubColorScheme(true);
+    renderTopBar({ state: 'connected' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    expect(screen.getByRole('menuitem', { name: 'Theme · System (Dark)' })).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Theme · Dark' }));
+      await Promise.resolve();
+    });
+    expect(useSettingsStore.getState().preferences.theme).toBe('dark');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    expect(screen.getByRole('menuitem', { name: 'Theme · Dark (current)' })).toBeDisabled();
+    await act(async () => {
+      colorScheme.setDark(false);
+      await Promise.resolve();
+    });
+    const system = screen.getByRole('menuitem', { name: 'Theme · System (Light)' });
+    await act(async () => {
+      fireEvent.click(system);
+      await Promise.resolve();
+    });
+    expect(useSettingsStore.getState().preferences.theme).toBe('system');
+  });
+
+  it('登出撤销服务端会话、清除本地 token，并 replace 到登录页', async () => {
+    useAuthStore.getState().setToken('session-token');
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/v1/auth/logout')) {
+        return fakeResponse({ body: { data: null } });
+      }
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: {
+            data: {
+              user: { id: 'u-1', email: 'u@c.com', display_name: 'U' },
+              memberships: [],
+            },
+          },
+        });
+      }
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    });
+    vi.stubGlobal('fetch', fetchSpy as typeof fetch);
+    renderTopBar({ state: 'connected' }, '/w/ws/issues');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().token).toBeNull();
+      expect(screen.getByTestId('current-location')).toHaveTextContent('/login');
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/auth/logout'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('登出接口断网时仍清除共享设备上的本地凭证并进入登录页', async () => {
+    useAuthStore.getState().setToken('offline-session-token');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('/api/v1/auth/logout')) {
+          throw new Error('offline');
+        }
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }) as typeof fetch,
+    );
+    renderTopBar({ state: 'offline' }, '/w/ws/issues');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().token).toBeNull();
+      expect(screen.getByTestId('current-location')).toHaveTextContent('/login');
+    });
+  });
+
+  it('登出接口永久挂起时也立即清除本地凭证并进入登录页', () => {
+    useAuthStore.getState().setToken('stalled-session-token');
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})) as typeof fetch);
+    renderTopBar({ state: 'offline' }, '/w/ws/issues');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open user menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+    expect(useAuthStore.getState().token).toBeNull();
+    expect(screen.getByTestId('current-location')).toHaveTextContent('/login');
   });
 
   it('键入展开内联结果弹层(同一 PaletteResults);输入框保留键入值', async () => {

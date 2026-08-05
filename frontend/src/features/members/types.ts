@@ -54,6 +54,8 @@ export interface MeResponse {
     readonly id: string;
     readonly email: string;
     readonly display_name: string;
+    readonly avatar_url?: string | null;
+    readonly timezone?: string | null;
     /** active workspace 解析序 ③ 的服务端提示(search-command-palette.md §3.4)。 */
     readonly last_active_workspace_id?: string | null;
   };

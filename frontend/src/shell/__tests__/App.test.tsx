@@ -117,13 +117,12 @@ describe('App 路由', () => {
     expect(screen.getByTestId('home-create')).toBeInTheDocument();
   });
 
-  it('/settings 渲染设置页(主题/语言/时区选择器)', () => {
+  it('/settings 默认渲染个人资料页', async () => {
     signIn();
     navigateTo('/settings');
     render(<App />);
-    expect(screen.getByTestId('theme-select')).toBeInTheDocument();
-    expect(screen.getByTestId('locale-select')).toBeInTheDocument();
-    expect(screen.getByTestId('timezone-select')).toBeInTheDocument();
+    expect(await screen.findByDisplayValue('Owner')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/settings/profile');
   });
 
   it('/inbox 渲染收件箱页(空态)', async () => {

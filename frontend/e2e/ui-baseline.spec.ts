@@ -11,7 +11,7 @@ import { login } from './helpers';
 test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整组 token 替换)', () => {
   test('设置页选择暗色 → html[data-theme=dark],切回亮色恢复', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.getByTestId('theme-select').selectOption('light');
@@ -20,7 +20,7 @@ test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整�
 
   test('暗色主题在刷新后保持(持久化)', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     const persisted = page.waitForResponse(
       (response) =>
         response.url().endsWith('/api/v1/users/me') &&
@@ -37,16 +37,17 @@ test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整�
 test.describe('i18n 切换(README §6.18:就地更新、无刷新、ICU 复数)', () => {
   test('切换到 zh-CN → 界面文案就地变更', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
     await page.getByTestId('locale-select').selectOption('zh-CN');
     await expect(page.getByRole('heading', { name: '设置' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '语言' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '外观' })).toBeVisible();
+    await expect(page.getByLabel('语言')).toBeVisible();
   });
 
   test('恢复跟随默认(null locale)', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('locale-select').selectOption('zh-CN');
     await expect(page.getByRole('heading', { name: '设置' })).toBeVisible();
     await page.getByTestId('locale-select').selectOption('');
@@ -55,7 +56,7 @@ test.describe('i18n 切换(README §6.18:就地更新、无刷新、ICU 复数)'
 
   test('时区化展示:同一 UTC 值按用户时区渲染(§6.18 存储不变)', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('timezone-select').selectOption('Asia/Shanghai');
     const sample = page.getByTestId('tz-sample');
     await expect(sample).toContainText('2026-07-26 02:00');

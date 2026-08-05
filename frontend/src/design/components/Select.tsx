@@ -11,19 +11,30 @@ export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement
   label: string;
   /** 错误文案插槽 */
   error?: string;
+  /** 控件说明；与 error 一并经 aria-describedby 关联 */
+  hint?: ReactNode;
   /** <option> 列表 */
   children: ReactNode;
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { label, error, id, className, children, ...rest },
+  { label, error, hint, id, className, children, 'aria-describedby': externalDescribedBy, ...rest },
   ref,
 ) {
   const autoId = useId();
   const selectId = id ?? `mesh-select-${autoId}`;
   const errorId = `${selectId}-error`;
+  const hintId = `${selectId}-hint`;
+  const describedBy =
+    [externalDescribedBy, error ? errorId : null, hint ? hintId : null]
+      .filter((part): part is string => Boolean(part))
+      .join(' ') || undefined;
 
-  const controlClasses = ['mesh-field__control', error ? 'mesh-field__control--invalid' : null, className]
+  const controlClasses = [
+    'mesh-field__control',
+    error ? 'mesh-field__control--invalid' : null,
+    className,
+  ]
     .filter((part): part is string => Boolean(part))
     .join(' ');
 
@@ -37,11 +48,16 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         id={selectId}
         className={controlClasses}
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedBy}
         {...rest}
       >
         {children}
       </select>
+      {hint ? (
+        <p id={hintId} className="mesh-field__hint">
+          {hint}
+        </p>
+      ) : null}
       {error ? (
         <p id={errorId} className="mesh-field__error">
           {error}

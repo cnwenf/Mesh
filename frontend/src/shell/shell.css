@@ -128,7 +128,7 @@
 .mesh-topbar > [data-testid='ws-switcher-button'] {
   grid-area: workspace;
   min-inline-size: 0;
-  max-inline-size: 172px;
+  max-inline-size: min(172px, 100%);
   justify-self: start;
   overflow: hidden;
 }
@@ -184,6 +184,15 @@
   display: flex;
   justify-self: end;
   gap: var(--space-1);
+}
+
+/* 用户菜单包含三态主题完整文案（system 还带实时解析值），预留稳定宽度。 */
+.mesh-topbar__user-menu .mesh-menu {
+  min-inline-size: 15.5rem;
+}
+
+.mesh-topbar__user-menu .mesh-menu__item {
+  white-space: nowrap;
 }
 
 /* ── 连接横幅(空态折叠,避免空白条) ──────────────────── */

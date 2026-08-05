@@ -11,7 +11,7 @@ import { Avatar, Icon, Menu } from '../../design';
 import type { MenuEntry } from '../../design';
 import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { env } from '../../env';
-import { formatRelativeTime, useT } from '../../i18n';
+import { RelativeTime, useT } from '../../i18n';
 import { getIssueByIdentifier } from '../issues/api';
 import { ReactionBar } from './ReactionBar';
 import type { Comment } from './types';
@@ -21,7 +21,8 @@ import { isDeletedComment, isResolved } from './types';
 // data-issue-identifier="X" href="...">; we hydrate them into title+status
 // reference cards. Identifiers come from a strict server regex, so the match
 // is controlled; card text is HTML-escaped before injection.
-export const ISSUE_LINK_RE = /<a\b[^>]*\bdata-issue-identifier="([A-Za-z0-9._-]{1,40})"[^>]*>[\s\S]*?<\/a>/g;
+export const ISSUE_LINK_RE =
+  /<a\b[^>]*\bdata-issue-identifier="([A-Za-z0-9._-]{1,40})"[^>]*>[\s\S]*?<\/a>/g;
 
 export function escapeHtml(value: string): string {
   return value
@@ -76,9 +77,7 @@ function useIssueLinkCards(bodyHtml: string, workspaceId: string): string {
 }
 
 function useMemoClient(): MeshApiClient {
-  const [client] = useState(
-    () => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
-  );
+  const [client] = useState(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }));
   return client;
 }
 
@@ -222,11 +221,18 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
             {author !== null ? author.name : t('comments.unknownAuthor')}
           </span>
           {isAgent ? (
-            <span className="mesh-comments__badge mesh-comments__badge--agent" data-testid="agent-badge">
+            <span
+              className="mesh-comments__badge mesh-comments__badge--agent"
+              data-testid="agent-badge"
+            >
               {t('comments.badge.agent')}
             </span>
           ) : null}
-          <time className="mesh-comments__time">{formatRelativeTime(comment.created_at, { locale: props.locale })}</time>
+          <RelativeTime
+            utcIso={comment.created_at}
+            locale={props.locale}
+            className="mesh-comments__time"
+          />
           {comment.edited_at !== null ? (
             <span className="mesh-comments__edited" data-testid="comment-edited">
               {t('comments.edited')}
@@ -254,15 +260,28 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
               onChange={(event) => setEditValue(event.target.value)}
             />
             {editError !== null ? (
-              <p className="mesh-comments__edit-error" role="alert" data-testid="comment-edit-error">
+              <p
+                className="mesh-comments__edit-error"
+                role="alert"
+                data-testid="comment-edit-error"
+              >
                 {editError}
               </p>
             ) : null}
             <div className="mesh-comments__edit-actions">
-              <button type="button" data-testid={`comment-edit-save-${comment.id}`} disabled={editBusy} onClick={() => void saveEdit()}>
+              <button
+                type="button"
+                data-testid={`comment-edit-save-${comment.id}`}
+                disabled={editBusy}
+                onClick={() => void saveEdit()}
+              >
                 {t('common.save')}
               </button>
-              <button type="button" data-testid={`comment-edit-cancel-${comment.id}`} onClick={() => setEditing(false)}>
+              <button
+                type="button"
+                data-testid={`comment-edit-cancel-${comment.id}`}
+                onClick={() => setEditing(false)}
+              >
                 {t('common.cancel')}
               </button>
             </div>
@@ -290,26 +309,46 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
         {!deleted ? (
           /* 桌面次要操作条:仅 hover/focus-within 显示(CSS opacity+visibility),保留键盘可达。 */
           <footer className="mesh-comments__actions">
-            <button type="button" data-testid={`comment-reply-${comment.id}`} onClick={() => props.onReply(comment)}>
+            <button
+              type="button"
+              data-testid={`comment-reply-${comment.id}`}
+              onClick={() => props.onReply(comment)}
+            >
               {t('comments.action.reply')}
             </button>
             {comment.parent_id === null ? (
               resolved ? (
-                <button type="button" data-testid={`comment-reopen-${comment.id}`} onClick={() => props.onReopen(comment)}>
+                <button
+                  type="button"
+                  data-testid={`comment-reopen-${comment.id}`}
+                  onClick={() => props.onReopen(comment)}
+                >
                   {t('comments.action.reopen')}
                 </button>
               ) : (
-                <button type="button" data-testid={`comment-resolve-${comment.id}`} onClick={() => props.onResolve(comment)}>
+                <button
+                  type="button"
+                  data-testid={`comment-resolve-${comment.id}`}
+                  onClick={() => props.onResolve(comment)}
+                >
                   {t('comments.action.resolve')}
                 </button>
               )
             ) : null}
-            <button type="button" data-testid={`comment-copy-${comment.id}`} onClick={() => props.onCopyLink(comment)}>
+            <button
+              type="button"
+              data-testid={`comment-copy-${comment.id}`}
+              onClick={() => props.onCopyLink(comment)}
+            >
               {t('comments.action.copyLink')}
             </button>
             {props.canModify ? (
               <>
-                <button type="button" data-testid={`comment-edit-${comment.id}`} onClick={startEdit}>
+                <button
+                  type="button"
+                  data-testid={`comment-edit-${comment.id}`}
+                  onClick={startEdit}
+                >
                   {t('comments.action.edit')}
                 </button>
                 <button

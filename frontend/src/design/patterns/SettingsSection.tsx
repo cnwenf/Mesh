@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import './patterns.css';
 
 export type SettingsSectionTone = 'default' | 'danger';
+export type SettingsSectionLayout = 'stack' | 'rows';
 
 export interface SettingsSectionProps {
   /** 分区标题(h2) */
@@ -22,12 +23,19 @@ export interface SettingsSectionProps {
   footer?: ReactNode;
   /** 语义色调,默认 default */
   tone?: SettingsSectionTone;
+  /** rows 将字段排成桌面双列、compact 单列的紧凑设置行 */
+  layout?: SettingsSectionLayout;
 }
 
 export function SettingsSection(props: SettingsSectionProps): React.JSX.Element {
-  const { title, description, children, footer, tone = 'default' } = props;
-  const className =
-    tone === 'danger' ? 'mesh-settings-section mesh-settings-section--danger' : 'mesh-settings-section';
+  const { title, description, children, footer, tone = 'default', layout = 'stack' } = props;
+  const className = [
+    'mesh-settings-section',
+    tone === 'danger' ? 'mesh-settings-section--danger' : null,
+    layout === 'rows' ? 'mesh-settings-section--rows' : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' ');
 
   return (
     <section className={className} aria-label={title}>
@@ -37,8 +45,12 @@ export function SettingsSection(props: SettingsSectionProps): React.JSX.Element 
           <p className="mesh-settings-section__description">{description}</p>
         ) : null}
       </div>
-      <div className="mesh-settings-section__body">{children}</div>
-      {footer !== undefined ? <div className="mesh-settings-section__footer">{footer}</div> : null}
+      <div className="mesh-settings-section__panel">
+        <div className="mesh-settings-section__body">{children}</div>
+        {footer !== undefined ? (
+          <div className="mesh-settings-section__footer">{footer}</div>
+        ) : null}
+      </div>
     </section>
   );
 }

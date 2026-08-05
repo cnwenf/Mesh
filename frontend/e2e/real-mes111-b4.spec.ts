@@ -4,7 +4,7 @@
  * 见 playwright.mes111-b4.config.ts 的 projects)。
  *
  * 验收项(issue 逐条对应):
- * 1. 账号设置:/settings 索引重定向 → appearance;主题/语言/时区即时生效;
+ * 1. 账号设置:/settings 索引重定向 → profile；appearance 中主题/语言/时区即时生效;
  *    SettingsLayout 二级导航在场;四组合存证(桌面/手机 × 亮/暗)。
  * 2. 工作区设置:/w/:slug/settings 索引重定向 → general;dirty 提示 + 保存 toast +
  *    刷新持久化;G11 默认主题选择器(admin)写入后对工作区页面真实生效(账号偏好缺省
@@ -112,9 +112,13 @@ test.describe('MES-111 批次④ 设置 / 搜索命令面板 / Analytics / 审�
   test('账号设置:索引重定向 + 主题/语言/时区即时生效 + 四组合存证', async ({ page }) => {
     await registerAndContinue(page, uniqueEmail('set'), 'MES-127 设置');
 
-    // /settings 索引 → Navigate replace → appearance(主题控件在场)
+    // /settings 索引 → 个人资料默认页；外观设置保留独立规范深链。
     await page.goto('/settings');
-    await page.waitForURL(/\/settings\/appearance$/);
+    await page.waitForURL(/\/settings\/profile$/);
+    await expect(page.getByLabel('Name')).toBeVisible();
+    await expect(page.getByTestId('settings-nav-profile')).toBeVisible();
+
+    await page.goto('/settings/appearance');
     await expect(page.getByTestId('theme-select')).toBeVisible();
     await expect(page.getByTestId('locale-select')).toBeVisible();
     await expect(page.getByTestId('timezone-select')).toBeVisible();

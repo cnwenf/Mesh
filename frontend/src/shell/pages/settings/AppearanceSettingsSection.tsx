@@ -91,6 +91,7 @@ export function AppearanceSettingsSection(): React.JSX.Element {
 
   return (
     <>
+      <h2 className="mesh-settings-content-title">{t('settings.appearance')}</h2>
       {lastSyncError !== null && (
         <Banner
           tone="danger"
@@ -102,9 +103,10 @@ export function AppearanceSettingsSection(): React.JSX.Element {
         </Banner>
       )}
 
-      <SettingsSection title={t('settings.appearance')}>
+      <SettingsSection title={t('settings.personal')} layout="rows">
         <Select
           data-testid="theme-select"
+          hint={t('theme.defaultHint')}
           label={t('theme.label')}
           value={preferences.theme ?? ''}
           onChange={(event) => {
@@ -121,10 +123,6 @@ export function AppearanceSettingsSection(): React.JSX.Element {
             {t('theme.systemResolved', { theme: t('theme.' + systemResolved) })}
           </option>
         </Select>
-        <p className="mesh-settings__hint">{t('theme.defaultHint')}</p>
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.language')}>
         <Select
           data-testid="locale-select"
           label={t('settings.language')}
@@ -141,11 +139,14 @@ export function AppearanceSettingsSection(): React.JSX.Element {
             </option>
           ))}
         </Select>
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.timezone')}>
         <Select
           data-testid="timezone-select"
+          hint={
+            <>
+              <span>{t('settings.timezoneBrowser')}</span>
+              <span data-testid="tz-sample">{zoneSample}</span>
+            </>
+          }
           label={t('settings.timezone')}
           value={preferences.timezone}
           onChange={(event) => {
@@ -159,10 +160,6 @@ export function AppearanceSettingsSection(): React.JSX.Element {
             </option>
           ))}
         </Select>
-        <p className="mesh-settings__hint">{t('settings.timezoneBrowser')}</p>
-        <p className="mesh-settings__sample" data-testid="tz-sample">
-          {zoneSample}
-        </p>
       </SettingsSection>
     </>
   );

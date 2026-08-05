@@ -20,8 +20,9 @@ import { NavLink, useLocation, useNavigate } from 'react-router';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { Input as AppicaInput } from '@appica/ui-react/input';
 import { Kbd as AppicaKbd } from '@appica/ui-react/kbd';
-import { IconButton, StatusDot } from '../design';
-import type { StatusDotTone } from '../design';
+import { getApiClient, logout } from '../api';
+import { Icon, IconButton, Menu, StatusDot } from '../design';
+import type { MenuEntry, StatusDotTone } from '../design';
 import { InboxBell } from '../features/inbox';
 import { useT } from '../i18n';
 import type { ConnectionState } from '../realtime';
@@ -33,6 +34,9 @@ import { usePaletteContext } from '../shortcuts/usePaletteContext';
 import { usePaletteData } from '../shortcuts/usePaletteData';
 import type { FavoritesProvider } from '../shortcuts/usePaletteData';
 import { formatCombo, isComposingEvent } from '../shortcuts/ShortcutProvider';
+import { useAuthStore } from '../state/authStore';
+import { useSettingsStore } from '../state/settingsStore';
+import type { ThemeMode } from '../state/settingsStore';
 import { WorkspaceSwitcher } from '../workspace/WorkspaceSwitcher';
 
 export interface TopBarProps {
@@ -74,6 +78,9 @@ const TEXT_VISIBLE_STATES: ReadonlySet<ConnectionState> = new Set<ConnectionStat
   'offline',
 ]);
 
+const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
+const THEME_MENU_MODES: readonly ThemeMode[] = ['light', 'dark', 'system'];
+
 export function TopBar(props: TopBarProps): React.JSX.Element {
   const t = useT();
   const navigate = useNavigate();
@@ -88,10 +95,16 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
   const [searchValue, setSearchValue] = useState('');
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [systemResolved, setSystemResolved] = useState<'light' | 'dark'>(() =>
+    window.matchMedia(DARK_SCHEME_QUERY).matches ? 'dark' : 'light',
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const listId = useId();
   const location = useLocation();
   const context = usePaletteContext(location.pathname);
+  const themeMode = useSettingsStore((settings) => settings.preferences.theme);
+  const setTheme = useSettingsStore((settings) => settings.setTheme);
+  const clearToken = useAuthStore((auth) => auth.clearToken);
 
   const data = usePaletteData({
     workspaceId: context.workspaceId,
@@ -121,6 +134,16 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [popoverOpen]);
+
+  // theme.md §4.1:system 快捷项必须展示当前系统解析值，并随 OS 实时更新。
+  useEffect(() => {
+    const media = window.matchMedia(DARK_SCHEME_QUERY);
+    const handleChange = (event: MediaQueryListEvent): void => {
+      setSystemResolved(event.matches ? 'dark' : 'light');
+    };
+    media.addEventListener('change', handleChange);
+    return () => media.removeEventListener('change', handleChange);
+  }, []);
 
   const closePopover = (): void => {
     setPopoverOpen(false);
@@ -219,6 +242,57 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
     }
   };
 
+  const themeName = (mode: ThemeMode): string =>
+    mode === 'system'
+      ? t('theme.systemResolved', { theme: t(`theme.${systemResolved}`) })
+      : t(`theme.${mode}`);
+
+  const themeEntries: MenuEntry[] = THEME_MENU_MODES.map((mode) => ({
+    key: `theme-${mode}`,
+    label: t(themeMode === mode ? 'topbar.userMenu.themeCurrent' : 'topbar.userMenu.themeOption', {
+      theme: themeName(mode),
+    }),
+    onSelect: () => setTheme(mode),
+    icon: themeMode === mode ? 'check' : undefined,
+    // 已选模式是显式 no-op，禁用可避免重复 PATCH；文案仍明确标注「当前」。
+    disabled: themeMode === mode,
+  }));
+
+  const handleLogout = (): void => {
+    // 先启动 cookie 会话撤销，使请求在本地 token 清除前捕获当前鉴权；撤销是
+    // best effort，绝不能让挂起网络阻塞共享设备上的本地退出。
+    const revoke = logout(getApiClient()).catch(() => undefined);
+    clearToken();
+    navigate('/login', { replace: true });
+    void revoke;
+  };
+
+  const userMenuEntries: MenuEntry[] = [
+    {
+      key: 'personal-settings',
+      label: t('topbar.userMenu.personalSettings'),
+      icon: 'settings',
+      onSelect: () => navigate('/settings'),
+    },
+    { separator: true, key: 'theme-separator' },
+    ...themeEntries,
+    { separator: true, key: 'help-separator' },
+    {
+      key: 'keyboard-shortcuts',
+      label: t('topbar.userMenu.shortcuts'),
+      icon: 'info',
+      onSelect: onOpenHelp,
+    },
+    { separator: true, key: 'logout-separator' },
+    {
+      key: 'logout',
+      label: t('topbar.userMenu.logout'),
+      icon: 'logout',
+      danger: true,
+      onSelect: () => void handleLogout(),
+    },
+  ];
+
   return (
     <header className="mesh-topbar" aria-label={t('a11y.topbar')}>
       {/* §4.2:品牌是返回首页的链接 */}
@@ -289,7 +363,7 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
           </span>
         )}
       </span>
-      <span className="mesh-topbar__actions">
+      <div className="mesh-topbar__actions">
         <InboxBell />
         <IconButton
           data-testid="open-palette"
@@ -301,7 +375,14 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
         <IconButton data-testid="open-help" label={t('a11y.openHelp')} onClick={onOpenHelp}>
           <AppicaKbd size="sm">?</AppicaKbd>
         </IconButton>
-      </span>
+        <Menu
+          className="mesh-topbar__user-menu"
+          trigger={<Icon name="user" size={20} />}
+          triggerLabel={t('topbar.userMenu.open')}
+          entries={userMenuEntries}
+          align="end"
+        />
+      </div>
     </header>
   );
 }

@@ -286,7 +286,7 @@ test.describe('workspace §4 真实后端全流程', () => {
   });
 
   test('⑭ zh-CN/en 个人偏好切换(文案 100% 外部化)', async () => {
-    await pageA.goto('/settings');
+    await pageA.goto('/settings/appearance');
     await expect(pageA.getByTestId('locale-select')).toBeVisible({ timeout: 30_000 });
     await pageA.getByTestId('locale-select').selectOption('zh-CN');
     await expect(pageA.locator('h2', { hasText: '外观' }).first()).toBeVisible({ timeout: 15_000 });
@@ -311,7 +311,9 @@ test.describe('workspace §4 真实后端全流程', () => {
     // 删除成功 → 切换器中该工作区消失
     await expect(pageA.getByTestId('ws-switcher-button')).toBeVisible({ timeout: 30_000 });
     await pageA.getByTestId('ws-switcher-button').click();
-    await expect(pageA.getByTestId('ws-switcher-empty').or(pageA.getByTestId('ws-switcher-item-' + SLUG2))).toBeVisible({ timeout: 30_000 });
+    await expect(
+      pageA.getByTestId('ws-switcher-empty').or(pageA.getByTestId('ws-switcher-item-' + SLUG2)),
+    ).toBeVisible({ timeout: 30_000 });
     await expect(pageA.getByTestId('ws-switcher-item-' + SLUG)).toHaveCount(0);
     await pageA.screenshot({ path: `${EVIDENCE_DIR}/15-workspace-deleted.png` });
   });

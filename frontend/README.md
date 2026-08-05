@@ -140,6 +140,13 @@ Textarea、Button、DataTable 与 Tabs 的 Appica 渲染契约由组件测试中
 跨泳道 move 参数/实时事件、位置作用域与 WIP 口径。因此本基线只覆盖
 已定义的单维看板，不把未定义的泳道行为计为已完成。
 
+MES-185 进一步冻结公开流程 `384px`、设置 `224px + 704px`、看板 `280px`
+列与普通信息卡的运行态尺寸。账号资料通过既有 `/users/me` 读写昵称和 HTTPS
+头像地址，时区仍归外观设置；工作区首页的项目、issue、收件箱、执行卡使用真实
+API 并独立呈现 loading/empty/error/ready。相对时间组件每 30 秒刷新并在提示中
+同时保留用户时区绝对时间与 UTC 原值。完整测量和验证边界见
+`../docs/audits/mes185-interface-alignment-audit.md`。
+
 真实 production 栈验证继续使用 `e2e/mes128-real/run-e2e.sh`。
 `MES128_FRONTEND_PORT` 是浏览器入口的单一端口输入，runner 会把同一值传给
 Compose 发布端、readyz 探针、Playwright base URL、应用公开 URL 与证据 manifest。
