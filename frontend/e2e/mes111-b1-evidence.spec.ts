@@ -28,7 +28,7 @@ async function presetDark(page: import('@playwright/test').Page): Promise<void> 
 
 /** 登录后通过真实设置控件写入服务端权威偏好,再回首页拍摄暗色工作台。 */
 async function persistAuthenticatedDark(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto('/settings');
+  await page.goto('/settings/appearance');
   const persisted = page.waitForResponse(
     (response) =>
       response.url().endsWith('/api/v1/users/me') &&

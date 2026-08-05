@@ -210,7 +210,6 @@
   inset-inline-start: 50%;
   transform: translateX(-50%);
   z-index: var(--z-dropdown);
-  max-inline-size: 16rem;
   padding-block: var(--space-1);
   padding-inline: var(--space-2);
   border-radius: var(--radius-sm);
@@ -222,7 +221,10 @@
   line-height: var(--line-height-caption);
   font-weight: var(--font-weight-medium);
   text-align: center;
-  white-space: nowrap;
+  inline-size: max-content;
+  max-inline-size: min(16rem, calc(100vw - var(--space-8)));
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: none;
   opacity: 0;
   transition:

@@ -28,6 +28,11 @@ export interface BoardCard {
   readonly assignee: { readonly id: string; readonly name: string } | null;
   readonly assignee_id: string | null;
   readonly project_id: string | null;
+  readonly project?: { readonly id: string; readonly name: string; readonly key: string } | null;
+  readonly description?: string | null;
+  readonly estimate?: number | null;
+  readonly estimate_unit?: string | null;
+  readonly due_date?: string | null;
   readonly position: number;
   readonly version: number;
   readonly updated_at: string;

@@ -10,12 +10,15 @@ import { useLocation, useNavigate } from 'react-router';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShortcutProvider } from '../../../shortcuts/ShortcutProvider';
+import { useSettingsStore } from '../../../state/settingsStore';
 import { renderWithProviders } from '../../../test-utils/render';
 import { useShortcutRegistry } from '../../../shortcuts';
 import { BoardColumns, computeDropPosition } from '../BoardColumns';
 import type { BoardCard } from '../projection';
 import type { BoardColumn } from '../types';
 import { ensurePointerEvent, mockRect } from './dragTestUtils';
+
+const originalPreferences = useSettingsStore.getState().preferences;
 
 function card(id: string, position: number): BoardCard {
   return {
@@ -125,7 +128,10 @@ describe('BoardColumns 渲染', () => {
     ensurePointerEvent();
     useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    act(() => useSettingsStore.setState({ preferences: originalPreferences }));
+  });
 
   it('落点计算在投影数组暂态稀疏时仍使用安全位置回退', () => {
     const sparse = Array<BoardCard>(2);
@@ -349,6 +355,60 @@ describe('BoardColumns 渲染', () => {
     const withAssignee: BoardCard = { ...card('a', 1), assignee: { id: 'u1', name: '张三' } };
     render({ cardsByKey: { todo: [withAssignee] } });
     expect(screen.getByTestId('board-card-a')).toHaveTextContent('张三');
+  });
+
+  it('按视图 card_fields 呈现信息密集元数据并可逐项隐藏', () => {
+    const richCard: BoardCard = {
+      ...card('a', 1),
+      description: 'Two-line supporting detail',
+      project: { id: 'p1', name: 'Web project', key: 'WEB' },
+      estimate: 5,
+      estimate_unit: 'points',
+      due_date: '2026-08-10',
+      assignee: { id: 'u1', name: 'Jane' },
+      updated_at: '2026-08-05T03:04:05Z',
+    };
+    const view = render({ cardsByKey: { todo: [richCard] } });
+    const rendered = screen.getByTestId('board-card-a');
+    expect(rendered).toHaveTextContent('Two-line supporting detail');
+    expect(rendered).toHaveTextContent('Web project');
+    expect(rendered).toHaveTextContent('5 Points');
+    expect(rendered).toHaveTextContent('8/10/26');
+    expect(rendered).toHaveTextContent('Jane');
+    expect(rendered.querySelector('time')).toHaveAttribute('datetime', '2026-08-05T03:04:05Z');
+
+    view.unmount();
+    render({ cardsByKey: { todo: [richCard] }, cardFields: [] });
+    const compact = screen.getByTestId('board-card-a');
+    expect(compact).not.toHaveTextContent('Two-line supporting detail');
+    expect(compact).not.toHaveTextContent('Web project');
+    expect(compact).not.toHaveTextContent('5 Points');
+    expect(compact).not.toHaveTextContent('8/10/26');
+    expect(compact).not.toHaveTextContent('Jane');
+    expect(compact.querySelector('time')).toBeNull();
+  });
+
+  it('按用户 locale 与 timezone 本地化卡片优先级、估算与日期', () => {
+    act(() => {
+      useSettingsStore.setState({
+        preferences: { theme: null, locale: 'zh-CN', timezone: 'Asia/Shanghai' },
+      });
+    });
+    const localizedCard: BoardCard = {
+      ...card('a', 1),
+      estimate: 1234.5,
+      estimate_unit: 'points',
+      due_date: '2026-08-10',
+      updated_at: '2026-08-05T17:04:05Z',
+    };
+
+    render({ cardsByKey: { todo: [localizedCard] } });
+
+    const rendered = screen.getByTestId('board-card-a');
+    expect(rendered).toHaveTextContent('高');
+    expect(rendered).toHaveTextContent('1,234.5 点数');
+    expect(rendered).toHaveTextContent('2026/8/10');
+    expect(rendered.querySelector('time')).toHaveTextContent('2026/8/6');
   });
 
   it('groupBy=null 的 __dynamic__ 列回退空分组名(不崩溃)', () => {

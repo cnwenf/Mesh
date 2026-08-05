@@ -1,6 +1,6 @@
 # 前端界面设计实施基线
 
-> 状态：v1.1。本文冻结当前可执行的界面规格，覆盖设计令牌、排版、布局、组件、页面结构、响应式、主题和发布边界。业务行为仍以对应功能 Spec 为准；本文不得改变接口、权限、路由或实时协议。v1.1 的数值来自授权运行态的黑盒观测，并经过 WCAG AA 校准；未读取或复制任何外部源码、样式表或品牌资产。
+> 状态：v1.2。本文冻结当前可执行的界面规格，覆盖设计令牌、排版、布局、组件、页面结构、响应式、主题和发布边界。业务行为仍以对应功能 Spec 为准；本文不得改变接口、权限、路由或实时协议。v1.2 的数值来自授权运行态的黑盒观测，并经过 WCAG AA 校准；未读取或复制任何外部源码、样式表或品牌资产。
 
 ## 1. 目标与单一事实源
 
@@ -42,6 +42,8 @@
 | `--page-gutter-compact`     | `16px`   | compact 页边距                         |
 | `--page-gutter-medium`      | `24px`   | medium 页边距                          |
 | `--page-gutter-wide`        | `32px`   | wide/xwide 内容上限；密集页优先 `16px` |
+| `--content-public-flow`     | `384px`  | 登录、注册与恢复流程的固定内容框       |
+| `--content-settings`        | `704px`  | 账号设置的主内容列                     |
 | `--content-readable`        | `720px`  | 长文本与讨论流                         |
 | `--content-form`            | `640px`  | 设置与表单                             |
 | `--content-standard`        | `1120px` | 常规列表和详情                         |
@@ -149,6 +151,7 @@
 | ---------- | --------- | --------- | ------------------------------- |
 | display-lg | `36/44px` | `650`     | 低频公开页展示标题              |
 | display-sm | `30/38px` | `650`     | 工作台欢迎区                    |
+| public     | `24/32px` | `500`     | 登录、注册与恢复流程标题        |
 | title-1    | `16/24px` | `600`     | 页面唯一 `h1`                   |
 | title-2    | `16/24px` | `600`     | 对象详情标题                    |
 | title-3    | `14/20px` | `600`     | 分区、浮层标题                  |
@@ -203,7 +206,7 @@
 
 ### 8.1 Workbench
 
-适用于工作区首页与洞察。结构为 `PageHeader → KPI/提醒条 → 模块网格 → 最近活动`。compact 下 KPI 两列或单列；图表重排而不压缩文字。
+适用于工作区首页与洞察。结构为 `PageHeader → 身份/范围摘要 → 最近活动模块网格 → 快速入口`。工作区首页的最近项目、issue、收件箱和执行卡必须读取真实 API，分别呈现 loading、empty、error 和 ready，不用示例数据填充空白。xwide/wide 为四列，medium 为两列，compact 为单列；卡片最小高度 `116px`、内边距 `12px`、间距 `12px`。
 
 ### 8.2 DataView
 
@@ -215,7 +218,7 @@
 
 ### 8.4 Board
 
-结构为 `view switcher → filter/sort/WIP toolbar → shared column headers → lane/cell grid → quick create`。wide/xwide 使用横向滚动的共享列；compact 一次展示一个列或泳道，并以可访问选择器切换。pointer、键盘和触控移动都必须走同一原子命令与回滚反馈，不能为视觉效果复制数据流。
+结构为 `horizontal view switcher → filter/sort/WIP toolbar → shared column headers → lane/cell grid → quick create`。wide/xwide 使用横向滚动的共享列，固定列宽 `280px`、列间距 `16px`、列圆角 `14px`；普通卡片最小高度 `140px`、内边距 `12px`，标题最多两行，并按视图设置显示当前投影已提供的描述、项目、估算、截止时间、负责人和更新时间。截止日作为日历日期按 locale 呈现，更新时间按 locale 与用户时区呈现。标签、子任务进度及人/agent 类型头像须待服务端卡片投影提供后再接入，不得由前端虚构；虚拟化大列表继续使用固定 `72px` 紧凑卡并隐藏扩展元数据，避免破坏千卡性能契约。compact 一次展示一个列或泳道，并以可访问选择器切换。pointer、键盘和触控移动都必须走同一原子命令与回滚反馈，不能为视觉效果复制数据流。
 
 ### 8.5 Conversation
 
@@ -223,11 +226,11 @@
 
 ### 8.6 Settings
 
-适用于账号、工作区和项目设置。结构为 `secondary navigation → readable/form column → section cards → dirty/save region`。普通设置、权限设置、令牌与危险操作分区；compact 下二级导航转选择器或分组列表，危险区独立呈现。
+适用于账号、工作区和项目设置。账号设置使用 `224px secondary navigation → 704px content column → section panels`，内容列在余下空间居中；字段行在桌面采用左侧 label/hint、右侧控件的紧凑布局。普通设置、权限设置、令牌与危险操作分区；compact 下二级导航变为可横向滚动的顶部标签，内容回到 `16px` 页边距，字段行改为单列，危险区独立呈现。
 
 ### 8.7 PublicFlow 与恢复页
 
-登录、注册、邀请、设备授权、回调使用 `context/identity → single-task card → help/security note`。403、404 和全局错误页不渲染不可见工作区上下文，必须提供明确恢复路径。
+登录、注册、邀请、设备授权、回调使用 `context/identity → single-task card → help/security note`。内容框固定最大 `384px`，区块间距 `16px`，卡片内边距 `16px`、圆角 `14px`，标题使用 `24/32px` 中等字重；compact 仍保持同一内容宽度上限并由视口自然收缩。403、404 和全局错误页不渲染不可见工作区上下文，必须提供明确恢复路径。
 
 ## 9. 工作区隔离与页面状态
 

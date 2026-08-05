@@ -25,6 +25,19 @@ export async function fetchMe(client: MeshApiClient): Promise<MeResponse> {
   return client.request<MeResponse>('GET', USERS_ME_PATH);
 }
 
+export interface UpdateOwnProfileBody {
+  readonly display_name?: string;
+  readonly avatar_url?: string;
+}
+
+/** 当前用户资料写入(auth.md §3.1 / member.md §3.1)。 */
+export async function updateOwnProfile(
+  client: MeshApiClient,
+  body: UpdateOwnProfileBody,
+): Promise<MeResponse['user']> {
+  return client.request<MeResponse['user']>('PATCH', USERS_ME_PATH, { body });
+}
+
 /** 选取名册目标工作区:取首个成员身份(MES-24 接通工作区选择器前的单一归属口径)。 */
 export function activeWorkspace(memberships: readonly Membership[]): Membership | null {
   return memberships.length > 0 ? memberships[0] : null;

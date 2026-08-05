@@ -1,0 +1,44 @@
+.mesh-relative-time__trigger {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: help;
+}
+
+.mesh-relative-time__trigger:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.mesh-relative-time--revealed .mesh-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: var(--motion-instant);
+}
+
+@media (pointer: coarse) {
+  .mesh-relative-time__trigger {
+    min-block-size: 44px;
+    padding-inline: var(--space-1);
+  }
+}
+
+@media (max-width: 599px) {
+  .mesh-relative-time .mesh-tooltip {
+    position: fixed;
+    inset-inline: var(--space-4);
+    inset-block-end: calc(var(--shell-mobile-nav-offset) + var(--space-4));
+    inline-size: auto;
+    max-inline-size: none;
+    transform: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}

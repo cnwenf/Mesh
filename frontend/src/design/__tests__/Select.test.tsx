@@ -44,6 +44,30 @@ describe('Select', () => {
     expect(document.getElementById(describedBy as string)).toHaveTextContent('Required');
   });
 
+  it('hint 与 error 同时关联到控件', () => {
+    render(
+      <>
+        <span id="external-help">Account preference</span>
+        <Select
+          label="Timezone"
+          hint="Used for dates"
+          error="Required"
+          aria-describedby="external-help"
+        >
+          <option value="">—</option>
+        </Select>
+      </>,
+    );
+    const select = screen.getByLabelText('Timezone');
+    const describedBy = select.getAttribute('aria-describedby')?.split(' ') ?? [];
+    expect(describedBy).toHaveLength(3);
+    expect(describedBy.map((id) => document.getElementById(id)?.textContent)).toEqual([
+      'Account preference',
+      'Required',
+      'Used for dates',
+    ]);
+  });
+
   it('转发 ref', () => {
     const ref = createRef<HTMLSelectElement>();
     render(

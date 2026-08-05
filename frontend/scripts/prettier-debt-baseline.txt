@@ -25,11 +25,9 @@ e2e/real-comments-inbox.spec.ts
 e2e/real-inbox-notify.spec.ts
 e2e/real-lead-gate.spec.ts
 e2e/real-members.spec.ts
-e2e/real-mes44-regression.spec.ts
 e2e/real-runtimes.spec.ts
 e2e/real-theme.spec.ts
 e2e/ui-onboarding-walkthrough.mjs
-e2e/workspace-flow.spec.ts
 eslint-rules/__tests__/no-emoji-icons.test.js
 lint-shared/color-grammar.mjs
 pal-r4.mjs
@@ -67,7 +65,6 @@ src/design/components/Field.tsx
 src/design/components/Icon.tsx
 src/design/components/Menu.tsx
 src/design/components/Popover.tsx
-src/design/components/Select.tsx
 src/design/components/StatusDot.tsx
 src/design/components/Switch.tsx
 src/design/components/Tabs.tsx
@@ -76,7 +73,6 @@ src/design/patterns/DataView.tsx
 src/design/patterns/DetailLayout.tsx
 src/design/patterns/FilterChips.tsx
 src/design/patterns/RunStateBadge.tsx
-src/design/patterns/SettingsSection.tsx
 src/design/patterns/useListKeyboardSelection.ts
 src/design/ugcColorGuard.ts
 src/env.ts
@@ -148,7 +144,6 @@ src/features/chat/__tests__/api.test.ts
 src/features/chat/__tests__/distill.test.ts
 src/features/chat/api.ts
 src/features/chat/types.ts
-src/features/comments/CommentCard.tsx
 src/features/comments/CommentsPanel.tsx
 src/features/comments/__tests__/CommentsPanel.test.tsx
 src/features/comments/__tests__/ReactionBar.test.tsx
@@ -275,8 +270,6 @@ src/shell/__tests__/LoginPageReal.test.tsx
 src/shell/__tests__/OAuthCallbackPage.test.tsx
 src/shell/__tests__/ResetPasswordPage.test.tsx
 src/shell/__tests__/SeoMeta.test.tsx
-src/shell/__tests__/SettingsPage.test.tsx
-src/shell/pages/SettingsPage.tsx
 src/shell/shortcutsRegistration.ts
 src/shortcuts/__tests__/conflicts.test.ts
 src/shortcuts/__tests__/dispatch.test.tsx

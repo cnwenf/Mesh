@@ -18,10 +18,12 @@
  */
 /* eslint-disable react-refresh/only-export-components -- 纯工具与列组件同模块契约 */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useIntl } from 'react-intl';
 import { Button, Icon, IconButton, Input } from '../../design';
-import { useT } from '../../i18n';
+import { formatDate, formatNumber, useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useShortcutRegistry } from '../../shortcuts';
+import { useSettingsStore } from '../../state/settingsStore';
 import { BoardCompact, useIsCompactViewport } from './BoardCompact';
 import { BoardDragLayer } from './BoardDragLayer';
 import { BoardTouchMoveSheet } from './BoardTouchMoveSheet';
@@ -56,6 +58,7 @@ const FIXED_COLUMN_TONES = new Set([
   'low',
   'none',
 ]);
+const FIXED_PRIORITY_TONES = new Set(['urgent', 'high', 'medium', 'low', 'none']);
 
 /** 固定状态/优先级列使用语义淡色面；服务端动态实体保持中性。 */
 export function columnToneClass(key: string, groupBy: string | null): string {
@@ -203,6 +206,7 @@ function QuickCreate({
 
 interface BoardCardItemProps {
   readonly card: BoardCard;
+  readonly cardFields: readonly string[];
   readonly columnKey: string;
   readonly isPlaceholder: boolean;
   readonly isSelected: boolean;
@@ -228,6 +232,7 @@ interface BoardCardItemProps {
 function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
   const {
     card,
+    cardFields,
     columnKey,
     isPlaceholder,
     isSelected,
@@ -238,6 +243,9 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
     onCardKeyDown,
     onSelect,
   } = props;
+  const intl = useIntl();
+  const t = useT();
+  const timeZone = useSettingsStore((state) => state.preferences.timezone);
   const className = [
     'mesh-board__card',
     isPlaceholder ? 'mesh-board__card--placeholder' : '',
@@ -246,6 +254,21 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
   ]
     .filter((part) => part !== '')
     .join(' ');
+  const visible = new Set(cardFields);
+  const priorityLabel = FIXED_PRIORITY_TONES.has(card.priority)
+    ? t(`board.priority.${card.priority}`)
+    : card.priority;
+  const estimateUnit =
+    card.estimate_unit === 'points' || card.estimate_unit === 'hours'
+      ? t(`issues.detail.estimateUnit.${card.estimate_unit}`)
+      : card.estimate_unit;
+  // due_date 是数据库 DATE 而非瞬时，固定 UTC 解析以免负时区把日历日倒退一天；
+  // updated_at 是 UTC 瞬时，按账号时区转换。
+  const dueDate = card.due_date
+    ? formatDate(`${card.due_date}T00:00:00Z`, { locale: intl.locale, timeZone: 'UTC' })
+    : null;
+  const updatedDate =
+    card.updated_at === '' ? null : formatDate(card.updated_at, { locale: intl.locale, timeZone });
   return (
     <div
       className={className}
@@ -269,19 +292,38 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
         if (event.defaultPrevented) event.stopPropagation();
       }}
     >
-      <span className="mesh-board__card-grip" aria-hidden="true">
-        <Icon name="grip" size={16} />
-      </span>
-      <span className="mesh-board__card-id">{card.identifier}</span>
-      <span className="mesh-board__card-title">{card.title}</span>
-      <span className={`mesh-board__card-priority mesh-board__card-priority--${card.priority}`}>
-        {card.priority}
-      </span>
-      {card.assignee !== null ? (
-        <span className="mesh-board__card-assignee" title={card.assignee.name}>
-          {card.assignee.name}
+      <div className="mesh-board__card-head">
+        <span className="mesh-board__card-grip" aria-hidden="true">
+          <Icon name="grip" size={16} />
         </span>
+        <span className="mesh-board__card-id">{card.identifier}</span>
+        <span className={`mesh-board__card-priority mesh-board__card-priority--${card.priority}`}>
+          {priorityLabel}
+        </span>
+      </div>
+      <span className="mesh-board__card-title">{card.title}</span>
+      {visible.has('description') && card.description ? (
+        <span className="mesh-board__card-description">{card.description}</span>
       ) : null}
+      <div className="mesh-board__card-meta">
+        {visible.has('project') && card.project !== null && card.project !== undefined ? (
+          <span className="mesh-board__card-project">{card.project.name}</span>
+        ) : null}
+        {visible.has('estimate') && card.estimate !== null && card.estimate !== undefined ? (
+          <span>{`${formatNumber(card.estimate, { locale: intl.locale })}${estimateUnit ? ` ${estimateUnit}` : ''}`}</span>
+        ) : null}
+        {visible.has('due_date') && dueDate !== null ? <span>{dueDate}</span> : null}
+      </div>
+      <div className="mesh-board__card-footer">
+        {visible.has('assignee') && card.assignee !== null ? (
+          <span className="mesh-board__card-assignee" title={card.assignee.name}>
+            {card.assignee.name}
+          </span>
+        ) : null}
+        {visible.has('updated_at') && updatedDate !== null ? (
+          <time dateTime={card.updated_at}>{updatedDate}</time>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -318,6 +360,7 @@ interface BoardColumnCardProps {
   readonly column: BoardColumn;
   readonly label: string;
   readonly cards: readonly BoardCard[];
+  readonly cardFields: readonly string[];
   readonly canWrite: boolean;
   readonly dragState: DragState | null;
   readonly moveState: KeyboardMoveState | null;
@@ -344,6 +387,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     column,
     label,
     cards,
+    cardFields,
     canWrite,
     dragState,
     moveState,
@@ -394,6 +438,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     <BoardCardItem
       key={card.id}
       card={card}
+      cardFields={cardFields}
       columnKey={dropKey}
       isPlaceholder={dragState?.cardId === card.id}
       isSelected={moveState?.cardId === card.id || selectedCardId === card.id}
@@ -505,6 +550,7 @@ interface BoardColumnsProps {
   readonly columns: readonly BoardColumn[];
   readonly groupBy: string | null;
   readonly cardsByKey: Readonly<Record<string, readonly BoardCard[]>>;
+  readonly cardFields?: readonly string[];
   readonly canWrite: boolean;
   readonly dragEnabled: boolean;
   readonly onToggleCollapse: (key: string) => void;
@@ -541,6 +587,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     columns,
     groupBy,
     cardsByKey,
+    cardFields = ['description', 'project', 'estimate', 'due_date', 'assignee', 'updated_at'],
     canWrite,
     dragEnabled,
     onToggleCollapse,
@@ -794,6 +841,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
         column={column}
         label={getColumnLabel(column.key)}
         cards={cardsByKey[column.key] ?? []}
+        cardFields={cardFields}
         canWrite={canWrite}
         dragState={visualDragState}
         moveState={keyboard.moveState}

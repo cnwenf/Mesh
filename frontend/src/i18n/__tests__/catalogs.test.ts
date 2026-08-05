@@ -85,6 +85,7 @@ const REQUIRED_KEYS = [
   'theme.light',
   'theme.dark',
   'theme.system',
+  'time.sharedTooltip',
   // settings.*
   'settings.title',
   'settings.appearance',
@@ -342,6 +343,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     // search-command-palette §4 文案占位符(MES-127):成员类型
     // (查询词/项目/key/可见性/scope 复用上方搜索占位,避免对象重名键)
     memberType: 'human',
+    // 共享时间 tooltip(§4.3):本地时区值 + UTC 原值
+    local: '2026-07-25 20:00 (GMT+8)',
+    utc: '2026-07-25T12:00:00Z',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

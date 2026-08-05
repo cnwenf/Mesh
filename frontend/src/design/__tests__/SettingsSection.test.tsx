@@ -56,6 +56,17 @@ describe('SettingsSection', () => {
     const region = screen.getByRole('region', { name: 'General' });
     expect(region.className).not.toContain('--danger');
   });
+
+  it('rows 布局为紧凑设置行追加稳定类名', () => {
+    render(
+      <SettingsSection title="Preferences" layout="rows">
+        <p>body</p>
+      </SettingsSection>,
+    );
+    expect(screen.getByRole('region', { name: 'Preferences' })).toHaveClass(
+      'mesh-settings-section--rows',
+    );
+  });
 });
 
 describe('SettingsFieldRow', () => {

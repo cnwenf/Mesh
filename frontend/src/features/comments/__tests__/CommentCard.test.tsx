@@ -2,9 +2,10 @@
  * CommentCard 组件测试(comment-inbox.md §4.1):作者/徽标/正文/已删除占位/已编辑、
  * 解决·重开按钮、反应切换、就地编辑保存、深链高亮。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../test-utils/render';
+import { useSettingsStore } from '../../../state/settingsStore';
 import { getIssueByIdentifier } from '../../issues/api';
 import { CommentCard, escapeHtml, ISSUE_LINK_RE } from '../CommentCard';
 import type { CommentCardProps } from '../CommentCard';
@@ -36,7 +37,9 @@ const COMMENT: Comment = {
   edited_at: null,
 };
 
-function renderCard(overrides: Partial<CommentCardProps> = {}): void {
+function renderCard(
+  overrides: Partial<CommentCardProps> = {},
+): ReturnType<typeof renderWithProviders> {
   const props: CommentCardProps = {
     comment: COMMENT,
     workspaceId: 'ws-1',
@@ -53,7 +56,7 @@ function renderCard(overrides: Partial<CommentCardProps> = {}): void {
     onCopyLink: vi.fn(),
     ...overrides,
   };
-  renderWithProviders(<CommentCard {...props} />);
+  return renderWithProviders(<CommentCard {...props} />);
 }
 
 describe('CommentCard', () => {
@@ -62,6 +65,34 @@ describe('CommentCard', () => {
     expect(screen.getByTestId('comment-author-c-1').textContent).toBe('reviewer');
     expect(screen.getByTestId('agent-badge')).toBeTruthy();
     expect(screen.getByTestId('comment-body-c-1').innerHTML).toContain('<p>hello</p>');
+  });
+
+  it('使用共享时间语义：自动刷新且 tooltip 保留本地时区与 UTC 原值', () => {
+    const previousPreferences = useSettingsStore.getState().preferences;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-01T00:03:10Z'));
+    useSettingsStore.setState({
+      preferences: { theme: null, locale: 'en', timezone: 'Asia/Shanghai' },
+    });
+
+    const view = renderCard();
+    try {
+      const time = screen.getByText('3 minutes ago');
+      expect(time.tagName).toBe('TIME');
+      expect(time).toHaveAttribute('datetime', COMMENT.created_at);
+      expect(screen.getByRole('tooltip').textContent).toBe(
+        '2026-07-01 08:00 (GMT+8) · UTC original: 2026-07-01T00:00:00Z',
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText('4 minutes ago')).toBeTruthy();
+    } finally {
+      view.unmount();
+      useSettingsStore.setState({ preferences: previousPreferences });
+      vi.useRealTimers();
+    }
   });
 
   it('shows the deleted placeholder for deleted comments', () => {

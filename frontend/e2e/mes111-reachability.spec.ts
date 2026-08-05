@@ -148,7 +148,7 @@ test.describe('手机可达性 @390×844', () => {
 
   test('中文界面:「自动值守」与「运行环境」为两个不同导航条目(§4.1 去重名)', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('locale-select').selectOption('zh-CN');
     await expect(page.getByRole('heading', { name: '设置' })).toBeVisible();
     await page.goto('/');
@@ -194,7 +194,7 @@ test.describe('手机可达性 @390×844', () => {
 
   test('暗色主题下底部导航与抽屉仍完整可用(双主题走查)', async ({ page }) => {
     await login(page);
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');
@@ -218,7 +218,7 @@ test.describe('桌面端回归 @1280×720(双主题走查存证)', () => {
     await expect(page.getByTestId('topbar-search')).toBeVisible();
     await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-home-light.png` });
 
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');
@@ -254,7 +254,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await expect(page.getByTestId('nav-home')).toBeVisible();
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-home-light.png` });
 
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');
@@ -292,7 +292,10 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page);
     await page.goto('/');
-    await expect(page.getByTestId('mobile-nav-home')).toBeVisible();
+    const mobileHome = page.getByTestId('mobile-nav-home');
+    await expect(mobileHome).toBeVisible();
+    await mobileHome.focus();
+    await expect(mobileHome).toBeFocused();
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/phone-home-light.png` });
 
     await page.goto('/board');
@@ -304,7 +307,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     expect(lightOverflow.scrollWidth).toBeLessThanOrEqual(lightOverflow.clientWidth);
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/phone-board-light.png` });
 
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');

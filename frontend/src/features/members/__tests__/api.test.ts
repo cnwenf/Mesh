@@ -13,6 +13,7 @@ import {
   listProjectAccess,
   reassignIssues,
   removeMember,
+  updateOwnProfile,
   updateMember,
 } from '../api';
 
@@ -41,6 +42,26 @@ describe('成员名册 API 路径与包络', () => {
     const me = await fetchMe(client);
     expect(request).toHaveBeenCalledWith('GET', '/api/v1/users/me');
     expect(me.user.id).toBe('u');
+  });
+
+  it('updateOwnProfile 以 PATCH 写入当前用户资料并返回更新结果', async () => {
+    const { client, request } = makeClient();
+    request.mockResolvedValueOnce({
+      id: 'u',
+      display_name: 'Jane Doe',
+      avatar_url: 'https://cdn.example/avatar.png',
+    });
+    const user = await updateOwnProfile(client, {
+      display_name: 'Jane Doe',
+      avatar_url: 'https://cdn.example/avatar.png',
+    });
+    expect(request).toHaveBeenCalledWith('PATCH', '/api/v1/users/me', {
+      body: {
+        display_name: 'Jane Doe',
+        avatar_url: 'https://cdn.example/avatar.png',
+      },
+    });
+    expect(user.display_name).toBe('Jane Doe');
   });
 
   it('listMembers 透传筛选查询并解包 {data,next_cursor}', async () => {

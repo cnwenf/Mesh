@@ -43,7 +43,7 @@ test.describe('设计底座 @桌面 1280×720', () => {
       canvas: getComputedStyle(document.body).backgroundColor,
       text: getComputedStyle(document.body).color,
     }));
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     const dark = await page.evaluate(() => ({
@@ -129,7 +129,7 @@ test.describe('设计底座 @桌面 1280×720', () => {
     await page.goto('/board');
     await page.getByTestId('board-page').waitFor({ state: 'visible' });
     await page.screenshot({ path: `${EVIDENCE_DIR}/foundation-desktop-board-light.png` });
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.getByTestId('theme-select').selectOption('dark');
     await page.goto('/board');
     await page.getByTestId('board-page').waitFor({ state: 'visible' });
@@ -155,7 +155,7 @@ test.describe('设计底座 @手机 390×844', () => {
     await expect(page.getByRole('dialog', { name: 'All navigation' })).toBeVisible();
     await page.screenshot({ path: `${EVIDENCE_DIR}/foundation-phone-drawer-light.png` });
     await page.keyboard.press('Escape');
-    await page.goto('/settings');
+    await page.goto('/settings/appearance');
     await page.screenshot({ path: `${EVIDENCE_DIR}/foundation-phone-settings-light.png` });
     await page.getByTestId('theme-select').selectOption('dark');
     await page.waitForTimeout(200);

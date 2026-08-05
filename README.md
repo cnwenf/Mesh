@@ -60,6 +60,12 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 > [`interface-design-baseline.md`](docs/specs/frontend/interface-design-baseline.md) 与
 > `frontend/src/design/tokenValues.ts` 共同约束；实现不包含外部源码、样式或品牌资产。
 >
+> **MES-185 界面收口**：公开流程统一为 384px 紧凑内容框；看板冻结 280px 列与
+> 信息卡密度；账号设置采用 224px 导航 + 704px 内容列并新增个人资料入口；顶栏补齐
+> 用户/主题/帮助/退出菜单；工作区首页以真实项目、issue、收件箱和执行数据构成四卡概览；
+> 评论相对时间自动刷新并保留本地时区与 UTC 提示。逐项处置和保留边界见
+> [`mes185-interface-alignment-audit.md`](docs/audits/mes185-interface-alignment-audit.md)。
+>
 > **钉钉临时令牌安全口径**：长期凭据解密值进入 `redact_in_logs`；持续轮换的
 > `accessToken` 不依赖字面值黑名单，而由适配器执行结构化零日志——请求体、响应体、
 > 鉴权头值均不记录或持久化，失败诊断仅保留 `method/url/status`。权威约束见

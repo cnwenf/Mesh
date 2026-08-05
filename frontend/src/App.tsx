@@ -68,6 +68,7 @@ import { RegisterPage } from './shell/pages/RegisterPage';
 import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
 import { AppearanceSettingsSection } from './shell/pages/settings/AppearanceSettingsSection';
+import { ProfileSettingsSection } from './shell/pages/settings/ProfileSettingsSection';
 import { SecuritySettingsSection } from './shell/pages/settings/SecuritySettingsSection';
 import { FlatRouteMigration } from './workspace/flatRoutes';
 import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
@@ -242,7 +243,8 @@ function ShellProviders(): React.JSX.Element {
                   <Route index element={<HomePage />} />
                   {/* 账号设置(design-quality §4.4 Settings 模板):二级导航 + 子路由分页 */}
                   <Route path="settings" element={<SettingsPage />}>
-                    <Route index element={<Navigate to="appearance" replace />} />
+                    <Route index element={<Navigate to="profile" replace />} />
+                    <Route path="profile" element={<ProfileSettingsSection />} />
                     <Route path="appearance" element={<AppearanceSettingsSection />} />
                     <Route path="notifications" element={<NotificationPreferencesSection />} />
                     <Route path="security" element={<SecuritySettingsSection />} />

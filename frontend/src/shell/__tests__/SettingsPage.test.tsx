@@ -67,8 +67,9 @@ describe('账号设置(SettingsLayout + 子路由)', () => {
     expect(screen.getByTestId('settings-nav-appearance')).toBeInTheDocument();
   });
 
-  it('二级导航呈现三个分页项,当前项高亮', () => {
+  it('二级导航呈现个人资料与三个偏好分页项,当前项高亮', () => {
     renderAt('/settings/notifications');
+    expect(screen.getByTestId('settings-nav-profile')).toBeInTheDocument();
     expect(screen.getByTestId('settings-nav-appearance')).toBeInTheDocument();
     expect(screen.getByTestId('settings-nav-notifications').className).toContain('is-active');
     expect(screen.getByTestId('settings-nav-security')).toBeInTheDocument();
@@ -250,9 +251,11 @@ describe('账号设置(SettingsLayout + 子路由)', () => {
         onchange: null,
         addListener: vi.fn(),
         removeListener: vi.fn(),
-        addEventListener: vi.fn((_event: string, callback: (event: MediaQueryListEvent) => void) => {
-          listeners.add(callback);
-        }),
+        addEventListener: vi.fn(
+          (_event: string, callback: (event: MediaQueryListEvent) => void) => {
+            listeners.add(callback);
+          },
+        ),
         removeEventListener: vi.fn(
           (_event: string, callback: (event: MediaQueryListEvent) => void) => {
             listeners.delete(callback);
@@ -260,7 +263,10 @@ describe('账号设置(SettingsLayout + 子路由)', () => {
         ),
         dispatchEvent: vi.fn(),
       };
-      vi.stubGlobal('matchMedia', vi.fn(() => mediaQueryList));
+      vi.stubGlobal(
+        'matchMedia',
+        vi.fn(() => mediaQueryList),
+      );
 
       renderAt('/settings/appearance');
       const select = screen.getByTestId('theme-select');

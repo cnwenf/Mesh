@@ -107,9 +107,9 @@ test.describe('MES-106 登录守卫 / 401 兜底 / WS 公网 HTTP', () => {
 
   test('登录后回跳原页面,内容正常加载(无加载失败、无 401)', async ({ page }) => {
     const unauthorizedUrls = collect401(page);
-    await registerAndContinue(page, uniqueEmail('back'), '/settings');
-    await page.waitForURL((url) => new URL(url).pathname === '/settings');
-    await expect(page.getByTestId('theme-select')).toBeVisible();
+    await registerAndContinue(page, uniqueEmail('back'), '/settings/profile');
+    await page.waitForURL((url) => new URL(url).pathname === '/settings/profile');
+    await expect(page.getByLabel('Name')).toBeVisible();
     await expectNoLoadFailure(page);
     // 登录态全程无受保护端点 401(会话凭证有效)
     expect(unauthorizedUrls.filter(isProtectedApi401)).toEqual([]);
