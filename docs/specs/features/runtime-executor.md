@@ -330,7 +330,7 @@ claim 与执行时序：
 2. **provider 层**：固定版本能力清单证明支持硬 USD/token/turn 限制，启动时传入对应 flag；缺能力则 fail-closed；
 3. **daemon 层**：wall/idle timeout、cgroup CPU/memory/pids/IO、日志/结果/diff/附件字节上限，先 TERM 后 KILL。
 
-provider usage 用于实时截断和服务端核账。最终上报的 usage 是审计材料，不是唯一执法点；异常偏差触发 runtime 隔离和告警。
+provider usage 用于实时截断和服务端核账。最终上报的 usage 是审计材料，不是唯一执法点；daemon 对 token/turn/金额执行本地非负整数与 decimal-string 不变量校验，异常偏差立即锁存 runtime `isolated`、停止本地 claim 并上报固定脱敏原因码；server 核账发现的偏差同样隔离并告警。
 
 ### 3.6 S-08：清理清单
 
@@ -345,6 +345,8 @@ provider usage 用于实时截断和服务端核账。最终上报的 usage 是�
 7. 更新 journal cleanup 位；全部资源销毁后才删除 journal。
 
 清理器以白名单资源清单工作，不接受 provider 提供的路径；symlink 不跟随，删除目标必须位于 attempt 根且 inode/owner 匹配。
+
+任一步清理失败都不是普通 attempt 警告：daemon 把固定原因码（不含异常文本/路径）原子写入 0600 本地状态文件，heartbeat 报告 `isolated`，claim scheduler 在本机门禁处停止请求新任务。隔离跨进程重启保留；仅在新进程先完成残留对账、完整 doctor 检查全绿且没有在途 attempt 时才可清除，避免“下一次心跳健康”误自动恢复。
 
 ### 3.7 S-09：不可信上下文与 squad 聚合
 
@@ -422,9 +424,15 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 | Online | 沙箱、provider、broker、egress、预算能力均通过 | 查看执行 |
 | Degraded | 精确列出缺失能力和受影响任务类型 | 查看修复命令 |
 | Paused | 管理员暂停，不 claim 新任务 | 恢复 |
-| Isolated | 安全异常、usage 偏差或清理失败 | 导出脱敏诊断 / 重新注册 |
+| Isolated | 安全异常、usage 偏差或清理失败（跨重启锁存，本地停止 claim） | 导出脱敏诊断 / 修复后重启并通过 doctor，必要时重新注册 |
 
 不得用“运行失败”一个泛化状态掩盖 provider 版本不兼容、egress 不可强制、token 文件权限错误或 sandbox 不可用。
+
+daemon 与 server 共用固定诊断原因码。隔离类至少包括 `cleanup_failed`、
+`provider_isolation_failed`、`runtime_auth_failed`、`sandbox_security_failed`、
+`security_anomaly`、`usage_invariant_failed`、`usage_anomaly`；这些码只决定安全状态与修复
+入口，不承载异常原文。provider 探测失败时诊断中的缺失能力取钉死 manifest 的期望清单，
+但 claim 能力仍只取实际探测成功清单，二者不得混用。
 
 ### 4.2 执行详情
 
@@ -433,9 +441,11 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 - provider/version/model、冻结预算和实际 usage；
 - claim/running/approval/requeue/terminal 时间线；
 - 日志续传水位、取消原因、租约回收原因；
-- 高风险动作的“请求内容—审批人—精确 grant—执行结果”；
+- 高风险动作的“请求内容—审批人—精确 grant—执行结果”；其中 `grant` 必须来自独立持久化的真实授权记录，当前协议仅持久化请求与决定时返回 `null`，不得把请求内容复制成授权证据；
 - 产出 diff/result 的脱敏标识和安全告警，不显示 secret 原文；
 - 安全失败给出固定 reason code，不回显内部路径、token、IP 解析详情或 provider 原始 thinking。
+
+时间线只采用持久化事实：审批续跑用 `approvals.decided_at`，失联重排用事务内写入的 `execution.requeued` outbox 事件时间；不得用下一 attempt 的 `claimed_at` 伪装 requeue 时间。控制台审批响应对 `action_summary` 做严格白名单投影，只公开动作及允许的标量/目标字段，`resume_context`、checkpoint、内部路径与 token 永不返回。
 
 ### 4.3 S-12：发布与运行
 
@@ -483,7 +493,7 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 | 「永久禁止动作携带 grant」运行时负向测试 | 闸门表静态拒绝已覆盖，运行时负向补强 | A3 |
 | probe_binary manifest required_flags 对照与探测沙箱（§1.4 步骤 2-4） | 当前仅路径/属主/摘要/版本自检 | A3 |
 | ISO-01 覆盖 B 的 provider 配置/socket（§5.2 枚举） | worktree/tmp 已覆盖，provider 配置/socket 面随 A3 provider 资产出现后补齐 | A3 |
-| cleanup 失败隔离 runtime（§3.6） | 当前仅 warning + journal 位记录；隔离语义随 doctor/isolated 状态接线 | S-12 |
+| cleanup 失败隔离 runtime（§3.6） | **已闭合**：cleanup/security/usage 不变量异常锁存 0600 本地状态，heartbeat 报 `isolated`，本地 claim gate 零请求；跨重启保留，仅残留对账 + doctor 全绿 + 无在途 attempt 后恢复 | S-12（已闭合） |
 | egress resolver 管理员可配置（§3.4 rule 2） | 当前固定系统解析器（安全属性成立：任务不可自定义） | S-12 |
 | §5.4.4 命脉层 `real_llm` workflow（MES-95 交付物 B） | **已落地**：`.github/workflows/real-llm.yml` 仅 workflow_dispatch/schedule 触发、受保护 self-hosted runner、`concurrency` 串行、凭证仅 secrets；跑 `daemon/tests/integration/real_llm_e2e.py`（单 agent）+ `real_llm_squad_e2e.py`（leader+2 成员组队真拆真干真聚合）；首次真实全链路 PASS 证据 `docs/evidence/mes-95/real-llm-squad-e2e.json` | B（已闭合） |
 | §2.2 task principal issue 路由 + §3.3 squad 动作（MES-95） | **已落地**：`/api/v1/task/issues/*`（读/评论/状态，评论 `suppress_triggers` 防回环）、`squad.members`/`squad.subtasks` broker 动作与 orchestrator 角色化 scope；MCP 传输修复为 stdio 桥接；续租 token 轮换同步 broker。真实 LLM 实弹验证（45k tokens / 4 独立 session / issue done / 凭据零泄漏） | B（已闭合） |

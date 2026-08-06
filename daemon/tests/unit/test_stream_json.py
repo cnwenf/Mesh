@@ -246,6 +246,77 @@ class TestResultRecord:
         assert final.termination == "completed"
         assert final.summary == "the answer"
 
+    def test_success_result_uses_model_usage_when_aggregate_fields_are_zero(self):
+        """Claude Code 2.1 emits authoritative per-model camelCase totals.
+
+        Its legacy top-level ``usage`` and ``total_cost_usd`` fields can remain
+        zero, so the pinned-provider parser must aggregate ``modelUsage``
+        without exposing model-key metadata to the unified event stream.
+        """
+        rec = _rec(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "num_turns": 1,
+                    "total_cost_usd": 0,
+                    "result": "the answer",
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "modelUsage": {
+                        "model-a": {
+                            "inputTokens": 10,
+                            "outputTokens": 2,
+                            "cacheReadInputTokens": 3,
+                            "cacheCreationInputTokens": 4,
+                            "costUSD": 0.012345,
+                        },
+                        "model-b": {
+                            "inputTokens": 5,
+                            "outputTokens": 1,
+                            "cacheReadInputTokens": 2,
+                            "cacheCreationInputTokens": 0,
+                            "costUSD": 0.003,
+                        },
+                    },
+                }
+            )
+        )
+        assert rec.dropped is None
+        usage = rec.events[0]
+        assert usage == UsageObserved(
+            input_tokens=15,
+            output_tokens=3,
+            cache_read_tokens=5,
+            cache_creation_tokens=4,
+            cost_usd="0.015345",
+            turns=1,
+        )
+
+    @pytest.mark.parametrize(
+        "bad_usage",
+        [
+            [],
+            {"model": {"inputTokens": -1}},
+            {"model": {"inputTokens": "1"}},
+            {"model": {"costUSD": "not-a-decimal"}},
+        ],
+    )
+    def test_zero_aggregate_with_malformed_model_usage_is_rejected(self, bad_usage):
+        rec = _rec(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "num_turns": 1,
+                    "total_cost_usd": 0,
+                    "result": "x",
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "modelUsage": bad_usage,
+                }
+            )
+        )
+        assert rec.dropped == "malformed"
+
     def test_error_result_subtype_maps_to_failed(self):
         rec = _rec(
             json.dumps(

@@ -17,10 +17,12 @@ from sqlalchemy import select
 from mesh.comment_inbox.mentions import EXECUTION_ENQUEUE_EVENT
 from mesh.comment_inbox.service import CommentService
 from mesh.db.models.agent import Agent
+from mesh.db.models.audit import AuditLog
 from mesh.db.models.comment import Comment, CommentMention
 from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.runtime import TaskExecution
 from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.errors import (
@@ -31,6 +33,8 @@ from mesh.errors import (
     NotFoundError,
     PayloadTooLargeError,
 )
+from mesh.issue.statuses import seed_default_statuses
+from mesh.runtime.enqueue import enqueue_execution_handler
 
 pytestmark = pytest.mark.unit
 
@@ -78,14 +82,17 @@ async def _agent(factory, workspace, name: str) -> Member:
 async def _issue(factory, workspace, reporter: Member, title: str = "Bug") -> Issue:
     namespace = uuid.uuid4().hex[:8]
     async with factory() as session, session.begin():
-        status = IssueStatus(
-            workspace_id=workspace.id,
-            name=f"Todo-{namespace}",
-            category="todo",
-            is_default=False,
+        # Match the workspace-creation invariant so tests that materialize an
+        # execution can project semantic status changes as production does.
+        await seed_default_statuses(session, workspace_id=workspace.id)
+        status = await session.scalar(
+            select(IssueStatus).where(
+                IssueStatus.workspace_id == workspace.id,
+                IssueStatus.project_id.is_(None),
+                IssueStatus.category == "todo",
+            )
         )
-        session.add(status)
-        await session.flush()
+        assert status is not None
         issue = Issue(
             workspace_id=workspace.id,
             identifier_namespace_key=namespace,
@@ -155,6 +162,30 @@ async def test_create_render_and_list(env):
     assert items[0]["preview_replies"] == []
 
 
+async def test_removed_agent_author_keeps_agent_identity_and_status(env):
+    service, issue, agent = env["service"], env["issue"], env["agent"]
+    await service.create_comment(
+        workspace_id=env["workspace"].id,
+        issue_id=issue.id,
+        author_member=agent,
+        body_markdown="historical agent comment",
+    )
+    async with env["factory"]() as session, session.begin():
+        persisted_agent = await session.get(Member, agent.id)
+        assert persisted_agent is not None
+        persisted_agent.status = "removed"
+
+    items, _ = await service.list_comments(
+        workspace_id=env["workspace"].id,
+        issue_id=issue.id,
+        viewer_member_id=env["author"].id,
+        member=env["author"],
+    )
+
+    assert items[0]["author"]["member_type"] == "agent"
+    assert items[0]["author"]["status"] == "removed"
+
+
 async def test_reply_threading_depth_one(env):
     service, issue, author = env["service"], env["issue"], env["author"]
     root = await service.create_comment(
@@ -166,27 +197,30 @@ async def test_reply_threading_depth_one(env):
         body_markdown="reply", parent_id=uuid.UUID(root["id"]),
     )
     assert reply["thread_root_id"] == root["id"]
-    # replying to a reply is rejected (depth is exactly 1)
-    with pytest.raises(BusinessRuleError) as exc:
-        await service.create_comment(
-            workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
-            body_markdown="reply2", parent_id=uuid.UUID(reply["id"]),
-        )
-    assert exc.value.code == "reply_depth_exceeded"
+    # Replying to a reply is normalized to the root so storage remains one level.
+    reply2 = await service.create_comment(
+        workspace_id=env["workspace"].id,
+        issue_id=issue.id,
+        author_member=author,
+        body_markdown="reply2",
+        parent_id=uuid.UUID(reply["id"]),
+    )
+    assert reply2["parent_id"] == root["id"]
+    assert reply2["thread_root_id"] == root["id"]
 
     items, _ = await service.list_comments(
         workspace_id=env["workspace"].id, issue_id=issue.id,
         viewer_member_id=author.id, member=author,
     )
     assert len(items) == 1  # top-level only
-    assert items[0]["reply_count"] == 1
+    assert items[0]["reply_count"] == 2
     assert items[0]["preview_replies"][0]["id"] == reply["id"]
 
     replies, _ = await service.list_replies(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(root["id"]),
         viewer_member_id=author.id,
     )
-    assert [r["id"] for r in replies] == [reply["id"]]
+    assert [r["id"] for r in replies] == [reply["id"], reply2["id"]]
 
 
 async def test_edit_sets_edited_and_optimistic_lock(env):
@@ -268,12 +302,46 @@ async def test_resolve_reopen_only_thread_root(env):
         actor_member=author, resolved=True,
     )
     assert resolved["resolved_at"] is not None
-    assert resolved["resolved_by"] == str(author.id)
+    assert resolved["resolved_by"] == {
+        "id": str(author.id),
+        "member_type": "human",
+        "name": "Alice",
+    }
+    # A state mutation returns the same thread aggregate contract as the list:
+    # resolving must not make the already-loaded replies disappear in clients.
+    assert resolved["reply_count"] == 1
+    assert [item["id"] for item in resolved["preview_replies"]] == [reply["id"]]
     reopened = await service.set_thread_resolved(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(root["id"]),
         actor_member=author, resolved=False,
     )
     assert reopened["resolved_at"] is None
+    assert reopened["resolved_by"] is None
+    assert reopened["reply_count"] == 1
+    assert [item["id"] for item in reopened["preview_replies"]] == [reply["id"]]
+    async with env["factory"]() as session:
+        history = list(
+            (
+                await session.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.workspace_id == env["workspace"].id,
+                        AuditLog.resource_type == "comment_thread",
+                        AuditLog.resource_id == uuid.UUID(root["id"]),
+                    )
+                    .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert [entry.action for entry in history] == [
+        "comment.thread_resolved",
+        "comment.thread_reopened",
+    ]
+    assert history[0].metadata_["resolved_by_id"] == str(author.id)
+    assert history[1].metadata_["previous_resolved_by_id"] == str(author.id)
+    assert history[1].metadata_["previous_resolved_at"] == history[0].metadata_["resolved_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +424,82 @@ async def test_idempotency_key_returns_first_result(env):
     assert second["body_markdown"] == "once"
 
 
+async def test_concurrent_idempotency_key_uses_savepoint_and_returns_winner(env):
+    """Two real PostgreSQL transactions that both pass SELECT-first converge.
+
+    The barrier is placed in mention resolution, after the idempotency lookup
+    and before INSERT, so this deterministically exercises the unique-index
+    race rather than merely issuing two requests close together.
+    """
+    service, issue, author = env["service"], env["issue"], env["author"]
+    original = service._resolve_mentions
+    arrived = 0
+    lock = asyncio.Lock()
+    both_ready = asyncio.Event()
+
+    async def synchronized_resolve(*args, **kwargs):
+        nonlocal arrived
+        rendered = await original(*args, **kwargs)
+        async with lock:
+            arrived += 1
+            if arrived == 2:
+                both_ready.set()
+        await asyncio.wait_for(both_ready.wait(), timeout=5)
+        return rendered
+
+    service._resolve_mentions = synchronized_resolve
+    request_id = str(uuid.uuid4())
+    first, second = await asyncio.wait_for(
+        asyncio.gather(
+            service.create_comment(
+                workspace_id=env["workspace"].id,
+                issue_id=issue.id,
+                author_member=author,
+                body_markdown="first transaction",
+                idempotency_key=request_id,
+            ),
+            service.create_comment(
+                workspace_id=env["workspace"].id,
+                issue_id=issue.id,
+                author_member=author,
+                body_markdown="second transaction",
+                idempotency_key=request_id,
+            ),
+        ),
+        timeout=10,
+    )
+
+    assert first["id"] == second["id"]
+    assert first["body_markdown"] == second["body_markdown"]
+    assert first["client_request_id"] == request_id
+    async with env["factory"]() as session:
+        rows = (
+            await session.execute(
+                select(Comment).where(
+                    Comment.workspace_id == env["workspace"].id,
+                    Comment.idempotency_key == request_id,
+                )
+            )
+        ).scalars().all()
+    assert len(rows) == 1
+    realtime_rows = await _outbox_rows(env["factory"], "realtime.publish")
+    created_frame = next(
+        row for row in realtime_rows if row.payload.get("event") == "comment.created"
+    )
+    assert created_frame.payload["data"]["client_request_id"] == request_id
+
+
+async def test_opaque_idempotency_key_is_not_reflected(env):
+    created = await env["service"].create_comment(
+        workspace_id=env["workspace"].id,
+        issue_id=env["issue"].id,
+        author_member=env["author"],
+        body_markdown="opaque key",
+        idempotency_key="caller-secret-or-opaque-value",
+    )
+    assert created["client_request_id"] is None
+
+
 async def test_system_comment_not_deletable_via_api(env):
     service, issue = env["service"], env["issue"]
     system = await service.create_system_comment(
@@ -369,6 +513,24 @@ async def test_system_comment_not_deletable_via_api(env):
             workspace_id=env["workspace"].id, comment_id=uuid.UUID(system["id"]),
             actor_member=env["author"], is_manager=True,
         )
+
+
+async def test_system_comment_cannot_be_resolved_or_reopened(env):
+    service, issue = env["service"], env["issue"]
+    system = await service.create_system_comment(
+        workspace_id=env["workspace"].id,
+        issue_id=issue.id,
+        body_markdown="状态变更为 **done**",
+    )
+
+    for resolved in (True, False):
+        with pytest.raises(ForbiddenError):
+            await service.set_thread_resolved(
+                workspace_id=env["workspace"].id,
+                comment_id=uuid.UUID(system["id"]),
+                actor_member=env["author"],
+                resolved=resolved,
+            )
 
 
 async def test_author_and_mentioned_subscribed(env):
@@ -408,22 +570,63 @@ async def test_publish_mention_agent_enqueues_once(env):
         workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
         body_markdown=body,
     )
-    # same comment, same agent twice → exactly one execution (uq_mentions)
-    assert len(created["triggered_execution_ids"]) == 1
+    # Same comment, same agent twice → one pending enqueue. Until the runtime
+    # materializes it, the API never exposes that outbox id as an execution id.
+    assert created["triggered_execution_ids"] == []
     enqueues = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
     assert len(enqueues) == 1
     payload = enqueues[0].payload
     assert payload["trigger"] == "mention"
     assert payload["agent_member_id"] == str(agent.id)
     assert enqueues[0].idempotency_key is not None
-    # triggered_execution_id persisted on the mention row (skeleton = outbox id)
+    # Pending correlation is separate from the canonical execution field.
     async with env["factory"]() as session:
         mention = await session.scalar(
             select(CommentMention).where(
                 CommentMention.comment_id == uuid.UUID(created["id"])
             )
         )
-    assert mention.triggered_execution_id == enqueues[0].id
+    assert mention.triggered_execution_id is None
+    assert mention.pending_trigger_event_id == enqueues[0].id
+
+    # The producer has no task_executions row/id yet. It must not expose the
+    # enqueue outbox id as though it were a materialized execution id; the
+    # runtime enqueue consumer owns the canonical execution.queued frame.
+    realtime = await _outbox_rows(env["factory"], "realtime.publish")
+    assert [row for row in realtime if row.payload.get("event") == "execution.queued"] == []
+
+    # Consume the real producer row. The canonical materializer must preserve
+    # the originating comment id on its FINAL execution.queued frame so a
+    # failed mention run can be retried from the placeholder card.
+    async with env["factory"]() as session, session.begin():
+        event = await session.get(OutboxEvent, enqueues[0].id)
+        assert event is not None
+        await enqueue_execution_handler(session, event)
+    async with env["factory"]() as session:
+        execution = (await session.execute(select(TaskExecution))).scalar_one()
+        queued_frames = (
+            await session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == "realtime.publish",
+                    OutboxEvent.payload["event"].astext == "execution.queued",
+                    OutboxEvent.payload["data"]["execution_id"].astext == str(execution.id),
+                )
+            )
+        ).scalars().all()
+    issue_frame = next(
+        row for row in queued_frames if row.payload["channel"] == f"issue:{issue.id}"
+    )
+    assert issue_frame.payload["data"]["comment_id"] == created["id"]
+    assert issue_frame.payload["data"]["execution_id"] == str(execution.id)
+    async with env["factory"]() as session:
+        mention = await session.scalar(
+            select(CommentMention).where(
+                CommentMention.comment_id == uuid.UUID(created["id"])
+            )
+        )
+    assert mention is not None
+    assert mention.triggered_execution_id == execution.id
+    assert mention.pending_trigger_event_id is None
 
 
 async def test_suppress_triggers_notifies_only(env):
@@ -463,16 +666,14 @@ async def test_edit_add_mention_enqueues_only_added(env):
         body_markdown=f"start {_mention_link(agent_a.id)}",
     )
     assert len(await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)) == 1
-    # edit adds B: only B enqueues (one NEW execution; the response carries
-    # every active trigger on the comment, so both A and B are listed)
+    # Edit adds B: only B enqueues; neither pending outbox id is rendered as a
+    # logical execution id before materialization.
     updated = await service.update_comment(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(created["id"]),
         editor_member=author, is_manager=False,
         body_markdown=f"start {_mention_link(agent_a.id)} plus {_mention_link(agent_b.id)}",
     )
-    assert set(updated["triggered_execution_ids"]) - set(
-        created["triggered_execution_ids"]
-    ) and len(updated["triggered_execution_ids"]) == 2
+    assert updated["triggered_execution_ids"] == []
     enqueues = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
     assert len(enqueues) == 2  # exactly one NEW enqueue for B
     agent_ids = {event.payload["agent_member_id"] for event in enqueues}
@@ -493,7 +694,7 @@ async def test_edit_remove_then_readd_mention_enqueues_fresh_execution(env):
     )
     first = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
     assert len(first) == 1
-    assert len(created["triggered_execution_ids"]) == 1
+    assert created["triggered_execution_ids"] == []
 
     # remove the mention — soft-delete, no enqueue, nothing cancelled (§6.9)
     await service.update_comment(
@@ -512,7 +713,15 @@ async def test_edit_remove_then_readd_mention_enqueues_fresh_execution(env):
     rows = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
     assert len(rows) == 2  # a brand-new enqueue, NOT the stale row replay
     assert {row.id for row in rows} != {first[0].id}
-    assert first[0].id not in set(readded["triggered_execution_ids"])
+    assert readded["triggered_execution_ids"] == []
+    async with env["factory"]() as session:
+        mention = await session.scalar(
+            select(CommentMention).where(
+                CommentMention.comment_id == uuid.UUID(created["id"])
+            )
+        )
+    assert mention is not None
+    assert mention.pending_trigger_event_id in {row.id for row in rows} - {first[0].id}
 
 
 async def test_edit_unrelated_text_does_not_retrigger(env):
@@ -560,7 +769,7 @@ async def test_new_comment_same_agent_enqueues_new_execution(env):
         workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
         body_markdown=_mention_link(agent.id),
     )
-    assert first["triggered_execution_ids"] != second["triggered_execution_ids"]
+    assert first["triggered_execution_ids"] == second["triggered_execution_ids"] == []
     assert len(await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)) == 2
 
 

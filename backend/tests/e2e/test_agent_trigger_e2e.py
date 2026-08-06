@@ -6,7 +6,8 @@ shape, agent.md §3.3 / §5.1, README §6.5 / §6.9 / §6.11):
 * assigning an issue to an agent emits ``issue.assigned`` in the business
   transaction; the relay's unified orchestration entry writes
   ``execution.enqueue`` with the §6.5 idempotency key and the §6.11
-  reproducible snapshot, and broadcasts ``execution.queued`` (§3.6);
+  reproducible snapshot, without broadcasting a placeholder
+  ``execution.queued`` before the runtime materializes an execution id;
 * §6.9 matrix lines: same-assignee re-select = no-op, unchanged save =
   no-op, reassignment = supersede(cancel) + enqueue, paused/
   trigger_on_assign=false → ``agent.trigger_skipped`` and no enqueue;
@@ -173,7 +174,8 @@ async def test_assign_to_agent_enqueues_execution_through_relay(api_client, sess
     assert assigned[0].payload["agent_id"] == agent["id"]
     trigger_event_id = assigned[0].payload["trigger_event_id"]
 
-    # Relay dispatches → execution.enqueue + execution.queued projection.
+    # Assignment relay dispatches → execution.enqueue only. The runtime
+    # consumer publishes execution.queued after materializing its final id.
     relay = _build_relay(session_factory)
     await _drain(relay)
 
@@ -211,11 +213,8 @@ async def test_assign_to_agent_enqueues_execution_through_relay(api_client, sess
     # §6.15 untrusted context isolation.
     assert "UNTRUSTED_DATA_BEGIN" in payload["task_spec"]["untrusted_context"]["issue"]["title"]
 
-    # execution.queued projected onto the issue's run channel (§3.6).
-    queued = await _realtime_rows(session_factory, "execution.queued")
-    assert len(queued) == 1
-    assert queued[0].channel == f"issue:{issue['id']}:runs"
-    assert queued[0].seq == 1
+    # No placeholder frame lacking execution_id may escape this producer.
+    assert await _realtime_rows(session_factory, "execution.queued") == []
 
     # Redelivery (crash-before-published simulation): reset to pending and
     # re-run — the idempotency key prevents a duplicate enqueue (§6.5).

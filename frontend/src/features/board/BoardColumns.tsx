@@ -213,6 +213,8 @@ interface BoardCardItemProps {
   /** 虚拟化窗口的 AT 坐标(仅虚拟化路径提供;§10.2 不破坏读屏集合语义)。 */
   readonly virtualSetSize?: number;
   readonly virtualPosInSet?: number;
+  /** 当前逻辑执行状态；仅活跃态会由父级传入。 */
+  readonly executionStatus?: string;
   readonly onCardPointerDown: (
     event: React.PointerEvent,
     cardId: string,
@@ -237,6 +239,7 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
     isHighlighted,
     virtualSetSize,
     virtualPosInSet,
+    executionStatus,
     onCardPointerDown,
     onCardKeyDown,
     onSelect,
@@ -301,6 +304,17 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
       </div>
       <span className="mesh-board__card-title">{card.title}</span>
       {visible.has('labels') ? <LabelDots labels={card.labels ?? []} /> : null}
+      {executionStatus !== undefined ? (
+        <span
+          className="mesh-board__card-execution"
+          data-testid={`board-card-execution-${card.id}`}
+          role="status"
+          data-execution-status={executionStatus}
+        >
+          <span className="mesh-board__card-execution-dot" aria-hidden="true" />
+          {t('board.issueProcessing')}
+        </span>
+      ) : null}
       {visible.has('description') && card.description ? (
         <span className="mesh-board__card-description">{card.description}</span>
       ) : null}
@@ -379,6 +393,7 @@ interface BoardColumnCardProps {
   readonly testKey: string;
   readonly subGroupKey?: string;
   readonly toneClass: string;
+  readonly executionStatusByIssueId: Readonly<Record<string, string>>;
 }
 
 function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
@@ -402,6 +417,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     testKey,
     subGroupKey,
     toneClass,
+    executionStatusByIssueId,
   } = props;
   const t = useT();
   const headingId = useId();
@@ -444,6 +460,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
       isHighlighted={highlightCardId === card.id}
       virtualSetSize={virtualA11y?.setsize}
       virtualPosInSet={virtualA11y?.posinset}
+      executionStatus={executionStatusByIssueId[card.id]}
       onCardPointerDown={onCardPointerDown}
       onCardKeyDown={onCardKeyDown}
       onSelect={onSelectCard}
@@ -573,6 +590,8 @@ interface BoardColumnsProps {
   readonly onDragStateChange?: (state: DragState | null) => void;
   /** 新建卡片 1.2s 插入高亮(§9.3.4);缺省无高亮。 */
   readonly highlightCardId?: string | null;
+  /** issue id → 活跃 execution 状态；终态不应进入此映射。 */
+  readonly executionStatusByIssueId?: Readonly<Record<string, string>>;
 }
 
 interface BoardSelection {
@@ -597,6 +616,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     dropTargets,
     sharedDragState,
     onDragStateChange,
+    executionStatusByIssueId = {},
   } = props;
   const t = useT();
   const boardRef = useRef<HTMLDivElement>(null);
@@ -856,6 +876,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
         testKey={testKey}
         subGroupKey={subGroupKey}
         toneClass={columnToneClass(column.key, groupBy)}
+        executionStatusByIssueId={executionStatusByIssueId}
       />
     );
   };

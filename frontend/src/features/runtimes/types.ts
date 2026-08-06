@@ -13,6 +13,31 @@ export type RuntimeKind = 'platform_managed' | 'self_hosted';
 export type RuntimeStatus =
   'pending' | 'online' | 'unavailable' | 'paused' | 'draining' | 'decommissioned';
 
+/** Runtime 可执行性状态。与注册 / 排空等生命周期状态分开呈现。 */
+export type RuntimeOperationalState = 'online' | 'degraded' | 'isolated' | 'paused';
+
+export type RuntimeDiagnosticReason =
+  | 'provider_unavailable'
+  | 'capability_missing'
+  | 'sandbox_unavailable'
+  | 'broker_unreachable'
+  | 'egress_blocked'
+  | 'budget_unavailable'
+  | 'cleanup_failed'
+  | 'security_anomaly'
+  | 'usage_anomaly'
+  | 'activation_pending'
+  | 'heartbeat_unavailable'
+  | 'runtime_draining';
+
+/** 服务端脱敏后的结构化诊断；不包含原始异常、路径、地址或凭据。 */
+export interface RuntimeDiagnostic {
+  readonly reason_code: RuntimeDiagnosticReason;
+  readonly missing_capabilities: readonly string[];
+  readonly affected_task_types: readonly string[];
+  readonly repair_command: string;
+}
+
 /** 逻辑执行状态(runtime.md §4.7,含审批挂起 awaiting_approval)。 */
 export type ExecutionStatus =
   | 'queued'
@@ -45,6 +70,8 @@ export interface RuntimeSummary {
   readonly name: string;
   readonly kind: RuntimeKind;
   readonly status: RuntimeStatus;
+  readonly operational_state?: RuntimeOperationalState;
+  readonly diagnostics?: readonly RuntimeDiagnostic[];
   /** 自定义标签,如 {"gpu":"true","region":"intranet"} */
   readonly labels: Readonly<Record<string, string>>;
   /** 已安装工具 / 能力列表,如 ["version_control","python"] */
@@ -107,6 +134,75 @@ export interface AttemptSummary {
   /** 本次尝试结果(exit code / diff 摘要 / 产物引用,§4.4 产物 Tab)。 */
   readonly result?: Readonly<Record<string, unknown>> | null;
   readonly failure_reason: string | null;
+  readonly lease_seq?: number;
+  readonly provider?: string | null;
+  readonly provider_version?: string | null;
+  readonly model?: string | null;
+  readonly actual_usage?: AttemptUsage | null;
+  readonly frozen_budget?: FrozenBudget;
+  readonly timeline?: readonly AttemptTimelineEvent[];
+  readonly redaction_hits?: number;
+  readonly redacted?: boolean;
+  readonly security_alert?: string | null;
+}
+
+/** 入队时冻结的预算，与运行后实际消耗并列展示。 */
+export interface FrozenBudget {
+  readonly max_cost_usd?: string;
+  readonly max_tokens?: number;
+  readonly max_turns?: number;
+  readonly max_wall_time_seconds?: number;
+  readonly max_idle_time_seconds?: number;
+}
+
+export interface AttemptUsage {
+  readonly prompt_tokens: number;
+  readonly completion_tokens: number;
+  readonly cache_tokens: number;
+  readonly total_tokens: number;
+  readonly cost_usd: string | null;
+  readonly turns: number | null;
+}
+
+export interface AttemptTimelineEvent {
+  readonly event: string;
+  readonly at: string;
+  readonly status?: AttemptStatus;
+  readonly reason_code?: string | null;
+}
+
+export interface ApprovalAuditPayload {
+  readonly action: string;
+  readonly fields: Readonly<Record<string, string | number | boolean>>;
+}
+
+export interface ApprovalAudit {
+  readonly id: string;
+  readonly source_attempt_id: string | null;
+  readonly request: ApprovalAuditPayload;
+  readonly requested_by_member_id: string;
+  readonly requested_at: string;
+  readonly decision: {
+    readonly status: string;
+    readonly decided_by_member_id: string | null;
+    readonly decided_at: string | null;
+  };
+  readonly grant: ApprovalAuditPayload | null;
+  readonly result: {
+    readonly attempt_id: string;
+    readonly status: AttemptStatus;
+    readonly termination: string | null;
+  } | null;
+}
+
+/** 执行详情中最新 attempt 的 checkout 元数据；UI 只公开 diff_ref 深链标识。 */
+export interface ExecutionCheckout {
+  readonly repo_url?: string;
+  readonly base_ref?: string;
+  readonly working_branch?: string;
+  readonly commit_sha?: string | null;
+  readonly status?: string;
+  readonly diff_ref: string | null;
 }
 
 /**
@@ -136,7 +232,16 @@ export interface ExecutionSummary {
 export interface ExecutionDetail extends ExecutionSummary {
   readonly max_attempts: number;
   readonly attempts: readonly AttemptSummary[];
+  readonly frozen_budget?: FrozenBudget;
+  readonly retry_count?: number;
+  readonly approval_audits?: readonly ApprovalAudit[];
+  readonly checkout?: ExecutionCheckout | null;
   readonly cancel_requested_at?: string | null;
+  readonly output_review?: {
+    readonly decision: 'approved' | 'rejected';
+    readonly decided_by_member_id: string | null;
+    readonly decided_at: string;
+  } | null;
   /** 凭证元信息(§4.10:仅名称 / 种类,值恒为 ***;服务端永不回显明文)。 */
   readonly credentials?: readonly CredentialMeta[];
 }

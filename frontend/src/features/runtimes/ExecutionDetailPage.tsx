@@ -1,6 +1,6 @@
 /**
  * 单个任务执行详情页(runtime.md §4.4):状态头 + runtime + 已运行 / 超时进度;
- * agent / issue / 触发 / 分支元信息;三 Tab —— 实时日志 / 产物 / Diff / 凭证(已脱敏),
+ * agent / issue / 触发 / 分支元信息;四 Tab —— 实时日志 / 尝试审计 / 产物 / 凭证(已脱敏),
  * 选中 Tab 同步 URL search params(与 AgentDetailPage 同模式)。
  *
  * 日志三段合一(§4.9):① REST listExecutionLogs(?offset=N)补历史 → ② WS 主通道
@@ -23,6 +23,7 @@ import {
 } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
 import {
@@ -33,28 +34,182 @@ import {
   getExecution,
   latestAttempt,
   listExecutionLogs,
+  workspaceExecutionsChannel,
 } from './api';
 import { executionDisplayLabel } from './executionLabel';
 import { formatDurationSeconds } from './format';
-import type { ExecutionDetail, ExecutionStatus, LogFrame, LogLine } from './types';
+import type { AttemptStatus, ExecutionDetail, ExecutionStatus, LogFrame, LogLine } from './types';
 import { SUCCESS_EXECUTION_STATUSES, TERMINAL_EXECUTION_STATUSES } from './types';
 import './runtimes.css';
 
-type TabKey = 'logs' | 'artifacts' | 'credentials';
+type TabKey = 'logs' | 'audit' | 'artifacts' | 'credentials';
 
-const TAB_KEYS: readonly TabKey[] = ['logs', 'artifacts', 'credentials'];
+const TAB_KEYS: readonly TabKey[] = ['logs', 'audit', 'artifacts', 'credentials'];
+
+function localText(t: TranslateFn, key: string, fallback: string): string {
+  const translated = t(key);
+  return translated === key || translated.includes(`[${key}]`) ? fallback : translated;
+}
+
+function auditValue(value: string | number | boolean): string {
+  return typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value);
+}
+
+const AUDIT_LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/;
+const AUDIT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,511}$/;
+const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const DECIMAL_PATTERN = /^\d+(?:\.\d+)?$/;
+const APPROVAL_AUDIT_FIELD_KEYS: ReadonlySet<string> = new Set([
+  'repository',
+  'branch',
+  'operation',
+  'resource',
+  'scope',
+  'method',
+  'target_type',
+  'target_id',
+]);
+
+function safeApprovalFields(
+  fields: Readonly<Record<string, string | number | boolean>>,
+): readonly (readonly [string, string | number | boolean])[] {
+  return Object.entries(fields).filter(([key, value]) => {
+    if (!APPROVAL_AUDIT_FIELD_KEYS.has(key)) return false;
+    if (typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (key === 'repository') return REPOSITORY_PATTERN.test(value);
+    if (key === 'branch') return BRANCH_PATTERN.test(value);
+    return AUDIT_LABEL_PATTERN.test(value);
+  });
+}
+
+function safeAuditRef(value: unknown): string | null {
+  return typeof value === 'string' && AUDIT_REF_PATTERN.test(value) ? value : null;
+}
+
+function recordOf(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === 'object' && value !== null
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+/**
+ * 二次收口服务端的安全 result DTO。只复制公开 schema 的字段；未知键、路径、
+ * provider 私有会话及任意嵌套对象都不会因 JSON.stringify 被意外展开。
+ */
+function safeArtifactResult(
+  result: Readonly<Record<string, unknown>> | null | undefined,
+): Readonly<Record<string, unknown>> | null {
+  if (result == null) return null;
+  const safe: Record<string, unknown> = {};
+  const schemaVersion = result.schema_version;
+  if (typeof schemaVersion === 'number' && Number.isInteger(schemaVersion)) {
+    safe.schema_version = schemaVersion;
+  }
+
+  const provider = recordOf(result.provider);
+  if (provider !== null) {
+    const safeProvider: Record<string, unknown> = {};
+    for (const key of ['name', 'version', 'model'] as const) {
+      const value = provider[key];
+      if (typeof value === 'string' && AUDIT_LABEL_PATTERN.test(value)) safeProvider[key] = value;
+    }
+    if (typeof provider.session_recorded === 'boolean') {
+      safeProvider.session_recorded = provider.session_recorded;
+    }
+    if (Object.keys(safeProvider).length > 0) safe.provider = safeProvider;
+  }
+
+  const usage = recordOf(result.usage);
+  if (usage !== null) {
+    const safeUsage: Record<string, unknown> = {};
+    for (const key of [
+      'input_tokens',
+      'cache_creation_tokens',
+      'cache_read_tokens',
+      'output_tokens',
+      'total_tokens',
+      'turns',
+    ] as const) {
+      const value = usage[key];
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+        safeUsage[key] = value;
+      }
+    }
+    if (typeof usage.cost_usd === 'string' && DECIMAL_PATTERN.test(usage.cost_usd)) {
+      safeUsage.cost_usd = usage.cost_usd;
+    }
+    if (Object.keys(safeUsage).length > 0) safe.usage = safeUsage;
+  }
+
+  const outcome = recordOf(result.outcome);
+  if (outcome !== null) {
+    const safeOutcome: Record<string, unknown> = {};
+    if (typeof outcome.exit_code === 'number' && Number.isInteger(outcome.exit_code)) {
+      safeOutcome.exit_code = outcome.exit_code;
+    }
+    if (typeof outcome.termination === 'string' && AUDIT_LABEL_PATTERN.test(outcome.termination)) {
+      safeOutcome.termination = outcome.termination;
+    }
+    if (typeof outcome.summary === 'string') safeOutcome.summary = outcome.summary.slice(0, 8192);
+    if (Object.keys(safeOutcome).length > 0) safe.outcome = safeOutcome;
+  }
+
+  const artifacts = recordOf(result.artifacts);
+  if (artifacts !== null) {
+    const safeArtifacts: Record<string, unknown> = {};
+    for (const key of ['checkout_id', 'diff_ref'] as const) {
+      if (artifacts[key] === null) safeArtifacts[key] = null;
+      else {
+        const value = safeAuditRef(artifacts[key]);
+        if (value !== null) safeArtifacts[key] = value;
+      }
+    }
+    if (Object.keys(safeArtifacts).length > 0) safe.artifacts = safeArtifacts;
+  }
+
+  const redaction = recordOf(result.redaction);
+  if (redaction !== null) {
+    const safeRedaction: Record<string, unknown> = {};
+    if (
+      typeof redaction.rule_version === 'string' &&
+      AUDIT_LABEL_PATTERN.test(redaction.rule_version)
+    ) {
+      safeRedaction.rule_version = redaction.rule_version;
+    }
+    if (
+      typeof redaction.hit_count === 'number' &&
+      Number.isInteger(redaction.hit_count) &&
+      redaction.hit_count >= 0
+    ) {
+      safeRedaction.hit_count = redaction.hit_count;
+    }
+    if (Object.keys(safeRedaction).length > 0) safe.redaction = safeRedaction;
+  }
+
+  return Object.keys(safe).length === 0 ? null : safe;
+}
 
 function tabFromParam(value: string | null): TabKey {
   return TAB_KEYS.includes(value as TabKey) ? (value as TabKey) : 'logs';
 }
 
-/** 终态帧触发执行详情重拉的事件(§3.6 execution:{id})。 */
-const EXECUTION_REFRESH_EVENTS: ReadonlySet<string> = new Set([
+/** execution:{id} 的终态 / 重排帧。 */
+const EXECUTION_DETAIL_REFRESH_EVENTS: ReadonlySet<string> = new Set([
   'execution.completed',
   'execution.failed',
   'execution.timeout',
   'execution.cancelled',
   'execution.requeued',
+]);
+
+/** workspace / issue 频道里的生产非终态协议。 */
+const EXECUTION_NON_TERMINAL_REFRESH_EVENTS: ReadonlySet<string> = new Set([
+  'execution.queued',
+  'execution.claimed',
+  'execution.started',
+  'execution.progress',
   'execution.awaiting_approval',
 ]);
 
@@ -68,6 +223,20 @@ const STATUS_TONE: Record<ExecutionStatus, 'success' | 'warn' | 'danger' | 'info
   failed: 'danger',
   timeout: 'danger',
   cancelled: 'neutral',
+};
+
+const ATTEMPT_STATUS_TONE: Record<
+  AttemptStatus,
+  'success' | 'warn' | 'danger' | 'info' | 'neutral'
+> = {
+  claimed: 'info',
+  running: 'success',
+  cancelling: 'warn',
+  completed: 'success',
+  failed: 'danger',
+  timeout: 'danger',
+  cancelled: 'neutral',
+  reclaimed: 'warn',
 };
 
 export function ExecutionDetailPage(): React.JSX.Element {
@@ -101,19 +270,41 @@ export function ExecutionDetailPage(): React.JSX.Element {
   const maxOffsetRef = useRef(0);
   const logPanelRef = useRef<HTMLDivElement | null>(null);
 
-  const loadExecution = useCallback(() => {
-    if (workspace === null || executionId === undefined) return;
+  // 路由复用同一组件时，上一执行的日志水位与终态绝不能带入下一执行。
+  // 此 effect 声明在所有加载 effect 之前，保证新 REST 日志从 offset=0 开始。
+  useEffect(() => {
+    setExecution(null);
     setIsLoading(true);
     setError(null);
-    getExecution(client, workspace.workspace_id, executionId)
-      .then(setExecution)
-      .catch((err) => setError(err instanceof Error ? err.message : t('state.errorDescription')))
-      .finally(() => setIsLoading(false));
-  }, [client, workspace, executionId, t]);
+    setCancelOpen(false);
+    setLogs([]);
+    setLogsUnavailable(false);
+    setEndStatus(null);
+    seenOffsetsRef.current = new Set();
+    maxOffsetRef.current = 0;
+  }, [executionId]);
 
   useEffect(() => {
-    loadExecution();
-  }, [loadExecution, reloadKey]);
+    if (workspace === null || executionId === undefined) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+    void getExecution(client, workspace.workspace_id, executionId)
+      .then((detail) => {
+        if (!cancelled) setExecution(detail);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : t('state.errorDescription'));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspace, executionId, reloadKey, t]);
 
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000);
@@ -167,6 +358,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
     })
       .then((page) => {
         if (cancelled) return;
+        setLogsUnavailable(false);
         ingestLines(page.lines);
         maxOffsetRef.current = Math.max(maxOffsetRef.current, page.next_offset);
       })
@@ -201,13 +393,33 @@ export function ExecutionDetailPage(): React.JSX.Element {
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (frame.channel !== channel) return;
-      if (EXECUTION_REFRESH_EVENTS.has(frame.event)) setReloadKey((key) => key + 1);
+      if (EXECUTION_DETAIL_REFRESH_EVENTS.has(frame.event)) setReloadKey((key) => key + 1);
     });
     return () => {
       unsubscribe();
       realtime.client.unsubscribe(channel);
     };
   }, [realtime, executionId]);
+
+  // public 非终态在 workspace 频道；private issue run 只在 issue:{id} 频道。
+  useEffect(() => {
+    if (realtime === null || workspace === null || executionId === undefined) return;
+    const workspaceChannel = workspaceExecutionsChannel(workspace.workspace_id);
+    const issueChannel = execution?.issue_id == null ? null : `issue:${execution.issue_id}`;
+    realtime.client.subscribe(workspaceChannel);
+    if (issueChannel !== null) realtime.client.subscribe(issueChannel);
+    const unsubscribe = realtime.client.onFrame((frame) => {
+      if (frame.channel !== workspaceChannel && frame.channel !== issueChannel) return;
+      if (!EXECUTION_NON_TERMINAL_REFRESH_EVENTS.has(frame.event)) return;
+      const payload = frame.payload as { execution_id?: unknown };
+      if (payload.execution_id === executionId) setReloadKey((key) => key + 1);
+    });
+    return () => {
+      unsubscribe();
+      realtime.client.unsubscribe(workspaceChannel);
+      if (issueChannel !== null) realtime.client.unsubscribe(issueChannel);
+    };
+  }, [execution?.issue_id, executionId, realtime, workspace]);
 
   // ②' SSE 降级(§3.3 / §4.9):实时态未连通且环境支持 EventSource 时订阅同一 offset 协议。
   useEffect(() => {
@@ -310,6 +522,8 @@ export function ExecutionDetailPage(): React.JSX.Element {
   }
 
   const credentials = execution.credentials ?? [];
+  const safeResult = safeArtifactResult(attempt?.result);
+  const diffRef = safeAuditRef(execution.checkout?.diff_ref);
 
   return (
     <div className="mesh-executions" data-testid="execution-detail-page">
@@ -397,7 +611,9 @@ export function ExecutionDetailPage(): React.JSX.Element {
             data-testid={`execution-tab-${tab}`}
             onClick={() => selectTab(tab)}
           >
-            {t(`runtimes.execution.tab.${tab}`)}
+            {tab === 'audit'
+              ? localText(t, 'runtimes.execution.tab.audit', 'Attempt audit')
+              : t(`runtimes.execution.tab.${tab}`)}
           </button>
         ))}
       </div>
@@ -447,6 +663,208 @@ export function ExecutionDetailPage(): React.JSX.Element {
         </section>
       ) : null}
 
+      {activeTab === 'audit' ? (
+        <section className="mesh-executions__panel" data-testid="execution-panel-audit">
+          <div className="mesh-executions__audit-summary">
+            <h2>{localText(t, 'runtimes.execution.audit.budgetTitle', 'Frozen budget')}</h2>
+            <dl>
+              <dt>{localText(t, 'runtimes.execution.audit.costLimit', 'Cost limit')}</dt>
+              <dd>{execution.frozen_budget?.max_cost_usd ?? '—'}</dd>
+              <dt>{localText(t, 'runtimes.execution.audit.turnLimit', 'Turn limit')}</dt>
+              <dd>{execution.frozen_budget?.max_turns ?? '—'}</dd>
+              <dt>{localText(t, 'runtimes.execution.audit.unitLimit', 'Unit limit')}</dt>
+              <dd>{execution.frozen_budget?.max_tokens ?? '—'}</dd>
+              <dt>{localText(t, 'runtimes.execution.audit.wallLimit', 'Wall time limit')}</dt>
+              <dd>
+                {execution.frozen_budget?.max_wall_time_seconds === undefined
+                  ? '—'
+                  : formatDurationSeconds(execution.frozen_budget.max_wall_time_seconds)}
+              </dd>
+              <dt>{localText(t, 'runtimes.execution.audit.idleLimit', 'Idle time limit')}</dt>
+              <dd>
+                {execution.frozen_budget?.max_idle_time_seconds === undefined
+                  ? '—'
+                  : formatDurationSeconds(execution.frozen_budget.max_idle_time_seconds)}
+              </dd>
+              <dt>{localText(t, 'runtimes.execution.audit.retryCount', 'Retries')}</dt>
+              <dd>{execution.retry_count ?? Math.max(execution.attempts.length - 1, 0)}</dd>
+            </dl>
+          </div>
+
+          <div className="mesh-executions__audit-attempts">
+            <h2>{localText(t, 'runtimes.execution.audit.attemptsTitle', 'Attempts')}</h2>
+            {execution.attempts.length === 0 ? (
+              <p className="mesh-executions__logs-note">
+                {localText(t, 'runtimes.execution.audit.noAttempts', 'No attempts recorded.')}
+              </p>
+            ) : (
+              execution.attempts.map((auditAttempt) => {
+                const budget = auditAttempt.frozen_budget ?? execution.frozen_budget;
+                const usage = auditAttempt.actual_usage;
+                return (
+                  <article
+                    key={auditAttempt.id}
+                    className="mesh-executions__audit-card"
+                    data-testid={`execution-attempt-audit-${auditAttempt.id}`}
+                  >
+                    <header>
+                      <h3>
+                        {localText(t, 'runtimes.execution.audit.attempt', 'Attempt')} #
+                        {auditAttempt.attempt_number}
+                      </h3>
+                      <StatusDot
+                        tone={ATTEMPT_STATUS_TONE[auditAttempt.status]}
+                        label={auditAttempt.status}
+                      />
+                    </header>
+                    <dl className="mesh-executions__audit-grid">
+                      <dt>{localText(t, 'runtimes.execution.audit.provider', 'Provider')}</dt>
+                      <dd>{auditAttempt.provider ?? '—'}</dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.version', 'Version')}</dt>
+                      <dd>{auditAttempt.provider_version ?? '—'}</dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.model', 'Model')}</dt>
+                      <dd>{auditAttempt.model ?? '—'}</dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.costLimit', 'Cost limit')}</dt>
+                      <dd>{budget?.max_cost_usd ?? '—'}</dd>
+                      <dt>
+                        {localText(t, 'runtimes.execution.audit.wallLimit', 'Wall time limit')}
+                      </dt>
+                      <dd>
+                        {budget?.max_wall_time_seconds === undefined
+                          ? '—'
+                          : formatDurationSeconds(budget.max_wall_time_seconds)}
+                      </dd>
+                      <dt>
+                        {localText(t, 'runtimes.execution.audit.idleLimit', 'Idle time limit')}
+                      </dt>
+                      <dd>
+                        {budget?.max_idle_time_seconds === undefined
+                          ? '—'
+                          : formatDurationSeconds(budget.max_idle_time_seconds)}
+                      </dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.actualCost', 'Actual cost')}</dt>
+                      <dd>{usage?.cost_usd ?? '—'}</dd>
+                      <dt>
+                        {localText(t, 'runtimes.execution.audit.promptUnits', 'Prompt units')}
+                      </dt>
+                      <dd>{usage?.prompt_tokens ?? '—'}</dd>
+                      <dt>
+                        {localText(
+                          t,
+                          'runtimes.execution.audit.completionUnits',
+                          'Completion units',
+                        )}
+                      </dt>
+                      <dd>{usage?.completion_tokens ?? '—'}</dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.cacheUnits', 'Cache units')}</dt>
+                      <dd>{usage?.cache_tokens ?? '—'}</dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.totalUnits', 'Total units')}</dt>
+                      <dd>{usage?.total_tokens ?? '—'}</dd>
+                      <dt>{localText(t, 'runtimes.execution.audit.turns', 'Turns')}</dt>
+                      <dd>{usage?.turns ?? '—'}</dd>
+                    </dl>
+                    <p className="mesh-executions__audit-redaction">
+                      {localText(t, 'runtimes.execution.audit.redacted', 'Redacted')}:{' '}
+                      {auditAttempt.redaction_hits ?? 0}
+                    </p>
+                    <p className="mesh-executions__audit-redaction">
+                      {localText(t, 'runtimes.execution.audit.payloadRedacted', 'Payload redacted')}
+                      : {auditAttempt.redacted === true ? 'true' : 'false'}
+                    </p>
+                    <p className="mesh-executions__audit-redaction">
+                      {localText(t, 'runtimes.execution.audit.securityAlert', 'Security alert')}:{' '}
+                      {auditAttempt.security_alert === 'result_redacted'
+                        ? auditAttempt.security_alert
+                        : '—'}
+                    </p>
+                    <ol className="mesh-executions__audit-timeline">
+                      {(auditAttempt.timeline ?? []).map((event, index) => (
+                        <li key={`${event.event}-${event.at}-${index}`}>
+                          <code>{event.event}</code>
+                          <time dateTime={event.at}>{event.at}</time>
+                          {event.status !== undefined ? <span>{event.status}</span> : null}
+                          {event.reason_code !== undefined && event.reason_code !== null ? (
+                            <span>{event.reason_code}</span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ol>
+                  </article>
+                );
+              })
+            )}
+          </div>
+
+          <div className="mesh-executions__approval-audits">
+            <h2>{localText(t, 'runtimes.execution.audit.approvalsTitle', 'Approvals')}</h2>
+            {(execution.approval_audits ?? []).length === 0 ? (
+              <p className="mesh-executions__logs-note">
+                {localText(t, 'runtimes.execution.audit.noApprovals', 'No approvals recorded.')}
+              </p>
+            ) : (
+              (execution.approval_audits ?? []).map((approval) => (
+                <article
+                  key={approval.id}
+                  className="mesh-executions__approval-card"
+                  data-testid={`execution-approval-audit-${approval.id}`}
+                >
+                  <div className="mesh-executions__approval-step">
+                    <h3>{localText(t, 'runtimes.execution.audit.request', 'Request')}</h3>
+                    <strong>{approval.request.action}</strong>
+                    <span>{approval.requested_by_member_id}</span>
+                    <time dateTime={approval.requested_at}>{approval.requested_at}</time>
+                    <dl>
+                      {safeApprovalFields(approval.request.fields).map(([key, value]) => (
+                        <div key={key}>
+                          <dt>{key}</dt>
+                          <dd>{auditValue(value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                  <span className="mesh-executions__approval-arrow" aria-hidden="true">
+                    →
+                  </span>
+                  <div className="mesh-executions__approval-step">
+                    <h3>{localText(t, 'runtimes.execution.audit.decision', 'Decision')}</h3>
+                    <strong>{approval.decision.status}</strong>
+                    <span>{approval.decision.decided_by_member_id ?? '—'}</span>
+                    <time dateTime={approval.decision.decided_at ?? undefined}>
+                      {approval.decision.decided_at ?? '—'}
+                    </time>
+                  </div>
+                  <span className="mesh-executions__approval-arrow" aria-hidden="true">
+                    →
+                  </span>
+                  <div className="mesh-executions__approval-step">
+                    <h3>{localText(t, 'runtimes.execution.audit.grant', 'Grant')}</h3>
+                    <strong>{approval.grant?.action ?? '—'}</strong>
+                    {approval.grant === null ? null : (
+                      <dl>
+                        {safeApprovalFields(approval.grant.fields).map(([key, value]) => (
+                          <div key={key}>
+                            <dt>{key}</dt>
+                            <dd>{auditValue(value)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+                  </div>
+                  <span className="mesh-executions__approval-arrow" aria-hidden="true">
+                    →
+                  </span>
+                  <div className="mesh-executions__approval-step">
+                    <h3>{localText(t, 'runtimes.execution.audit.result', 'Result')}</h3>
+                    <strong>{approval.result?.status ?? '—'}</strong>
+                    <span>{approval.result?.termination ?? '—'}</span>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      ) : null}
+
       {activeTab === 'artifacts' ? (
         <section className="mesh-executions__panel" data-testid="execution-panel-artifacts">
           {attempt === null || attempt.working_branch === null ? (
@@ -459,9 +877,15 @@ export function ExecutionDetailPage(): React.JSX.Element {
               <p data-testid="execution-artifact-branch">
                 {t('runtimes.execution.artifactBranch', { branch: attempt.working_branch })}
               </p>
-              {attempt.result !== null && attempt.result !== undefined ? (
+              {diffRef !== null ? (
+                <p>
+                  {localText(t, 'runtimes.execution.diffReference', 'Diff reference')}:{' '}
+                  <code data-testid="execution-artifact-diff-ref">{diffRef}</code>
+                </p>
+              ) : null}
+              {safeResult !== null ? (
                 <pre className="mesh-executions__pre" data-testid="execution-artifact-result">
-                  {JSON.stringify(attempt.result, null, 2)}
+                  {JSON.stringify(safeResult, null, 2)}
                 </pre>
               ) : null}
             </>

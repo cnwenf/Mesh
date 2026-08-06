@@ -268,7 +268,7 @@ async def test_mention_trigger_matrix_e2e(env, relay, owner_factory):
             headers=_auth(token),
         )
     ).json()["data"]
-    assert len(first["triggered_execution_ids"]) == 1
+    assert first["triggered_execution_ids"] == []
     rows = await enqueues()
     assert len(rows) == 1
     assert rows[0].payload["trigger"] == "mention"
@@ -341,8 +341,7 @@ async def test_mention_trigger_matrix_e2e(env, relay, owner_factory):
             headers=_auth(token),
         )
     ).json()["data"]
-    assert len(second["triggered_execution_ids"]) == 1
-    assert second["triggered_execution_ids"] != first["triggered_execution_ids"]
+    assert second["triggered_execution_ids"] == []
     assert len(await enqueues()) == 3
 
     # the relay consumes execution.enqueue (bridge handler) without failure
@@ -356,7 +355,17 @@ async def test_mention_trigger_matrix_e2e(env, relay, owner_factory):
                 )
             )
         ).scalars().all()
+        materialized_mentions = (
+            await session.execute(
+                select(CommentMention).where(
+                    CommentMention.workspace_id == ws_id,
+                    CommentMention.pending_trigger_event_id.is_(None),
+                    CommentMention.triggered_execution_id.is_not(None),
+                )
+            )
+        ).scalars().all()
     assert pending == []
+    assert materialized_mentions
 
 
 # ---------------------------------------------------------------------------

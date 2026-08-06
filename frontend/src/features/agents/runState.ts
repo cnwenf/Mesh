@@ -14,6 +14,25 @@ export interface PresenceTriple {
   readonly awaiting: number;
 }
 
+/** REST/realtime 的后端绝对容量快照。 */
+export interface AgentCapacitySnapshot {
+  readonly running: number;
+  readonly queued: number;
+  readonly awaiting_approval: number;
+}
+
+/** REST 字段名归一为界面共享的 PresenceTriple；旧响应缺字段时保持 unknown。 */
+export function capacityToPresence(
+  capacity: AgentCapacitySnapshot | null | undefined,
+): PresenceTriple | null {
+  if (capacity === null || capacity === undefined) return null;
+  return {
+    running: capacity.running,
+    queued: capacity.queued,
+    awaiting: capacity.awaiting_approval,
+  };
+}
+
 /**
  * 三元组 → 运行态(§9.8 五态 + idle/unknown 派生态):
  * - 无帧(null,帧未至)→ `unknown`;

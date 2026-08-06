@@ -253,6 +253,7 @@ async def list_runtime_executions(
         status=status,
         cursor=cursor,
         limit=limit,
+        viewer=context.member,
     )
 
 
@@ -279,6 +280,7 @@ async def list_executions(
         status=status,
         cursor=cursor,
         limit=limit,
+        viewer=context.member,
     )
 
 
@@ -290,7 +292,9 @@ async def get_execution(
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     data = await _service(request).get_execution(
-        workspace_id=context.workspace.id, execution_id=_path_uuid(execution_id)
+        workspace_id=context.workspace.id,
+        execution_id=_path_uuid(execution_id),
+        viewer=context.member,
     )
     return {"data": data}
 
@@ -310,6 +314,7 @@ async def cancel_execution_route(
         workspace_id=context.workspace.id,
         execution_id=_path_uuid(execution_id),
         member_id=context.member.id,
+        viewer=context.member,
     )
     return {"data": data}
 
@@ -350,6 +355,7 @@ async def get_execution_logs(
         offset=max(offset, 0),
         stream=stream if stream in ("stdout", "stderr") else None,
         max_lines=max(1, min(limit, 5000)),
+        viewer=context.member,
     )
     return {"data": data}
 
@@ -383,6 +389,7 @@ async def stream_execution_logs(
                 workspace_id=ws_id,
                 execution_id=exec_id,
                 offset=cursor,
+                viewer=context.member,
             )
             for line in payload["lines"]:
                 cursor = max(cursor, line["offset"] + len(line["line"].encode("utf-8")) + 1)
@@ -481,7 +488,7 @@ async def list_approvals(
     role: str | None = None,
     status: str | None = None,
 ) -> dict:
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
 
     from mesh.db.models.runtime import Approval, TaskExecution
     from mesh.db.tenant import set_tenant_context
@@ -489,6 +496,21 @@ async def list_approvals(
     async with request.app.state.session_factory() as session:
         await set_tenant_context(session, context.workspace.id)
         stmt = select(Approval).where(Approval.workspace_id == context.workspace.id)
+        visibility = _service(request)._execution_visibility_clause(
+            workspace_id=context.workspace.id,
+            viewer=context.member,
+        )
+        if visibility is not None:
+            visible_execution_ids = select(TaskExecution.id).where(
+                TaskExecution.workspace_id == context.workspace.id,
+                visibility,
+            )
+            stmt = stmt.where(
+                or_(
+                    Approval.subject_execution_id.is_(None),
+                    Approval.subject_execution_id.in_(visible_execution_ids),
+                )
+            )
         if status:
             stmt = stmt.where(Approval.status == status)
         if role == "mine":
@@ -552,12 +574,20 @@ async def get_approval(
             raise NotFoundError("approval not found")
         execution_status = None
         if approval.subject_execution_id is not None:
-            execution_status = await session.scalar(
-                select(TaskExecution.status).where(
+            execution = await session.scalar(
+                select(TaskExecution).where(
                     TaskExecution.id == approval.subject_execution_id,
                     TaskExecution.workspace_id == context.workspace.id,
                 )
             )
+            if execution is None:
+                raise NotFoundError("approval not found")
+            await _service(request)._assert_execution_visible(
+                session,
+                execution=execution,
+                viewer=context.member,
+            )
+            execution_status = execution.status
         return {"data": approvals_mod._approval_response(approval, execution_status=execution_status)}
 
 

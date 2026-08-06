@@ -377,6 +377,14 @@ class TestResultSink:
         summary = _build_result_summary("completed", {}, None)
         assert summary == "Task completed successfully."
 
+    def test_build_result_summary_uses_versioned_outcome_summary(self):
+        from mesh.runtime.result_sink import _build_result_summary
+
+        summary = _build_result_summary(
+            "completed", {"schema_version": 1, "outcome": {"summary": "Reviewed."}}, None
+        )
+        assert summary == "Reviewed."
+
     def test_build_result_summary_failed(self):
         from mesh.runtime.result_sink import _build_result_summary
 

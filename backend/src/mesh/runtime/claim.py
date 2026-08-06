@@ -37,7 +37,12 @@ from mesh.db.models.runtime import (
     TaskExecution,
 )
 from mesh.db.tenant import set_tenant_context
+from mesh.issue.execution_observability import (
+    emit_workspace_execution_event,
+    record_issue_execution_phase,
+)
 from mesh.outbox.service import emit_realtime
+from mesh.runtime.agent_presence import emit_agent_presence
 from mesh.runtime.credentials import DeliveredCredential, issue_envelopes
 from mesh.runtime.daemon_auth import validate_env_names
 from mesh.runtime.task_tokens import issue_task_token, squad_role_of_task_spec
@@ -181,6 +186,31 @@ async def claim_execution(
                 .where(TaskExecution.id == picked_id)
                 .values(status="claimed", updated_at=func.now())
             )
+            execution = (
+                await session.execute(
+                    select(TaskExecution).where(TaskExecution.id == picked_id)
+                )
+            ).scalar_one()
+            snapshot = (
+                execution.config_snapshot
+                if isinstance(execution.config_snapshot, dict)
+                else {}
+            )
+            manifest = (
+                runtime.provider_manifest
+                if isinstance(runtime.provider_manifest, dict)
+                else {}
+            )
+            provider = manifest.get("provider") or snapshot.get("provider")
+            provider_version = manifest.get("version")
+            model = snapshot.get("model") or manifest.get("model")
+            provider = provider if isinstance(provider, str) and provider else None
+            provider_version = (
+                provider_version
+                if isinstance(provider_version, str) and provider_version
+                else None
+            )
+            model = model if isinstance(model, str) and model else None
             attempt_row = (
                 await session.execute(
                     text(
@@ -188,7 +218,7 @@ async def claim_execution(
                         INSERT INTO execution_attempts
                           (workspace_id, execution_id, attempt_number, runtime_id,
                            claimed_by_runtime_id, status, lease_expires_at, lease_seq,
-                           claimed_at, working_branch)
+                           claimed_at, working_branch, provider, provider_version, model)
                         SELECT :ws, :eid,
                                COALESCE((SELECT MAX(attempt_number)
                                          FROM execution_attempts
@@ -198,7 +228,8 @@ async def claim_execution(
                                'agent/' || CAST(:eid AS text) || '/a' ||
                                  CAST(COALESCE((SELECT MAX(attempt_number)
                                                 FROM execution_attempts
-                                                WHERE execution_id = :eid), 0) + 1 AS text)
+                                                WHERE execution_id = :eid), 0) + 1 AS text),
+                               :provider, :provider_version, :model
                         RETURNING id, attempt_number, lease_expires_at, lease_seq,
                                   working_branch, claimed_at
                         """
@@ -208,15 +239,12 @@ async def claim_execution(
                         "eid": picked_id,
                         "rid": runtime_id,
                         "lease_seconds": lease_seconds,
+                        "provider": provider,
+                        "provider_version": provider_version,
+                        "model": model,
                     },
                 )
             ).mappings().one()
-
-            execution = (
-                await session.execute(
-                    select(TaskExecution).where(TaskExecution.id == picked_id)
-                )
-            ).scalar_one()
 
             # H1 (§6.10): if this claim resumes an APPROVED high-risk-tool
             # approval, deliver the frozen resume_context so the new attempt
@@ -281,10 +309,10 @@ async def claim_execution(
 
             # Observability: claim + queue depth (§3.6 channels).
             attempt_id = attempt_row["id"]
-            await emit_realtime(
+            await emit_workspace_execution_event(
                 session,
                 workspace_id=workspace_id,
-                channel=f"workspace:{workspace_id}:executions",
+                issue_id=execution.issue_id,
                 event="execution.claimed",
                 data={
                     "execution_id": str(picked_id),
@@ -297,6 +325,24 @@ async def claim_execution(
                 },
                 idempotency_key=f"claim:{attempt_id}:execution-claimed",
             )
+            await record_issue_execution_phase(
+                session,
+                workspace_id=workspace_id,
+                issue_id=execution.issue_id,
+                execution_id=execution.id,
+                agent_id=execution.agent_id,
+                phase="claimed",
+                attempt_id=attempt_id,
+                runtime_id=runtime_id,
+                runtime_name=runtime.name,
+            )
+            if execution.agent_id is not None:
+                await emit_agent_presence(
+                    session,
+                    workspace_id=workspace_id,
+                    agent_id=execution.agent_id,
+                    idempotency_key=f"attempt:{attempt_id}:presence:claimed",
+                )
             await _emit_queue_depth(session, workspace_id=workspace_id)
 
         # Transaction committed — build the daemon response.

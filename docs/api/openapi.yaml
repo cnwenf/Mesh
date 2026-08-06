@@ -7324,7 +7324,7 @@ paths:
         required: false
         schema:
           type: string
-          default: all
+          default: default
           title: Status
       - name: visibility
         in: query
@@ -16577,6 +16577,10 @@ components:
           type: string
           minLength: 1
           title: Body Markdown
+        suppress_triggers:
+          type: boolean
+          title: Suppress Triggers
+          default: false
       type: object
       required:
       - body_markdown
@@ -16772,6 +16776,16 @@ components:
           - type: number
           - type: 'null'
           title: Position
+        review_execution_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Review Execution Id
+        review_decision:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Review Decision
         version:
           anyOf:
           - type: integer

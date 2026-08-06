@@ -8,7 +8,8 @@
  * 设计要点:
  * - 帧过滤以「频道是否属于已订阅集合」为准(而非事件名),与订阅清单一一对应;
  * - id 列表变化(以 join 后的字符串作 effect 依赖)即整体退订重订,避免泄漏;
- * - realtime 为 null(shell 外)→ 恒空映射,调用方据此渲染 unknown 态;
+ * - REST 快照先填充映射,realtime 绝对帧到达后按 agent id 整体覆盖;
+ * - realtime 为 null(shell 外)时仍保留调用方提供的 REST 快照;
  * - `parsePresenceFrame` 为纯函数,单测独立覆盖各分支。
  */
 import { useEffect, useState } from 'react';
@@ -22,6 +23,7 @@ const PRESENCE_CHANNEL_PATTERN = /^agent:(.+):presence$/;
 
 /** join 分隔符:agent id 为 UUID,不含空白,join/split 往返不歧义。 */
 const IDS_KEY_SEPARATOR = '\u0000';
+const EMPTY_INITIAL_PRESENCE: ReadonlyMap<string, PresenceTriple> = new Map();
 
 interface PresenceFramePayload {
   readonly running?: number;
@@ -32,6 +34,24 @@ interface PresenceFramePayload {
 export interface ParsedPresenceFrame {
   readonly id: string;
   readonly triple: PresenceTriple;
+}
+
+type PresenceEntry = readonly [string, PresenceTriple];
+
+function initialPresenceKey(
+  agentIds: readonly string[],
+  initialPresence: ReadonlyMap<string, PresenceTriple>,
+): string {
+  const entries: PresenceEntry[] = [];
+  for (const id of agentIds) {
+    const triple = initialPresence.get(id);
+    if (triple !== undefined) entries.push([id, triple]);
+  }
+  return JSON.stringify(entries);
+}
+
+function presenceMapFromKey(key: string): ReadonlyMap<string, PresenceTriple> {
+  return new Map(JSON.parse(key) as PresenceEntry[]);
 }
 
 /**
@@ -54,23 +74,25 @@ export function parsePresenceFrame(frame: RealtimeEventFrame): ParsedPresenceFra
 
 /**
  * 订阅若干 agent 的 presence 频道,返回 `agentId → 容量三元组` 只读映射。
- * 帧未至的 agent 不在映射内(调用方 `map.get(id) ?? null` → unknown 态)。
+ * 有 REST 快照的 agent 首屏即在映射内；无快照且帧未至时仍为 unknown。
  */
 export function useAgentPresenceMap(
   agentIds: readonly string[],
+  initialPresence: ReadonlyMap<string, PresenceTriple> = EMPTY_INITIAL_PRESENCE,
 ): ReadonlyMap<string, PresenceTriple> {
   const realtime = useRealtimeContext();
-  const [presenceMap, setPresenceMap] = useState<ReadonlyMap<string, PresenceTriple>>(
-    () => new Map(),
+  const idsKey = agentIds.join(IDS_KEY_SEPARATOR);
+  const initialKey = initialPresenceKey(agentIds, initialPresence);
+  const [presenceMap, setPresenceMap] = useState<ReadonlyMap<string, PresenceTriple>>(() =>
+    presenceMapFromKey(initialKey),
   );
   // 以 join 后的字符串作依赖:id 列表内容变化才重订,数组引用变化(内容不变)不重订。
-  const idsKey = agentIds.join(IDS_KEY_SEPARATOR);
 
   useEffect(() => {
     // M1:名单变化(切 tab/搜索/移除成员)即清空映射,避免已离列 agent 的旧三元组
     // 永久滞留、再入列时在新帧到达前短暂渲染陈旧运行态。
-    setPresenceMap(new Map());
-    // shell 外(登录页/独立渲染)无 realtime → 恒空映射。
+    setPresenceMap(presenceMapFromKey(initialKey));
+    // shell 外(登录页/独立渲染)无 realtime → 保留 REST 初始映射。
     if (realtime === null) {
       return;
     }
@@ -99,7 +121,7 @@ export function useAgentPresenceMap(
         realtime.client.unsubscribe(channel);
       }
     };
-  }, [realtime, idsKey]);
+  }, [realtime, idsKey, initialKey]);
 
   return presenceMap;
 }

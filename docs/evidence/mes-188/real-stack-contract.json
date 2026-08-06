@@ -1,0 +1,28 @@
+{
+  "verdict": "PASS",
+  "workspace_id": "97d3ead7-3a61-462d-832a-a7795ad7895d",
+  "issue_id": "69e9ee59-5635-43a1-b544-443a64fec361",
+  "execution_id": "bdad1241-1316-4637-ad77-1e853c6aabb8",
+  "failed_execution_id": "18e690a7-878d-4e13-b106-68cda3e75776",
+  "runtime_states": [
+    "online",
+    "degraded",
+    "paused",
+    "isolated"
+  ],
+  "database": {
+    "primary_attempts": 2,
+    "approval_status": "approved",
+    "reply_count": 1,
+    "tombstone_persisted": true,
+    "agent_member_removed": true,
+    "failed_notification_count": 1,
+    "rejected_output_review_count": 1,
+    "approved_output_review_count": 1
+  },
+  "optimistic_retry": {
+    "persisted_rows": 1,
+    "stable_idempotency_key": true
+  },
+  "provider_credentials_redacted": true
+}

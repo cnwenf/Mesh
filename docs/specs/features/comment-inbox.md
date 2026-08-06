@@ -11,7 +11,7 @@
 
 > **实现注记(v0.14.0)**
 > 1. **提及语法(§3.5 服务端解析)**:结构提及为 Markdown 链接 `[显示名](mention://member/<uuid>)`(composer 选人的芯片序列化形态);散文中的 `@Name` 按工作区内**精确显示名**(member.md §2.4 解析序)解析,歧义名解析为空;代码块/行内代码/链接语法内的 `@` 不扫描。客户端显式提交的提及字段不被接受(解析以服务端为准)。
-> 2. **`task_executions` deferred FK**:`comment_mentions.triggered_execution_id` / `notifications.execution_id` 的物理复合 FK 随 runtime.md 增量补齐(同 `members.agent_id` → `agents` 先例);入队骨架为 `execution.enqueue` outbox 事件(§6.5 幂等键齐全),其事件 id 作为骨架执行 id 落 `triggered_execution_id` 并回填响应;relay 侧为桥接处理器(审计留痕、保持 relay 健康),`task_executions` 落库与完整执行生命周期待 runtime.md。
+> 2. **提及与 execution 的两阶段关联**：`comment_mentions.triggered_execution_id` 只保存正式 `task_executions.id`，并由 `(workspace_id, triggered_execution_id)` 复合 FK 强制同租户；业务事务先把 `execution.enqueue` outbox id 写入独立的 `pending_trigger_event_id`，relay 物化 execution 后按 event id 条件更新为正式 id。relay 幂等重投也会修复遗留 pending 关联。升级迁移会保留已经是正式 execution 的值、回填已发布 outbox、把尚未物化的旧值移入 pending 列，绝不把 outbox id 伪装成 execution id。
 > 3. **`comments.idempotency_key`**:为落实 README §6.14「创建/动作类端点支持 `Idempotency-Key` 请求头」与 §6.5 agent 回流防重键,`comments` 表增设 `idempotency_key TEXT NULL`(部分唯一索引 `uq_comments_idempotency`,NULL 不冲突);重复键返回首次结果。
 > 4. **同父域约束(§2.2 / README §6.2 第 7 条)**:已按重叠唯一键 `UNIQUE(workspace_id, issue_id, id)` + 重叠复合自引用 FK `(workspace_id, issue_id, parent_id/thread_root_id)` 落地,跨 issue 挂父 INSERT 被数据库拒绝(集成测试实测)。
 > 5. **评论附件(C11)**:`attachment_ids` 字段已预留于请求 schema;attachments/attachment_links 随 attachment.md 增量合入后接通,合入前非空附件列表返回 422 `attachments_not_available`(占位,与派发说明一致)。
@@ -166,6 +166,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `comment_id` | uuid | NOT NULL,复合 FK `(workspace_id, comment_id) → comments(workspace_id, id)` | 来源评论 |
 | `mentioned_id` | uuid | NOT NULL,复合 FK `(workspace_id, mentioned_id) → members(workspace_id, id)` | 被提及成员(human 或 agent,以 JOIN `members.member_type` 区分) |
 | `triggered_execution_id` | uuid | NULL,复合 FK `(workspace_id, triggered_execution_id) → task_executions(workspace_id, id)` | 若被提及者为 agent 且成功入队执行,记录**逻辑执行** ID(runtime.md owns `task_executions`,README §6.4;核心差异留痕) |
+| `pending_trigger_event_id` | uuid | NULL,部分索引 `(workspace_id, pending_trigger_event_id) WHERE ... IS NOT NULL` | execution 尚未物化时暂存 `execution.enqueue` outbox id；relay 成功关联后原子清空，不对外作为 execution id 返回 |
 | `deleted_at` | timestamptz | NULL | 软删除:编辑评论移除 @ 时提及记录软删除(README §6.9:不取消在途执行) |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() | |
 
@@ -294,7 +295,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | GET | `/api/v1/issues/{issue_id}/comments` | 列出评论(默认仅顶层 + `reply_count` + 前 N 条预览回复) |
 | POST | `/api/v1/issues/{issue_id}/comments` | 发表评论(可带 `parent_id` 成为回复;可带 `suppress_triggers`) |
 | GET | `/api/v1/comments/{comment_id}` | 取单条评论 |
-| PATCH | `/api/v1/comments/{comment_id}` | 编辑评论(乐观锁,带 `updated_at`;新增 @ 仅为新增提及入队,§3.5) |
+| PATCH | `/api/v1/comments/{comment_id}` | 编辑评论(乐观锁,带 `updated_at`;新增 @ 仅为新增提及入队,可带 `suppress_triggers`,§3.5) |
 | DELETE | `/api/v1/comments/{comment_id}` | 软删除评论 |
 | GET | `/api/v1/comments/{comment_id}/replies` | 列出某线程回复(游标分页) |
 | POST | `/api/v1/comments/{comment_id}/resolve` | 解决线程 |
@@ -302,6 +303,11 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | GET | `/api/v1/comments/{comment_id}/reactions` | 列出反应 |
 | POST | `/api/v1/comments/{comment_id}/reactions` | 添加反应 |
 | DELETE | `/api/v1/comments/{comment_id}/reactions/{emoji}` | 取消(自己的)反应 |
+
+回复 API 接受顶层评论或该线程内任一回复的 id；若客户端回复的是回复，服务端把
+`parent_id` / `thread_root_id` 规范化为同一顶层线程根，持久化深度始终为 1。解决与重开
+只作用于线程根，并分别写 `comment.thread_resolved` / `comment.thread_reopened` 审计；重开
+审计保留上一次解决人和解决时间，不能因清空当前投影而丢失历史。
 
 **发表评论请求体:**
 ```json
@@ -433,7 +439,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 1. 评论创建/编辑成功,服务端从 `body_markdown` 解析出提及列表(以服务端解析为准,客户端显式提交的提及仅作参考)。
 2. 编辑时与上一版本提及集合做 **diff**,仅对**新增**且 JOIN `members` 得 `member_type='agent'` 的提及走触发流程。
 3. 入队经 **transactional outbox(README §6.6)** 写 `execution.enqueue` 事件 → relay 创建 `task_executions`(`queued`,`trigger='mention'`,入队快照见 README §6.11,幂等键见 §6.5),落 `comment_mentions.triggered_execution_id`。业务事务与 outbox 同提交,接口同步返回;即使派发组件短暂不可用,事件也不丢(outbox 补投,集成测试 T5)。
-4. 请求体 `suppress_triggers: true` → **仅发通知、不入队执行**(README §6.9 显式抑制)。
+4. 创建或编辑请求体 `suppress_triggers: true` → **仅发通知、不为本次新增提及入队执行**(README §6.9 显式抑制)；已有执行不取消。
 5. 执行结果由 agent runtime 以 **agent 评论**形式回流到**原线程**(`parent_id`=原评论所属线程根),并把触发者加入订阅(reason=`participated`/`mentioned`);**是否进收件箱一律按 README §6.13 唯一通知矩阵**——执行**成功**默认**不进收件箱**(留运行页/时间线,仅当触发者在 `notification_preferences` 显式订阅 `execution_finished` 时才进箱,且不重置已读组);执行**失败/超时**按 critical 进收件箱并穿透 quiet hours;agent 回流评论本身按「评论新增」normal 档聚合进箱(订阅者可见)。本模块**不另行定义成功通知**(`execution_finished` 类型默认不投递成功事件,preferences 显式订阅后才进箱);执行事件词汇(`execution.queued` / `execution.completed` 等)见 runtime.md。
 
 **权限校验:** 无触发权限 → 该提及返回 `mention_invalid`/`forbidden`,不入队;其余合法提及正常处理。
@@ -456,7 +462,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `comment.created` | 评论对象(含 author、reactions、triggered_execution_ids) | 评论发表(含 agent 回流评论) |
 | `comment.updated` | 评论 id + 变更字段 | 编辑 |
 | `comment.deleted` | 评论 id | 软删除 |
-| `comment.resolved` | 评论 id + resolved_at/by | 解决/重开 |
+| `comment.resolved` | 评论 id + resolved_at/by | 解决/重开；持久审计分别使用 `comment.thread_resolved` / `comment.thread_reopened` |
 | `reaction.changed` | 评论 id + 反应聚合 | 增/减反应 |
 | `notification.created` | 通知对象 | fan-out 生成新通知(直接进收件箱) |
 | `notification.read` | 通知 id + read_at | 标已读(多端同步) |

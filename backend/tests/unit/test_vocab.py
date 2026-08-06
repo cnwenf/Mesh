@@ -35,8 +35,9 @@ def _load_checker_module():
 # task.aggregated, squad.md §3.2/§3.5).
 # +1 in MES-82: integration.queue_updated(入站消息队列失效通知,
 # integrations.md §3.6/§3.9,README §6.7 平台能力域登记)。
-def test_vocabulary_baseline_is_104_events():
-    assert len(EVENT_VOCABULARY) == 104
+# +1 in MES-188: runtime.isolated(安全隔离后的可行动运行状态)。
+def test_vocabulary_baseline_is_105_events():
+    assert len(EVENT_VOCABULARY) == 105
 
 
 def test_vocabulary_matches_readme_registry_exactly():

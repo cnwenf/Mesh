@@ -26,16 +26,13 @@ from mesh.db.models.onboarding import (
     STEP_SEE_AGENT_REPLY_IN_INBOX,
     OnboardingState,
 )
-from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.onboarding.attribution import evaluate_agent_reply_notification
 from mesh.onboarding.completion import complete_step
 
 Clock = Callable[[], datetime]
 
-_IDEMPOTENCY_PREFIX = "ws"
 _ASSIGN_FIELD = "assignee_id"
-_TRIGGER_TRIGGERS = ("assign", "mention")
 
 
 def _utcnow() -> datetime:
@@ -162,50 +159,34 @@ async def _historical_mention_evidence(
     session: AsyncSession, *, workspace_id: uuid.UUID, member_id: uuid.UUID
 ) -> dict | None:
     """Earliest mention-triggered execution this member personally authored."""
-    rows = (
-        (
-            await session.execute(
-                select(CommentMention.triggered_execution_id)
-                .join(
-                    Comment,
-                    and_(
-                        Comment.id == CommentMention.comment_id,
-                        Comment.workspace_id == CommentMention.workspace_id,
-                    ),
-                )
-                .where(
-                    CommentMention.workspace_id == workspace_id,
-                    CommentMention.triggered_execution_id.is_not(None),
-                    CommentMention.deleted_at.is_(None),
-                    Comment.author_id == member_id,
-                )
-                .order_by(CommentMention.created_at.asc())
-            )
+    execution_id = await session.scalar(
+        select(TaskExecution.id)
+        .join(
+            CommentMention,
+            and_(
+                CommentMention.workspace_id == TaskExecution.workspace_id,
+                CommentMention.triggered_execution_id == TaskExecution.id,
+            ),
         )
-        .scalars()
-        .all()
+        .join(
+            Comment,
+            and_(
+                Comment.id == CommentMention.comment_id,
+                Comment.workspace_id == CommentMention.workspace_id,
+            ),
+        )
+        .where(
+            TaskExecution.workspace_id == workspace_id,
+            TaskExecution.trigger == "mention",
+            CommentMention.deleted_at.is_(None),
+            Comment.author_id == member_id,
+        )
+        .order_by(CommentMention.created_at.asc(), TaskExecution.queued_at.asc())
+        .limit(1)
     )
-    for outbox_id in rows:
-        scoped = await session.scalar(
-            select(OutboxEvent.idempotency_key).where(
-                OutboxEvent.workspace_id == workspace_id,
-                OutboxEvent.id == outbox_id,
-            )
-        )
-        if scoped is None:
-            continue
-        prefix = f"{_IDEMPOTENCY_PREFIX}:{workspace_id}:"
-        if not scoped.startswith(prefix):
-            continue
-        execution = await session.scalar(
-            select(TaskExecution).where(
-                TaskExecution.workspace_id == workspace_id,
-                TaskExecution.idempotency_key == scoped[len(prefix) :],
-            )
-        )
-        if execution is not None and execution.trigger in _TRIGGER_TRIGGERS:
-            return {"execution_id": str(execution.id), "trigger_member_id": str(member_id)}
-    return None
+    if execution_id is None:
+        return None
+    return {"execution_id": str(execution_id), "trigger_member_id": str(member_id)}
 
 
 async def _historical_assign_evidence(
@@ -369,5 +350,3 @@ async def reconcile_state(
     await _reconcile_step_first_issue(session, workspace_id=workspace_id, state=state, clock=clock)
     await _reconcile_step_dispatch(session, workspace_id=workspace_id, state=state, clock=clock)
     await _reconcile_step_aha(session, workspace_id=workspace_id, state=state, clock=clock)
-
-

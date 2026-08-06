@@ -8,7 +8,7 @@ issue 指派 agent 触发 enqueue → daemon 真实 claim → 在 namespace/cgro
 
 断言:runtime online;execution queued→claimed→running→completed;日志经 REST
 可读且含 provider 真实输出;result schema_version=1 且 usage.total_tokens>0、
-session_id 非空、cost 为 decimal string;provider 凭据(API key)在日志与 result
+session_recorded=true、cost 为 decimal string;provider 凭据(API key)在日志与 result
 中零泄漏(同一脱敏器,§5.4.7)。证据写 docs/evidence/mes-101/real-llm-e2e.json
 (落盘前对凭据脱敏)。
 
@@ -75,22 +75,27 @@ async def main() -> dict:
     async with httpx.AsyncClient(base_url=SERVER_URL, timeout=30.0) as c:
         # 1. register + login (real product auth flow).
         email = f"mes101-{run_id}@int.mesh"
-        await c.post("/api/v1/auth/register",
-                     json={"email": email, "password": PASSWORD, "display_name": "MES-101 A3"})
+        await c.post(
+            "/api/v1/auth/register", json={"email": email, "password": PASSWORD, "display_name": "MES-101 A3"}
+        )
         r = await c.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
         assert r.status_code == 200, r.text
         token = r.json()["data"]["access_token"]
         evidence["steps"].append("auth: register+login ok")
 
         # 2. workspace + allowed_repos.
-        r = await c.post("/api/v1/workspaces",
-                         json={"name": "MES-101 A3", "slug": f"mes101-{run_id}"},
-                         headers=_auth(token))
+        r = await c.post(
+            "/api/v1/workspaces",
+            json={"name": "MES-101 A3", "slug": f"mes101-{run_id}"},
+            headers=_auth(token),
+        )
         assert r.status_code == 201, r.text
         ws_id = r.json()["data"]["id"]
-        await c.patch(f"/api/v1/workspaces/{ws_id}",
-                      json={"settings": {"allowed_repos": ["https://github.com/cnwenf/Mesh"]}},
-                      headers=_auth(token))
+        await c.patch(
+            f"/api/v1/workspaces/{ws_id}",
+            json={"settings": {"allowed_repos": ["https://github.com/cnwenf/Mesh"]}},
+            headers=_auth(token),
+        )
         evidence["steps"].append(f"workspace {ws_id} created")
 
         # 3. agent with FROZEN budget + network policy in model_config (§2.1).
@@ -104,15 +109,19 @@ async def main() -> dict:
             "budget": {"max_cost_usd": "0.50", "max_turns": 2},
             "network_policy": {"allowed_hosts": [API_HOST]},
         }
-        r = await c.post(f"/api/v1/workspaces/{ws_id}/agents",
-                         json={"name": f"a3-agent-{run_id}",
-                               "system_instructions": (
-                                   "You are a concise agent. For this task reply with "
-                                   f"exactly the text {MARKER} and nothing else. Do not "
-                                   "use any tools."
-                               ),
-                               "model_config": model_config},
-                         headers=_auth(token))
+        r = await c.post(
+            f"/api/v1/workspaces/{ws_id}/agents",
+            json={
+                "name": f"a3-agent-{run_id}",
+                "system_instructions": (
+                    "You are a concise agent. For this task reply with "
+                    f"exactly the text {MARKER} and nothing else. Do not "
+                    "use any tools."
+                ),
+                "model_config": model_config,
+            },
+            headers=_auth(token),
+        )
         assert r.status_code == 201, r.text
         agent = r.json()["data"]
         agent_member_id = agent.get("member_id") or (agent.get("member") or {}).get("id")
@@ -120,10 +129,11 @@ async def main() -> dict:
         evidence["steps"].append(f"agent {agent['id']} created (member {agent_member_id})")
 
         # 4. pending runtime → activation code.
-        r = await c.post(f"/api/v1/workspaces/{ws_id}/runtimes",
-                         json={"name": f"a3-rt-{run_id}", "kind": "self_hosted",
-                               "labels": {}, "max_concurrent": 1},
-                         headers=_auth(token))
+        r = await c.post(
+            f"/api/v1/workspaces/{ws_id}/runtimes",
+            json={"name": f"a3-rt-{run_id}", "kind": "self_hosted", "labels": {}, "max_concurrent": 1},
+            headers=_auth(token),
+        )
         assert r.status_code == 201, r.text
         created = r.json()["data"]
         runtime_id = created["id"]
@@ -148,25 +158,31 @@ async def main() -> dict:
         sandbox_tmp_bytes=256 * 1024 * 1024,
     )
     api = RuntimeApiClient(SERVER_URL, None)
-    mgr = SandboxManager(state_root=state / "sandbox",
-                         sandbox_uid=config.sandbox_uid, sandbox_gid=config.sandbox_gid)
+    mgr = SandboxManager(
+        state_root=state / "sandbox", sandbox_uid=config.sandbox_uid, sandbox_gid=config.sandbox_gid
+    )
     await mgr.start()
 
     adapters = build_adapters(config)  # pinned ClaudeCodeAdapter (manifest configured)
     inventory = await Inventory.probe(adapters)
     assert inventory.healthy(), f"provider probe failed: {inventory.degraded_reasons()}"
-    evidence["steps"].append(
-        f"provider probed healthy: {[s.name for s in inventory.statuses]}"
-    )
+    evidence["steps"].append(f"provider probed healthy: {[s.name for s in inventory.statuses]}")
 
     journal = Journal(config.journal_path)
     await journal.open()
-    app = RuntimeApp(config, api, journal, inventory, adapters,
-                     redaction_secrets=[api_key] if api_key else [],
-                     sandbox_manager=mgr)
+    app = RuntimeApp(
+        config,
+        api,
+        journal,
+        inventory,
+        adapters,
+        redaction_secrets=[api_key] if api_key else [],
+        sandbox_manager=mgr,
+    )
     meta = heartbeat_metadata(config, inventory)
     activated = await api.activate(
-        code, {**meta, "version": "0.3.0-a3"},
+        code,
+        {**meta, "version": "0.3.0-a3"},
         daemon_features={"sandbox": "linux_ns", "egress": "gateway", "broker": "unix"},
     )
     api.set_token(activated.runtime_token)
@@ -184,11 +200,15 @@ async def main() -> dict:
         assert rt_status == "online", f"runtime not online: {rt_status}"
 
         # 7. assign issue → enqueue → real claim → real claude run.
-        r = await c.post(f"/api/v1/workspaces/{ws_id}/issues",
-                         json={"title": f"A3 real LLM {run_id}",
-                               "description": f"Reply with exactly the text {MARKER} and nothing else.",
-                               "assignee_id": agent_member_id},
-                         headers=_auth(token))
+        r = await c.post(
+            f"/api/v1/workspaces/{ws_id}/issues",
+            json={
+                "title": f"A3 real LLM {run_id}",
+                "description": f"Reply with exactly the text {MARKER} and nothing else.",
+                "assignee_id": agent_member_id,
+            },
+            headers=_auth(token),
+        )
         assert r.status_code == 201, r.text
         issue = r.json()["data"]
         evidence["steps"].append(f"issue {issue['id']} assigned → enqueue path triggered")
@@ -197,8 +217,11 @@ async def main() -> dict:
         execution = None
         deadline = asyncio.get_event_loop().time() + 400
         while asyncio.get_event_loop().time() < deadline:
-            r = await c.get(f"/api/v1/workspaces/{ws_id}/executions", headers=_auth(token),
-                            params={"issue_id": issue["id"]})
+            r = await c.get(
+                f"/api/v1/workspaces/{ws_id}/executions",
+                headers=_auth(token),
+                params={"issue_id": issue["id"]},
+            )
             data = r.json()["data"]
             items = data["items"] if isinstance(data, dict) else data
             if items:
@@ -208,29 +231,33 @@ async def main() -> dict:
             await asyncio.sleep(3.0)
         assert execution is not None, "execution never materialized"
         evidence["execution"] = {
-            "id": execution["id"], "status": execution["status"],
+            "id": execution["id"],
+            "status": execution["status"],
             "failure_reason": execution.get("failure_reason"),
         }
-        evidence["steps"].append(f"execution terminal: {execution['status']} "
-                                 f"(reason={execution.get('failure_reason')})")
+        evidence["steps"].append(
+            f"execution terminal: {execution['status']} (reason={execution.get('failure_reason')})"
+        )
 
         # 9. result schema v1 + real usage回流 (fetched BEFORE the status assert
         # so a failed run still surfaces diagnostics).
-        r = await c.get(f"/api/v1/workspaces/{ws_id}/executions/{execution['id']}",
-                        headers=_auth(token))
+        r = await c.get(f"/api/v1/workspaces/{ws_id}/executions/{execution['id']}", headers=_auth(token))
         exec_detail = r.json()["data"]
         result = exec_detail.get("result") or {}
         evidence["result"] = result
         # capture logs even on failure for debugging
-        lr = await c.get(f"/api/v1/workspaces/{ws_id}/executions/{execution['id']}/logs",
-                         headers=_auth(token))
+        lr = await c.get(
+            f"/api/v1/workspaces/{ws_id}/executions/{execution['id']}/logs", headers=_auth(token)
+        )
         evidence["log_excerpt"] = json.dumps(lr.json())[:2000]
         assert execution["status"] == "completed", evidence["execution"]
         assert result.get("schema_version") == 1, f"result schema: {result}"
         assert result.get("provider", {}).get("name") == "claude-code"
         usage = result.get("usage", {})
         assert usage.get("total_tokens", 0) > 0, f"no usage回流: {usage}"
-        assert result.get("provider", {}).get("session_id"), "no session_id回流"
+        # Public result DTO confirms that the opaque provider session was
+        # persisted without disclosing its identifier to browsers/API clients.
+        assert result.get("provider", {}).get("session_recorded") is True, "provider session was not recorded"
         # Functional assertion (CRITICAL-1): the task instruction must ACTUALLY
         # reach the model and be executed — the MARKER appears in the model's
         # reflowed final summary. "execution completed" alone is NOT enough
@@ -250,12 +277,11 @@ async def main() -> dict:
         evidence["steps"].append(
             f"result v1 ok: MARKER in output; model={e2e_model}; "
             f"total_tokens={usage.get('total_tokens')} turns={usage.get('turns')} "
-            f"cost={usage.get('cost_usd')} session={result['provider']['session_id'][:8]}"
+            f"cost={usage.get('cost_usd')} session_recorded=true"
         )
 
         # 10. logs回流 via REST + secret redaction.
-        r = await c.get(f"/api/v1/workspaces/{ws_id}/executions/{execution['id']}/logs",
-                        headers=_auth(token))
+        r = await c.get(f"/api/v1/workspaces/{ws_id}/executions/{execution['id']}/logs", headers=_auth(token))
         log_body = json.dumps(r.json())
         evidence["log_excerpt"] = log_body[:800]
         assert api_key not in log_body, "API KEY leaked into logs!"

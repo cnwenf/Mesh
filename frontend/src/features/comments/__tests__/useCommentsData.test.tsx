@@ -51,19 +51,25 @@ const ROOT: Comment = {
 interface RecordedCall {
   url: string;
   method: string;
+  idempotencyKey: string | null;
 }
 
 let calls: RecordedCall[] = [];
 let failNext = false;
 let frameListener: ((frame: RealtimeEventFrame) => void) | null = null;
+const frameListeners = new Set<(frame: RealtimeEventFrame) => void>();
 
 const fakeClient = {
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   onFrame: (cb: (frame: RealtimeEventFrame) => void) => {
-    frameListener = cb;
+    frameListeners.add(cb);
+    frameListener = (frame) => {
+      for (const listener of [...frameListeners]) listener(frame);
+    };
     return () => {
-      frameListener = null;
+      frameListeners.delete(cb);
+      if (frameListeners.size === 0) frameListener = null;
     };
   },
 };
@@ -73,10 +79,17 @@ function mockFetch(): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
-    calls.push({ url, method });
+    calls.push({
+      url,
+      method,
+      idempotencyKey: new Headers(init?.headers).get('Idempotency-Key'),
+    });
     if (failNext) {
       failNext = false;
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }
     if (method === 'DELETE') return fakeResponse({ status: 204 });
     if (method === 'GET' && url.includes('/comments') && !url.includes('/comments/')) {
@@ -89,7 +102,9 @@ function mockFetch(): typeof fetch {
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }
     // 写操作返回带确定 id 的评论(创建/解决/编辑)
-    return fakeResponse({ body: { data: { ...ROOT, id: 'c-server', resolved_at: '2026-07-03T00:00:00Z' } } });
+    return fakeResponse({
+      body: { data: { ...ROOT, id: 'c-server', resolved_at: '2026-07-03T00:00:00Z' } },
+    });
   }) as typeof fetch;
 }
 
@@ -104,7 +119,9 @@ function wrapper(props: { children: ReactNode }): React.JSX.Element {
   );
 }
 
-function render(): ReturnType<typeof renderHook<ReturnType<typeof useCommentsData>, { member: CommentMemberRef | null }>> {
+function render(): ReturnType<
+  typeof renderHook<ReturnType<typeof useCommentsData>, { member: CommentMemberRef | null }>
+> {
   return renderHook(({ member }) => useCommentsData('iss-1', member), {
     wrapper,
     initialProps: { member: ME as CommentMemberRef | null },
@@ -115,6 +132,7 @@ beforeEach(() => {
   calls = [];
   failNext = false;
   frameListener = null;
+  frameListeners.clear();
   vi.stubGlobal('fetch', mockFetch());
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -144,17 +162,34 @@ describe('useCommentsData', () => {
     expect(result.current.comments.some((c) => c.id.startsWith('local-'))).toBe(false);
   });
 
-  it('rolls back a failed top-level create', async () => {
+  it('keeps a failed top-level optimistic entity and retries with the same idempotency key', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     failNext = true;
     await act(async () => {
-      await expect(result.current.createTopLevel('boom', { suppressTriggers: false })).rejects.toBeTruthy();
+      await expect(
+        result.current.createTopLevel('boom', { suppressTriggers: false }),
+      ).rejects.toBeTruthy();
     });
-    expect(result.current.comments.some((c) => c.id.startsWith('local-'))).toBe(false);
+    const failed = result.current.comments.find((c) => c.id.startsWith('local-')) as
+      (Comment & { delivery_state?: string }) | undefined;
+    expect(failed?.delivery_state).toBe('failed');
+    const firstKey = calls.find((call) => call.method === 'POST')?.idempotencyKey;
+
+    await act(async () => {
+      await result.current.createTopLevel('boom', { suppressTriggers: false });
+    });
+
+    const postKeys = calls
+      .filter((call) => call.method === 'POST')
+      .map((call) => call.idempotencyKey);
+    expect(firstKey).not.toBeNull();
+    expect(postKeys).toEqual([firstKey, firstKey]);
+    expect(result.current.comments.filter((comment) => comment.id === 'c-server')).toHaveLength(1);
+    expect(result.current.comments.some((comment) => comment.id.startsWith('local-'))).toBe(false);
   });
 
-  it('creates a reply nested under the thread root and rolls back on failure', async () => {
+  it('creates a reply nested under the thread root and keeps a failed entity on failure', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(async () => {
@@ -165,10 +200,14 @@ describe('useCommentsData', () => {
     // failure path
     failNext = true;
     await act(async () => {
-      await expect(result.current.createReply(ROOT, 'bad', { suppressTriggers: false })).rejects.toBeTruthy();
+      await expect(
+        result.current.createReply(ROOT, 'bad', { suppressTriggers: false }),
+      ).rejects.toBeTruthy();
     });
     const after = result.current.comments.find((c) => c.id === 'c-1');
-    expect(after?.preview_replies?.some((r) => r.id.startsWith('local-'))).toBe(false);
+    expect(after?.preview_replies?.find((r) => r.id.startsWith('local-'))?.delivery_state).toBe(
+      'failed',
+    );
   });
 
   it('createReply 以嵌套 reply 为 parent(parent.id!==rootId 且 preview_replies 缺省)→ 归并到线程根', async () => {
@@ -181,7 +220,9 @@ describe('useCommentsData', () => {
     });
     const root = result.current.comments.find((c) => c.id === 'c-1');
     expect(root?.reply_count).toBe(1);
-    expect(root?.preview_replies?.some((r) => r.id === 'c-server' || r.id.startsWith('local-'))).toBe(true);
+    expect(
+      root?.preview_replies?.some((r) => r.id === 'c-server' || r.id.startsWith('local-')),
+    ).toBe(true);
   });
 
   it('toggles reactions add/remove and rolls back on failure', async () => {
@@ -206,7 +247,10 @@ describe('useCommentsData', () => {
     failNext = true;
     const before = result.current.comments;
     await act(async () => {
-      await result.current.toggleReaction(result.current.comments.find((c) => c.id === 'c-1') as Comment, '🎉');
+      await result.current.toggleReaction(
+        result.current.comments.find((c) => c.id === 'c-1') as Comment,
+        '🎉',
+      );
     });
     expect(result.current.comments).toBe(before);
   });
@@ -228,23 +272,28 @@ describe('useCommentsData', () => {
     await act(async () => {
       await result.current.setResolved(ROOT, true);
     });
-    expect(result.current.comments.some((c) => c.resolved_at === '2026-07-03T00:00:00Z')).toBe(true);
+    expect(result.current.comments.some((c) => c.resolved_at === '2026-07-03T00:00:00Z')).toBe(
+      true,
+    );
     // failure rollback
     failNext = true;
     await act(async () => {
       await result.current.setResolved(result.current.comments[0] as Comment, false);
     });
-    expect(result.current.comments.some((c) => c.resolved_at === '2026-07-03T00:00:00Z')).toBe(true);
+    expect(result.current.comments.some((c) => c.resolved_at === '2026-07-03T00:00:00Z')).toBe(
+      true,
+    );
   });
 
-  it('hides the comment immediately and defers the real DELETE (§9.5.5)', async () => {
+  it('keeps a tombstone immediately and defers the real DELETE (§9.5.5)', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     act(() => {
       result.current.remove(ROOT);
     });
-    // 乐观隐藏:立即从列表移除
-    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(false);
+    const tombstone = result.current.comments.find((comment) => comment.id === 'c-1');
+    expect(tombstone?.deleted_at).not.toBeNull();
+    expect(tombstone?.body_markdown).toBe('');
     // 撤销窗口内尚未真正删除
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
@@ -300,8 +349,9 @@ describe('useCommentsData', () => {
       result.current.remove(ROOT);
       result.current.remove(ROOT);
     });
-    // 仍只隐藏一次,不抛错;列表中无 c-1
-    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(false);
+    // 仍只生成一个墓碑,不抛错也不重复排程。
+    expect(result.current.comments.filter((c) => c.id === 'c-1')).toHaveLength(1);
+    expect(result.current.comments.find((c) => c.id === 'c-1')?.deleted_at).not.toBeNull();
   });
 
   it('saves an edit with the optimistic lock', async () => {
@@ -328,6 +378,156 @@ describe('useCommentsData', () => {
     });
     expect(result.current.comments.some((c) => c.id === 'c-live')).toBe(true);
   });
+
+  it('deduplicates a comment.created frame that wins the race with the POST response', async () => {
+    let finishPost: ((response: Response) => void) | undefined;
+    vi.stubGlobal('fetch', (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (method === 'GET') {
+        return fakeResponse({ body: { data: [ROOT], next_cursor: null } });
+      }
+      return new Promise<Response>((resolve) => {
+        finishPost = resolve;
+      });
+    }) as typeof fetch);
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let pending: Promise<Comment> | undefined;
+    act(() => {
+      pending = result.current.createTopLevel('racing', { suppressTriggers: false });
+    });
+    await waitFor(() =>
+      expect(
+        (
+          result.current.comments.find((comment) => comment.id.startsWith('local-')) as
+            (Comment & { delivery_state?: string }) | undefined
+        )?.delivery_state,
+      ).toBe('sending'),
+    );
+
+    const server = {
+      ...ROOT,
+      id: 'c-race',
+      body_markdown: 'racing',
+      body_html: '<p>racing</p>',
+      body_text: 'racing',
+    };
+    act(() => {
+      frameListener?.({
+        op: 'event',
+        channel: 'issue:iss-1',
+        seq: 9,
+        event: 'comment.created',
+        payload: server,
+      });
+    });
+    await act(async () => {
+      finishPost?.(fakeResponse({ body: { data: server } }));
+      await pending;
+    });
+
+    expect(result.current.comments.filter((comment) => comment.id === 'c-race')).toHaveLength(1);
+    expect(result.current.comments.some((comment) => comment.id.startsWith('local-'))).toBe(false);
+  });
+
+  it('treats a correlated WS commit as success when the HTTP response is lost', async () => {
+    let rejectPost: ((reason?: unknown) => void) | undefined;
+    vi.stubGlobal('fetch', (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET') {
+        return fakeResponse({ body: { data: [ROOT], next_cursor: null } });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        rejectPost = reject;
+      });
+    }) as typeof fetch);
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let pending: Promise<Comment> | undefined;
+    act(() => {
+      pending = result.current.createTopLevel('committed over ws', { suppressTriggers: false });
+    });
+    const optimistic = await waitFor(() => {
+      const value = result.current.comments.find((comment) => comment.id.startsWith('local-'));
+      expect(value?.client_request_id).toBeTruthy();
+      return value as Comment;
+    });
+    const committed: Comment = {
+      ...ROOT,
+      id: 'c-ws-commit',
+      body_markdown: 'committed over ws',
+      body_html: '<p>committed over ws</p>',
+      body_text: 'committed over ws',
+      client_request_id: optimistic.client_request_id,
+    };
+    act(() => {
+      frameListener?.({
+        op: 'event',
+        channel: 'issue:iss-1',
+        seq: 12,
+        event: 'comment.created',
+        payload: committed as unknown as Record<string, unknown>,
+      });
+    });
+    await act(async () => {
+      rejectPost?.(new TypeError('response connection lost'));
+      await expect(pending).resolves.toMatchObject({ id: committed.id });
+    });
+
+    expect(result.current.comments.filter((comment) => comment.id === committed.id)).toHaveLength(
+      1,
+    );
+    expect(result.current.comments.some((comment) => comment.id.startsWith('local-'))).toBe(false);
+    expect(result.current.comments.some((comment) => comment.delivery_state === 'failed')).toBe(
+      false,
+    );
+  });
+
+  it('merges realtime changes into replies after the full thread has loaded', async () => {
+    const loadedReply: Comment = {
+      ...ROOT,
+      id: 'r-loaded',
+      parent_id: ROOT.id,
+      thread_root_id: ROOT.id,
+      body_markdown: 'loaded',
+      body_html: '<p>loaded</p>',
+      body_text: 'loaded',
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/replies')) {
+        return fakeResponse({ body: { data: [loadedReply], next_cursor: null } });
+      }
+      return fakeResponse({
+        body: { data: [{ ...ROOT, reply_count: 1, preview_replies: [] }], next_cursor: null },
+      });
+    }) as typeof fetch);
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const stateful = result.current as unknown as typeof result.current & {
+      loadReplies: (root: Comment) => Promise<void>;
+    };
+    await act(async () => {
+      await stateful.loadReplies(ROOT);
+    });
+    act(() => {
+      frameListener?.({
+        op: 'event',
+        channel: 'issue:iss-1',
+        seq: 10,
+        event: 'comment.updated',
+        payload: {
+          id: loadedReply.id,
+          body_text: 'updated live',
+          updated_at: '2026-07-04T00:00:00Z',
+        },
+      });
+    });
+
+    expect(result.current.comments[0]?.preview_replies?.[0]?.body_text).toBe('updated live');
+  });
 });
 
 describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inbox §4.1)', () => {
@@ -336,7 +536,12 @@ describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inb
     channel: 'issue:iss-1',
     seq: 2,
     event: 'execution.queued',
-    payload: { execution_id: 'e1', agent_member_id: 'mem-agent', agent_name: 'rev', comment_id: 'c-1' },
+    payload: {
+      execution_id: 'e1',
+      agent_member_id: 'mem-agent',
+      agent_name: 'rev',
+      comment_id: 'c-1',
+    },
   } as RealtimeEventFrame;
   const failedFrame = {
     op: 'event',
@@ -345,6 +550,81 @@ describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inb
     event: 'execution.failed',
     payload: { execution_id: 'e1', failure_reason: 'nonzero_exit' },
   } as RealtimeEventFrame;
+
+  it('applies the complete non-terminal state machine directly from the issue channel', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => frameListener?.(queuedFrame));
+    expect(result.current.placeholders[0]?.status).toBe('queued');
+
+    for (const [event, expected] of [
+      ['execution.claimed', 'running'],
+      ['execution.awaiting_approval', 'waiting'],
+      ['execution.queued', 'queued'],
+      ['execution.started', 'running'],
+    ] as const) {
+      act(() =>
+        frameListener?.({
+          ...queuedFrame,
+          event,
+          payload: { ...queuedFrame.payload, execution_id: 'e1' },
+        }),
+      );
+      expect(result.current.placeholders).toHaveLength(1);
+      expect(result.current.placeholders[0]?.status).toBe(expected);
+    }
+
+    act(() =>
+      frameListener?.({
+        ...queuedFrame,
+        event: 'execution.completed',
+        payload: { execution_id: 'e1' },
+      }),
+    );
+    expect(result.current.placeholders).toEqual([]);
+  });
+
+  it('restores active placeholders from the existing issue execution REST list', async () => {
+    const triggered: Comment = {
+      ...ROOT,
+      mentions: [{ id: 'mem-agent', member_type: 'agent', name: 'rev' }],
+      triggered_execution_ids: ['e-restored'],
+    };
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/workspaces/ws-1/executions')) {
+        return fakeResponse({
+          body: {
+            data: [
+              {
+                id: 'e-restored',
+                issue_id: 'iss-1',
+                agent_id: 'agent-entity',
+                status: 'awaiting_approval',
+                failure_reason: null,
+              },
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ body: { data: [triggered], next_cursor: null } });
+    }) as typeof fetch);
+
+    const { result } = renderHook(() => useCommentsData('iss-1', ME, 'ws-1'), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.placeholders).toEqual([
+      {
+        execution_id: 'e-restored',
+        comment_id: 'c-1',
+        agent_id: 'mem-agent',
+        agent_name: 'rev',
+        status: 'waiting',
+        failure_reason: null,
+      },
+    ]);
+  });
 
   async function seedFailedPlaceholder() {
     const utils = render();
@@ -365,7 +645,9 @@ describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inb
     });
     const urls = calls.map((c) => `${c.method} ${c.url}`);
     expect(urls.some((u) => u.startsWith('GET') && u.includes('/comments/c-1'))).toBe(true);
-    expect(urls.some((u) => u.startsWith('POST') && u.includes('/issues/iss-1/comments'))).toBe(true);
+    expect(urls.some((u) => u.startsWith('POST') && u.includes('/issues/iss-1/comments'))).toBe(
+      true,
+    );
     expect(result.current.placeholders.some((p) => p.execution_id === 'e1')).toBe(false);
   });
 
@@ -403,7 +685,11 @@ describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inb
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     act(() => frameListener?.(queuedFrame));
     act(() =>
-      frameListener?.({ ...failedFrame, event: 'execution.completed', payload: { execution_id: 'e1' } }),
+      frameListener?.({
+        ...failedFrame,
+        event: 'execution.completed',
+        payload: { execution_id: 'e1' },
+      }),
     );
     expect(result.current.placeholders).toHaveLength(0);
   });
@@ -411,7 +697,10 @@ describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inb
 
 describe('pure helpers', () => {
   it('patchCommentById patches nested replies and returns same ref on miss', () => {
-    const withReply: Comment = { ...ROOT, preview_replies: [{ ...ROOT, id: 'c-2', parent_id: 'c-1' }] };
+    const withReply: Comment = {
+      ...ROOT,
+      preview_replies: [{ ...ROOT, id: 'c-2', parent_id: 'c-1' }],
+    };
     const patched = patchCommentById([withReply], 'c-2', (c) => ({ ...c, body_text: 'x' }));
     expect(patched[0].preview_replies?.[0].body_text).toBe('x');
     const miss = patchCommentById([ROOT], 'nope', (c) => c);
@@ -422,7 +711,11 @@ describe('pure helpers', () => {
     // 顶层移除
     expect(removeCommentById([ROOT], 'c-1')).toEqual([]);
     // 嵌套移除并递减 reply_count
-    const withReply: Comment = { ...ROOT, reply_count: 1, preview_replies: [{ ...ROOT, id: 'c-2', parent_id: 'c-1' }] };
+    const withReply: Comment = {
+      ...ROOT,
+      reply_count: 1,
+      preview_replies: [{ ...ROOT, id: 'c-2', parent_id: 'c-1' }],
+    };
     const removed = removeCommentById([withReply], 'c-2');
     expect(removed[0].preview_replies).toEqual([]);
     expect(removed[0].reply_count).toBe(0);
@@ -439,7 +732,14 @@ describe('pure helpers', () => {
     expect(removed).toEqual([]);
     // removing when others still reacted keeps the chip
     const withOthers = toggleReactionLocal(
-      [{ emoji: '👍', count: 2, reacted_by_me: true, actors: [ME, { id: 'mem-9', member_type: 'human', name: 'B' }] }],
+      [
+        {
+          emoji: '👍',
+          count: 2,
+          reacted_by_me: true,
+          actors: [ME, { id: 'mem-9', member_type: 'human', name: 'B' }],
+        },
+      ],
       '👍',
       ME,
     );

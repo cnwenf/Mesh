@@ -7,10 +7,10 @@ style, matches the agent module). Only REQUEST bodies live here.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 NAME_MAX = 120
 # L3: daemon-supplied JSONB payloads are size-capped (storage-bloat / DoS).
@@ -28,6 +28,37 @@ CAPABILITIES_MAX = 64
 CAPABILITY_KEY_MAX = 128
 LOG_LINES_MAX = 2000
 LOG_LINE_BYTES_MAX = 8192
+
+DiagnosticName = Annotated[
+    str,
+    Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.:-]*$"),
+]
+RuntimeDiagnosticReason = Literal[
+    "provider_unavailable",
+    "capability_missing",
+    "sandbox_unavailable",
+    "broker_unreachable",
+    "egress_blocked",
+    "budget_unavailable",
+    "cleanup_failed",
+    "provider_isolation_failed",
+    "runtime_auth_failed",
+    "sandbox_security_failed",
+    "security_anomaly",
+    "usage_invariant_failed",
+    "usage_anomaly",
+]
+ISOLATION_DIAGNOSTIC_REASONS = frozenset(
+    {
+        "cleanup_failed",
+        "provider_isolation_failed",
+        "runtime_auth_failed",
+        "sandbox_security_failed",
+        "security_anomaly",
+        "usage_invariant_failed",
+        "usage_anomaly",
+    }
+)
 
 
 class RuntimeLabelsModel(BaseModel):
@@ -93,6 +124,22 @@ class ContextProgressEntry(BaseModel):
     lease_seq: int = Field(default=0, ge=0)
 
 
+class RuntimeDiagnosticRequest(BaseModel):
+    """Safe daemon→server operational diagnostic.
+
+    Only fixed reason codes and slug-like identifiers cross this boundary.
+    Raw exception text, host paths, addresses, tokens and provider output are
+    deliberately not representable. The server derives the repair command
+    from ``reason_code`` instead of trusting daemon-authored shell text.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    reason_code: RuntimeDiagnosticReason
+    missing_capabilities: list[DiagnosticName] = Field(default_factory=list, max_length=64)
+    affected_task_types: list[DiagnosticName] = Field(default_factory=list, max_length=64)
+
+
 class HeartbeatRequest(BaseModel):
     """POST /daemon/runtimes/{id}:heartbeat (§3.2).
 
@@ -102,8 +149,12 @@ class HeartbeatRequest(BaseModel):
     loses the dedup fast path without affecting at-least-once semantics.
     """
 
+    model_config = {"extra": "forbid"}
+
     current_load: int = Field(default=0, ge=0)
     health: Literal["healthy", "degraded"] = "healthy"
+    operational_state: Literal["online", "degraded", "isolated"] | None = None
+    diagnostics: list[RuntimeDiagnosticRequest] = Field(default_factory=list, max_length=16)
     metrics: dict[str, Any] = Field(default_factory=dict)
     inflight: list[str] = Field(default_factory=list)
     protocol_version: int | None = Field(default=None, ge=1)
@@ -113,6 +164,32 @@ class HeartbeatRequest(BaseModel):
     @classmethod
     def _bound_metrics(cls, v: dict[str, Any]) -> dict[str, Any]:
         return _bounded_json(v, "metrics")  # type: ignore[return-value]
+
+    @model_validator(mode="after")
+    def _validate_operational_report(self) -> HeartbeatRequest:
+        # Fields are optional as a compatibility bridge for already-installed
+        # daemons. Once supplied, however, the report is internally coherent
+        # and fail-closed.
+        if self.operational_state is None:
+            if self.diagnostics:
+                raise ValueError("diagnostics require operational_state")
+            return self
+        if self.operational_state == "online":
+            if self.health != "healthy" or self.diagnostics:
+                raise ValueError("online requires healthy with no diagnostics")
+            return self
+        if self.health != "degraded" or not self.diagnostics:
+            raise ValueError("degraded/isolated require degraded health and diagnostics")
+        reasons = {item.reason_code for item in self.diagnostics}
+        if self.operational_state == "isolated" and not reasons.intersection(
+            ISOLATION_DIAGNOSTIC_REASONS
+        ):
+            raise ValueError("isolated requires a security, usage, or cleanup reason")
+        if self.operational_state == "degraded" and reasons.intersection(
+            ISOLATION_DIAGNOSTIC_REASONS
+        ):
+            raise ValueError("isolation reasons require isolated operational_state")
+        return self
 
 
 class ClaimRequest(BaseModel):

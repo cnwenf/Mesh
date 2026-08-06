@@ -710,3 +710,163 @@ textarea.mesh-issues-detail__description {
 .mesh-issues-detail__field-error {
   color: var(--color-danger-fg);
 }
+
+/* ---- Issue 运行反查与人类监督(agent.md §4.10 / runtime.md §4.5) ---- */
+
+.mesh-issue-executions {
+  display: grid;
+  gap: var(--space-3);
+  margin-block: calc(var(--space-4) + var(--space-2));
+}
+
+.mesh-issue-executions__header,
+.mesh-issue-executions__summary,
+.mesh-issue-executions__active,
+.mesh-issue-executions__review {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-issue-executions__header {
+  justify-content: space-between;
+}
+
+.mesh-issue-executions__header h2 {
+  margin: 0;
+}
+
+.mesh-issue-executions__count {
+  min-width: 1.5rem;
+  padding-inline: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: 1.5rem;
+  text-align: center;
+}
+
+.mesh-issue-executions__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mesh-issue-executions__item {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.mesh-issue-executions__item[data-active='true'] {
+  border-color: var(--color-accent);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.mesh-issue-executions__summary {
+  justify-content: space-between;
+}
+
+.mesh-issue-executions__link {
+  color: var(--color-text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.mesh-issue-executions__link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.mesh-issue-executions__meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.mesh-issue-executions__meta > div {
+  min-width: 0;
+}
+
+.mesh-issue-executions__meta dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-issue-executions__meta dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-issue-executions__active {
+  justify-content: space-between;
+}
+
+.mesh-issue-executions__progress {
+  position: relative;
+  flex: 1;
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-subtle);
+}
+
+.mesh-issue-executions__progress span {
+  position: absolute;
+  inset-block: 0;
+  width: 42%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  animation: mesh-issue-execution-progress 1.4s ease-in-out infinite alternate;
+}
+
+.mesh-issue-executions__failure {
+  margin: 0;
+  color: var(--error);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.mesh-issue-executions__review {
+  flex-wrap: wrap;
+}
+
+@keyframes mesh-issue-execution-progress {
+  from {
+    transform: translateX(-15%);
+  }
+  to {
+    transform: translateX(155%);
+  }
+}
+
+@media (max-width: 42rem) {
+  .mesh-issue-executions__meta {
+    grid-template-columns: 1fr;
+  }
+
+  .mesh-issue-executions__active {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-issue-executions__progress span {
+    width: 60%;
+    animation: none;
+  }
+}

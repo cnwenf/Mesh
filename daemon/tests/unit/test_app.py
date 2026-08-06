@@ -54,7 +54,17 @@ class AppStubApi:
             return self.claim_response
         return None
 
-    async def heartbeat(self, runtime_id, *, current_load, health, metrics, inflight):
+    async def heartbeat(
+        self,
+        runtime_id,
+        *,
+        current_load,
+        health,
+        metrics,
+        inflight,
+        operational_state=None,
+        diagnostics=None,
+    ):
         commands = []
         # Deliver the cancel only once the attempt is running (a real cancel
         # arrives on a later heartbeat, never before startup completes) and

@@ -15,7 +15,13 @@ from meshcli.context import get_context
 from meshcli.main import cli as root
 from meshcli.output import stderr
 
-RUNTIME_COLUMNS = ["id", "name", "status", "last_heartbeat_at", "updated_at"]
+RUNTIME_COLUMNS = [
+    "id",
+    "name",
+    "status",
+    "operational_state",
+    "last_heartbeat_at",
+]
 
 
 @root.group()

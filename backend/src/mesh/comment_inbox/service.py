@@ -73,6 +73,22 @@ def _issue_channel(issue_id: uuid.UUID) -> str:
     return f"issue:{issue_id}"
 
 
+def _public_client_request_id(idempotency_key: str | None) -> str | None:
+    """Expose only UUID request ids for optimistic UI reconciliation.
+
+    ``Idempotency-Key`` accepts opaque caller data and must not be reflected to
+    every issue-channel subscriber.  The first-party client uses a random UUID,
+    so canonical UUID values are sufficient for correlating a committed
+    ``comment.created`` frame with its local optimistic entity.
+    """
+    if idempotency_key is None:
+        return None
+    try:
+        return str(uuid.UUID(idempotency_key))
+    except (ValueError, AttributeError):
+        return None
+
+
 class CommentService:
     """Stateless orchestrator over a session factory (house pattern)."""
 
@@ -205,12 +221,12 @@ class CommentService:
                     session, workspace_id, parent_id, issue_id=issue_id
                 )
                 if parent.parent_id is not None:
-                    # Depth is exactly 1: replies attach to the thread root.
-                    raise BusinessRuleError(
-                        "cannot reply to a reply (thread depth is 1)",
-                        code="reply_depth_exceeded",
-                    )
-                thread_root_id = parent.id
+                    # The API accepts a reply id for ergonomic clients, but
+                    # canonical storage stays exactly one level deep.
+                    parent_id = parent.thread_root_id or parent.parent_id
+                    thread_root_id = parent_id
+                else:
+                    thread_root_id = parent.id
 
             comment = Comment(
                 workspace_id=workspace_id,
@@ -224,13 +240,16 @@ class CommentService:
                 body_text=rendered.text,
                 idempotency_key=idempotency_key,
             )
-            session.add(comment)
             # L3 / §6.14: the SELECT-then-INSERT above is not race-free; a
             # concurrent create with the same Idempotency-Key can lose the
             # race on uq_comments_idempotency. Catch it in a savepoint and
             # return the winner's row instead of surfacing a 500.
             try:
                 async with session.begin_nested():
+                    # Add only *after* the SAVEPOINT exists.  SQLAlchemy flushes
+                    # pending state while entering begin_nested(); adding first
+                    # would let the unique violation abort the outer transaction.
+                    session.add(comment)
                     await session.flush()
             except IntegrityError:
                 if idempotency_key is None:
@@ -515,7 +534,6 @@ class CommentService:
                     )
             await session.flush()
 
-            triggered_ids: tuple[uuid.UUID, ...] = ()
             if added_agents and not suppress_triggers:
                 # L4 / §6.5: the create path anchors the trigger key on
                 # comment.id (one enqueue per comment+agent, forever). An edit
@@ -538,7 +556,6 @@ class CommentService:
                     trigger_event_id=edit_epoch,
                     max_chain_depth=self._max_agent_chain_depth,
                 )
-                triggered_ids = result.triggered_execution_ids
                 await self._record_triggered_executions(
                     session, comment_id=comment.id, triggered=result.triggered_by_member
                 )
@@ -570,7 +587,7 @@ class CommentService:
                     "edited_at": rendered_dict["edited_at"],
                     "updated_at": rendered_dict["updated_at"],
                     "mentions": rendered_dict["mentions"],
-                    "triggered_execution_ids": [str(x) for x in triggered_ids],
+                    "triggered_execution_ids": rendered_dict["triggered_execution_ids"],
                 },
             )
             # Only NEWLY mentioned humans get the critical mention
@@ -612,7 +629,12 @@ class CommentService:
                 workspace_id=workspace_id,
                 channel=_issue_channel(comment.issue_id),
                 event="comment.deleted",
-                data={"id": str(comment.id), "issue_id": str(comment.issue_id)},
+                data={
+                    "id": str(comment.id),
+                    "issue_id": str(comment.issue_id),
+                    "deleted_at": _isoformat(comment.deleted_at),
+                    "updated_at": _isoformat(comment.updated_at),
+                },
             )
 
     async def set_thread_resolved(
@@ -626,21 +648,55 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             comment = await self._load_active_comment(session, workspace_id, comment_id)
+            if comment.author_kind == "system":
+                raise ForbiddenError("system comments are read-only")
             if comment.parent_id is not None or comment.thread_root_id is not None:
                 raise BusinessRuleError(
                     "only a thread root can be resolved", code="not_thread_root"
                 )
             now = self._clock()
+            previous_resolved_at = comment.resolved_at
+            previous_resolved_by_id = comment.resolved_by_id
             if resolved:
                 comment.resolved_at = now
                 comment.resolved_by_id = actor_member.id
+                action = "comment.thread_resolved"
+                audit_metadata = {
+                    "issue_id": str(comment.issue_id),
+                    "resolved_at": _isoformat(now),
+                    "resolved_by_id": str(actor_member.id),
+                }
             else:
                 comment.resolved_at = None
                 comment.resolved_by_id = None
+                action = "comment.thread_reopened"
+                audit_metadata = {
+                    "issue_id": str(comment.issue_id),
+                    "previous_resolved_at": _isoformat(previous_resolved_at),
+                    "previous_resolved_by_id": (
+                        str(previous_resolved_by_id) if previous_resolved_by_id else None
+                    ),
+                }
             comment.updated_at = now
             await session.flush()
+            await write_audit(
+                session,
+                workspace_id=workspace_id,
+                actor_member_id=actor_member.id,
+                actor_kind="member",
+                action=action,
+                resource_type="comment_thread",
+                resource_id=comment.id,
+                metadata=audit_metadata,
+            )
             rendered_dict = await self._render_comment(
-                session, comment, viewer_member_id=actor_member.id
+                session, comment, viewer_member_id=actor_member.id, with_counts=True
+            )
+            await self._attach_preview_replies(
+                session,
+                workspace_id=workspace_id,
+                items=[rendered_dict],
+                viewer_member_id=actor_member.id,
             )
             await emit_realtime(
                 session,
@@ -653,6 +709,7 @@ class CommentService:
                     "resolved": resolved,
                     "resolved_at": rendered_dict["resolved_at"],
                     "resolved_by": rendered_dict["resolved_by"],
+                    "updated_at": rendered_dict["updated_at"],
                 },
             )
             return rendered_dict
@@ -1118,15 +1175,18 @@ class CommentService:
         comment_id: uuid.UUID,
         triggered: dict[uuid.UUID, uuid.UUID],
     ) -> None:
-        """Persist the skeleton execution ids on the mention rows (§3.5)."""
-        for mentioned_id, execution_id in triggered.items():
+        """Persist pending outbox correlations without exposing fake run ids."""
+        for mentioned_id, trigger_event_id in triggered.items():
             await session.execute(
                 CommentMention.__table__.update()
                 .where(
                     CommentMention.comment_id == comment_id,
                     CommentMention.mentioned_id == mentioned_id,
                 )
-                .values(triggered_execution_id=execution_id)
+                .values(
+                    triggered_execution_id=None,
+                    pending_trigger_event_id=trigger_event_id,
+                )
             )
 
     async def _render_comment(
@@ -1153,10 +1213,27 @@ class CommentService:
                     "id": str(member.id),
                     "member_type": member.member_type,  # snapshot; source: members
                     "name": resolve_display_name(member=member, user=user),
+                    "status": member.status,
                 }
-        resolved_by: str | None = None
+        resolved_by: dict | None = None
         if comment.resolved_by_id is not None:
-            resolved_by = str(comment.resolved_by_id)
+            resolver = await session.scalar(
+                select(Member).where(
+                    Member.workspace_id == comment.workspace_id,
+                    Member.id == comment.resolved_by_id,
+                )
+            )
+            if resolver is not None:
+                resolver_user = None
+                if resolver.user_id is not None:
+                    resolver_user = await session.scalar(
+                        select(User).where(User.id == resolver.user_id)
+                    )
+                resolved_by = {
+                    "id": str(resolver.id),
+                    "member_type": resolver.member_type,
+                    "name": resolve_display_name(member=resolver, user=resolver_user),
+                }
 
         deleted = comment.deleted_at is not None
         reactions = await self._reaction_aggregation(
@@ -1209,6 +1286,7 @@ class CommentService:
             "resolved_by": resolved_by,
             "mentions": mentions,
             "triggered_execution_ids": triggered,
+            "client_request_id": _public_client_request_id(comment.idempotency_key),
             "deleted_at": _isoformat(comment.deleted_at),
             "created_at": _isoformat(comment.created_at),
             "updated_at": _isoformat(comment.updated_at),

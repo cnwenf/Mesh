@@ -6,12 +6,16 @@
 
 export type AuthorKind = 'member' | 'system';
 export type MemberType = 'human' | 'agent';
+export type MemberStatus = 'active' | 'disabled' | 'removed';
+export type CommentDeliveryState = 'sending' | 'failed' | 'sent';
 
 /** 轻量成员引用(作者 / 提及 / 反应人):服务端解析显示名 + 类型快照。 */
 export interface CommentMemberRef {
   readonly id: string;
   readonly member_type: MemberType;
   readonly name: string;
+  /** 作者历史展示需要区分已移除的 agent；旧服务响应可暂不携带。 */
+  readonly status?: MemberStatus;
 }
 
 /** 表情回应聚合(评论级):emoji + 计数 + 当前用户是否已反应 + 反应人列表。 */
@@ -43,6 +47,12 @@ export interface Comment {
   readonly created_at: string;
   readonly updated_at: string;
   readonly edited_at: string | null;
+  /** 仅客户端乐观实体使用；服务端实体缺省等价于 sent。 */
+  readonly delivery_state?: CommentDeliveryState;
+  /** UUID 请求关联键；服务端实时回显，用于 HTTP/WS 竞态对账及失败重试。 */
+  readonly client_request_id?: string | null;
+  /** 仅客户端保留，用于失败实体的等价重试匹配。 */
+  readonly suppress_triggers?: boolean;
   /** 列表(include=replies)附带的前 N 条预览回复;详情/单条无此字段。 */
   readonly preview_replies?: readonly Comment[];
 }
@@ -62,6 +72,18 @@ export interface ListCommentsParams {
   readonly cursor?: string;
   readonly include?: 'replies' | 'none';
   readonly order?: 'asc' | 'desc';
+}
+
+/**
+ * 评论占位恢复所需的最小 execution REST 投影。完整执行详情属于 runtime 模块；
+ * 评论区只依赖这些稳定字段，避免复制或猜测 attempt/runtime 数据。
+ */
+export interface CommentExecutionSnapshot {
+  readonly id: string;
+  readonly issue_id: string | null;
+  readonly agent_id: string | null;
+  readonly status: string;
+  readonly failure_reason: string | null;
 }
 
 /** 反应人运行时结构守卫(边界处校验,不信任外部载荷)。 */

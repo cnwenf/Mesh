@@ -98,6 +98,7 @@ export interface CommentCardProps {
   readonly onSaveEdit: (comment: Comment, bodyMarkdown: string) => Promise<void>;
   readonly onDelete: (comment: Comment) => void;
   readonly onCopyLink: (comment: Comment) => void;
+  readonly onRetrySend: (comment: Comment) => void;
 }
 
 export function CommentCard(props: CommentCardProps): React.JSX.Element {
@@ -135,80 +136,93 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
   const resolved = isResolved(comment);
   const author = comment.author;
   const isAgent = author !== null && author.member_type === 'agent';
+  const inactiveAgent = isAgent && author.status === 'removed';
+  const authorName =
+    author === null
+      ? t('comments.unknownAuthor')
+      : inactiveAgent
+        ? t('comments.inactiveAgent')
+        : author.name;
+  const deliveryState = comment.delivery_state ?? 'sent';
+  const interactive = deliveryState === 'sent';
 
   const cardClass = [
     'mesh-comments__card',
     props.highlighted ? 'mesh-comments__card--highlight' : null,
     resolved ? 'mesh-comments__card--resolved' : null,
+    deliveryState === 'sending' ? 'mesh-comments__card--sending' : null,
+    deliveryState === 'failed' ? 'mesh-comments__card--failed' : null,
   ]
     .filter((part): part is string => part !== null)
     .join(' ');
 
   // 触控「更多」菜单(§9.5.6 / §8.2):承载与桌面操作条相同的动作;
   // 桌面端经 CSS 隐藏(hover:none 时显示),触控端常驻,命中区 ≥44px。
-  const menuEntries: ReadonlyArray<MenuEntry> = deleted
-    ? []
-    : [
-        {
-          key: 'reply',
-          label: t('comments.action.reply'),
-          icon: 'message',
-          onSelect: () => props.onReply(comment),
-        },
-        ...(comment.parent_id === null
-          ? resolved
+  const menuEntries: ReadonlyArray<MenuEntry> =
+    deleted || !interactive
+      ? []
+      : [
+          {
+            key: 'reply',
+            label: t('comments.action.reply'),
+            icon: 'message',
+            onSelect: () => props.onReply(comment),
+          },
+          ...(comment.parent_id === null
+            ? resolved
+              ? [
+                  {
+                    key: 'reopen',
+                    label: t('comments.action.reopen'),
+                    icon: 'refresh',
+                    onSelect: () => props.onReopen(comment),
+                  },
+                ]
+              : [
+                  {
+                    key: 'resolve',
+                    label: t('comments.action.resolve'),
+                    icon: 'check',
+                    onSelect: () => props.onResolve(comment),
+                  },
+                ]
+            : []),
+          {
+            key: 'copy',
+            label: t('comments.action.copyLink'),
+            icon: 'link',
+            onSelect: () => props.onCopyLink(comment),
+          },
+          ...(props.canModify
             ? [
                 {
-                  key: 'reopen',
-                  label: t('comments.action.reopen'),
-                  icon: 'refresh',
-                  onSelect: () => props.onReopen(comment),
+                  key: 'edit',
+                  label: t('comments.action.edit'),
+                  icon: 'edit',
+                  onSelect: startEdit,
                 },
-              ]
-            : [
                 {
-                  key: 'resolve',
-                  label: t('comments.action.resolve'),
-                  icon: 'check',
-                  onSelect: () => props.onResolve(comment),
+                  key: 'delete',
+                  label: t('comments.action.delete'),
+                  icon: 'trash',
+                  danger: true,
+                  onSelect: () => props.onDelete(comment),
                 },
               ]
-          : []),
-        {
-          key: 'copy',
-          label: t('comments.action.copyLink'),
-          icon: 'link',
-          onSelect: () => props.onCopyLink(comment),
-        },
-        ...(props.canModify
-          ? [
-              {
-                key: 'edit',
-                label: t('comments.action.edit'),
-                icon: 'edit',
-                onSelect: startEdit,
-              },
-              {
-                key: 'delete',
-                label: t('comments.action.delete'),
-                icon: 'trash',
-                danger: true,
-                onSelect: () => props.onDelete(comment),
-              },
-            ]
-          : []),
-      ];
+            : []),
+        ];
 
   return (
     <article
       className={cardClass}
       id={`comment-${comment.id}`}
       data-testid={`comment-card-${comment.id}`}
+      data-state={deliveryState}
     >
       {/* 时间线头像列(40px):头像下接连接线(CSS),系统活动与回复共用同一左轨。 */}
       <div className="mesh-comments__avatar-col" aria-hidden="true">
         <Avatar
-          name={author !== null ? author.name : '?'}
+          name={authorName}
           kind={isAgent ? 'agent' : 'human'}
           size={40}
           className="mesh-comments__avatar"
@@ -218,7 +232,7 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
       <div className="mesh-comments__card-main">
         <header className="mesh-comments__card-head">
           <span className="mesh-comments__author" data-testid={`comment-author-${comment.id}`}>
-            {author !== null ? author.name : t('comments.unknownAuthor')}
+            {authorName}
           </span>
           {isAgent ? (
             <span
@@ -243,7 +257,20 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
               {t('comments.resolved')}
             </span>
           ) : null}
+          {deliveryState === 'sending' ? (
+            <span className="mesh-comments__delivery" data-testid="comment-delivery-sending">
+              {t('comments.delivery.sending')}
+            </span>
+          ) : null}
         </header>
+
+        {resolved && comment.resolved_by !== null && comment.resolved_at !== null ? (
+          <div className="mesh-comments__resolved-meta" data-testid="comment-resolved-meta">
+            <span>{t('comments.resolvedBy')}</span>
+            <span>{comment.resolved_by.name}</span>
+            <RelativeTime utcIso={comment.resolved_at} locale={props.locale} />
+          </div>
+        ) : null}
 
         {deleted ? (
           <p className="mesh-comments__deleted" data-testid="comment-deleted">
@@ -298,7 +325,7 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
           />
         )}
 
-        {!deleted ? (
+        {!deleted && interactive ? (
           <ReactionBar
             reactions={comment.reactions}
             onToggle={(emoji) => props.onToggleReaction(comment, emoji)}
@@ -306,7 +333,20 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
           />
         ) : null}
 
-        {!deleted ? (
+        {deliveryState === 'failed' ? (
+          <div className="mesh-comments__delivery-error">
+            <span data-testid="comment-delivery-failed">{t('comments.delivery.failed')}</span>
+            <button
+              type="button"
+              data-testid="comment-delivery-retry"
+              onClick={() => props.onRetrySend(comment)}
+            >
+              {t('comments.delivery.retry')}
+            </button>
+          </div>
+        ) : null}
+
+        {!deleted && interactive ? (
           /* 桌面次要操作条:仅 hover/focus-within 显示(CSS opacity+visibility),保留键盘可达。 */
           <footer className="mesh-comments__actions">
             <button
@@ -364,7 +404,7 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
           </footer>
         ) : null}
 
-        {!deleted && menuEntries.length > 0 ? (
+        {!deleted && interactive && menuEntries.length > 0 ? (
           <div className="mesh-comments__actions-touch">
             <Menu
               trigger={<Icon name="more-horizontal" size={20} />}

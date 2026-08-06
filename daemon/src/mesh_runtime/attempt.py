@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from mesh_runtime.api import RuntimeApiClient
 from mesh_runtime.backoff import capped_retry_after
@@ -83,6 +85,7 @@ class AttemptSupervisor:
         max_renew_failures: int = _MAX_RENEW_FAILURES,
         security=None,  # AttemptSecurity | None — A2 isolation stack
         redactor=None,  # RedactionPipeline for diff/summary redaction
+        on_operational_incident: Callable[[str], None] | None = None,
     ) -> None:
         self._api = api
         self._journal = journal
@@ -95,6 +98,7 @@ class AttemptSupervisor:
         self._max_renew_failures = max_renew_failures
         self._security = security
         self._redactor = redactor
+        self._on_operational_incident = on_operational_incident
 
         self._provider_done = False
         self._provider_task: asyncio.Task | None = None
@@ -139,6 +143,7 @@ class AttemptSupervisor:
                     seq = ctx.lease_seq
                 await self._security.start(lease_seq=seq)
             except DaemonError:
+                self._signal_operational_incident("sandbox_security_failed")
                 await self._finalize(
                     ctx,
                     AttemptOutcome(ctx.attempt_id, "failed", "executor_unavailable"),
@@ -198,11 +203,17 @@ class AttemptSupervisor:
         try:
             report = await self._security.finish(spool_flushed=self._spool_flushed)
             if not report.ok:
+                self._signal_operational_incident("cleanup_failed")
                 logger.warning(
                     "attempt %s cleanup incomplete: %s", self._attempt_id, report.failures
                 )
-        except DaemonError as exc:
+        except Exception as exc:  # noqa: BLE001 — cleanup failure must isolate, not escape
+            self._signal_operational_incident("cleanup_failed")
             logger.warning("attempt %s cleanup failed: %s", self._attempt_id, type(exc).__name__)
+
+    def _signal_operational_incident(self, reason_code: str) -> None:
+        if self._on_operational_incident is not None:
+            self._on_operational_incident(reason_code)
 
     async def wait(self) -> AttemptOutcome:
         await self._done.wait()
@@ -298,11 +309,48 @@ class AttemptSupervisor:
                     ack = await self._logs.submit(ctx, "stdout", event.text)
                     hit_count += ack.redacted_hits
                 elif isinstance(event, UsageObserved):
-                    usage = Usage(
+                    observed = Usage(
                         event.input_tokens, event.cache_creation_tokens,
                         event.cache_read_tokens, event.output_tokens,
                         event.turns, event.cost_usd,
                     )
+                    try:
+                        observed._validate()
+                    except ValueError:
+                        self._signal_operational_incident("usage_invariant_failed")
+                        self._provider_done = True
+                        await self._finalize(
+                            ctx,
+                            AttemptOutcome(
+                                ctx.attempt_id,
+                                "failed",
+                                "executor_unavailable",
+                            ),
+                            session_id,
+                            usage,
+                            "",
+                            1,
+                            hit_count,
+                        )
+                        return
+                    if _usage_regressed(usage, observed):
+                        self._signal_operational_incident("usage_invariant_failed")
+                        self._provider_done = True
+                        await self._finalize(
+                            ctx,
+                            AttemptOutcome(
+                                ctx.attempt_id,
+                                "failed",
+                                "executor_unavailable",
+                            ),
+                            session_id,
+                            usage,
+                            "",
+                            1,
+                            hit_count,
+                        )
+                        return
+                    usage = observed
                 elif isinstance(event, FinalResult):
                     summary = event.summary
                     exit_code = event.exit_code
@@ -321,6 +369,7 @@ class AttemptSupervisor:
             # fail-closed red line: the sandbox could not be provisioned or
             # verified — report sandbox_violation, NEVER run bare (§5.2).
             self._provider_done = True
+            self._signal_operational_incident("sandbox_security_failed")
             await self._finalize(
                 ctx,
                 AttemptOutcome(ctx.attempt_id, "failed", "sandbox_violation"),
@@ -432,7 +481,10 @@ class AttemptSupervisor:
     async def _report_cancelled(self, ctx: AttemptContext) -> None:
         if self._terminal_reported or self._lease_lost:
             return
-        await self._send_terminal(ctx, "cancelled", "cancelled", result=None)
+        # Cancellation is an acknowledgement. The server owns the durable
+        # reason (for example agent_paused, superseded, or an explicit user
+        # action) because the downlink intentionally carries no policy data.
+        await self._send_terminal(ctx, "cancelled", None, result=None)
 
     async def _report_terminal(self, ctx, outcome, session_id, usage, summary, exit_code, hit_count) -> None:
         status = outcome.status if outcome.status in TERMINATIONS else "failed"
@@ -499,6 +551,23 @@ class AttemptSupervisor:
 
 def _short_reason(exc: Exception) -> str:
     return type(exc).__name__[:64]
+
+
+def _usage_regressed(previous: Usage, current: Usage) -> bool:
+    """Provider usage frames are cumulative; counters may never decrease."""
+    count_fields = (
+        "input_tokens",
+        "cache_creation_tokens",
+        "cache_read_tokens",
+        "output_tokens",
+        "turns",
+    )
+    if any(getattr(current, field) < getattr(previous, field) for field in count_fields):
+        return True
+    try:
+        return Decimal(current.cost_usd) < Decimal(previous.cost_usd)
+    except InvalidOperation:
+        return True
 
 
 def _sealed_flush_delay(exc: DaemonError, *, attempt: int) -> float:

@@ -67,6 +67,11 @@ class SandboxedProcessAdapter:
             binary_sha256=None,
             capabilities=(),
             reason=str(caps.get("reason", "sandbox unavailable")),
+            required_capabilities=(
+                "sandbox.linux_ns",
+                "egress.gateway",
+                "broker.unix",
+            ),
         )
 
     async def run(self, request: RunRequest) -> AsyncIterator[ExecutorEvent]:

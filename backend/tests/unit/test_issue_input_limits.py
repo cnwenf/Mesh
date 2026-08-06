@@ -54,10 +54,16 @@ async def _make_member(session_factory, workspace, *, role="owner") -> Member:
     from mesh.db.models.user import User
 
     async with session_factory() as session, session.begin():
-        user = User(email=f"{uuid.uuid4().hex[:12]}@corp.com", password_hash="x", display_name="Lim")
+        user = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Lim",
+        )
         session.add(user)
         await session.flush()
-        member = Member(workspace_id=workspace.id, member_type="human", user_id=user.id, role=role)
+        member = Member(
+            workspace_id=workspace.id, member_type="human", user_id=user.id, role=role
+        )
         session.add(member)
     return member
 
@@ -94,15 +100,39 @@ def test_update_issue_description_over_limit_rejected() -> None:
     assert exc_info.value.details["field"] == "description"
 
 
+def test_execution_output_review_request_requires_a_valid_pair() -> None:
+    execution_id = str(uuid.uuid4())
+    with pytest.raises(BusinessRuleError) as missing:
+        UpdateIssueRequest(review_execution_id=execution_id)
+    assert missing.value.code == "invalid_execution_output_review"
+
+    with pytest.raises(BusinessRuleError) as invalid:
+        UpdateIssueRequest(
+            review_execution_id=execution_id,
+            review_decision="maybe",
+        )
+    assert invalid.value.code == "invalid_execution_output_review"
+
+    valid = UpdateIssueRequest(
+        review_execution_id=execution_id,
+        review_decision="approved",
+    )
+    assert valid.review_execution_id == execution_id
+
+
 def test_template_description_over_limit_rejected() -> None:
     with pytest.raises(BusinessRuleError) as exc_info:
-        CreateIssueTemplateRequest(name="tpl", description="x" * (LONG_TEXT_MAX_BYTES + 1))
+        CreateIssueTemplateRequest(
+            name="tpl", description="x" * (LONG_TEXT_MAX_BYTES + 1)
+        )
     assert exc_info.value.code == "field_too_large"
 
 
 def test_template_body_over_limit_rejected() -> None:
     with pytest.raises(BusinessRuleError) as exc_info:
-        CreateIssueTemplateRequest(name="tpl", template_body={"blob": "z" * TEMPLATE_BODY_MAX_BYTES})
+        CreateIssueTemplateRequest(
+            name="tpl", template_body={"blob": "z" * TEMPLATE_BODY_MAX_BYTES}
+        )
     assert exc_info.value.status_code == 422
     assert exc_info.value.code == "field_too_large"
     assert exc_info.value.details == {
@@ -124,7 +154,9 @@ def test_update_template_limits_enforced() -> None:
         UpdateIssueTemplateRequest(description="x" * (LONG_TEXT_MAX_BYTES + 1))
     assert exc_info.value.code == "field_too_large"
     with pytest.raises(BusinessRuleError) as exc_info:
-        UpdateIssueTemplateRequest(template_body={"blob": "z" * TEMPLATE_BODY_MAX_BYTES})
+        UpdateIssueTemplateRequest(
+            template_body={"blob": "z" * TEMPLATE_BODY_MAX_BYTES}
+        )
     assert exc_info.value.code == "field_too_large"
 
 

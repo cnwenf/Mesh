@@ -158,6 +158,7 @@ describe('CommentsPanel moderation callbacks', () => {
     cfg.comments = [mkComment('c-1', { resolved_at: '2026-07-02T00:00:00Z' })];
     cfg.writeResult = mkComment('c-1', { resolved_at: null });
     renderPanel();
+    fireEvent.click(await screen.findByTestId('resolved-threads-toggle'));
     await screen.findByTestId('comment-reopen-c-1');
     fireEvent.click(screen.getByTestId('comment-reopen-c-1'));
     await waitFor(() => expect(calls.some((c) => c.url.includes('/reopen'))).toBe(true));
@@ -204,8 +205,9 @@ describe('CommentsPanel moderation callbacks', () => {
     renderPanel();
     await screen.findByTestId('comment-delete-c-1');
     fireEvent.click(screen.getByTestId('comment-delete-c-1'));
-    // 乐观隐藏:卡片立即移除;撤销窗口内尚未真正调用 DELETE
-    await waitFor(() => expect(screen.queryByTestId('comment-card-c-1')).toBeNull());
+    // 乐观墓碑:卡片留在时间线以保持线程结构;撤销窗口内尚未真正调用 DELETE
+    await screen.findByTestId('comment-deleted');
+    expect(screen.getByTestId('comment-card-c-1')).toBeTruthy();
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
     // 撤销提示 toast 出现(含撤销动作与实际文案)
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
@@ -241,6 +243,24 @@ describe('CommentsPanel deep-link highlight', () => {
         'mesh-comments__card--highlight',
       ),
     );
+  });
+
+  it('reveals a resolved thread before scrolling to its anchor', async () => {
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    window.location.hash = '#comment-c-1';
+    cfg.comments = [
+      mkComment('c-1', {
+        resolved_at: '2026-07-03T00:00:00Z',
+        resolved_by: { id: 'mem-2', member_type: 'human', name: 'Reviewer' },
+      }),
+    ];
+
+    renderPanel();
+
+    const card = await screen.findByTestId('comment-card-c-1');
+    expect(screen.getByTestId('resolved-threads-toggle')).toHaveAttribute('aria-expanded', 'true');
+    expect(card.className).toContain('mesh-comments__card--highlight');
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
   });
 });
 

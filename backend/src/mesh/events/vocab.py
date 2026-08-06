@@ -116,6 +116,7 @@ EXECUTION_EVENTS: frozenset[str] = frozenset(
         "runtime.online",
         "runtime.offline",
         "runtime.degraded",
+        "runtime.isolated",
         "runtime.paused",
     }
 )

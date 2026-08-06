@@ -809,7 +809,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 | 频道 | 事件 | 说明 |
 |------|------|------|
-| `workspace:{ws}:runtimes` | `runtime.activated` / `runtime.online` / `runtime.offline` / `runtime.degraded` / `runtime.paused` | runtime 生命周期，注册引导页 ⏳→✅ |
+| `workspace:{ws}:runtimes` | `runtime.activated` / `runtime.online` / `runtime.offline` / `runtime.degraded` / `runtime.isolated` / `runtime.paused` | runtime 生命周期与可执行性状态，注册引导页 ⏳→✅；安全异常进入 isolated 时立即广播 |
 | `workspace:{ws}:executions` | `execution.queued` / `execution.claimed` / `execution.started` / `execution.awaiting_approval` | 队列、领取与审批挂起可观测 |
 | `execution:{id}` | `execution.completed` / `execution.failed` / `execution.timeout` / `execution.cancelled` / `execution.requeued` | 终态 / 重排 |
 | `execution:{id}:logs` | `execution.log`（带 offset） | 实时日志流 |
@@ -927,7 +927,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 - `execution.claimed`：详情显示由哪台 runtime 领取（含 hostname / 标签）。
 - `execution.started`：进入 running，日志流开始滚动。
 - 终态：`execution.completed/failed/timeout/cancelled` 触发通知，附 `failure_reason` 与最后 N 行日志摘要，深链直达详情页。
-- issue 详情页可反查其所有 `task_executions`（按 `issue_id` 索引），看到「这个任务被 agent 干过几次、每次结果如何」。
+- issue 详情页可反查其所有 `task_executions`（按 `issue_id` 索引），以 `next_cursor` 分页直至全部历史均可达，看到「这个任务被 agent 干过几次、每次结果如何」。产出「批准/要求修改」仅绑定列表中最新一条 execution：只有它仍为 `completed` 且 issue 仍为 `in_review` 时可操作；服务端同事务复核并把 `{execution_id, decision, actor, created_at}` 写入 `issue_activity`。旧 execution、较新运行已开始、重复决定或非评审态均拒绝，旧运行不得关闭当前 issue。
 
 ### 4.6 关键端到端流程
 
@@ -997,6 +997,7 @@ stateDiagram-v2
 要点说明：
 - 核心终态为 `completed` / `failed` / `cancelled`；`timeout` 是失败类的独立终态（UX 上单独呈现，`failure_reason='timeout'`）。
 - `cancelling` 是显式中间态，让「取消请求已发出但进程未退」这段时间可见；取消两段式：SIGTERM + 宽限期 → SIGKILL，取消幂等（对已结束执行为 no-op）。
+- 取消原因由发起取消的服务端策略在进入 `cancelling/cancelled` 时持久化（如 `agent_paused` / `superseded`）；daemon 的 `cancelled` 上报只是终止 ACK，不携带策略原因，也不得以泛化 `cancelled` 覆盖已保存原因。`awaiting_approval` 被 agent 生命周期策略取消时，同事务撤销 pending approval 后直接终态，后续决定请求必须失败。
 - 失败分类新增 `superseded`（被替换分派取消）、`agent_paused`（agent 暂停取消在途）、`awaiting_approval`（审批挂起时当前 attempt）、`approval_rejected` / `approval_expired`（README §6.9/§6.10）。
 - **审批挂起唯一协议（R2，README §6.4/§6.10）**：审批挂起只能从 `running` 进入（不存在 `queued → awaiting_approval`）。进入 `awaiting_approval` 时当前 attempt 置 `cancelled(failure_reason='awaiting_approval')`——**attempt 不保留在途态**（审计行保留）、**租约不继续**（随 attempt 终态结束）、**容量不占用**（幂等释放）；批准后执行回 `queued`，由新 attempt #N+1 凭 `resume_context` 从审批点续跑；拒绝/过期 → `cancelled`。该协议不存在"暂停租约导致永久卡死"的路径，每一环皆可测试（T21）。
 - 所有 daemon 迁移走 `PATCH` 带 `lease_seq` / 状态前置校验，非法迁移返回 `409` / `422`。
@@ -1005,7 +1006,7 @@ stateDiagram-v2
 
 - **竞争**：纯数据库 `SKIP LOCKED` 解决，无需分布式锁。多 runtime 并发 claim 时彼此不阻塞，各拿各的任务，公平按 `(priority, queued_at)` 排序。
 - **租约（lease）**：领取 / 续租都设 `lease_expires_at`；守护进程在租约到期前（如剩余 1/3 时）主动 `:renew-lease`。
-- **失联回收（reaper）**：平台后台任务（README §2.2 拓扑）周期扫描 `idx_attempts_lease_expired`，对租约过期且近期无心跳的 **attempt** 执行回收：该 attempt 置 `reclaimed`（审计信息保留），逻辑执行若 `COUNT(attempts) < max_attempts` → 回落 `queued`（等待新建 attempt #N+1）；否则 → `failed(max_retries)`。回收同事务**幂等释放** runtime 容量（`GREATEST(current_load-1,0)`），并回收时 `lease_seq++`，使旧持有者后续上报因 `lease_seq` 不匹配被 `409` 拒绝——**防止「诈尸」runtime 覆盖新持有者的结果**（脑裂防护）。
+- **失联回收（reaper）**：平台后台任务（README §2.2 拓扑）周期扫描 `idx_attempts_lease_expired`，对租约过期且近期无心跳的 **attempt** 执行回收：该 attempt 置 `reclaimed`（审计信息保留），逻辑执行若 `COUNT(attempts) < max_attempts` → 回落 `queued`（等待新建 attempt #N+1）；否则 → `failed(max_retries)`。回收同事务**幂等释放** runtime 容量（`GREATEST(current_load-1,0)`），并回收时 `lease_seq++`，使旧持有者后续上报因 `lease_seq` 不匹配被 `409` 拒绝——**防止「诈尸」runtime 覆盖新持有者的结果**（脑裂防护）。`max_retries` 终态走与 daemon 上报相同的通知生产器，并注入本次 reclaimed attempt id 与对象存储实例，从已封口、已脱敏的日志段读取最后 N 行；存储不可用时通知仍提交，但不得伪造日志摘要。
 - **审批挂起无需 reaper 特殊处理（R2，README §6.4 唯一协议）**：`awaiting_approval` 逻辑态**没有在途 attempt**——进入该态时当前 attempt 已置 `cancelled(awaiting_approval)`、租约已结束、容量已幂等释放，因此 reaper 扫描在途 attempt 时不会触及该执行；不存在"awaiting_approval 期间暂停租约 / reaper 不回收"的在途态，也就没有"暂停租约导致永久卡死"的路径。批准后执行回 `queued`，由新 attempt 凭 `resume_context` 从审批点续跑。
 - **实时性**：心跳与续租共用一条心跳通道降低连接数；取消等下行指令搭载心跳响应即时下发（默认 15s 内必达），需要更快可叠加 `/ws` 下行通道。
 

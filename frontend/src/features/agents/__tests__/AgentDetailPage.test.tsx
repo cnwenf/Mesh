@@ -78,6 +78,7 @@ const AGENT = {
   visibility: 'workspace',
   trigger_on_assign: true,
   owner_user_id: 'u-1',
+  capacity: { running: 2, queued: 3, awaiting_approval: 4 },
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   slug: null,
@@ -133,11 +134,14 @@ describe('AgentDetailPage', () => {
     expect(
       screen.getByTestId('agent-detail-badge').querySelector('.mesh-badge--accent'),
     ).not.toBeNull();
-    // 运行态徽标:无帧 → unknown(data-state);容量说明为「Capacity: —」。
+    // 首屏直接使用 REST 的绝对容量快照,无需等待实时帧。
     expect(
-      screen.getByTestId('agent-detail-presence').querySelector('[data-state="unknown"]'),
+      screen.getByTestId('agent-detail-presence').querySelector('[data-state="running"]'),
     ).not.toBeNull();
-    expect(screen.getByTestId('agent-detail-presence-caption')).toHaveTextContent('—');
+    const capacity = screen.getByTestId('agent-detail-presence-caption');
+    expect(capacity).toHaveTextContent('2');
+    expect(capacity).toHaveTextContent('3');
+    expect(capacity).toHaveTextContent('4');
     expect(screen.getByTestId('agent-panel-overview')).toBeInTheDocument();
   });
 
@@ -630,6 +634,9 @@ describe('AgentDetailPage 扩展覆盖', () => {
     const calls = setupWith();
     renderPageWithRealtime(rt);
     await screen.findByTestId('agent-detail-name');
+    expect(screen.getByTestId('agent-detail-presence-caption')).toHaveTextContent(
+      'Running 2 / Queued 3 / Awaiting 4',
+    );
     expect(rt.client.subscribe).toHaveBeenCalledWith('workspace:ws-1:agents');
     expect(rt.client.subscribe).toHaveBeenCalledWith('agent:a-1:presence');
 
@@ -677,10 +684,9 @@ describe('AgentDetailPage 扩展覆盖', () => {
         screen.getByTestId('agent-detail-presence').querySelector('[data-state="running"]'),
       ).not.toBeNull(),
     );
-    const caption = screen.getByTestId('agent-detail-presence-caption');
-    expect(caption).toHaveTextContent('1');
-    expect(caption).toHaveTextContent('2');
-    expect(caption).toHaveTextContent('3');
+    expect(screen.getByTestId('agent-detail-presence-caption')).toHaveTextContent(
+      'Running 1 / Queued 2 / Awaiting 3',
+    );
   });
 
   it('实时帧:agent.deleted 跳回名册', async () => {

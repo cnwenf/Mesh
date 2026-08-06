@@ -76,7 +76,9 @@ class CreateIssueRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_field_limits(self) -> CreateIssueRequest:
-        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
+        _check_text_bytes(
+            self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES
+        )
         return self
 
 
@@ -103,11 +105,30 @@ class UpdateIssueRequest(BaseModel):
     cycle_id: str | None = None
     parent_id: str | None = None
     position: float | None = None
+    review_execution_id: str | None = None
+    review_decision: str | None = None
     version: int | None = None
 
     @model_validator(mode="after")
     def _check_field_limits(self) -> UpdateIssueRequest:
-        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
+        _check_text_bytes(
+            self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES
+        )
+        review_fields = ("review_execution_id", "review_decision")
+        present = [field for field in review_fields if field in self.model_fields_set]
+        if present and len(present) != len(review_fields):
+            raise BusinessRuleError(
+                "execution output review requires an execution and decision",
+                code="invalid_execution_output_review",
+            )
+        if self.review_decision is not None and self.review_decision not in {
+            "approved",
+            "rejected",
+        }:
+            raise BusinessRuleError(
+                "invalid execution output review decision",
+                code="invalid_execution_output_review",
+            )
         return self
 
 
@@ -209,8 +230,12 @@ class CreateIssueTemplateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_field_limits(self) -> CreateIssueTemplateRequest:
-        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
-        _check_json_bytes(self.template_body, field="template_body", max_bytes=TEMPLATE_BODY_MAX_BYTES)
+        _check_text_bytes(
+            self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES
+        )
+        _check_json_bytes(
+            self.template_body, field="template_body", max_bytes=TEMPLATE_BODY_MAX_BYTES
+        )
         return self
 
 
@@ -223,8 +248,12 @@ class UpdateIssueTemplateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_field_limits(self) -> UpdateIssueTemplateRequest:
-        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
-        _check_json_bytes(self.template_body, field="template_body", max_bytes=TEMPLATE_BODY_MAX_BYTES)
+        _check_text_bytes(
+            self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES
+        )
+        _check_json_bytes(
+            self.template_body, field="template_body", max_bytes=TEMPLATE_BODY_MAX_BYTES
+        )
         return self
 
 

@@ -8,7 +8,7 @@ from meshcli.context import get_context
 from meshcli.main import cli as root
 
 AGENT_COLUMNS = ["id", "name", "role_tag", "lifecycle_status", "updated_at"]
-EXECUTION_COLUMNS = ["id", "status", "trigger_kind", "created_at", "finished_at"]
+EXECUTION_COLUMNS = ["id", "status", "trigger", "queued_at", "finished_at"]
 
 
 @root.group()

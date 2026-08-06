@@ -10,6 +10,7 @@ transfer, soft delete, and the realtime/audit side effects.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -19,6 +20,7 @@ from mesh.db.models.agent import Agent, AgentConfigVersion
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.runtime import Approval, TaskExecution
 from mesh.db.models.user import User
 from mesh.errors import (
     BusinessRuleError,
@@ -130,6 +132,60 @@ async def test_create_agent_writes_agents_member_version_atomically(session_fact
     assert created["member"]["display_name"] == "小测"
     assert created["lifecycle_status"] == "active"
     assert created["badge_kind"] == "ai"
+    assert created["capacity"] == {
+        "running": 0,
+        "queued": 0,
+        "awaiting_approval": 0,
+    }
+
+
+@pytest.mark.unit
+async def test_detail_and_list_return_absolute_capacity_snapshot(session_factory, agent_service):
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    created = await _create_agent(agent_service, owner, workspace)
+    agent_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session, session.begin():
+        agent_member = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == workspace.id,
+                Member.agent_id == agent_id,
+            )
+        )
+        executions = [
+            TaskExecution(workspace_id=workspace.id, agent_id=agent_id, status=status)
+            for status in (
+                "queued",
+                "claimed",
+                "running",
+                "cancelling",
+                "awaiting_approval",
+                "completed",
+            )
+        ]
+        session.add_all(executions)
+        await session.flush()
+        session.add(
+            Approval(
+                workspace_id=workspace.id,
+                subject_type="tool_call",
+                subject_execution_id=executions[4].id,
+                requested_by_member_id=agent_member.id,
+                action_summary={},
+                status="pending",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+
+    expected = {"running": 3, "queued": 1, "awaiting_approval": 1}
+    detail = await agent_service.get_agent(
+        actor=owner, workspace_id=workspace.id, agent_id=agent_id
+    )
+    items, _ = await agent_service.list_agents(actor=owner, workspace_id=workspace.id)
+
+    assert detail["capacity"] == expected
+    assert items[0]["capacity"] == expected
 
 
 @pytest.mark.unit
@@ -603,6 +659,139 @@ async def test_full_lifecycle_machine(session_factory, agent_service):
     first = events[0].payload["data"]
     assert first["from"] == "active" and first["to"] == "paused"
     assert first["in_flight_policy"] == "cancel_current"
+
+
+@pytest.mark.unit
+async def test_pause_cancel_current_cancels_agent_inflight_executions(
+    session_factory, agent_service
+):
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    created = await _create_agent(agent_service, owner, workspace)
+    agent_id = uuid.UUID(created["id"])
+    async with session_factory() as session, session.begin():
+        queued = TaskExecution(workspace_id=workspace.id, agent_id=agent_id, status="queued")
+        running = TaskExecution(workspace_id=workspace.id, agent_id=agent_id, status="running")
+        awaiting_approval = TaskExecution(
+            workspace_id=workspace.id,
+            agent_id=agent_id,
+            status="awaiting_approval",
+        )
+        session.add_all([queued, running, awaiting_approval])
+        await session.flush()
+        queued_id, running_id, awaiting_approval_id = (
+            queued.id,
+            running.id,
+            awaiting_approval.id,
+        )
+
+    paused = await agent_service.transition_lifecycle(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=agent_id,
+        action="pause",
+        in_flight_policy="cancel_current",
+    )
+
+    assert paused["affected_executions"] == 3
+    async with session_factory() as session:
+        stored_queued = await session.get(TaskExecution, queued_id)
+        stored_running = await session.get(TaskExecution, running_id)
+        stored_awaiting_approval = await session.get(TaskExecution, awaiting_approval_id)
+    assert stored_queued.status == "cancelled"
+    assert stored_queued.failure_reason == "agent_paused"
+    assert stored_running.status == "cancelling"
+    assert stored_running.failure_reason == "agent_paused"
+    assert stored_awaiting_approval.status == "cancelled"
+    assert stored_awaiting_approval.failure_reason == "agent_paused"
+
+
+@pytest.mark.unit
+async def test_pause_finish_current_leaves_inflight_executions_untouched(
+    session_factory, agent_service
+):
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    created = await _create_agent(agent_service, owner, workspace)
+    agent_id = uuid.UUID(created["id"])
+    async with session_factory() as session, session.begin():
+        execution = TaskExecution(
+            workspace_id=workspace.id,
+            agent_id=agent_id,
+            status="running",
+        )
+        session.add(execution)
+        await session.flush()
+        execution_id = execution.id
+
+    paused = await agent_service.transition_lifecycle(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=agent_id,
+        action="pause",
+        in_flight_policy="finish_current",
+    )
+
+    assert paused["affected_executions"] == 0
+    async with session_factory() as session:
+        stored = await session.get(TaskExecution, execution_id)
+    assert stored.status == "running"
+
+
+@pytest.mark.unit
+async def test_disabled_and_archived_are_hidden_by_default_and_explicitly_queryable(
+    session_factory, agent_service
+):
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    disabled = await _create_agent(agent_service, owner, workspace, name="Disabled")
+    archived = await _create_agent(agent_service, owner, workspace, name="Archived")
+    disabled_id = uuid.UUID(disabled["id"])
+    archived_id = uuid.UUID(archived["id"])
+    await agent_service.transition_lifecycle(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=disabled_id,
+        action="disable",
+    )
+    await agent_service.transition_lifecycle(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=archived_id,
+        action="archive",
+    )
+
+    default_items, _ = await agent_service.list_agents(
+        actor=owner, workspace_id=workspace.id
+    )
+    all_items, _ = await agent_service.list_agents(
+        actor=owner, workspace_id=workspace.id, status="all"
+    )
+    archived_items, _ = await agent_service.list_agents(
+        actor=owner, workspace_id=workspace.id, status="archived"
+    )
+    disabled_items, _ = await agent_service.list_agents(
+        actor=owner, workspace_id=workspace.id, status="disabled"
+    )
+
+    default_ids = {item["id"] for item in default_items}
+    all_ids = {item["id"] for item in all_items}
+    assert disabled["id"] not in default_ids
+    assert archived["id"] not in default_ids
+    assert {disabled["id"], archived["id"]} <= all_ids
+    assert [item["id"] for item in archived_items] == [archived["id"]]
+    assert [item["id"] for item in disabled_items] == [disabled["id"]]
+
+    await agent_service.transition_lifecycle(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=archived_id,
+        action="restore",
+    )
+    restored_items, _ = await agent_service.list_agents(
+        actor=owner, workspace_id=workspace.id
+    )
+    assert archived["id"] in {item["id"] for item in restored_items}
 
 
 @pytest.mark.unit

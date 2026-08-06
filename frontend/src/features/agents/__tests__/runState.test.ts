@@ -3,7 +3,22 @@
  * 覆盖全部分支:无帧 unknown、running/queued/waiting 优先级、全 0 → idle。
  */
 import { describe, expect, it } from 'vitest';
-import { presenceToRunState } from '../runState';
+import { capacityToPresence, presenceToRunState } from '../runState';
+
+describe('capacityToPresence', () => {
+  it('REST awaiting_approval 字段归一为界面 awaiting', () => {
+    expect(capacityToPresence({ running: 1, queued: 2, awaiting_approval: 3 })).toEqual({
+      running: 1,
+      queued: 2,
+      awaiting: 3,
+    });
+  });
+
+  it('旧响应缺快照时保持 unknown 所需的 null', () => {
+    expect(capacityToPresence(undefined)).toBeNull();
+    expect(capacityToPresence(null)).toBeNull();
+  });
+});
 
 describe('presenceToRunState', () => {
   it('无帧(null)→ unknown', () => {

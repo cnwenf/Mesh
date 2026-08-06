@@ -5,7 +5,13 @@
  * issue 作用域路径由服务端解析 workspace(无需客户端传 workspace_id)。
  */
 import type { MeshApiClient } from '../../api';
-import type { Comment, CreateCommentBody, ListCommentsParams, ReactionSummary } from './types';
+import type {
+  Comment,
+  CommentExecutionSnapshot,
+  CreateCommentBody,
+  ListCommentsParams,
+  ReactionSummary,
+} from './types';
 
 export interface Page<T> {
   readonly data: readonly T[];
@@ -37,13 +43,37 @@ export async function listComments(
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
 
+/**
+ * 读取 issue 的 execution 快照，供评论区刷新后恢复活动占位。
+ * 复用既有 workspace execution 列表及其 issue_id/cursor 过滤，不引入新后端契约。
+ */
+export async function listCommentIssueExecutions(
+  client: MeshApiClient,
+  workspaceId: string,
+  issueId: string,
+  params: { readonly limit?: number; readonly cursor?: string } = {},
+): Promise<Page<CommentExecutionSnapshot>> {
+  const envelope = await client.list<CommentExecutionSnapshot>(
+    `/api/v1/workspaces/${workspaceId}/executions`,
+    {
+      query: {
+        issue_id: issueId,
+        limit: params.limit,
+        cursor: params.cursor,
+      },
+    },
+  );
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
+}
+
 /** 发表评论(可带 parent_id 成为回复;Idempotency-Key 由客户端自动携带)。 */
 export async function createComment(
   client: MeshApiClient,
   issueId: string,
   body: CreateCommentBody,
+  idempotencyKey?: string,
 ): Promise<Comment> {
-  return client.request<Comment>('POST', issueCommentsPath(issueId), { body });
+  return client.request<Comment>('POST', issueCommentsPath(issueId), { body, idempotencyKey });
 }
 
 /** 取单条评论。 */

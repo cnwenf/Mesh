@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from mesh.db.models.agent import Agent
+from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
 from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 from mesh.runtime.attempts import (
@@ -201,8 +202,25 @@ async def test_cancel_queued_execution_goes_straight_to_cancelled(session_factor
     assert data["status"] == "cancelled"
     async with session_factory() as session:
         stored = await session.get(TaskExecution, execution.id)
+        presence = (
+            await session.execute(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.event_type == "realtime.publish",
+                    OutboxEvent.payload["event"].astext == "agent.presence",
+                )
+                .order_by(OutboxEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
     assert stored.status == "cancelled"
     assert stored.finished_at is not None
+    assert presence.payload["data"] == {
+        "agent_id": str(world["agent_id"]),
+        "running": 0,
+        "queued": 0,
+        "awaiting_approval": 0,
+    }
 
 
 async def test_cancel_running_execution_enters_cancelling(session_factory):
@@ -217,6 +235,7 @@ async def test_cancel_running_execution_enters_cancelling(session_factory):
         workspace_id=world["ws_id"],
         execution_id=execution_id,
         member_id=world["member_id"],
+        failure_reason="cancelled_by_command",
     )
     assert data["status"] == "cancelling"
     async with session_factory() as session:
@@ -238,7 +257,51 @@ async def test_cancel_running_execution_enters_cancelling(session_factory):
         stored = await session.get(TaskExecution, execution_id)
         fresh = await session.get(Runtime, runtime.id)
     assert stored.status == "cancelled"
+    assert stored.failure_reason == "cancelled_by_command"
     assert fresh.current_load == 0
+
+
+async def test_agent_pause_cancel_preserves_reason_after_daemon_ack(session_factory):
+    """The daemon only acknowledges cancellation; the server owns its cause."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    result = await _claim_one(session_factory, runtime)
+    await _transition(session_factory, runtime, result, new_status="running")
+    execution_id = uuid.UUID(result.execution["id"])
+
+    async with session_factory() as session, session.begin():
+        affected = await cancel_in_flight_for_agent(
+            session,
+            workspace_id=world["ws_id"],
+            agent_id=world["agent_id"],
+            issue_id=None,
+            failure_reason="agent_paused",
+        )
+    assert affected == 1
+    async with session_factory() as session:
+        cancelling = await session.get(TaskExecution, execution_id)
+    assert cancelling.status == "cancelling"
+    assert cancelling.failure_reason == "agent_paused"
+
+    await transition_attempt(
+        session_factory,
+        attempt_id=uuid.UUID(result.attempt["id"]),
+        runtime=runtime,
+        lease_seq=1,
+        new_status="cancelled",
+        failure_reason=None,
+    )
+    async with session_factory() as session:
+        cancelled = await session.get(TaskExecution, execution_id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.failure_reason == "agent_paused"
+    await assert_execution_finished_fanout(
+        session_factory,
+        world["ws_id"],
+        execution_id,
+        status="cancelled",
+        failure_reason="agent_paused",
+    )
 
 
 async def test_cancel_is_idempotent_on_terminal(session_factory):

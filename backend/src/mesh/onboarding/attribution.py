@@ -1,9 +1,9 @@
 """触发者归属与 aha 证据链(onboarding.md §1.2.1 步骤 4/5,R3/R4,T34)。
 
 R4 严格 trigger_member_id 归属:assign 经 `issue_activity` 分派留痕 actor
-(建 issue 即分派无留痕时回退 reporter),mention 经 `execution.enqueue`
-outbox 幂等键 → `comment_mentions.triggered_execution_id`(skeleton 锚点)
-→ 评论作者。末步证据链:agent 回评(含聚合组 latest_comment_id)+ 该成员
+(建 issue 即分派无留痕时回退 reporter),mention 经正式 logical execution id
+→ `comment_mentions.triggered_execution_id` → 评论作者。末步证据链:agent
+回评(含聚合组 latest_comment_id)+ 该成员
 触发的已完成执行 → 四元组 evidence。
 """
 
@@ -18,12 +18,9 @@ from mesh.db.models.comment import Comment, CommentMention
 from mesh.db.models.issue import Issue, IssueActivity
 from mesh.db.models.member import Member
 from mesh.db.models.notification import Notification
-from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 
-_IDEMPOTENCY_PREFIX = "ws"
 _ASSIGN_FIELD = "assignee_id"
-_TRIGGER_TRIGGERS = ("assign", "mention")
 
 
 def _parse_uuid(value: object) -> uuid.UUID | None:
@@ -36,30 +33,14 @@ def _parse_uuid(value: object) -> uuid.UUID | None:
 # --- trigger attribution (R3/R4 — strict trigger_member_id) --------------------
 
 
-def _scoped_key(workspace_id: uuid.UUID, key: str) -> str:
-    return f"{_IDEMPOTENCY_PREFIX}:{workspace_id}:{key}"
-
-
 async def _mention_trigger_member(
     session: AsyncSession, *, workspace_id: uuid.UUID, execution: TaskExecution
 ) -> uuid.UUID | None:
     """@-trigger owner = the MENTION comment's author (§1.2.1 step 4).
 
-    ``comment_mentions.triggered_execution_id`` stores the ``execution.enqueue``
-    OUTBOX EVENT id (the skeleton anchor), so the chain is execution →
-    outbox row (via the §6.5 idempotency key, workspace-scoped on the outbox
-    side) → comment_mentions → comments.author_id.
+    The relay has already replaced the temporary outbox correlation with the
+    canonical logical execution id before publishing ``execution.queued``.
     """
-    if not execution.idempotency_key:
-        return None
-    outbox_id = await session.scalar(
-        select(OutboxEvent.id).where(
-            OutboxEvent.workspace_id == workspace_id,
-            OutboxEvent.idempotency_key == _scoped_key(workspace_id, execution.idempotency_key),
-        )
-    )
-    if outbox_id is None:
-        return None
     return await session.scalar(
         select(Comment.author_id)
         .join(
@@ -71,7 +52,7 @@ async def _mention_trigger_member(
         )
         .where(
             CommentMention.workspace_id == workspace_id,
-            CommentMention.triggered_execution_id == outbox_id,
+            CommentMention.triggered_execution_id == execution.id,
             CommentMention.deleted_at.is_(None),
         )
         .order_by(CommentMention.created_at.asc())
@@ -257,5 +238,4 @@ async def evaluate_agent_reply_notification(
         "notification_id": str(notification.id),
         "trigger_member_id": str(member_id),
     }
-
 

@@ -11,6 +11,7 @@ import {
   applyExecutionLifecycleFrame,
   clearPlaceholdersForAgentComment,
   executionChannel,
+  restoreExecutionPlaceholders,
 } from '../realtime';
 import type { ExecutionPlaceholder } from '../realtime';
 import type { Comment } from '../types';
@@ -55,6 +56,46 @@ describe('applyCommentsFrame', () => {
     expect(same).toBe(next);
   });
 
+  it('does not correlate ordinary server comments whose request id is null', () => {
+    const existing = { ...ROOT, client_request_id: null };
+    const created = { ...ROOT, id: 'c-ordinary', client_request_id: null };
+    const next = applyCommentsFrame([existing], frame('comment.created', created));
+    expect(next.map((comment) => comment.id)).toEqual(['c-1', 'c-ordinary']);
+  });
+
+  it('reconciles an optimistic top-level and reply by client_request_id', () => {
+    const optimisticRoot: Comment = {
+      ...ROOT,
+      id: 'local-root',
+      client_request_id: 'req-root',
+      delivery_state: 'sending',
+    };
+    const rootFrame = {
+      ...ROOT,
+      id: 'server-root',
+      client_request_id: 'req-root',
+    };
+    const roots = applyCommentsFrame([optimisticRoot], frame('comment.created', rootFrame));
+    expect(roots.map((comment) => [comment.id, comment.delivery_state])).toEqual([
+      ['server-root', 'sent'],
+    ]);
+
+    const optimisticReply: Comment = {
+      ...ROOT,
+      id: 'local-reply',
+      parent_id: ROOT.id,
+      thread_root_id: ROOT.id,
+      client_request_id: 'req-reply',
+      delivery_state: 'sending',
+    };
+    const withOptimistic = { ...ROOT, reply_count: 1, preview_replies: [optimisticReply] };
+    const serverReply = { ...optimisticReply, id: 'server-reply', delivery_state: undefined };
+    const replies = applyCommentsFrame([withOptimistic], frame('comment.created', serverReply));
+    expect(replies[0]?.reply_count).toBe(1);
+    expect(replies[0]?.preview_replies?.map((reply) => reply.id)).toEqual(['server-reply']);
+    expect(replies[0]?.preview_replies?.[0]?.delivery_state).toBe('sent');
+  });
+
   it('rejects a malformed created payload', () => {
     const list = [ROOT];
     expect(applyCommentsFrame(list, frame('comment.created', { nope: true }))).toBe(list);
@@ -82,12 +123,20 @@ describe('applyCommentsFrame', () => {
   it('merges comment.updated with stale guard', () => {
     const next = applyCommentsFrame(
       [ROOT],
-      frame('comment.updated', { id: 'c-1', body_html: '<p>new</p>', updated_at: '2026-07-03T00:00:00Z' }),
+      frame('comment.updated', {
+        id: 'c-1',
+        body_html: '<p>new</p>',
+        updated_at: '2026-07-03T00:00:00Z',
+      }),
     );
     expect(next[0].body_html).toBe('<p>new</p>');
     const stale = applyCommentsFrame(
       next,
-      frame('comment.updated', { id: 'c-1', body_html: '<p>old</p>', updated_at: '2026-07-01T00:00:00Z' }),
+      frame('comment.updated', {
+        id: 'c-1',
+        body_html: '<p>old</p>',
+        updated_at: '2026-07-01T00:00:00Z',
+      }),
     );
     expect(stale).toBe(next);
   });
@@ -95,13 +144,20 @@ describe('applyCommentsFrame', () => {
   it('merges nested changes object', () => {
     const next = applyCommentsFrame(
       [ROOT],
-      frame('comment.updated', { id: 'c-1', changes: { body_text: 'edited' }, updated_at: '2026-07-03T00:00:00Z' }),
+      frame('comment.updated', {
+        id: 'c-1',
+        changes: { body_text: 'edited' },
+        updated_at: '2026-07-03T00:00:00Z',
+      }),
     );
     expect(next[0].body_text).toBe('edited');
   });
 
   it('marks deleted comments and clears bodies', () => {
-    const next = applyCommentsFrame([ROOT], frame('comment.deleted', { id: 'c-1', deleted_at: '2026-07-04T00:00:00Z' }));
+    const next = applyCommentsFrame(
+      [ROOT],
+      frame('comment.deleted', { id: 'c-1', deleted_at: '2026-07-04T00:00:00Z' }),
+    );
     expect(next[0].deleted_at).toBe('2026-07-04T00:00:00Z');
     expect(next[0].body_html).toBe('');
   });
@@ -114,7 +170,11 @@ describe('applyCommentsFrame', () => {
   it('applies comment.resolved', () => {
     const next = applyCommentsFrame(
       [ROOT],
-      frame('comment.resolved', { id: 'c-1', resolved_at: '2026-07-05T00:00:00Z', updated_at: '2026-07-05T00:00:00Z' }),
+      frame('comment.resolved', {
+        id: 'c-1',
+        resolved_at: '2026-07-05T00:00:00Z',
+        updated_at: '2026-07-05T00:00:00Z',
+      }),
     );
     expect(next[0].resolved_at).toBe('2026-07-05T00:00:00Z');
   });
@@ -133,7 +193,11 @@ describe('applyCommentsFrame', () => {
     const withReply: Comment = { ...ROOT, preview_replies: [reply], reply_count: 1 };
     const next = applyCommentsFrame(
       [withReply],
-      frame('comment.updated', { id: 'c-3', body_text: 'edited reply', updated_at: '2026-07-03T00:00:00Z' }),
+      frame('comment.updated', {
+        id: 'c-3',
+        body_text: 'edited reply',
+        updated_at: '2026-07-03T00:00:00Z',
+      }),
     );
     expect(next[0].preview_replies?.[0].body_text).toBe('edited reply');
   });
@@ -175,20 +239,84 @@ describe('execution placeholders', () => {
   });
 
   it('falls back to agent id when name missing and ignores malformed frames', () => {
-    const noName = applyExecutionFrame([], frame('execution.queued', { execution_id: 'e', agent_member_id: 'a' }));
+    const noName = applyExecutionFrame(
+      [],
+      frame('execution.queued', { execution_id: 'e', agent_member_id: 'a' }),
+    );
     expect(noName[0].agent_name).toBe('a');
     expect(applyExecutionFrame([], frame('execution.queued', { execution_id: 'e' }))).toEqual([]);
     expect(applyExecutionFrame([], frame('other.event', {}))).toEqual([]);
   });
 
-  it('clears placeholders when the agent comment arrives', () => {
-    const placeholders = applyExecutionFrame([], queued);
-    const agentComment = { ...ROOT, id: 'c-9', author: { id: 'mem-agent', member_type: 'agent', name: 'reviewer' } };
-    const cleared = clearPlaceholdersForAgentComment(placeholders, frame('comment.created', agentComment));
-    expect(cleared).toEqual([]);
+  it('only clears the execution explicitly linked by an agent comment', () => {
+    const placeholders = [
+      ...applyExecutionFrame([], queued),
+      ...applyExecutionFrame(
+        [],
+        frame('execution.queued', {
+          execution_id: 'exec-2',
+          agent_member_id: 'mem-agent',
+          agent_name: 'reviewer',
+          comment_id: 'c-2',
+        }),
+      ),
+    ];
+    const agentComment = {
+      ...ROOT,
+      id: 'c-9',
+      author: { id: 'mem-agent', member_type: 'agent', name: 'reviewer' },
+    };
+    const cleared = clearPlaceholdersForAgentComment(
+      placeholders,
+      frame('comment.created', { comment: agentComment, execution_id: 'exec-1' }),
+    );
+    expect(cleared.map((item) => item.execution_id)).toEqual(['exec-2']);
+
+    // No execution/comment correlation means no destructive guess, even when
+    // both in-flight executions belong to the same agent.
+    expect(
+      clearPlaceholdersForAgentComment(placeholders, frame('comment.created', agentComment)),
+    ).toBe(placeholders);
     // non-agent comment / non-created frames keep placeholders
-    expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.created', ROOT))).toBe(placeholders);
-    expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.updated', {}))).toBe(placeholders);
+    expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.created', ROOT))).toBe(
+      placeholders,
+    );
+    expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.updated', {}))).toBe(
+      placeholders,
+    );
+  });
+
+  it('uses an agent reply parent as an exact trigger-comment correlation', () => {
+    const placeholders: ExecutionPlaceholder[] = [
+      {
+        execution_id: 'exec-1',
+        comment_id: 'c-1',
+        agent_id: 'mem-agent',
+        agent_name: 'reviewer',
+        status: 'running',
+        failure_reason: null,
+      },
+      {
+        execution_id: 'exec-2',
+        comment_id: 'c-2',
+        agent_id: 'mem-agent',
+        agent_name: 'reviewer',
+        status: 'running',
+        failure_reason: null,
+      },
+    ];
+    const reply: Comment = {
+      ...ROOT,
+      id: 'agent-reply',
+      parent_id: 'c-1',
+      thread_root_id: 'c-1',
+      author: { id: 'mem-agent', member_type: 'agent', name: 'reviewer' },
+    };
+    expect(
+      clearPlaceholdersForAgentComment(placeholders, frame('comment.created', reply)).map(
+        (item) => item.execution_id,
+      ),
+    ).toEqual(['exec-2']);
   });
 });
 
@@ -215,10 +343,74 @@ describe('applyExecutionLifecycleFrame 五态迁移', () => {
   });
 
   it('started → running;awaiting_approval → waiting', () => {
-    const running = applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.started', { execution_id: 'e1' }));
+    const running = applyExecutionLifecycleFrame(
+      [PLACEHOLDER],
+      lifecycleFrame('execution.started', { execution_id: 'e1' }),
+    );
     expect(running[0].status).toBe('running');
-    const waiting = applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.awaiting_approval', { execution_id: 'e1' }));
+    const waiting = applyExecutionLifecycleFrame(
+      [PLACEHOLDER],
+      lifecycleFrame('execution.awaiting_approval', { execution_id: 'e1' }),
+    );
     expect(waiting[0].status).toBe('waiting');
+  });
+
+  it('issue channel drives queued/claimed/started/awaiting/requeued/terminal on one placeholder', () => {
+    let state = applyExecutionFrame(
+      [],
+      frame('execution.queued', {
+        execution_id: 'e1',
+        agent_member_id: 'mem-agent',
+        agent_name: 'reviewer',
+        comment_id: 'c-1',
+      }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('queued');
+
+    state = applyExecutionFrame(
+      state,
+      frame('execution.claimed', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('running');
+
+    state = applyExecutionFrame(
+      state,
+      frame('execution.started', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('running');
+
+    state = applyExecutionFrame(
+      state,
+      frame('execution.awaiting_approval', {
+        execution_id: 'e1',
+        agent_member_id: 'mem-agent',
+      }),
+    );
+    expect(state[0].status).toBe('waiting');
+
+    // Approval resume/reaper requeue must update the existing id, not dedupe it.
+    state = applyExecutionFrame(
+      state,
+      frame('execution.requeued', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(state).toHaveLength(1);
+    expect(state[0].status).toBe('queued');
+
+    state = applyExecutionFrame(state, frame('execution.completed', { execution_id: 'e1' }));
+    expect(state).toEqual([]);
+  });
+
+  it('execution.queued resumes an existing waiting placeholder', () => {
+    const waiting: ExecutionPlaceholder = { ...PLACEHOLDER, status: 'waiting' };
+    const resumed = applyExecutionFrame(
+      [waiting],
+      frame('execution.queued', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0].status).toBe('queued');
   });
 
   it('failed / timeout → failed + failure_reason(留失败占位供重试,§4.1)', () => {
@@ -238,10 +430,16 @@ describe('applyExecutionLifecycleFrame 五态迁移', () => {
 
   it('completed / cancelled → 移除占位', () => {
     expect(
-      applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.completed', { execution_id: 'e1' })),
+      applyExecutionLifecycleFrame(
+        [PLACEHOLDER],
+        lifecycleFrame('execution.completed', { execution_id: 'e1' }),
+      ),
     ).toEqual([]);
     expect(
-      applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.cancelled', { execution_id: 'e1' })),
+      applyExecutionLifecycleFrame(
+        [PLACEHOLDER],
+        lifecycleFrame('execution.cancelled', { execution_id: 'e1' }),
+      ),
     ).toEqual([]);
   });
 
@@ -259,5 +457,68 @@ describe('applyExecutionLifecycleFrame 五态迁移', () => {
 
   it('executionChannel 按执行 id 组装频道名', () => {
     expect(executionChannel('e1')).toBe('execution:e1');
+  });
+});
+
+describe('restoreExecutionPlaceholders', () => {
+  it('rebuilds active placeholders from issue executions and comment trigger correlations', () => {
+    const triggeringComment: Comment = {
+      ...ROOT,
+      mentions: [{ id: 'mem-agent', member_type: 'agent', name: 'reviewer' }],
+      triggered_execution_ids: ['e-waiting'],
+    };
+    const restored = restoreExecutionPlaceholders(
+      [triggeringComment],
+      [
+        {
+          id: 'e-waiting',
+          issue_id: 'iss-1',
+          agent_id: 'agent-entity',
+          status: 'awaiting_approval',
+          failure_reason: null,
+        },
+        {
+          id: 'e-assigned',
+          issue_id: 'iss-1',
+          agent_id: 'agent-assigned',
+          status: 'running',
+          failure_reason: null,
+        },
+        {
+          id: 'e-completed',
+          issue_id: 'iss-1',
+          agent_id: 'agent-entity',
+          status: 'completed',
+          failure_reason: null,
+        },
+        {
+          id: 'other-issue',
+          issue_id: 'iss-2',
+          agent_id: 'agent-other',
+          status: 'queued',
+          failure_reason: null,
+        },
+      ],
+      'iss-1',
+    );
+
+    expect(restored).toEqual([
+      {
+        execution_id: 'e-waiting',
+        comment_id: 'c-1',
+        agent_id: 'mem-agent',
+        agent_name: 'reviewer',
+        status: 'waiting',
+        failure_reason: null,
+      },
+      {
+        execution_id: 'e-assigned',
+        comment_id: null,
+        agent_id: 'agent-assigned',
+        agent_name: 'agent-assigned',
+        status: 'running',
+        failure_reason: null,
+      },
+    ]);
   });
 });

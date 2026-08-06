@@ -168,6 +168,7 @@ class TestSupervise:
         assert outcome.status == "cancelled"
         assert outcome.terminal_reported is True
         assert [t["status"] for t in api.transitions] == ["running", "cancelled"]
+        assert api.transitions[-1]["failure_reason"] is None
 
     async def test_terminal_409_becomes_lease_lost(self, journal, ctx):
         api = StubApi(fail_terminal=True)  # completed transition -> 409
@@ -522,6 +523,105 @@ class TestTerminationMapping:
 
 
 class TestUnexpectedProviderError:
+    async def test_invalid_usage_isolates_runtime_and_fails_attempt(self, journal, ctx):
+        api = RenewOkApi()
+        incidents = []
+
+        class InvalidUsageProvider:
+            name = "invalid-usage"
+
+            async def run(self, request):
+                yield UsageObserved(input_tokens=-1, output_tokens=2, cost_usd="0.001000")
+                yield FinalResult(summary="must not complete", exit_code=0)
+
+        sup = make_supervisor(
+            api,
+            journal,
+            FakeClock(),
+            on_operational_incident=incidents.append,
+        )
+
+        outcome = await sup.supervise(ctx, InvalidUsageProvider(), run_request())
+
+        assert outcome.status == "failed"
+        assert outcome.failure_reason == "executor_unavailable"
+        assert incidents == ["usage_invariant_failed"]
+
+    async def test_cumulative_usage_regression_isolates_runtime(self, journal, ctx):
+        api = RenewOkApi()
+        incidents = []
+
+        class RegressingUsageProvider:
+            name = "regressing-usage"
+
+            async def run(self, request):
+                yield UsageObserved(
+                    input_tokens=10,
+                    output_tokens=4,
+                    turns=2,
+                    cost_usd="0.002000",
+                )
+                yield UsageObserved(
+                    input_tokens=8,
+                    output_tokens=4,
+                    turns=1,
+                    cost_usd="0.001000",
+                )
+                yield FinalResult(summary="must not complete", exit_code=0)
+
+        sup = make_supervisor(
+            api,
+            journal,
+            FakeClock(),
+            on_operational_incident=incidents.append,
+        )
+
+        outcome = await sup.supervise(ctx, RegressingUsageProvider(), run_request())
+
+        assert outcome.status == "failed"
+        assert outcome.failure_reason == "executor_unavailable"
+        assert incidents == ["usage_invariant_failed"]
+
+    async def test_cleanup_failure_isolates_runtime(self, journal, ctx):
+        from mesh_runtime.cleanup import CleanupReport
+
+        api = RenewOkApi()
+        incidents = []
+
+        class Security:
+            async def start(self, *, lease_seq):
+                return None
+
+            async def finish(self, *, spool_flushed):
+                return CleanupReport(
+                    steps_done=["broker_closed"],
+                    failures={"cgroup_killed": "OSError"},
+                )
+
+            async def export_diff(self, *, lease_seq, redactor):
+                return 0
+
+            checkout_id = None
+            diff_ref = None
+
+        class Provider:
+            name = "fake"
+
+            async def run(self, request):
+                yield FinalResult(summary="done", exit_code=0)
+
+        sup = make_supervisor(
+            api,
+            journal,
+            FakeClock(),
+            security=Security(),
+            on_operational_incident=incidents.append,
+        )
+
+        await sup.supervise(ctx, Provider(), run_request())
+
+        assert incidents == ["cleanup_failed"]
+
     async def test_unexpected_exception_terminates_not_hangs(self, journal, ctx):
         # HIGH #1: a non-DaemonError from the provider must still finalize the
         # attempt (set _done) — otherwise supervise() blocks forever.

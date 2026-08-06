@@ -424,7 +424,7 @@ erDiagram
 
 `in_flight_policy` 取值 `finish_current`（让进行中任务跑完）/ **`cancel_current`（取消在途执行）**。响应返回最新 `lifecycle_status` 与被影响的运行数。非法状态迁移返回 `409 conflict`。
 
-> **R1 修订（A7）**：原 `pause_now`（"冻结运行、稍后恢复"）**已废弃**。runtime 的执行状态机（README §6.4）**不含 pause/resume 执行态**，"冻结并可恢复单次执行"无法实现，故不保留该承诺：`cancel_current` 即对 agent 所有 `queued/claimed/running` 执行发起取消（`failure_reason='agent_paused'`，走 runtime.md 两段式取消）；`finish_current` 等在途执行自然终态。paused 期间不入队新执行；resume 回 active 后由新触发重新入队。
+> **R1 修订（A7）**：原 `pause_now`（"冻结运行、稍后恢复"）**已废弃**。runtime 的执行状态机（README §6.4）**不含 pause/resume 执行态**，"冻结并可恢复单次执行"无法实现，故不保留该承诺：`cancel_current` 即对 agent 所有 `queued/claimed/running/cancelling/awaiting_approval` 执行发起取消（`failure_reason='agent_paused'`，走 runtime.md 两段式取消）；审批挂起态同时取消 pending approval 并直接进入 `cancelled`，不能遗留可批准的孤儿审批。`finish_current` 等在途执行自然终态。paused 期间不入队新执行；resume 回 active 后由新触发重新入队。
 
 **软删除 — `DELETE /api/v1/agents/{id}`** → `204 No Content`；后续列表中不再出现，历史评论以「已停用 agent」占位渲染。
 
@@ -749,7 +749,9 @@ stateDiagram-v2
 - [ ] 技能 / 工具可逐项启停；绑定与授权全部走 skill.md（`agent_skills`/`skill_installations`/`granted_capabilities`，不重复建表；`agent_skill_bindings`/`agent_tool_bindings`/`tools` 已删除）；**工具权限统一为 capability 条目语义**（`{"capability": "<key>", "permission": "read_only|write|confirm_required"}`，**无工具主键**），`/agents/{id}/tools` 系列端点为 `skill_installations.granted_capabilities` 能力条目的薄封装（README §6.11）；高风险能力默认 `permission='confirm_required'`，执行时经统一 `approvals`（README §6.10）；入队快照含绑定版本与 `capability_grants` 授权清单（README §6.11）。
 - [ ] 可见性 `workspace`/`private` 生效：private agent 非所有者 / 非 admin 不可见、不可触发。
 - [ ] 生命周期状态机按 4.8 实现；非法迁移返回 `409`；`disable` 时 `members.status` 联动置 `disabled`。
+- [ ] 生命周期、配置更新/回滚、删除与所有权转移在事务内锁定 agent 行；并发操作按锁后最新状态裁决，不允许两个合法旧状态同时提交。`cancel_current` 覆盖 `awaiting_approval` 并撤销其 pending approval，取消原因由服务端策略持久化，daemon 终态 ACK 不得覆盖。
 - [ ] 软删除置 `deleted_at` 后从所有列表 / 候选隐藏；历史评论以「已停用 agent」占位渲染，外键不报错。
+- [x] **名册生命周期投影**：成员名册「仅 Agent」默认只显示 `active/paused`，隐藏 `disabled/archived`；显式生命周期/停用筛选仍可查询审计行。历史评论不依赖主名册可见性，removed agent 作者稳定渲染「已停用 agent」与 AI 身份徽标。
 - [ ] 所有权转移仅所有者 / admin 可操作；转移后 `owner_user_id` 更新并发 `agent.updated`。
 - [ ] **分派即触发**：把 agent 设为 issue 负责人发出 `issue.assigned` → 自动入队一次运行，无需人工点「开始」；`trigger_on_assign=false` 时不触发。
 - [ ] **@提及触发**：评论 @agent 与分派共用同一 `enqueue_agent_run` 入口。

@@ -25,6 +25,7 @@ class UpdateCommentRequest(BaseModel):
     """PATCH /comments/{comment_id} body (optimistic lock via If-Match)."""
 
     body_markdown: str = Field(min_length=1)
+    suppress_triggers: bool = False
 
 
 class AddReactionRequest(BaseModel):

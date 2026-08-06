@@ -18,6 +18,8 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.db.models.issue import Issue
+from mesh.db.models.member import Member
 from mesh.db.models.runtime import (
     ExecutionAttempt,
     TaskExecution,
@@ -25,6 +27,7 @@ from mesh.db.models.runtime import (
 )
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ConflictError, NotFoundError, StorageError
+from mesh.issue.service import IssueService
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt
 from mesh.runtime.credentials import load_redaction_blacklist, redact_text
@@ -171,6 +174,7 @@ async def read_execution_logs(
     offset: int = 0,
     stream: str | None = None,
     max_lines: int = 1000,
+    viewer: Member | None = None,
 ) -> dict:
     """REST backfill / resume read across the execution's attempts.
 
@@ -189,6 +193,21 @@ async def read_execution_logs(
         ).scalar_one_or_none()
         if execution is None:
             raise NotFoundError("execution not found")
+        if viewer is not None and execution.issue_id is not None:
+            issue = (
+                await session.execute(
+                    select(Issue).where(
+                        Issue.id == execution.issue_id,
+                        Issue.workspace_id == workspace_id,
+                        Issue.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if issue is None:
+                raise NotFoundError("issue not found")
+            await IssueService(session_factory).assert_can_view_issue(
+                session, viewer=viewer, issue=issue
+            )
         attempt = (
             await session.execute(
                 select(ExecutionAttempt)

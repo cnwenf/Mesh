@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, time
 
 import pytest
 
 from mesh.comment_inbox.notifications import (
     _email_body,
+    _render_notification_frame,
     in_quiet_hours,
     inbox_channel,
     policy_for,
@@ -98,8 +100,6 @@ def test_quiet_hours_unset_means_never():
 
 
 def test_inbox_channel_shape():
-    import uuid
-
     member_id = uuid.uuid4()
     assert inbox_channel(member_id) == f"member:{member_id}:inbox"
 
@@ -120,3 +120,39 @@ def test_email_body_html_escapes_previews():
     assert "&lt;script&gt;" in body
     assert "&lt;b&gt;Mallory&lt;/b&gt;" in body
     assert "comment_created" in body
+
+
+def test_notification_wire_actor_is_null_when_producer_has_no_actor():
+    notification = Notification(
+        id=uuid.uuid4(),
+        type="execution_finished",
+        priority="critical",
+        actor_id=None,
+        payload={
+            "actor_name": None,
+            "actor_member_type": None,
+            "title": "Agent run needs attention",
+            "preview": "executor_unavailable",
+        },
+        created_at=datetime.now(UTC),
+    )
+
+    assert _render_notification_frame(notification)["actor"] is None
+
+
+def test_notification_wire_actor_keeps_complete_member_snapshot():
+    actor_id = uuid.uuid4()
+    notification = Notification(
+        id=uuid.uuid4(),
+        type="comment_created",
+        priority="normal",
+        actor_id=actor_id,
+        payload={"actor_name": "Alice", "actor_member_type": "human"},
+        created_at=datetime.now(UTC),
+    )
+
+    assert _render_notification_frame(notification)["actor"] == {
+        "id": str(actor_id),
+        "member_type": "human",
+        "name": "Alice",
+    }

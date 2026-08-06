@@ -21,10 +21,12 @@ import {
 import type { StatusDotTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   cancelExecution,
+  executionChannel,
   getRuntime,
   listRuntimeExecutions,
   pauseRuntime,
@@ -35,7 +37,12 @@ import {
 } from './api';
 import { executionDisplayLabel } from './executionLabel';
 import { formatDurationSeconds, formatMemoryMb } from './format';
-import type { ExecutionDetail, RuntimeDetail, RuntimeStatus } from './types';
+import type {
+  ExecutionDetail,
+  RuntimeDetail,
+  RuntimeOperationalState,
+  RuntimeStatus,
+} from './types';
 import './runtimes.css';
 
 const STATUS_TONE: Record<RuntimeStatus, StatusDotTone> = {
@@ -46,6 +53,38 @@ const STATUS_TONE: Record<RuntimeStatus, StatusDotTone> = {
   draining: 'warn',
   decommissioned: 'neutral',
 };
+
+const OPERATIONAL_TONE: Record<RuntimeOperationalState, StatusDotTone> = {
+  online: 'success',
+  degraded: 'warn',
+  isolated: 'danger',
+  paused: 'neutral',
+};
+
+const OPERATIONAL_FALLBACK: Record<RuntimeOperationalState, string> = {
+  online: 'Online',
+  degraded: 'Degraded',
+  isolated: 'Isolated',
+  paused: 'Paused',
+};
+
+const REREGISTER_COMMAND = 'mesh-runtime activate --config <config-file> --activation-code-stdin';
+
+function localText(
+  t: TranslateFn,
+  key: string,
+  fallback: string,
+  values?: Record<string, unknown>,
+): string {
+  const translated = t(key, values);
+  return translated === key || translated.includes(`[${key}]`) ? fallback : translated;
+}
+
+function operationalState(runtime: RuntimeDetail): RuntimeOperationalState {
+  if (runtime.operational_state !== undefined) return runtime.operational_state;
+  if (runtime.status === 'paused') return 'paused';
+  return runtime.status === 'online' ? 'online' : 'degraded';
+}
 
 /** 在途执行:逻辑态未到终态且非审批挂起(§4.2「正在执行」区块)。 */
 const INFLIGHT_STATUSES: ReadonlySet<string> = new Set([
@@ -60,7 +99,15 @@ const RUNTIME_DETAIL_EVENTS: ReadonlySet<string> = new Set([
   'runtime.online',
   'runtime.offline',
   'runtime.degraded',
+  'runtime.isolated',
   'runtime.paused',
+]);
+
+const EXECUTION_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
+  'execution.completed',
+  'execution.failed',
+  'execution.timeout',
+  'execution.cancelled',
 ]);
 
 export function RuntimeDetailPage(): React.JSX.Element {
@@ -108,13 +155,17 @@ export function RuntimeDetailPage(): React.JSX.Element {
     return () => clearInterval(id);
   }, []);
 
-  // 实时重拉:本 runtime 的生命周期帧 + 工作区执行帧(领取 / 启动 / 终态)。
+  // 实时重拉:本 runtime 生命周期 + broad 工作区非终态 + 当前列表 execution 终态。
+  // 私有 issue 的终态不会进入 broad workspace 频道，因此必须按已知 execution 订阅。
   useEffect(() => {
     if (realtime === null || workspace === null) return;
     const runtimesChannel = workspaceRuntimesChannel(workspace.workspace_id);
     const executionsChannel = workspaceExecutionsChannel(workspace.workspace_id);
+    const detailChannels = executions.map((execution) => executionChannel(execution.id));
+    const detailChannelSet = new Set(detailChannels);
     realtime.client.subscribe(runtimesChannel);
     realtime.client.subscribe(executionsChannel);
+    for (const channel of detailChannels) realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (frame.channel === runtimesChannel) {
         if (!RUNTIME_DETAIL_EVENTS.has(frame.event)) return;
@@ -124,14 +175,21 @@ export function RuntimeDetailPage(): React.JSX.Element {
         setReloadKey((key) => key + 1);
         return;
       }
-      if (frame.channel === executionsChannel) setReloadKey((key) => key + 1);
+      if (frame.channel === executionsChannel) {
+        setReloadKey((key) => key + 1);
+        return;
+      }
+      if (detailChannelSet.has(frame.channel) && EXECUTION_TERMINAL_EVENTS.has(frame.event)) {
+        setReloadKey((key) => key + 1);
+      }
     });
     return () => {
       unsubscribe();
       realtime.client.unsubscribe(runtimesChannel);
       realtime.client.unsubscribe(executionsChannel);
+      for (const channel of detailChannels) realtime.client.unsubscribe(channel);
     };
-  }, [realtime, workspace, runtimeId]);
+  }, [executions, realtime, workspace, runtimeId]);
 
   const act = async (action: () => Promise<unknown>, successMessage: string): Promise<void> => {
     try {
@@ -173,6 +231,38 @@ export function RuntimeDetailPage(): React.JSX.Element {
         closeLabel: t('common.close'),
       });
     }
+  };
+
+  const copyRepairCommand = async (command: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(command);
+      toast.addToast(t('runtimes.wizard.copied'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
+    } catch {
+      toast.addToast(t('runtimes.wizard.copyFailed'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
+    }
+  };
+
+  const exportDiagnostics = (): void => {
+    if (runtime === null) return;
+    const payload = {
+      runtime_id: runtime.id,
+      operational_state: operationalState(runtime),
+      diagnostics: runtime.diagnostics ?? [],
+      exported_at: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `runtime-${runtime.id}-diagnostics.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const inflight = useMemo(
@@ -222,6 +312,8 @@ export function RuntimeDetailPage(): React.JSX.Element {
 
   const memory = formatMemoryMb(runtime.memory_mb);
   const labelEntries = Object.entries(runtime.labels);
+  const runtimeOperationalState = operationalState(runtime);
+  const diagnostics = runtime.diagnostics ?? [];
   const canPause = runtime.status === 'online' || runtime.status === 'draining';
   const canResume = runtime.status === 'paused';
 
@@ -293,6 +385,115 @@ export function RuntimeDetailPage(): React.JSX.Element {
           ) : null}
         </div>
       </div>
+
+      <section
+        className={`mesh-runtimes-detail__operational mesh-runtimes-detail__operational--${runtimeOperationalState}`}
+        data-testid="runtime-operational-panel"
+      >
+        <div className="mesh-runtimes-detail__operational-header">
+          <h2>{localText(t, 'runtimes.operational.title', 'Operational state')}</h2>
+          <span data-testid="runtime-operational-state">
+            <StatusDot
+              tone={OPERATIONAL_TONE[runtimeOperationalState]}
+              label={localText(
+                t,
+                `runtimes.operational.state.${runtimeOperationalState}`,
+                OPERATIONAL_FALLBACK[runtimeOperationalState],
+              )}
+            />
+          </span>
+        </div>
+
+        {runtimeOperationalState === 'online' ? (
+          <p>
+            {localText(
+              t,
+              'runtimes.operational.onlineDescription',
+              'This runtime is ready to accept work.',
+            )}
+          </p>
+        ) : null}
+
+        {runtimeOperationalState === 'paused' ? (
+          <p>
+            {localText(
+              t,
+              'runtimes.operational.pausedDescription',
+              'New work is paused until an administrator resumes this runtime.',
+            )}
+          </p>
+        ) : null}
+
+        {runtimeOperationalState === 'degraded' ? (
+          <div className="mesh-runtimes-detail__diagnostics">
+            {diagnostics.map((diagnostic) => (
+              <article
+                key={diagnostic.reason_code}
+                className="mesh-runtimes-detail__diagnostic"
+                data-testid={`runtime-diagnostic-${diagnostic.reason_code}`}
+              >
+                <h3>{diagnostic.reason_code.replaceAll('_', ' ')}</h3>
+                <dl>
+                  <dt>
+                    {localText(
+                      t,
+                      'runtimes.operational.missingCapabilities',
+                      'Missing capabilities',
+                    )}
+                  </dt>
+                  <dd>{diagnostic.missing_capabilities.join(', ') || '—'}</dd>
+                  <dt>
+                    {localText(t, 'runtimes.operational.affectedTaskTypes', 'Affected task types')}
+                  </dt>
+                  <dd>{diagnostic.affected_task_types.join(', ') || '—'}</dd>
+                </dl>
+                <div className="mesh-runtimes-detail__repair">
+                  <code>{diagnostic.repair_command}</code>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    data-testid={`runtime-diagnostic-copy-${diagnostic.reason_code}`}
+                    onClick={() => void copyRepairCommand(diagnostic.repair_command)}
+                  >
+                    {localText(t, 'runtimes.operational.copyCommand', 'Copy command')}
+                  </Button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
+
+        {runtimeOperationalState === 'isolated' ? (
+          <div className="mesh-runtimes-detail__isolation-actions">
+            <p>
+              {localText(
+                t,
+                'runtimes.operational.isolatedDescription',
+                'Execution is isolated. Export the redacted diagnostics before re-registering.',
+              )}
+            </p>
+            <code data-testid="runtime-reregister-command">{REREGISTER_COMMAND}</code>
+            <div>
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="runtime-export-diagnostics"
+                onClick={exportDiagnostics}
+              >
+                {localText(t, 'runtimes.operational.exportDiagnostics', 'Export diagnostics')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="runtime-reregister-copy"
+                onClick={() => void copyRepairCommand(REREGISTER_COMMAND)}
+              >
+                {localText(t, 'runtimes.operational.copyReregister', 'Copy re-register command')}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       <dl className="mesh-runtimes-detail__meta">
         <dt>{t('runtimes.field.hostname')}</dt>

@@ -81,6 +81,22 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 > 保留、头像清空等 PostgreSQL 断言附在 Playwright 报告中；runner 使用临时强随机凭据、
 > 唯一 Compose project，并在结束时销毁容器和数据卷。
 >
+> **MES-185 后续批次②（agent 运行可观测 + 评论线程状态机）**：分派即开工的全链路
+> 可观测闭环——分派生成 execution 后，看板卡片呈「●处理中」、时间线记「已开始处理」、
+> claimed 显示领取 runtime、started 开启日志流，终态通知附 failure_reason、日志摘要与
+> 深链；容量三元组（运行中/排队/需审批）经 presence 推送，agent 列表与卡片即时更新。
+> 评论线程单层折叠「N 条回复」，解决/重新打开留痕（解决人/时间；重开保留上一位解决人），
+> 设「已解决线程」区；乐观发送 sending 态、失败标红重试（同幂等键收敛）、删除留占位。
+> agent 生命周期 pause（cancel_current/finish_current）、resume、disable、archive、
+> restore、所有权转移全程行锁裁决，软删除后历史评论稳定渲染「已停用 agent」；人类干预
+> 支持停止本次运行、产物批准/要求修改（仅绑定最新 completed execution 并写审计）、
+> 配置回滚。runtime 四态 Online/Degraded/Paused/Isolated 可行动——Degraded 精确列出
+> 缺失能力、受影响任务类型与修复命令，禁用泛化「运行失败」文案；执行详情按 attempt
+> 展示 provider/version/model、冻结预算 vs 实际 usage、claim/running/approval/requeue/
+> terminal 持久时间线与高风险动作审批链；issue 详情沿游标反查全部执行并 gate 私有项目
+> 可见性。真实栈证据（四组合走查 + 真 daemon/provider 旅程 + 落库契约）见
+> `docs/evidence/mes-188/`。
+>
 > **钉钉临时令牌安全口径**：长期凭据解密值进入 `redact_in_logs`；持续轮换的
 > `accessToken` 不依赖字面值黑名单，而由适配器执行结构化零日志——请求体、响应体、
 > 鉴权头值均不记录或持久化，失败诊断仅保留 `method/url/status`。权威约束见

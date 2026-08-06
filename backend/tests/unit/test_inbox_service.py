@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime, time, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from mesh.comment_inbox.inbox import InboxService
 from mesh.comment_inbox.notifications import (
@@ -31,6 +31,7 @@ from mesh.db.models.notification import (
     NotificationPreference,
 )
 from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.project import Project, ProjectMember
 from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
@@ -303,6 +304,51 @@ async def test_execution_failure_is_critical_in_inbox(env):
     rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
     assert len(rows) == 1
     assert rows[0].priority == "critical"
+
+
+async def test_private_project_access_revocation_blocks_failure_preview_and_email(env):
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    await _subscribe(factory, workspace, issue, env["carol"], reason="participated")
+    async with factory() as session, session.begin():
+        project = Project(
+            workspace_id=workspace.id,
+            name=f"Private notifications {uuid.uuid4().hex[:6]}",
+            key=f"N{uuid.uuid4().hex[:7].upper()}",
+            visibility="private",
+        )
+        session.add(project)
+        await session.flush()
+        stored_issue = await session.get(Issue, issue.id)
+        assert stored_issue is not None
+        stored_issue.project_id = project.id
+        grant = ProjectMember(
+            workspace_id=workspace.id,
+            project_id=project.id,
+            member_id=env["carol"].id,
+            role="viewer",
+        )
+        session.add(grant)
+        await session.flush()
+        # Revocation happens after the historical subscription was created.
+        await session.execute(
+            delete(ProjectMember).where(ProjectMember.id == grant.id)
+        )
+
+    event = await _emit_fanout(
+        factory,
+        workspace,
+        notification_type="execution_finished",
+        execution_status="failed",
+        actor_member_id=env["agent"].id,
+        issue_id=issue.id,
+        recipient_ids=[env["carol"].id],
+        title="Agent run needs attention",
+        preview="failure · already-redacted private log tail",
+    )
+    mailer = _RecordingMailer()
+    await _run_fanout(factory, event, mailer=mailer)
+    assert await _notifications(factory) == []
+    assert mailer.sent == []
 
 
 async def test_aggregation_window_merges_same_group(env):

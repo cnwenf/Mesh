@@ -78,12 +78,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.history.replaceState(null, '', window.location.pathname);
   vi.unstubAllGlobals();
 });
 
 function renderPanel(): void {
   renderWithProviders(
-    <CommentsPanel issueId="iss-1" workspaceId="ws-1" locale="en" candidates={[]} currentMember={null} />,
+    <CommentsPanel
+      issueId="iss-1"
+      workspaceId="ws-1"
+      locale="en"
+      candidates={[]}
+      currentMember={null}
+    />,
   );
 }
 
@@ -116,11 +123,32 @@ describe('CommentsPanel', () => {
     await waitFor(() => expect(screen.queryByTestId('comment-card-c-2')).toBeNull());
   });
 
+  it('puts resolved threads in a collapsed section with resolver trace and supports reopen', async () => {
+    const resolved: Comment = {
+      ...MEMBER_COMMENT,
+      resolved_at: '2026-07-02T00:00:00Z',
+      resolved_by: { id: 'mem-9', member_type: 'human', name: 'Reviewer' },
+    };
+    queueComments([resolved]);
+    renderPanel();
+
+    const sectionToggle = await screen.findByTestId('resolved-threads-toggle');
+    expect(sectionToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(sectionToggle.textContent).toContain('1');
+    expect(screen.queryByTestId('comment-card-c-1')).toBeNull();
+
+    fireEvent.click(sectionToggle);
+    const card = await screen.findByTestId('comment-card-c-1');
+    expect(screen.getByTestId('comment-resolved-meta').textContent).toContain('Reviewer');
+    expect(card.querySelector('[data-testid="comment-reopen-c-1"]')).not.toBeNull();
+  });
+
   it('currentMember 为作者时评论可修改(显示 edit/delete)', async () => {
     queueComments([MEMBER_COMMENT]);
     renderWithProviders(
       <CommentsPanel
-        issueId="iss-1" workspaceId="ws-1"
+        issueId="iss-1"
+        workspaceId="ws-1"
         locale="en"
         candidates={[]}
         currentMember={{ id: 'mem-1', member_type: 'human', name: 'Owner' }}
@@ -139,6 +167,47 @@ describe('CommentsPanel', () => {
     // 回复输入框出现并标明回复对象;线程随之展开
     await screen.findByTestId('reply-hint');
     expect(screen.getByTestId('thread-replies-c-1')).toBeTruthy();
+  });
+
+  it('hydrates a deep-linked reply outside the first page and expands its thread', async () => {
+    const root: Comment = {
+      ...MEMBER_COMMENT,
+      id: 'c-root-deep',
+      reply_count: 1,
+      preview_replies: undefined,
+    };
+    const reply: Comment = {
+      ...MEMBER_COMMENT,
+      id: 'c-reply-deep',
+      parent_id: root.id,
+      thread_root_id: root.id,
+      reply_count: 0,
+      preview_replies: undefined,
+    };
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/comments/c-reply-deep')) {
+        return fakeResponse({ body: { data: reply } });
+      }
+      if (url.endsWith('/comments/c-root-deep')) {
+        return fakeResponse({ body: { data: root } });
+      }
+      if (url.includes('/comments/c-root-deep/replies')) {
+        return fakeResponse({ body: { data: [reply], next_cursor: null } });
+      }
+      return fakeResponse({ body: { data: [MEMBER_COMMENT], next_cursor: null } });
+    });
+    vi.stubGlobal('fetch', fetchImpl as typeof fetch);
+    window.history.replaceState(null, '', `${window.location.pathname}#comment-${reply.id}`);
+
+    renderPanel();
+
+    const card = await screen.findByTestId(`comment-card-${reply.id}`);
+    expect(screen.getByTestId(`thread-replies-${root.id}`)).toBeTruthy();
+    expect(card.className).toContain('mesh-comments__card--highlight');
+    expect(
+      fetchImpl.mock.calls.some(([input]) => String(input).endsWith(`/comments/${reply.id}`)),
+    ).toBe(true);
   });
 
   it('shows the error state with retry when the fetch fails', async () => {

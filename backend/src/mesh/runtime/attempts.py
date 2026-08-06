@@ -10,6 +10,8 @@ prevents negatives).
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -17,6 +19,8 @@ from decimal import Decimal
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.db.models.issue import Issue
+from mesh.db.models.member import Member
 from mesh.db.models.runtime import (
     ATTEMPT_INFLIGHT_STATUSES,
     ATTEMPT_TERMINAL_STATUSES,
@@ -25,6 +29,7 @@ from mesh.db.models.runtime import (
     ExecutionAttempt,
     Runtime,
     TaskExecution,
+    TaskLogSegment,
 )
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
@@ -33,7 +38,13 @@ from mesh.errors import (
     ForbiddenError,
     NotFoundError,
 )
+from mesh.issue.execution_observability import (
+    emit_workspace_execution_event,
+    record_issue_execution_phase,
+)
+from mesh.issue.service import IssueService
 from mesh.outbox.service import emit_event, emit_realtime
+from mesh.runtime.agent_presence import emit_agent_presence
 from mesh.runtime.credentials import revoke_attempt_envelopes, revoke_execution_envelopes
 from mesh.runtime.redaction import redact_result
 from mesh.runtime.result_schema import RESULT_SCHEMA_VERSION, validate_result_schema
@@ -47,6 +58,12 @@ ATTEMPT_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 _TERMINAL_NOTIFICATION_KINDS = frozenset({"failed", "timeout"})
+_TERMINAL_LOG_LINES = 5
+_TERMINAL_LOG_SEGMENTS = 8
+_TERMINAL_LOG_OBJECT_MAX_BYTES = 2 * 1024 * 1024
+_TERMINAL_LOG_LINE_MAX_CHARS = 240
+_TERMINAL_PREVIEW_MAX_CHARS = 500
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _now() -> datetime:
@@ -97,26 +114,107 @@ async def _release_capacity(session: AsyncSession, runtime_id: uuid.UUID | None)
     )
 
 
+def _notification_log_line(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    without_ansi = _ANSI_ESCAPE_RE.sub("", value)
+    safe = "".join(
+        character if character == "\t" or ord(character) >= 32 else " "
+        for character in without_ansi
+    )
+    return safe[:_TERMINAL_LOG_LINE_MAX_CHARS]
+
+
+async def _terminal_log_summary(
+    session: AsyncSession,
+    *,
+    attempt_id: uuid.UUID | None,
+    storage: object | None,
+) -> str | None:
+    """Return a small tail from already-redacted, sealed log objects.
+
+    Notification enrichment is best-effort: corrupt or unavailable storage
+    never rolls back an otherwise valid terminal transition.
+    """
+    if attempt_id is None or storage is None:
+        return None
+    segments = list(
+        (
+            await session.execute(
+                select(TaskLogSegment)
+                .where(
+                    TaskLogSegment.attempt_id == attempt_id,
+                    TaskLogSegment.sealed.is_(True),
+                )
+                .order_by(TaskLogSegment.start_offset.desc())
+                .limit(_TERMINAL_LOG_SEGMENTS)
+            )
+        ).scalars()
+    )
+    lines: list[str] = []
+    for segment in reversed(segments):
+        try:
+            raw = await storage.get_bytes(  # type: ignore[attr-defined]
+                segment.storage_ref,
+                max_bytes=_TERMINAL_LOG_OBJECT_MAX_BYTES,
+            )
+            records = json.loads(raw.decode("utf-8"))
+        except Exception:  # noqa: BLE001 — enrichment must remain best-effort
+            continue
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            line = _notification_log_line(record.get("l"))
+            if line is not None:
+                lines.append(line)
+    tail = lines[-_TERMINAL_LOG_LINES:]
+    return "\n".join(tail) if tail else None
+
+
 async def _emit_terminal_notification(
-    session: AsyncSession, *, workspace_id: uuid.UUID, execution: TaskExecution
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    execution: TaskExecution,
+    attempt_id: uuid.UUID | None = None,
+    storage: object | None = None,
 ) -> None:
     """§6.13 matrix: failed/timeout = critical inbox event; success/cancel are
     NOT fanned out here (success stays on the run page unless subscribed;
     the cancel initiator is never notified)."""
     if execution.status not in _TERMINAL_NOTIFICATION_KINDS:
         return
+    log_summary = await _terminal_log_summary(
+        session,
+        attempt_id=attempt_id,
+        storage=storage,
+    )
+    preview_parts = [execution.failure_reason or execution.status]
+    if log_summary:
+        preview_parts.append(" | ".join(log_summary.splitlines()))
+    preview = " · ".join(preview_parts)[:_TERMINAL_PREVIEW_MAX_CHARS]
     await emit_event(
         session,
         workspace_id=workspace_id,
         event_type="notification.fanout",
         payload={
-            "kind": "execution_finished",
+            # Unified inbox contract: the consumer routes on `type` and the
+            # priority matrix reads `execution_status`. Keep one vocabulary at
+            # the outbox boundary; `kind`/`status` made every failed-run event
+            # retry forever in NotificationFanoutHandler.
+            "type": "execution_finished",
             "priority": "critical",
             "execution_id": str(execution.id),
             "agent_id": str(execution.agent_id) if execution.agent_id else None,
             "issue_id": str(execution.issue_id) if execution.issue_id else None,
-            "status": execution.status,
+            "execution_status": execution.status,
             "failure_reason": execution.failure_reason,
+            "log_summary": log_summary,
+            "title": "Agent run needs attention",
+            "preview": preview,
+            "group_key": f"execution:{execution.id}:terminal",
         },
         idempotency_key=f"execution:{execution.id}:notify:{execution.status}",
     )
@@ -162,6 +260,10 @@ async def _sync_execution_status(
     attempt_status: str,
     result: dict | None,
     failure_reason: str | None,
+    attempt_id: uuid.UUID,
+    runtime_id: uuid.UUID | None,
+    runtime_name: str | None,
+    storage: object | None = None,
 ) -> str:
     """Mirror an attempt transition onto the logical execution (§4.7).
 
@@ -176,12 +278,19 @@ async def _sync_execution_status(
     if attempt_status == "running":
         if execution.status == "claimed":
             new_status = "running"
-            await emit_realtime(
+            await emit_workspace_execution_event(
                 session,
                 workspace_id=execution.workspace_id,
-                channel=f"workspace:{execution.workspace_id}:executions",
+                issue_id=execution.issue_id,
                 event="execution.started",
-                data={"execution_id": str(execution.id), "agent_id": _opt(execution.agent_id)},
+                data={
+                    "execution_id": str(execution.id),
+                    "attempt_id": str(attempt_id),
+                    "runtime_id": _opt(runtime_id),
+                    "runtime_name": runtime_name,
+                    "agent_id": _opt(execution.agent_id),
+                    "issue_id": _opt(execution.issue_id),
+                },
                 idempotency_key=f"execution:{execution.id}:started",
             )
     elif attempt_status == "completed":
@@ -217,7 +326,9 @@ async def _sync_execution_status(
             # approvals.py drives execution → awaiting_approval in its own txn.
             return execution.status
         new_status = "cancelled"
-        execution.failure_reason = failure_reason
+        # Console policy owns the cancellation cause. A daemon only
+        # acknowledges the stop and must not erase agent_paused/superseded.
+        execution.failure_reason = execution.failure_reason or failure_reason
         execution.finished_at = now
         await emit_realtime(
             session,
@@ -226,18 +337,43 @@ async def _sync_execution_status(
             event="execution.cancelled",
             data={
                 "execution_id": str(execution.id),
-                "failure_reason": failure_reason,
+                "failure_reason": execution.failure_reason,
             },
             idempotency_key=f"execution:{execution.id}:cancelled",
         )
 
-    if new_status != execution.status:
+    transitioned = new_status != execution.status
+    if transitioned:
         execution.status = new_status
         execution.updated_at = now
         await session.flush()
+        phase = "started" if new_status == "running" else new_status
+        await record_issue_execution_phase(
+            session,
+            workspace_id=execution.workspace_id,
+            issue_id=execution.issue_id,
+            execution_id=execution.id,
+            agent_id=execution.agent_id,
+            phase=phase,
+            attempt_id=attempt_id,
+            runtime_id=runtime_id,
+            runtime_name=runtime_name,
+            failure_reason=execution.failure_reason,
+        )
+        if execution.agent_id is not None:
+            await emit_agent_presence(
+                session,
+                workspace_id=execution.workspace_id,
+                agent_id=execution.agent_id,
+                idempotency_key=f"attempt:{attempt_id}:presence:{new_status}",
+            )
     if new_status in EXECUTION_TERMINAL_STATUSES:
         await _emit_terminal_notification(
-            session, workspace_id=execution.workspace_id, execution=execution
+            session,
+            workspace_id=execution.workspace_id,
+            execution=execution,
+            attempt_id=attempt_id,
+            storage=storage,
         )
         # Domain hook (squad.md §4.4): orchestration layers observe the terminal
         # state via the §3.6 single fan-out event. The squad module correlates
@@ -305,6 +441,7 @@ async def transition_attempt(
     result: dict | None = None,
     failure_reason: str | None = None,
     signing_secret: str = "",
+    storage: object | None = None,
 ) -> dict:
     """PATCH /daemon/attempts/{id} — fenced status transition.
 
@@ -419,6 +556,10 @@ async def transition_attempt(
                 attempt_status=new_status,
                 result=result,
                 failure_reason=failure_reason,
+                attempt_id=attempt.id,
+                runtime_id=attempt.runtime_id,
+                runtime_name=runtime.name,
+                storage=storage,
             )
         await session.flush()
         return _attempt_response(attempt, execution_status=execution_status)
@@ -508,6 +649,7 @@ async def cancel_execution(
     workspace_id: uuid.UUID,
     execution_id: uuid.UUID,
     member_id: uuid.UUID | None = None,
+    viewer: Member | None = None,
     failure_reason: str | None = None,
 ) -> dict:
     """POST /executions/{id}:cancel — two-phase, idempotent (§4.7/§4.10).
@@ -520,6 +662,38 @@ async def cancel_execution(
     """
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
+        if viewer is not None:
+            target = (
+                await session.execute(
+                    select(TaskExecution)
+                    .where(
+                        TaskExecution.id == execution_id,
+                        TaskExecution.workspace_id == workspace_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if target is None:
+                raise NotFoundError("execution not found")
+            if target.issue_id is not None:
+                issue = (
+                    await session.execute(
+                        select(Issue)
+                        .where(
+                            Issue.id == target.issue_id,
+                            Issue.workspace_id == workspace_id,
+                            Issue.deleted_at.is_(None),
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if issue is None:
+                    raise NotFoundError("execution not found")
+                await IssueService(session_factory).assert_can_view_issue(
+                    session,
+                    viewer=viewer,
+                    issue=issue,
+                )
         execution = await request_execution_cancel_tx(
             session,
             workspace_id=workspace_id,
@@ -570,6 +744,8 @@ async def request_execution_cancel_tx(
 
     execution.cancel_requested_by = member_id
     execution.cancel_requested_at = now
+    if failure_reason is not None:
+        execution.failure_reason = failure_reason
     execution.updated_at = now
 
     if execution.status == "queued":
@@ -617,6 +793,24 @@ async def request_execution_cancel_tx(
             attempt.status = "cancelling"
             attempt.updated_at = now
     await session.flush()
+    if execution.status == "cancelled":
+        await record_issue_execution_phase(
+            session,
+            workspace_id=workspace_id,
+            issue_id=execution.issue_id,
+            execution_id=execution.id,
+            agent_id=execution.agent_id,
+            phase="cancelled",
+            failure_reason=execution.failure_reason,
+            event_key="direct-cancel",
+        )
+    if execution.agent_id is not None:
+        await emit_agent_presence(
+            session,
+            workspace_id=workspace_id,
+            agent_id=execution.agent_id,
+            idempotency_key=f"execution:{execution.id}:presence:{execution.status}",
+        )
     return execution
 
 
@@ -693,7 +887,9 @@ async def cancel_in_flight_for_agent(
         .where(
             TaskExecution.workspace_id == workspace_id,
             TaskExecution.agent_id == agent_id,
-            TaskExecution.status.in_(["queued", "claimed", "running", "cancelling"]),
+            TaskExecution.status.in_(
+                ["queued", "claimed", "running", "cancelling", "awaiting_approval"]
+            ),
         )
         .with_for_update()
     )
@@ -702,7 +898,16 @@ async def cancel_in_flight_for_agent(
     executions = (await session.execute(stmt)).scalars().all()
     now = _now()
     for execution in executions:
-        if execution.status == "queued":
+        if execution.status in {"queued", "awaiting_approval"}:
+            if execution.status == "awaiting_approval":
+                from mesh.runtime.approvals import cancel_pending_approvals
+
+                await cancel_pending_approvals(
+                    session,
+                    workspace_id=workspace_id,
+                    execution_id=execution.id,
+                    now=now,
+                )
             execution.status = "cancelled"
             execution.failure_reason = failure_reason
             execution.finished_at = now
@@ -721,6 +926,7 @@ async def cancel_in_flight_for_agent(
         else:
             execution.status = "cancelling"
             execution.cancel_requested_at = now
+            execution.failure_reason = execution.failure_reason or failure_reason
             execution.updated_at = now
             attempts = (
                 await session.execute(
@@ -733,4 +939,27 @@ async def cancel_in_flight_for_agent(
             for attempt in attempts:
                 attempt.status = "cancelling"
                 attempt.updated_at = now
+    await session.flush()
+    for execution in executions:
+        if execution.status == "cancelled":
+            await record_issue_execution_phase(
+                session,
+                workspace_id=workspace_id,
+                issue_id=execution.issue_id,
+                execution_id=execution.id,
+                agent_id=execution.agent_id,
+                phase="cancelled",
+                failure_reason=execution.failure_reason,
+                event_key=f"bulk-{failure_reason}",
+            )
+    if executions:
+        await emit_agent_presence(
+            session,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            idempotency_key=(
+                f"agent:{agent_id}:presence:cancel:"
+                f"{executions[-1].id}:{len(executions)}"
+            ),
+        )
     return len(executions)

@@ -3,15 +3,12 @@
  * 评论卡片按时间穿插;线程单层折叠「N 条回复 ▸」;执行占位卡片「⏳ {name} 正在执行…」;
  * 深链锚点 #comment-{id} 高亮;底部 composer(顶层 / 回复)。数据与乐观操作经 useCommentsData。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MeshApiClient, getToken } from '../../api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ErrorState, Icon, Skeleton, useToast } from '../../design';
-import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { CommentCard } from './CommentCard';
 import { CommentComposer } from './CommentComposer';
 import { RunStatus } from './RunStatus';
-import { listReplies } from './api';
 import type { MentionCandidate } from './mentions';
 import { scrollToAndHighlight } from './scrollToAndHighlight';
 import type { Comment, CommentMemberRef } from './types';
@@ -36,7 +33,6 @@ function readAnchorId(): string | null {
 export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
   const t = useT();
   const toast = useToast();
-  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const {
     comments,
     isLoading,
@@ -46,16 +42,21 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
     reload,
     createTopLevel,
     createReply,
+    retrySend,
+    locateComment,
+    loadReplies,
     toggleReaction,
     setResolved,
     remove,
     saveEdit,
-  } = useCommentsData(props.issueId, props.currentMember);
+  } = useCommentsData(props.issueId, props.currentMember, props.workspaceId);
 
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [loadedReplies, setLoadedReplies] = useState<Record<string, readonly Comment[]>>({});
+  const [loadedThreadIds, setLoadedThreadIds] = useState<ReadonlySet<string>>(new Set());
+  const [resolvedExpanded, setResolvedExpanded] = useState(false);
   const [replyTarget, setReplyTarget] = useState<Comment | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(readAnchorId);
+  const attemptedAnchors = useRef<Set<string>>(new Set());
 
   // 深链锚点:初始 + hashchange 同步高亮 id。
   useEffect(() => {
@@ -64,41 +65,87 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  useEffect(() => {
+    attemptedAnchors.current.clear();
+  }, [props.issueId]);
+
+  // 首屏只含一页顶层评论；永久链接缺失时通过单条评论接口解析线程根，
+  // 再回补完整线程，避免链接只能定位首屏或 reply preview 的内容。
+  useEffect(() => {
+    if (isLoading || highlightedId === null || attemptedAnchors.current.has(highlightedId)) return;
+    const present = comments.some(
+      (comment) =>
+        comment.id === highlightedId ||
+        comment.preview_replies?.some((reply) => reply.id === highlightedId) === true,
+    );
+    if (present) return;
+    attemptedAnchors.current.add(highlightedId);
+    void locateComment(highlightedId).catch(() => undefined);
+  }, [comments, highlightedId, isLoading, locateComment]);
+
+  // 永久链接优先保证目标可见：已解决区默认折叠，回复线程也默认折叠，
+  // 因此要先展开其容器，再由下面的统一入口滚动并高亮。
+  useEffect(() => {
+    if (highlightedId === null) return;
+    const root = comments.find(
+      (comment) =>
+        comment.id === highlightedId ||
+        comment.preview_replies?.some((reply) => reply.id === highlightedId) === true,
+    );
+    if (root === undefined) return;
+    if (root.resolved_at !== null) setResolvedExpanded(true);
+    if (root.id !== highlightedId) {
+      setExpanded((prev) => {
+        if (prev.has(root.id)) return prev;
+        return new Set(prev).add(root.id);
+      });
+    }
+  }, [comments, highlightedId]);
+
   // 深链跳转与发表成功共用同一滚动 + 高亮入口(§9.5.5)。
   useEffect(() => {
     if (highlightedId === null) return;
     const element = window.document.getElementById(`comment-${highlightedId}`);
     scrollToAndHighlight(element);
-  }, [highlightedId, comments]);
+  }, [highlightedId, comments, resolvedExpanded, expanded]);
 
   const toggleThread = useCallback(
     (root: Comment) => {
+      const willExpand = !expanded.has(root.id);
       setExpanded((prev) => {
         const next = new Set(prev);
         if (next.has(root.id)) next.delete(root.id);
         else next.add(root.id);
         return next;
       });
-      if (loadedReplies[root.id] === undefined) {
+      if (willExpand && !loadedThreadIds.has(root.id)) {
         void (async () => {
           try {
-            const page = await listReplies(client, root.id, { limit: 50 });
-            setLoadedReplies((prev) => ({ ...prev, [root.id]: page.data }));
+            await loadReplies(root);
+            setLoadedThreadIds((prev) => new Set(prev).add(root.id));
           } catch {
             // 拉取失败时退回 preview_replies(已有),不中断展开。
           }
         })();
       }
     },
-    [client, loadedReplies],
+    [expanded, loadReplies, loadedThreadIds],
   );
 
   const handleCopyLink = useCallback(
     (comment: Comment) => {
       const url = `${window.location.origin}${window.location.pathname}#comment-${comment.id}`;
       void navigator.clipboard?.writeText(url).then(
-        () => toast.addToast(t('comments.linkCopied'), { tone: 'success', closeLabel: t('common.close') }),
-        () => toast.addToast(t('comments.linkCopyFailed'), { tone: 'danger', closeLabel: t('common.close') }),
+        () =>
+          toast.addToast(t('comments.linkCopied'), {
+            tone: 'success',
+            closeLabel: t('common.close'),
+          }),
+        () =>
+          toast.addToast(t('comments.linkCopyFailed'), {
+            tone: 'danger',
+            closeLabel: t('common.close'),
+          }),
       );
     },
     [toast, t],
@@ -119,7 +166,9 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
 
   const canModify = useCallback(
     (comment: Comment): boolean =>
-      props.currentMember !== null && comment.author !== null && comment.author.id === props.currentMember.id,
+      props.currentMember !== null &&
+      comment.author !== null &&
+      comment.author.id === props.currentMember.id,
     [props.currentMember],
   );
 
@@ -133,6 +182,21 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
       return next;
     });
   }, []);
+
+  const activeComments = useMemo(
+    () =>
+      comments.filter(
+        (comment) => comment.author_kind === 'system' || comment.resolved_at === null,
+      ),
+    [comments],
+  );
+  const resolvedThreads = useMemo(
+    () =>
+      comments.filter(
+        (comment) => comment.author_kind === 'member' && comment.resolved_at !== null,
+      ),
+    [comments],
+  );
 
   if (error !== null) {
     return (
@@ -163,12 +227,15 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
       }}
       onDelete={(target) => void remove(target)}
       onCopyLink={handleCopyLink}
+      onRetrySend={(target) => {
+        void retrySend(target).catch(() => undefined);
+      }}
     />
   );
 
   const renderThread = (root: Comment): React.JSX.Element => {
     const isExpanded = expanded.has(root.id);
-    const replies = loadedReplies[root.id] ?? root.preview_replies ?? [];
+    const replies = root.preview_replies ?? [];
     return (
       <div className="mesh-comments__thread" key={root.id} data-testid={`thread-${root.id}`}>
         {renderCard(root)}
@@ -203,7 +270,11 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
   };
 
   return (
-    <section className="mesh-comments" aria-label={t('comments.title')} data-testid="comments-panel">
+    <section
+      className="mesh-comments"
+      aria-label={t('comments.title')}
+      data-testid="comments-panel"
+    >
       <h2 className="mesh-comments__heading">{t('comments.title')}</h2>
       {isLoading ? (
         <Skeleton loadingLabel={t('common.loading')} className="mesh-comments__skeleton" />
@@ -214,9 +285,13 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
               {t('comments.empty')}
             </p>
           ) : (
-            comments.map((comment) =>
+            activeComments.map((comment) =>
               comment.author_kind === 'system' ? (
-                <div className="mesh-comments__activity" key={comment.id} data-testid={`activity-${comment.id}`}>
+                <div
+                  className="mesh-comments__activity"
+                  key={comment.id}
+                  data-testid={`activity-${comment.id}`}
+                >
                   {/* 系统活动:左轨上的紧凑灰色小字行 + 小活动图标(§3.2 时间线视觉)。 */}
                   <span className="mesh-comments__activity-node" aria-hidden="true">
                     <Icon name="activity" size={16} />
@@ -231,6 +306,24 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
               ),
             )
           )}
+          {resolvedThreads.length > 0 ? (
+            <div className="mesh-comments__resolved-section" data-testid="resolved-threads-section">
+              <button
+                type="button"
+                className="mesh-comments__resolved-toggle"
+                data-testid="resolved-threads-toggle"
+                aria-expanded={resolvedExpanded}
+                onClick={() => setResolvedExpanded((value) => !value)}
+              >
+                {t('comments.resolvedThreads')} ({resolvedThreads.length})
+              </button>
+              {resolvedExpanded ? (
+                <div className="mesh-comments__resolved-list">
+                  {resolvedThreads.map((comment) => renderThread(comment))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {/* AI 运行占位:统一五态组件(§9.8)。queued/running/waiting/failed 经
               execution:{id} 频道生命周期帧迁移(验收必修 3);completed 由 agent
               评论回流替换;failed 留失败占位 + 重试入口(comment-inbox §4.1)。 */}

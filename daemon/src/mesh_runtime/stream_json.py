@@ -33,6 +33,11 @@ MAX_LINE_BYTES = 1024 * 1024
 #: oversize and is dropped (parser DoS guard; real records are far smaller).
 MAX_CONTENT_BLOCKS = 4096
 MAX_BLOCK_TEXT_CHARS = 256 * 1024
+# The terminal record may carry one entry per model used during the run. Keep
+# the compatibility surface bounded before aggregating it into the model-free
+# unified usage event.
+MAX_MODEL_USAGE_ENTRIES = 64
+MAX_MODEL_USAGE_KEY_CHARS = 256
 #: Terminal summary carried into result schema v1 (attempt.py re-caps at 4096).
 SUMMARY_MAX_CHARS = 16 * 1024
 
@@ -178,12 +183,24 @@ def _parse_result(record: dict) -> ParsedRecord:
     usage_event = _usage_event(record.get("usage"))
     if usage_event is _MALFORMED:
         return _drop("malformed", "result")
+    model_usage_event = _model_usage_event(record.get("modelUsage"))
+    if model_usage_event is _MALFORMED:
+        return _drop("malformed", "result")
+    # Claude Code 2.1 keeps the legacy aggregate fields for compatibility but
+    # can leave them at zero while reporting authoritative per-model camelCase
+    # counters. Prefer a non-zero model aggregate; model keys themselves never
+    # cross into logs/results. Retain the legacy path for older pinned builds.
+    effective_usage = usage_event
+    if model_usage_event is not None and model_usage_event.total_tokens > 0:
+        effective_usage = model_usage_event
+    if cost == "0.000000" and model_usage_event is not None:
+        cost = model_usage_event.cost_usd
     success = subtype == "success"
     final_usage = UsageObserved(
-        input_tokens=usage_event.input_tokens if usage_event else 0,
-        output_tokens=usage_event.output_tokens if usage_event else 0,
-        cache_read_tokens=usage_event.cache_read_tokens if usage_event else 0,
-        cache_creation_tokens=usage_event.cache_creation_tokens if usage_event else 0,
+        input_tokens=effective_usage.input_tokens if effective_usage else 0,
+        output_tokens=effective_usage.output_tokens if effective_usage else 0,
+        cache_read_tokens=effective_usage.cache_read_tokens if effective_usage else 0,
+        cache_creation_tokens=effective_usage.cache_creation_tokens if effective_usage else 0,
         cost_usd=cost,
         turns=num_turns,
     )
@@ -225,6 +242,56 @@ def _usage_event(raw: object) -> UsageObserved | _MalformedSentinel | None:
         output_tokens=values["output_tokens"],
         cache_read_tokens=values["cache_read_tokens"],
         cache_creation_tokens=values["cache_creation_tokens"],
+    )
+
+
+def _model_usage_event(raw: object) -> UsageObserved | _MalformedSentinel | None:
+    """Aggregate Claude Code's bounded per-model terminal usage contract."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or len(raw) > MAX_MODEL_USAGE_ENTRIES:
+        return _MALFORMED
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+    }
+    total_cost = Decimal("0")
+    for model_key, item in raw.items():
+        if (
+            not isinstance(model_key, str)
+            or not model_key
+            or len(model_key) > MAX_MODEL_USAGE_KEY_CHARS
+            or not isinstance(item, dict)
+        ):
+            return _MALFORMED
+        for target, source in (
+            ("input_tokens", "inputTokens"),
+            ("output_tokens", "outputTokens"),
+            ("cache_read_tokens", "cacheReadInputTokens"),
+            ("cache_creation_tokens", "cacheCreationInputTokens"),
+        ):
+            value = item.get(source, 0)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return _MALFORMED
+            totals[target] += value
+        try:
+            item_cost = Decimal(str(item.get("costUSD", 0)))
+        except (InvalidOperation, ValueError):
+            return _MALFORMED
+        if not item_cost.is_finite() or item_cost < 0:
+            return _MALFORMED
+        total_cost += item_cost
+    formatted_cost = format_cost_usd(total_cost)
+    if formatted_cost is None:
+        return _MALFORMED
+    return UsageObserved(
+        input_tokens=totals["input_tokens"],
+        output_tokens=totals["output_tokens"],
+        cache_read_tokens=totals["cache_read_tokens"],
+        cache_creation_tokens=totals["cache_creation_tokens"],
+        cost_usd=formatted_cost,
     )
 
 

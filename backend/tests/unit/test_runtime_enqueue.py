@@ -12,9 +12,13 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from mesh.db.models.comment import CommentMention
+from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
+from mesh.db.models.workspace import Workspace
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler, queue_depth
+from tests.unit.onboarding_support import make_comment, make_issue
 from tests.unit.runtime_support import make_execution, seed_world
 
 pytestmark = pytest.mark.unit
@@ -61,6 +65,18 @@ async def test_enqueue_inserts_execution_with_frozen_snapshot(session_factory):
 
     async with session_factory() as session:
         execution = (await session.execute(select(TaskExecution))).scalar_one()
+        realtime = list(
+            (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "realtime.publish",
+                        OutboxEvent.payload["event"].astext == "execution.queued",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
         depth = await queue_depth(session, world["ws_id"])
     assert execution.status == "queued"
     assert execution.agent_id == world["agent_id"]
@@ -69,6 +85,9 @@ async def test_enqueue_inserts_execution_with_frozen_snapshot(session_factory):
     assert execution.label_requirements == {}  # normalized
     assert execution.required_capabilities == ["python"]
     assert execution.config_snapshot["capability_grants"] == []
+    assert len(realtime) == 1
+    assert realtime[0].payload["data"]["execution_id"] == str(execution.id)
+    assert realtime[0].payload["data"]["execution_id"] != str(event.id)
     assert depth == 1
 
 
@@ -125,6 +144,55 @@ async def test_enqueue_redelivery_under_different_outbox_key_is_noop(session_fac
     async with session_factory() as session:
         rows = (await session.execute(select(TaskExecution))).scalars().all()
     assert len(rows) == 1
+
+
+async def test_enqueue_redelivery_repairs_pending_mention_correlation(session_factory):
+    """A redelivered enqueue must not strand the pending comment link."""
+    world = await seed_world(session_factory)
+    async with session_factory() as session:
+        workspace = await session.get(Workspace, world["ws_id"])
+        author = await session.get(Member, world["member_id"])
+    issue = await make_issue(session_factory, workspace)
+    comment = await make_comment(session_factory, workspace, issue, author_member=author)
+    key = f"mention-redelivery-{uuid.uuid4().hex}"
+    execution = await make_execution(
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        idempotency_key=key,
+        issue_id=issue.id,
+    )
+    event = await _emit(
+        world,
+        {
+            "intent": "enqueue",
+            "agent_id": str(world["agent_id"]),
+            "agent_member_id": str(world["agent_member_id"]),
+            "issue_id": str(issue.id),
+            "comment_id": str(comment.id),
+            "trigger": "mention",
+            "idempotency_key": key,
+        },
+        key=f"outbox-{key}",
+    )
+    async with session_factory() as session, session.begin():
+        session.add(event)
+        await session.flush()
+        session.add(
+            CommentMention(
+                workspace_id=world["ws_id"],
+                comment_id=comment.id,
+                mentioned_id=world["agent_member_id"],
+                pending_trigger_event_id=event.id,
+            )
+        )
+        await session.flush()
+        await enqueue_execution_handler(session, event)
+
+    async with session_factory() as session:
+        mention = (await session.execute(select(CommentMention))).scalar_one()
+    assert mention.triggered_execution_id == execution.id
+    assert mention.pending_trigger_event_id is None
 
 
 async def test_idempotency_conflict_detector_matches_only_idem_index():
