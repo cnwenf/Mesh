@@ -200,8 +200,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b1/desktop-home-light.png",
-          "sha256": "b8378f9ab1d234c69f306b612624ee2f88fe41a1554c447482f936ce9fbfe2f6",
-          "byte_size": 92588,
+          "sha256": "aa6640c5a133c7bd892c36a4e9cb31bdbb4e3198b90f93afc7f48713cd0d0d94",
+          "byte_size": 92518,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -219,8 +219,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b1/desktop-home-dark.png",
-          "sha256": "4ec7f5abfc52a826a3d911b67ea231742a5ea864bfc19602f36ca6ca7ac92350",
-          "byte_size": 93008,
+          "sha256": "3a210bb58c1fd668e1ec030eba5687325bad0c689a99614ccd0a3a696e6b1649",
+          "byte_size": 92937,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -283,8 +283,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/desktop-04-app-shell-light.png",
-          "sha256": "ec674f3be4667bdf10560fbd6b15600a9af83fb33caa4b4ac33eeebbc9d2efd6",
-          "byte_size": 70905,
+          "sha256": "3ac636c663f704e4c25797914457931ab01a57f1e7d921e9d3c5ac09c91698ca",
+          "byte_size": 70921,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -710,8 +710,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-issues-light.png",
-          "sha256": "1f4f4b007a798bb1ba8ddfacdd312bde7dea001143a40210f1d98cc217669ba9",
-          "byte_size": 55324,
+          "sha256": "248840a634d3cb7fdfdec1524b1ace9e0dc7046cd229d9116156b330237caf9c",
+          "byte_size": 55383,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -729,8 +729,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-issues-dark.png",
-          "sha256": "8446b2cd1ff812b0ac30af479a70ddc8cf8354add1e74bff5070021bdee478bf",
-          "byte_size": 56162,
+          "sha256": "b3df591b343bba0dee471794c5dcd615dc63dc8be1896fad9e2ae1eca04db279",
+          "byte_size": 56226,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -767,8 +767,8 @@
         "mobile_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-issues-dark.png",
-          "sha256": "82084a606a117cb9429940a23638d96999f27a0e7a5618190cbceb102273dede",
-          "byte_size": 40242,
+          "sha256": "319cec5403e9a5894f4e3ce566e7a999eb2eae6a47b6c074800d42d5f3218c41",
+          "byte_size": 40231,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -793,9 +793,9 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-issue-detail-light.png",
-          "sha256": "a5ae6d869d59b8c8e5d0a351a7efe63b3804feafee70d0643d9a07fdc37dba0e",
-          "byte_size": 129414,
-          "image": { "width": 1440, "height": 1108 },
+          "sha256": "789c22a2a47cfe94b3dbe46892674c3983e5d2e4c4396047c2643dbf55ca9b7a",
+          "byte_size": 131374,
+          "image": { "width": 1440, "height": 1212 },
           "provenance": {
             "mode": "desktop",
             "theme": "light",
@@ -812,9 +812,9 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-issue-detail-dark.png",
-          "sha256": "62671a172eabb52c5c02a4ec9d8e49f37ca91d66b1f8657066b71670f6991a40",
-          "byte_size": 130827,
-          "image": { "width": 1440, "height": 1108 },
+          "sha256": "6e7e97571d22a219c82ef034e7ca01eb38140524a63a26d6d0bbe9afb379bb2f",
+          "byte_size": 132886,
+          "image": { "width": 1440, "height": 1212 },
           "provenance": {
             "mode": "desktop",
             "theme": "dark",
@@ -831,9 +831,9 @@
         "mobile_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-issue-detail-light.png",
-          "sha256": "b1045a50fc05677ac986a7ed9d296d9aa13e9a18a1e95d24e6dfe93ae0de040d",
-          "byte_size": 59067,
-          "image": { "width": 390, "height": 1440 },
+          "sha256": "8ca44788d6867255775af59a353f4402211f3020bb8a9b8ddcb1f8a8e5835db6",
+          "byte_size": 59425,
+          "image": { "width": 390, "height": 1544 },
           "provenance": {
             "mode": "mobile",
             "theme": "light",
@@ -850,9 +850,9 @@
         "mobile_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-issue-detail-dark.png",
-          "sha256": "e7185aef51fb0822767009e2fc49c91eed70958a3c24cdb532cd389edb5531ee",
-          "byte_size": 59506,
-          "image": { "width": 390, "height": 1440 },
+          "sha256": "4d69921d3a1ce0af94c0431f7e9c08d153cc26eaea2ebf53923710a6626d7235",
+          "byte_size": 59868,
+          "image": { "width": 390, "height": 1544 },
           "provenance": {
             "mode": "mobile",
             "theme": "dark",
@@ -876,8 +876,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-board-light.png",
-          "sha256": "05a9ad6b60484bc05e32eae845f652237374e2a275329a9ea301d52d7f62b803",
-          "byte_size": 76957,
+          "sha256": "5e515f57622ce69a94c3c2c479f0f95806e8cce10d26fc432c012fbc3e695580",
+          "byte_size": 77094,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -895,8 +895,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-board-dark.png",
-          "sha256": "012cbfb0de905bda6e763e95bf50d93a72897d034e561329fbee194562aec9c1",
-          "byte_size": 78134,
+          "sha256": "57877b2b488b900c39dd33e736f69c3da8d6d4d608fa9cfe4c28a3970e22b3ae",
+          "byte_size": 78186,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -914,8 +914,8 @@
         "mobile_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-board-light.png",
-          "sha256": "ced27f090c65cc4ddb87fb1e95df16b668c5890ec483da6689b817cff709f74c",
-          "byte_size": 47491,
+          "sha256": "604c8bfb97ca5f1fd1695a751731b0b590b092cb6cddfc4af41f89a7be0f6925",
+          "byte_size": 47631,
           "image": { "width": 390, "height": 1077 },
           "provenance": {
             "mode": "mobile",
@@ -1457,8 +1457,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-execution-light.png",
-          "sha256": "fcfab10a05aa0561dad2525aae5a401914647e1091f9c7933feef14f8853457a",
-          "byte_size": 69913,
+          "sha256": "bdc907213ae20487022a46959fbe71e0886de40146110657f8c2e3a1330568e3",
+          "byte_size": 70924,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -1476,8 +1476,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-execution-dark.png",
-          "sha256": "df55f56b203295c84ffbbfdb04f17c93a410d7f8f523da80b6773ba8fca44ebd",
-          "byte_size": 70225,
+          "sha256": "e2a998285c1ea955bc2c3c22d4f591f8676d54367ea9fc325d47a7caf61f5434",
+          "byte_size": 71166,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -1495,8 +1495,8 @@
         "mobile_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-execution-light.png",
-          "sha256": "4604e56a8b4932572b2d667d5ac5d20fdd8ea96006e654cdbb6fd5d43196efa7",
-          "byte_size": 42083,
+          "sha256": "7e1450ea11648e24e9decb4eedf2b298bb54896aaad884619421d40f403f5c5c",
+          "byte_size": 40016,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -1514,8 +1514,8 @@
         "mobile_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-execution-dark.png",
-          "sha256": "76b93782160b6921e6ebde25d5fab23217611d93231ec4fe1d596a4c4ecaa449",
-          "byte_size": 42790,
+          "sha256": "4341c2180f63bdc9b3a5ed54c4a8fb741cd3e4480c961b1a5cb0e0a0f2f6aa10",
+          "byte_size": 40138,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -1540,8 +1540,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-autopilots-light.png",
-          "sha256": "a1266bf9ec8ad6b7f63436d8ea6f96347d98876a1c31f0afab193bf4017aedf7",
-          "byte_size": 62352,
+          "sha256": "68c8d1f8fd8b150bea93b477f653d5aadca49b701b9d420f76b2d756eee4c813",
+          "byte_size": 62350,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -1559,8 +1559,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-autopilots-dark.png",
-          "sha256": "c9f45e2f702b75cd8fcde1c60e63e471474f6c200fbc0d595f0d8a51290a44cf",
-          "byte_size": 62679,
+          "sha256": "aa26bb0c3a459377f841089e61bff335e10054a3c0d8e6289175f4aba9fe2b35",
+          "byte_size": 62639,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -1578,8 +1578,8 @@
         "mobile_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-autopilots-light.png",
-          "sha256": "46714a09b467d6ffc652320c6a5fa0b3c829dc431fa358c272fd5a398c6cccb6",
-          "byte_size": 44223,
+          "sha256": "e96d4ce096e5e1bda9cce18b73b86997e0543629df66d4fe14c8c4ce9d740e68",
+          "byte_size": 44325,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -1597,8 +1597,8 @@
         "mobile_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/mobile-autopilots-dark.png",
-          "sha256": "3cd8442291e4ddc017e799cd3058ecbf6f99bbb04cd076e77251145515b847ee",
-          "byte_size": 45087,
+          "sha256": "04f1f2de1ae6a4522a12eba49d0bc6126114dc67efc1ccb71447d4c23970fe41",
+          "byte_size": 45165,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -1623,8 +1623,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-integrations-light.png",
-          "sha256": "726d8747ccd910acf209a0890afd758c8dabb355b16ce218d444bc4cc254acad",
-          "byte_size": 86400,
+          "sha256": "b6c7ea8cd932660d57ce039fa1c3ad2a36573207a094aa57339c3d25ff728921",
+          "byte_size": 86430,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -1642,8 +1642,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes111-b5/desktop-integrations-dark.png",
-          "sha256": "8bf2c28fa513de5a8459957ac51efac986a1a5c028dc59eaa61e1cc93c4933a1",
-          "byte_size": 86290,
+          "sha256": "95858d9c735fdfa2ab255cded0ff7279ac97123bf0ac1ff70f632fc8ac366e34",
+          "byte_size": 86344,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -2204,8 +2204,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-light.png",
-          "sha256": "475ccf9218e9e18c558683b95942306fb80737ddcd5fdabea7598aaa2d431cfe",
-          "byte_size": 109025,
+          "sha256": "769ba58d9ff7fff04f384be6f881014534ea7545ac90431bce0b585c128aba81",
+          "byte_size": 112106,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -2226,8 +2226,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-dark.png",
-          "sha256": "8aed49e312363290b5a3e3c93ac803005c43b0158ac240c7e58581acf01224db",
-          "byte_size": 100964,
+          "sha256": "befcdd79f578a08020b804d112dac456693c09b037fb1e08e0c6e3a050efe6b5",
+          "byte_size": 103801,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -2248,8 +2248,8 @@
         "mobile_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-light.png",
-          "sha256": "917e6de5e900a39949d7f77b37a96784b0d14f84a7d08772919f2ead6b501717",
-          "byte_size": 27329,
+          "sha256": "9a79096679f142a64d938b163163df26bc146e5d6135d53d83b1f8c32aec96bd",
+          "byte_size": 25431,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -2270,8 +2270,8 @@
         "mobile_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-dark.png",
-          "sha256": "dee21026c11fb395ae13d4890feaeb8b5162d02d4f430a4e4befb07ed1764f5f",
-          "byte_size": 24554,
+          "sha256": "1b8cfdc81d481d6b72345aba634fed5c2db2412781ef539dfb35046655b00c16",
+          "byte_size": 22513,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",

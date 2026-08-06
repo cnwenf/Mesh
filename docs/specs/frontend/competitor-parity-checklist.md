@@ -399,12 +399,12 @@
 
 - [x] 活动流 + 评论混合时间线（系统活动灰色小字与评论卡片穿插）（依据: comment-inbox.md §4.1）— 现状 ✅
 - [x] 评论卡片：头像 | 作者名+身份徽标(人/agent) | 相对时间 |「已编辑」；Markdown 渲染（代码高亮/任务清单/表格）；操作条（回复/表情/更多:复制链接/编辑/删除/解决线程）（依据: comment-inbox.md §4.1）— 现状 ✅
-- [x] 线程单层折叠「N 条回复 ▸」+ 解决/重新打开（留痕解决人/时间）+「✓ 已解决线程 (N)」区（依据: comment-inbox.md §4.1）— 现状 ⬜ 待实机
+- [x] 线程单层折叠「N 条回复 ▸」+ 解决/重新打开（留痕解决人/时间）+「✓ 已解决线程 (N)」区（依据: comment-inbox.md §4.1）— 现状 ✅ 实机（证据: docs/evidence/mes-188/{desktop,phone}-{light,dark}-comments-and-issue-executions.png；解决/重开留痕与已解决区折叠经 real-mes188 真栈断言）
 - [x] Reaction：emoji chip（`👍 2`）点击增减 +「+」选择器 + 自己可取消（依据: comment-inbox.md F7）— 现状 ✅（CommentCard 已实现）
 - [x] composer：底部固定、Markdown 工具条、@ 补全（agent 项标「发布后将触发一次运行」）、附件拖拽/粘贴、编辑/预览切换、Cmd+Enter 提交、草稿按 issue 本地暂存（依据: comment-inbox.md §4.1/§4.3）— 现状 ✅
 - [x] @agent 副作用 UI：选中后常驻轻提示条；提交前 trigger preview 列出将触发 agent + 显式抑制开关「仅通知,不触发运行」（依据: comment-inbox.md §4.1；README §6.9）— 现状 ✅（triggerPreview + suppress_triggers）
 - [x] @agent 提交后「⏳ 正在执行…」占位卡片，完成替换为评论，失败留失败占位 +「重试」（依据: comment-inbox.md §3.5）— 现状 ⬜ 待实机
-- [x] 乐观更新：sending 态出现 → WS 广播最终态；失败标红「重试」；删除评论留占位「该评论已删除」（依据: comment-inbox.md §4.3）— 现状 ⬜ 待实机
+- [x] 乐观更新：sending 态出现 → WS 广播最终态；失败标红「重试」；删除评论留占位「该评论已删除」（依据: comment-inbox.md §4.3）— 现状 ✅ 实机（证据: docs/evidence/mes-188/real-stack-contract.json `optimistic_retry.persisted_rows=1`/`stable_idempotency_key=true`、`tombstone_persisted=true`；断网重试经真实浏览器旅程）
 - [x] 评论深链可复制、跳转并高亮闪烁（依据: comment-inbox.md C12）— 现状 ⬜ 待实机
 - [x] 实时：comment.created/updated/deleted/resolved、reaction.changed P95<1s；多端已读同步（依据: comment-inbox.md §5.4）— 现状 ⬜ 待实机
 - [x] 四组合走查：评论区 × 四组合 — 现状 ⬜
@@ -437,10 +437,10 @@
 - [x] 历史 Tab：配置版本时间线，「对比上一版」「回滚到此版本」（依据: agent.md §4.3）— 现状 ✅
 - [x] 四步创建向导：基本信息→模型与指令→技能与工具(可稍后)→可见性；每步独立校验可后退不丢数据；步骤指示器；「从现有复制」「从模板创建」（依据: agent.md §4.4）— 现状 ⬜ 待实机
 - [x] 全场景 AI 徽章不可关闭（列表/卡片/评论/@候选/分派选择器）（依据: agent.md §5.1）— 现状 ✅
-- [x] 容量三元组「运行中 N / 排队 M / 需审批 K」经 presence 推送，列表与卡片即时变化（依据: agent.md §4.9）— 现状 ⬜ 待实机
-- [x] 分派即开工可观测：卡片「●处理中」+ 时间线「已开始处理」+ claimed 显示 runtime + started 日志流 + 终态通知附 failure_reason/日志摘要/深链（依据: agent.md §4.7）— 现状 ⬜ 待实机（全链路 e2e）
-- [x] 生命周期操作：pause（cancel_current/finish_current）、resume、disable、archive、restore、所有权转移；软删除后历史评论「已停用 agent」占位（依据: agent.md §4.8）— 现状 ⬜ 待实机
-- [x] 人类干预：运行进度条「停止本次运行」；产物批准/打回；配置回滚（依据: agent.md §4.10）— 现状 ⬜ 待实机
+- [x] 容量三元组「运行中 N / 排队 M / 需审批 K」经 presence 推送，列表与卡片即时变化（依据: agent.md §4.9）— 现状 ✅ 实机（证据: docs/evidence/mes-188/{desktop,phone}-{light,dark}-agent-capacity.png；REST capacity={running:0,queued:0,awaiting_approval:1} 与 presence 推送断言见 real-mes188）
+- [x] 分派即开工可观测：卡片「●处理中」+ 时间线「已开始处理」+ claimed 显示 runtime + started 日志流 + 终态通知附 failure_reason/日志摘要/深链（依据: agent.md §4.7）— 现状 ✅ 实机（证据: docs/evidence/mes-188/{desktop,phone}-{light,dark}-board-processing.png、real-stack-contract.json；真栈 claim→running→terminal 全链路由 daemon 机器 API 驱动并落库。真 LLM provider 旅程（mes188_real_llm_e2e）因 token-plan 配额耗尽暂缓，配额恢复后补跑）
+- [x] 生命周期操作：pause（cancel_current/finish_current）、resume、disable、archive、restore、所有权转移；软删除后历史评论「已停用 agent」占位（依据: agent.md §4.8）— 现状 ✅ 实机（证据: docs/evidence/mes-188/real-stack-contract.json `agent_member_removed=true`/`tombstone_persisted=true`；生命周期逐操作 409/落库断言见后端 e2e 与 real-mes188 旅程）
+- [x] 人类干预：运行进度条「停止本次运行」；产物批准/打回；配置回滚（依据: agent.md §4.10）— 现状 ✅ 实机（证据: docs/evidence/mes-188/real-stack-contract.json `approved_output_review_count=1`/`rejected_output_review_count=1`、`failed_notification_count=1`；停止运行/回滚经真栈 API + 落库断言）
 - [x] `agent.trigger_skipped` 六类护栏原因 UI 提示（依据: agent.md §3.6）— 现状 ✅（权威选型为 AppShell toast，opt-out 为 info、其余为 warn，可携 `issue_id` 深链；`agentTriggerNotice.test.ts` + `AppShell.test.tsx`）
 - [x] 四组合走查：agent 详情各 Tab × 四组合 — 现状 ⬜
 
@@ -453,10 +453,10 @@
 - [x] 注册引导三步：①基本信息 ②安装命令块（逐条可复制可审，**无 curl|sh 盲管道**）③等待激活（WS 监听 ⏳→✅ 无需刷新）（依据: runtime.md §4.3）— 现状 ✅
 - [x] 执行详情页：状态 + 运行时长/超时进度条 + agent[AI]+issue+触发方式+分支；Tab[实时日志][产物/Diff][凭证(已脱敏)]；日志「跟随尾部」+ offset 续传 + 下载完整日志；取消二次确认（依据: runtime.md §4.4）— 现状 ✅
 - [x] 凭证 Tab 仅元信息值恒 `***`（依据: runtime.md §2.4）— 现状 ⬜ 待实机
-- [x] runtime 四态可行动：Online/Degraded（精确列出缺失能力+受影响任务类型+修复命令）/Paused/Isolated；**禁止泛化「运行失败」**（依据: runtime-executor.md §4.1）— 现状 ⬜ 待实机
-- [x] 执行按 attempt 展示：provider/version/model、冻结预算 vs 实际 usage、claim/running/approval/requeue/terminal 真实持久时间线，高风险动作「请求—审批人—grant（无独立记录则 null）—结果」（依据: runtime-executor.md §4.2）— 现状 ⬜ 待实机
-- [x] issue 详情沿 cursor 反查其所有 task_executions；产出评审仅绑定最新有效 completed execution 并持久留痕（依据: runtime.md §4.5）— 现状 ⬜ 待实机
-- [x] 四组合走查：runtime 三页 × 四组合 — 现状 ⬜
+- [x] runtime 四态可行动：Online/Degraded（精确列出缺失能力+受影响任务类型+修复命令）/Paused/Isolated；**禁止泛化「运行失败」**（依据: runtime-executor.md §4.1）— 现状 ✅ 实机（证据: docs/evidence/mes-188/{desktop,phone}-{light,dark}-runtime-degraded.png、real-stack-contract.json `runtime_states=[online,degraded,paused,isolated]`；四态由真实心跳驱动）
+- [x] 执行按 attempt 展示：provider/version/model、冻结预算 vs 实际 usage、claim/running/approval/requeue/terminal 真实持久时间线，高风险动作「请求—审批人—grant（无独立记录则 null）—结果」（依据: runtime-executor.md §4.2）— 现状 ✅ 实机（证据: docs/evidence/mes-188/{desktop,phone}-{light,dark}-attempt-audit.png、real-stack-contract.json `primary_attempts=2`/`approval_status=approved`；真实 requeue + 审批续跑产生两次 attempt）
+- [x] issue 详情沿 cursor 反查其所有 task_executions；产出评审仅绑定最新有效 completed execution 并持久留痕（依据: runtime.md §4.5）— 现状 ✅ 实机（证据: docs/evidence/mes-188/{desktop,phone}-{light,dark}-comments-and-issue-executions.png、real-stack-contract.json 输出评审批准/打回各 1 次；私有项目可见性负测经双账号断言）
+- [x] 四组合走查：runtime 三页 × 四组合 — 现状 ✅ 实机（证据: docs/evidence/mes-188/ 四组合 runtime-degraded/attempt-audit 截图；real-mes188 四项目全绿）
 
 ### 2.14 技能
 

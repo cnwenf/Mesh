@@ -14,6 +14,9 @@
 - task broker 闸门动作(`squad.members`、`squad.subtasks` 等)是沙箱工具调用经
   daemon broker 代执行的动作词汇(runtime-executor.md §3.3 唯一权威),非实时事件名,
   列入 BROKER_GATE_ACTIONS 白名单(新增此类动作须同步本清单);
+- 审计 action 名(`comment.thread_resolved`、`comment.thread_reopened` 等)是
+  write_audit 落库的 action 字段值,非实时事件名,列入 AUDIT_ACTIONS 白名单
+  (新增此类 action 须同步本清单);
 - 文件引用(*.md / *.py / *.sql / *.yaml / *.json / *.csv)与代码块内的 SQL 列引用跳过;
 - 注册表内的 `error`/`ping` 为 §6.8 流式协议流内帧名,无点号,不参与点号 token 校验。
 
@@ -69,6 +72,17 @@ BROKER_GATE_ACTIONS = frozenset(
     {
         "squad.members",  # runtime-executor.md §3.3:读取当前 squad 任务成员名册(read_only,orchestrator attempt 专属)
         "squad.subtasks",  # runtime-executor.md §3.3:拆解当前 squad 任务(write + 幂等键,服务端校验 orchestrator 身份)
+    }
+)
+
+# 审计 action 名(write_audit 的 action 字段,落 audit_log/issue_activity)。
+# 形如 `<entity>.<action>` 但不是实时事件名——实时事件另有其名(如线程解决/重开
+# 的实时事件仍是 `comment.resolved`,comment-inbox.md §4.3);唯一权威为各功能
+# Spec 的审计留痕条款。新增此类 action 时必须同步本清单。
+AUDIT_ACTIONS = frozenset(
+    {
+        "comment.thread_resolved",  # comment-inbox.md §4.3:线程解决审计留痕(action 字段)
+        "comment.thread_reopened",  # comment-inbox.md §4.3:线程重开审计留痕(action 字段)
     }
 )
 
@@ -132,6 +146,7 @@ def scan_spec(md_file: Path, registered: set[str], entities: set[str]) -> list[t
                 or token in OUTBOX_EVENT_TYPES
                 or token in EXTERNAL_PLATFORM_EVENTS
                 or token in BROKER_GATE_ACTIONS
+                or token in AUDIT_ACTIONS
             ):
                 continue
             if looks_like_column(token):

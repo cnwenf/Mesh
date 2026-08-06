@@ -1,8 +1,23 @@
-# Real PostgreSQL/Redis test runner. Compose this after the root stack file;
-# datastore ports remain un-published and credentials stay in the caller's
-# generated env file.
+# Real PostgreSQL/Redis test runner — SELF-CONTAINED (CI parity).
+#
+# Composing this ON TOP of the root docker-compose.yml leaks the api service's
+# production-shaped environment (MESH_APP_DATABASE_URL, MESH_JWT_SECRET,
+# MESH_DEVICE_CODE_PEPPER, MESH_APP_BASE_URL, ...) into the pytest process:
+# the suite then runs against the restricted mesh_app role instead of the
+# owner role CI uses, and ~40 config/mailer/e2e tests fail on env-var
+# defaults they assert. GitHub CI executes pytest with ONLY the MESH_TEST_*
+# variables plus the per-run object-storage credentials, so this file defines
+# its own datastores and a test runner with exactly that surface.
+#
+#   docker compose -p <proj> -f backend/compose.test.yml \
+#     --env-file <generated stack.env> up -d postgres redis minio
+#   docker compose -p <proj> -f backend/compose.test.yml \
+#     --env-file <generated stack.env> run --rm api python -m pytest ...
+#
+# Datastore ports are NOT published; credentials are required, no defaults.
 services:
   postgres:
+    image: postgres:16
     # Test-only durability trade-off: the suite truncates every table before
     # each of thousands of tests. Keep genuine PostgreSQL locking/constraint
     # semantics while avoiding synchronous disk flushes for disposable data.
@@ -15,17 +30,70 @@ services:
       - -c
       - full_page_writes=off
     environment:
+      POSTGRES_DB: ${MESH_POSTGRES_DB:-mesh}
+      POSTGRES_USER: ${MESH_POSTGRES_USER:-mesh}
+      POSTGRES_PASSWORD: ${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required}
       PGDATA: /var/lib/postgresql/testdata
     tmpfs:
       - /var/lib/postgresql/testdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MESH_POSTGRES_USER:-mesh} -d ${MESH_POSTGRES_DB:-mesh}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    command:
+      - redis-server
+      - --requirepass
+      - ${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required}
+      - --protected-mode
+      - "yes"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-06-13T11-33-47Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MESH_STORAGE_ACCESS_KEY:?MESH_STORAGE_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MESH_STORAGE_SECRET_KEY:?MESH_STORAGE_SECRET_KEY is required}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
     build:
-      context: .
+      # This file is self-contained, so the Compose base directory is
+      # backend/ — the repo root (Dockerfile.test's COPY anchor) is one level up.
+      context: ..
       dockerfile: backend/Dockerfile.test
     command: ["python", "-m", "pytest"]
     environment:
+      # CI parity (backend-ci.yml test job): ONLY the MESH_TEST_* variables
+      # and the object-storage credentials exist in the pytest process.
       MESH_TEST_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       MESH_TEST_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required}@redis:6379/1
       MESH_TEST_STORAGE_ENDPOINT: http://minio:9000
       MESH_TEST_STORAGE_BUCKET: mesh-e2e
+      MESH_STORAGE_ACCESS_KEY: ${MESH_STORAGE_ACCESS_KEY:?MESH_STORAGE_ACCESS_KEY is required}
+      MESH_STORAGE_SECRET_KEY: ${MESH_STORAGE_SECRET_KEY:?MESH_STORAGE_SECRET_KEY is required}
+      # On the CI runner the settings DEFAULT endpoint (http://127.0.0.1:9000)
+      # reaches MinIO because the container port is published on host
+      # loopback; in-process tests and relay fixtures rely on that default.
+      # Inside this Compose network the equivalent reachable address is the
+      # service name — map the default onto it so the same code paths work.
+      MESH_STORAGE_ENDPOINT: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy

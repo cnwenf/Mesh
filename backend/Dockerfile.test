@@ -5,8 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /repo/backend
 
+# git: contract tests inspect repository artifacts.
+# postgresql-client: tests/e2e/test_schema_validation.py runs
+# docs/specs/validation/schema_r2_validation.sql through the real psql binary
+# (CI runners ship it; the slim image does not).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/pyproject.toml backend/README.md backend/requirements-dev.lock ./

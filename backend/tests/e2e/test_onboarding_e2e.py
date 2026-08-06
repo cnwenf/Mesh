@@ -147,7 +147,9 @@ async def _activated_runtime(client, token: str, ws_id: str) -> tuple[str, str]:
     return runtime["id"], activated.json()["data"]["runtime_token"]
 
 
-async def _run_execution_to_completion(client, runtime_id: str, daemon_token: str) -> dict:
+async def _run_execution_to_completion(
+    client, runtime_id: str, daemon_token: str, result: dict | None = None
+) -> dict:
     """Real daemon claim → running → completed (runtime.md §3)."""
     claimed = await client.post(
         f"/api/v1/daemon/runtimes/{runtime_id}/executions:claim",
@@ -164,7 +166,8 @@ async def _run_execution_to_completion(client, runtime_id: str, daemon_token: st
     assert running.status_code == 200, running.text
     done = await client.patch(
         f"/api/v1/daemon/attempts/{attempt['id']}",
-        json={"lease_seq": 1, "status": "completed", "result": valid_result_v1()},
+        json={"lease_seq": 1, "status": "completed",
+              "result": result if result is not None else valid_result_v1()},
         headers=_daemon(daemon_token),
     )
     assert done.status_code == 200, done.text
@@ -396,7 +399,15 @@ async def _aha_world(api_client, owner_factory, relay, tag: str):
     )
     assert patched.status_code == 200, patched.text
     await _drain(relay)  # assign orchestration → enqueue → execution.queued (→ onboarding step 4)
-    await _run_execution_to_completion(api_client, runtime_id, daemon_token)
+    # Empty result summary ON PURPOSE: the execution.finished result sink
+    # posts an agent result comment for assign/mention executions with
+    # non-empty output (result_sink.py §3.7 S-09), which would race this
+    # flow's manual agent reply and overwrite the aggregated group row's
+    # latest_comment_id. A stub completion without output produces no result
+    # comment, keeping the single-agent-reply inbox invariant intact.
+    await _run_execution_to_completion(
+        api_client, runtime_id, daemon_token, result=valid_result_v1(summary="")
+    )
 
     # Agent reply — real CommentService path (same mechanism the runtime
     # uses): real comment row, real outbox events, real notification fanout.

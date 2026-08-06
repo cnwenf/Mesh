@@ -656,6 +656,38 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
 }
 
+/**
+ * Wait for a board card to materialize on any viewport. Desktop renders every
+ * column at once, so the card appears in place once assignment materializes.
+ * Mobile collapses columns into a lane-tab strip starting on the first column,
+ * so the card may sit on a later tab: keep sweeping the tabs (like a phone
+ * user flicking through lanes) until the card shows or the deadline passes.
+ * The board skeleton needs a moment to render either way, so the loop also
+ * covers the "tablist not present yet" window instead of bailing out early.
+ */
+async function focusBoardLane(page: Page, issueId: string): Promise<void> {
+  const card = page.getByTestId(`board-card-${issueId}`);
+  const tabs = page.getByRole('tablist', { name: 'Board columns' }).getByRole('tab');
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (await card.isVisible()) {
+      return;
+    }
+    const tabCount = await tabs.count();
+    for (let index = 0; index < tabCount; index += 1) {
+      await tabs.nth(index).click();
+      if (await card.isVisible()) {
+        return;
+      }
+    }
+    await page.waitForTimeout(500);
+  }
+  if (await card.isVisible()) {
+    return;
+  }
+  throw new Error(`board card ${issueId} not found on any viewport/lane tab`);
+}
+
 async function expectForbiddenExecutionSubscription(
   page: Page,
   token: string,
@@ -1231,6 +1263,7 @@ test('agent/runtime/comment execution matrix on the real stack', async ({
 
   // Assignment materialization is immediately visible on the real board.
   await page.goto(`/w/${world.workspace.slug}/board`);
+  await focusBoardLane(page, world.issue.id);
   await expect(page.getByTestId(`board-card-${world.issue.id}`)).toBeVisible();
   await expect(page.getByTestId(`board-card-execution-${world.issue.id}`)).toBeVisible();
   await expectNoHorizontalOverflow(page);
