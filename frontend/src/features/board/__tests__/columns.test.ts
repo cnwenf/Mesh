@@ -79,21 +79,18 @@ describe('columnsForView', () => {
     expect(columns[0]?.label).toBe('board.priority.urgent');
   });
 
-  it('动态分组(status/assignee/project/label)为占位列', () => {
+  it('动态分组等待服务端投影时不构造伪列', () => {
     for (const groupBy of ['status', 'assignee', 'project', 'label'] as const) {
       const columns = columnsForView(makeView({ group_by: groupBy }));
-      expect(columns).toHaveLength(1);
-      expect(columns[0]?.placeholder).toBe(true);
-      expect(columns[0]?.key).toBe('__dynamic__');
+      expect(columns).toEqual([]);
     }
   });
 
-  it('动态分组携带 board_settings.columns 时按其派生占位列', () => {
+  it('动态分组不把 board_settings.columns 当成响应骨架', () => {
     const columns = columnsForView(
       makeView({ group_by: 'status', board_settings: { columns: ['st1', 'st2'] } }),
     );
-    expect(columns.map((c) => c.key)).toEqual(['st1', 'st2']);
-    expect(columns.every((c) => c.placeholder)).toBe(true);
+    expect(columns).toEqual([]);
   });
 });
 
@@ -115,10 +112,20 @@ describe('isRenderableLayout', () => {
 
 function makeCard(overrides: Partial<BoardCard> = {}): BoardCard {
   return {
-    id: 'i1', identifier: 'WEB-1', title: 'C', state_category: 'todo',
-    status: { id: 'st', name: 'Todo', category: 'todo' }, status_id: 'st', priority: 'high',
-    assignee: null, assignee_id: null, project_id: null, position: 1, version: 1,
-    updated_at: '', ...overrides,
+    id: 'i1',
+    identifier: 'WEB-1',
+    title: 'C',
+    state_category: 'todo',
+    status: { id: 'st', name: 'Todo', category: 'todo' },
+    status_id: 'st',
+    priority: 'high',
+    assignee: null,
+    assignee_id: null,
+    project_id: null,
+    position: 1,
+    version: 1,
+    updated_at: '',
+    ...overrides,
   };
 }
 
@@ -137,7 +144,13 @@ describe('deriveColumns(投影分组 → 列,§3.2)', () => {
   it('固定分组(state_category):骨架列 + 各组 count/卡片', () => {
     const v = makeView({ group_by: 'state_category' });
     const groups: BoardGroup[] = [
-      { key: 'todo', label: 'Todo', count: 1, wip: { limit: 2, enforcement: 'warn' }, data: [makeCard()] },
+      {
+        key: 'todo',
+        label: 'Todo',
+        count: 1,
+        wip: { limit: 2, enforcement: 'warn' },
+        data: [makeCard()],
+      },
     ];
     const { columns, cardsByKey } = deriveColumns(v, groups);
     expect(columns.map((c) => c.key)).toEqual([...STATE_CATEGORY_KEYS]);

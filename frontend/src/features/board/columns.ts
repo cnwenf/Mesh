@@ -1,9 +1,8 @@
 /**
  * 看板列派生(纯函数,kanban.md §2.4 分组映射表)。
  *
- * 定义层切片不接真实 issue 数据:列结构完全由视图配置(group_by +
- * board_settings.columns / collapsed_columns / wip)派生,卡片计数恒为 0,
- * 投影查询落地后计数由执行响应填充。
+ * 固定轴可由视图配置先行派生；动态轴必须以投影响应为真源，加载前不
+ * 构造伪列，避免把配置 key 或占位文案误当成真实分组。
  */
 import type { BoardCard, BoardGroup } from './projection';
 import type { BoardColumn, View, WipLimit } from './types';
@@ -24,7 +23,7 @@ export const PRIORITY_KEYS: readonly string[] = ['urgent', 'high', 'medium', 'lo
 
 /** 列 key 的 i18n 标签键(类别与优先级)。 */
 export function columnLabelKey(groupBy: string | null, key: string): string {
-  if (groupBy === 'priority' || groupBy === null && PRIORITY_KEYS.includes(key)) {
+  if (groupBy === 'priority' || (groupBy === null && PRIORITY_KEYS.includes(key))) {
     return `board.priority.${key}`;
   }
   return `board.category.${key}`;
@@ -41,8 +40,8 @@ function wipFor(settings: View['board_settings'], key: string): WipLimit | null 
  * - group_by = state_category / null(默认)→ 7 个固定类别列;
  *   board_settings.columns 存在时按其排序/筛选列集合;
  * - group_by = priority → 5 档优先级列;
- * - group_by = status/assignee/project/label → 列来自动态实体,
- *   定义层切片以占位列呈现(数据随投影查询增量落地)。
+ * - group_by = status/assignee/project/label/自定义字段 → 列来自服务端
+ *   动态骨架，定义层切片返回空数组。
  */
 export function columnsForView(view: View): readonly BoardColumn[] {
   const settings = view.board_settings;
@@ -77,18 +76,7 @@ export function columnsForView(view: View): readonly BoardColumn[] {
     }));
   }
 
-  // status / assignee / project / label:列来行动态实体(状态行/成员/项目/
-  // 标签),定义层切片无实体数据 → 单个占位列,投影增量落地后替换为真实列。
-  const configured = settings.columns ?? [];
-  const keys = configured.length > 0 ? [...configured] : ['__dynamic__'];
-  return keys.map((key) => ({
-    key,
-    label: columnLabelKey(groupBy, key),
-    collapsed: collapsed.has(key),
-    wip: wipFor(settings, key),
-    count: 0,
-    placeholder: true,
-  }));
+  return [];
 }
 
 /** 视图是否可切换为看板渲染(layout board;list 复用 shell,timeline/table 预留)。 */

@@ -283,6 +283,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     succeeded: 9,
     failed: 1,
     field: 'priority',
+    fields: 'Acceptance owner, Evidence link',
+    target: 'defect',
     // kanban 视图 §4 文案占位符(MES-43)
     limit: 5,
     enforcement: 'warn',

@@ -37,6 +37,7 @@ import {
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import { usePageContext } from '../../shortcuts';
 import { AttachmentPanel } from '../attachments';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -231,6 +232,23 @@ function saveIndicatorText(phase: SavePhase, t: (key: string) => string): string
   return '';
 }
 
+/** 422 required_field_missing 的 details.missing → 可读字段名。 */
+function requiredFieldNames(error: MeshApiError): string[] {
+  const missing = error.details?.missing;
+  if (!Array.isArray(missing)) return [];
+  const names: string[] = [];
+  for (const entry of missing) {
+    if (typeof entry === 'string' && entry.trim() !== '') {
+      names.push(entry);
+      continue;
+    }
+    if (typeof entry !== 'object' || entry === null) continue;
+    const name = (entry as Record<string, unknown>).name;
+    if (typeof name === 'string' && name.trim() !== '') names.push(name);
+  }
+  return names;
+}
+
 export function IssueDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
@@ -242,6 +260,7 @@ export function IssueDetailPage(): React.JSX.Element {
   }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  const workspaceContext = useOptionalWorkspace();
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
   const indicator = useSaveIndicator();
 
@@ -268,6 +287,8 @@ export function IssueDetailPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('comments');
+  const [statusValidationError, setStatusValidationError] = useState<string | null>(null);
+  const statusStrictMode = workspaceContext?.workspace?.settings.status_strict_mode === true;
 
   useEffect(
     () =>
@@ -393,20 +414,43 @@ export function IssueDetailPage(): React.JSX.Element {
   const patchAndToast = useCallback(
     async (changes: Partial<IssueDetail>) => {
       if (issue === null) return;
+      const isStatusChange = changes.status_id !== undefined;
+      if (isStatusChange) setStatusValidationError(null);
       // 乐观更新:让受控 <select>/输入立即反映所选值(异步间隙不悬停目标值,§4.4/§5.2)。
       const snapshot = issue;
       setIssue({ ...issue, ...changes });
       indicator.begin();
       try {
-        const { conflicted } = await mutation.mutate(snapshot, changes);
+        const { result, conflicted } = await mutation.mutate(snapshot, changes);
         if (conflicted) indicator.conflict();
         else indicator.succeed();
+        if (isStatusChange) setStatusValidationError(null);
         toast.addToast(t(conflicted ? 'issues.conflictToast' : 'issues.savedToast'), {
           tone: conflicted ? 'warn' : 'success',
           closeLabel: t('common.close'),
         });
-        // 成功:重取以收敛 version / children_progress / activity 等服务端派生数据。
-        setReloadKey((k) => k + 1);
+        if (!conflicted && changes.assignee_id !== undefined) {
+          // 负责人 PATCH 已返回完整 issue 快照(详情专有的 children_progress 除外)。
+          // 就地收敛可保留窄容器中的属性抽屉与 agent 提示，避免成功保存后抽屉
+          // 因整页 loading 重挂载而关闭；activity 单独刷新，不打断当前交互。
+          const settled = {
+            ...snapshot,
+            ...result,
+            children_progress: result.children_progress ?? snapshot.children_progress,
+          };
+          setIssue(settled);
+          setTitleDraft(settled.title);
+          setDescriptionDraft(settled.description ?? '');
+          try {
+            const refreshedActivity = await listActivity(client, snapshot.id);
+            setActivity([...refreshedActivity.data]);
+          } catch {
+            // 保存已由服务端确认；派生活动的临时刷新失败不应回滚成功写入。
+          }
+        } else {
+          // 其他字段成功后重取，以收敛 children_progress 等服务端派生数据。
+          setReloadKey((k) => k + 1);
+        }
       } catch (err: unknown) {
         // 被服务端拒绝(如严格模式 409 invalid_status_transition):就地回滚到快照,
         // select 回落原值、不保留被禁目标值,且不触发整页 reload / 骨架闪烁(§4.4/§5.2)。
@@ -415,10 +459,22 @@ export function IssueDetailPage(): React.JSX.Element {
         setDescriptionDraft(snapshot.description ?? '');
         indicator.reset();
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+        if (
+          isStatusChange &&
+          err instanceof MeshApiError &&
+          err.code === 'required_field_missing'
+        ) {
+          const names = requiredFieldNames(err);
+          setStatusValidationError(
+            names.length > 0
+              ? t('issues.statusRequiredFields', { fields: names.join(', ') })
+              : t(key),
+          );
+        }
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       }
     },
-    [issue, mutation, toast, t, indicator],
+    [client, issue, mutation, toast, t, indicator],
   );
 
   const saveTitle = useCallback(async () => {
@@ -688,6 +744,8 @@ export function IssueDetailPage(): React.JSX.Element {
             client={client}
             realtime={realtime}
             reloadKey={reloadKey}
+            statusStrictMode={statusStrictMode}
+            statusValidationError={statusValidationError}
             onPatch={(changes) => void patchAndToast(changes)}
             onRequestMove={(target) => void requestMove(target)}
             onIssueChanged={() => setReloadKey((k) => k + 1)}

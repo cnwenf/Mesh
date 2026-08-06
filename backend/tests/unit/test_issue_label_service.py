@@ -573,6 +573,94 @@ async def test_merge_label_rejects_self_and_unknown(session_factory):
         )
 
 
+async def test_merge_label_rejects_project_target_from_a_broader_or_other_scope(
+    session_factory,
+):
+    ctx = await _setup(session_factory)
+    first = await _make_project(session_factory, ctx.workspace, key="PONE")
+    second = await _make_project(session_factory, ctx.workspace, key="PTWO")
+    first_label = await ctx.label_service.create_label(
+        actor=ctx.admin,
+        workspace_id=ctx.workspace.id,
+        name="first private",
+        color="#aa0000",
+        project_id=first.id,
+    )
+    second_label = await ctx.label_service.create_label(
+        actor=ctx.admin,
+        workspace_id=ctx.workspace.id,
+        name="second private",
+        color="#0000aa",
+        project_id=second.id,
+    )
+    workspace_label_id = uuid.UUID(ctx.labels["bug"]["id"])
+    first_label_id = uuid.UUID(first_label["id"])
+    second_label_id = uuid.UUID(second_label["id"])
+
+    for source_id, target_id, source_project_id in (
+        (workspace_label_id, first_label_id, None),
+        (first_label_id, second_label_id, first.id),
+    ):
+        with pytest.raises(BusinessRuleError) as excinfo:
+            await ctx.label_service.merge_label(
+                actor=ctx.admin,
+                workspace_id=ctx.workspace.id,
+                source_label_id=source_id,
+                target_label_id=target_id,
+            )
+        assert excinfo.value.code == "label_scope_mismatch"
+        assert excinfo.value.details == {
+            "source_label_id": str(source_id),
+            "source_project_id": str(source_project_id)
+            if source_project_id is not None
+            else None,
+            "target_label_id": str(target_id),
+            "target_project_id": str(first.id if target_id == first_label_id else second.id),
+        }
+
+    # Both rejected transactions are non-mutating.
+    async with session_factory() as session:
+        surviving = set(
+            (
+                await session.execute(
+                    select(Label.id).where(
+                        Label.id.in_([workspace_label_id, first_label_id, second_label_id])
+                    )
+                )
+            ).scalars()
+        )
+    assert surviving == {workspace_label_id, first_label_id, second_label_id}
+
+
+async def test_merge_label_allows_same_project_source_into_project_target(session_factory):
+    ctx = await _setup(session_factory)
+    project = await _make_project(session_factory, ctx.workspace, key="SAME")
+    source = await ctx.label_service.create_label(
+        actor=ctx.admin,
+        workspace_id=ctx.workspace.id,
+        name="private source",
+        color="#aa0000",
+        project_id=project.id,
+    )
+    target = await ctx.label_service.create_label(
+        actor=ctx.admin,
+        workspace_id=ctx.workspace.id,
+        name="private target",
+        color="#0000aa",
+        project_id=project.id,
+    )
+
+    result = await ctx.label_service.merge_label(
+        actor=ctx.admin,
+        workspace_id=ctx.workspace.id,
+        source_label_id=uuid.UUID(source["id"]),
+        target_label_id=uuid.UUID(target["id"]),
+    )
+
+    assert result["merged_issue_count"] == 0
+    assert result["target_label"]["id"] == target["id"]
+
+
 async def test_merge_carries_across_when_target_absent_on_issue(session_factory):
     ctx = await _setup(session_factory)
     defect = await ctx.label_service.create_label(

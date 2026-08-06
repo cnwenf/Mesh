@@ -1,7 +1,8 @@
 export function isSecureAvatarUrl(value: string): boolean {
-  if (value === '') return false;
+  if (!/^https:\/\/[^/]/i.test(value) || value.includes('\\') || /\s/.test(value)) return false;
   try {
-    return new URL(value).protocol === 'https:';
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.hostname !== '';
   } catch {
     return false;
   }

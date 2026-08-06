@@ -745,7 +745,11 @@ async def test_binding_and_event_reads_enforce_project_visibility_before_paginat
 
     # Make the hidden/visible rows deterministically interleave in descending
     # keyset order, independent of request wall-clock precision.
-    base_time = datetime(2026, 7, 29, 13, 0, 0, tzinfo=UTC)
+    # Keep the deterministic interleaving inside the route's real rolling
+    # seven-day aggregate window. A fixed calendar instant makes this test
+    # expire as wall time advances even though the visibility contract is
+    # unchanged.
+    base_time = datetime.now(UTC) - timedelta(minutes=1)
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
         rows = (

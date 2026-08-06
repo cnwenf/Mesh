@@ -900,7 +900,7 @@ describe('CreateProjectDialog(经 ProjectsPage 打开)', () => {
 
     await user.type(screen.getByTestId('create-project-name'), 'Website Redesign');
     expect(screen.getByTestId('create-project-key')).toHaveValue('WEBSITE_REDE');
-    expect(screen.getByText('Looks good — this key is valid.')).toBeInTheDocument();
+    expect(screen.getByText('The key format is valid.')).toBeInTheDocument();
 
     await user.clear(screen.getByTestId('create-project-key'));
     await user.type(screen.getByTestId('create-project-key'), '9bad');
@@ -914,7 +914,7 @@ describe('CreateProjectDialog(经 ProjectsPage 打开)', () => {
 
     await user.clear(screen.getByTestId('create-project-key'));
     await user.type(screen.getByTestId('create-project-key'), 'WEB');
-    expect(screen.getByText('Looks good — this key is valid.')).toBeInTheDocument();
+    expect(screen.getByText('The key format is valid.')).toBeInTheDocument();
     expect(screen.getByTestId('create-project-submit')).toBeEnabled();
   });
 

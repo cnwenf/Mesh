@@ -12,8 +12,8 @@
  * 排版走 type-scale 工具类;A-05 收尾——窄屏表格隐藏、改主次行卡片,行操作进底座 Menu,
  * 无横向溢出;agent 行运行态经 presence 实时帧 → `presenceToRunState` 五态统一语言(§9.8)。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import {
   Avatar,
@@ -29,6 +29,7 @@ import {
   RunStateBadge,
   Skeleton,
   Tabs,
+  Tooltip,
   useToast,
 } from '../../design';
 import type { MenuEntry } from '../../design';
@@ -38,9 +39,12 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { workspaceChannel } from '../../workspace/WorkspaceProvider';
 import { AgentWizard } from '../agents/AgentWizard';
-import { deleteAgent, transitionAgentLifecycle } from '../agents/api';
+import { deleteAgent, getAgent, listConfigVersions, transitionAgentLifecycle } from '../agents/api';
 import { useAgentPresenceMap } from '../agents/presence';
 import { presenceToRunState } from '../agents/runState';
+import type { AgentConfigVersion, AgentDetail } from '../agents/types';
+import { listIssues } from '../issues/api';
+import type { IssueSummary } from '../issues/types';
 import { resetOnboardingMember } from '../onboarding/api';
 import { requestOptimisticStepComplete } from '../onboarding/notify';
 import { EmptyRoster } from '../onboarding/illustrations';
@@ -96,6 +100,13 @@ function memberSubtext(member: MemberSummary): string {
   return '';
 }
 
+function humanEmail(member: MemberSummary): string | null {
+  const profile = member.profile;
+  return member.member_type === 'human' && profile !== null && 'email' in profile
+    ? profile.email
+    : null;
+}
+
 /** 头像 URL:profile.avatar_url 为空/空串回退 undefined(Avatar 据此渲染缩写/轮廓)。 */
 function avatarSrc(member: MemberSummary): string | undefined {
   const profile = member.profile;
@@ -141,10 +152,26 @@ function isCurrentHumanMember(member: MemberSummary, userId: string | null): boo
   );
 }
 
+/** Capability grants are intentionally schema-flexible; prefer their stable human key. */
+function capabilityLabel(grant: unknown): string {
+  if (typeof grant === 'string') return grant;
+  if (typeof grant === 'object' && grant !== null) {
+    for (const key of ['name', 'capability', 'id', 'slug', 'type'] as const) {
+      const value = (grant as Record<string, unknown>)[key];
+      if (typeof value === 'string' && value !== '') return value;
+    }
+    try {
+      return JSON.stringify(grant);
+    } catch {
+      return String(grant);
+    }
+  }
+  return String(grant);
+}
+
 export function MembersPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
-  const navigate = useNavigate();
   const realtime = useRealtimeContext();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const membershipState = useWorkspaceMembership(client);
@@ -165,7 +192,15 @@ export function MembersPage(): React.JSX.Element {
 
   const [addOpen, setAddOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [detailTarget, setDetailTarget] = useState<MemberSummary | null>(null);
+  const [detailWorkspaceId, setDetailWorkspaceId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
+  const [detailIssues, setDetailIssues] = useState<readonly IssueSummary[] | null>(null);
+  const [detailAgent, setDetailAgent] = useState<AgentDetail | null>(null);
+  const [detailVersions, setDetailVersions] = useState<readonly AgentConfigVersion[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailRequestRef = useRef<AbortController | null>(null);
   const [confirm, setConfirm] = useState<{ mode: RemoveMode; member: MemberSummary } | null>(null);
   const [agentActionPending, setAgentActionPending] = useState(false);
   const [agentActionError, setAgentActionError] = useState<string | null>(null);
@@ -186,11 +221,53 @@ export function MembersPage(): React.JSX.Element {
     return presenceToRunState(presenceMap.get(id) ?? null);
   };
 
+  const openDetailIssues = useMemo(
+    () =>
+      (detailIssues ?? []).filter(
+        (issue) => issue.state_category !== 'done' && issue.state_category !== 'cancelled',
+      ),
+    [detailIssues],
+  );
+  const recentlyUpdatedAssignedIssues = useMemo(
+    () =>
+      [...(detailIssues ?? [])]
+        .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
+        .slice(0, 5),
+    [detailIssues],
+  );
+  const activeDetailVersion = useMemo(() => {
+    const activeId = detailAgent?.active_config_version_id ?? detailAgent?.current_version?.id;
+    if (activeId !== null && activeId !== undefined) {
+      return detailVersions.find((version) => version.id === activeId) ?? null;
+    }
+    return detailVersions[0] ?? null;
+  }, [detailAgent, detailVersions]);
+  const detailCapabilities = activeDetailVersion?.snapshot.capability_grants ?? [];
+  const displayedDetail = detail ?? detailTarget;
+  const detailEmail = displayedDetail === null ? null : humanEmail(displayedDetail);
+
   // Debounce the search box into the query term.
   useEffect(() => {
     const handle = setTimeout(() => setQ(searchInput.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [searchInput]);
+
+  useEffect(() => () => detailRequestRef.current?.abort(), []);
+
+  useEffect(() => {
+    const workspaceId = workspace?.workspace_id ?? null;
+    if (detailWorkspaceId === null || detailWorkspaceId === workspaceId) return;
+    detailRequestRef.current?.abort();
+    detailRequestRef.current = null;
+    setDetailTarget(null);
+    setDetailWorkspaceId(null);
+    setDetail(null);
+    setDetailIssues(null);
+    setDetailAgent(null);
+    setDetailVersions([]);
+    setDetailLoading(false);
+    setDetailError(null);
+  }, [detailWorkspaceId, workspace?.workspace_id]);
 
   const loadRoster = useCallback(() => {
     if (membershipState.kind !== 'ready' || workspace === null) {
@@ -329,24 +406,81 @@ export function MembersPage(): React.JSX.Element {
     }
   };
 
+  const closeDetail = (): void => {
+    detailRequestRef.current?.abort();
+    detailRequestRef.current = null;
+    setDetailTarget(null);
+    setDetailWorkspaceId(null);
+    setDetail(null);
+    setDetailIssues(null);
+    setDetailAgent(null);
+    setDetailVersions([]);
+    setDetailLoading(false);
+    setDetailError(null);
+  };
+
   const openDetail = async (member: MemberSummary): Promise<void> => {
-    // Agent 行深链到 agent 详情页(README §6.12 名册详情深链);人类行开抽屉。
-    if (
-      workspace !== null &&
-      member.member_type === 'agent' &&
-      member.profile !== null &&
-      'id' in member.profile
-    ) {
-      navigate(workspaceRoute(workspace.workspace_slug, `/agents/${member.profile.id}`));
-      return;
-    }
     if (workspace === null) return;
-    try {
-      const full = await getMember(client, workspace.workspace_id, member.id);
-      setDetail(full);
-    } catch {
-      setDetail(null);
+    detailRequestRef.current?.abort();
+    const controller = new AbortController();
+    detailRequestRef.current = controller;
+    setDetailTarget(member);
+    setDetailWorkspaceId(workspace.workspace_id);
+    setDetail(null);
+    setDetailIssues(null);
+    setDetailAgent(null);
+    setDetailVersions([]);
+    setDetailLoading(true);
+    setDetailError(null);
+
+    const isCurrentRequest = (): boolean =>
+      !controller.signal.aborted && detailRequestRef.current === controller;
+    const requests: Promise<void>[] = [
+      getMember(client, workspace.workspace_id, member.id, controller.signal)
+        .then((full) => {
+          if (isCurrentRequest()) setDetail(full);
+        })
+        .catch(() => {
+          if (isCurrentRequest()) {
+            setDetailLoading(false);
+            setDetailError(t('state.errorDescription'));
+          }
+        }),
+      listIssues(
+        client,
+        workspace.workspace_id,
+        { assignee_id: member.id, limit: 100 },
+        controller.signal,
+      )
+        .then((page) => {
+          if (isCurrentRequest()) setDetailIssues(page.data);
+        })
+        .catch(() => undefined),
+    ];
+
+    const agentId = agentIdOf(member);
+    if (agentId !== null) {
+      requests.push(
+        getAgent(client, workspace.workspace_id, agentId, controller.signal)
+          .then((agent) => {
+            if (isCurrentRequest()) setDetailAgent(agent);
+          })
+          .catch(() => undefined),
+        listConfigVersions(
+          client,
+          workspace.workspace_id,
+          agentId,
+          { limit: 20 },
+          controller.signal,
+        )
+          .then((versions) => {
+            if (isCurrentRequest()) setDetailVersions(versions.data);
+          })
+          .catch(() => undefined),
+      );
     }
+    await Promise.allSettled(requests);
+    if (isCurrentRequest()) setDetailLoading(false);
   };
 
   const reassignTargets = useMemo(
@@ -469,41 +603,49 @@ export function MembersPage(): React.JSX.Element {
   };
 
   /** 身份簇:头像 + 名称(+AI 徽章) + 次要行,整体按钮开详情(桌面/卡片同源,testid 分流)。 */
-  const renderIdentity = (member: MemberSummary, isCard: boolean): React.JSX.Element => (
-    <button
-      type="button"
-      className="mesh-members__identity"
-      data-testid={isCard ? `member-card-open-${member.id}` : `member-open-${member.id}`}
-      onClick={() => openDetail(member)}
-    >
-      <Avatar
-        name={member.display_name}
-        kind={member.member_type === 'agent' ? 'agent' : 'human'}
-        size={32}
-        src={avatarSrc(member)}
-      />
-      <span className="mesh-members__identity-text">
-        <span className="mesh-members__identity-primary">
-          <span
-            className="mesh-members__name mesh-text-body-strong mesh-truncate"
-            title={member.display_name}
-          >
-            {member.display_name}
-          </span>
-          {member.member_type === 'agent' ? (
-            <span data-testid={isCard ? `card-ai-badge-${member.id}` : `ai-badge-${member.id}`}>
-              <Badge tone="accent" size="sm">
-                {t('members.badge.agent')}
-              </Badge>
+  const renderIdentity = (member: MemberSummary, isCard: boolean): React.JSX.Element => {
+    const subtext = memberSubtext(member);
+    const subtextElement = (
+      <span className="mesh-members__subtext mesh-text-caption mesh-truncate">{subtext}</span>
+    );
+    return (
+      <button
+        type="button"
+        className="mesh-members__identity"
+        data-testid={isCard ? `member-card-open-${member.id}` : `member-open-${member.id}`}
+        onClick={() => openDetail(member)}
+      >
+        <Avatar
+          name={member.display_name}
+          kind={member.member_type === 'agent' ? 'agent' : 'human'}
+          size={32}
+          src={avatarSrc(member)}
+        />
+        <span className="mesh-members__identity-text">
+          <span className="mesh-members__identity-primary">
+            <span
+              className="mesh-members__name mesh-text-body-strong mesh-truncate"
+              title={member.display_name}
+            >
+              {member.display_name}
             </span>
-          ) : null}
+            {member.member_type === 'agent' ? (
+              <span data-testid={isCard ? `card-ai-badge-${member.id}` : `ai-badge-${member.id}`}>
+                <Badge tone="accent" size="sm">
+                  {t('members.badge.agent')}
+                </Badge>
+              </span>
+            ) : null}
+          </span>
+          {member.member_type === 'agent' && subtext !== '' ? (
+            <Tooltip content={subtext}>{subtextElement}</Tooltip>
+          ) : (
+            subtextElement
+          )}
         </span>
-        <span className="mesh-members__subtext mesh-text-caption mesh-truncate">
-          {memberSubtext(member)}
-        </span>
-      </span>
-    </button>
-  );
+      </button>
+    );
+  };
 
   /** agent 行运行态徽标(§9.8 五态统一语言);人类行渲染空。testid 桌面/卡片分流。 */
   const renderRunState = (member: MemberSummary, isCard: boolean): React.JSX.Element | null => {
@@ -710,21 +852,140 @@ export function MembersPage(): React.JSX.Element {
         )}
       </DataView>
 
-      {detail !== null ? (
+      {detailTarget !== null &&
+      workspace !== null &&
+      detailWorkspaceId === workspace.workspace_id ? (
         <Drawer
           open
-          onClose={() => setDetail(null)}
-          title={detail.display_name}
+          onClose={closeDetail}
+          title={detailTarget.display_name}
           closeLabel={t('common.close')}
         >
-          <dl className="mesh-members__drawer-dl" data-testid="member-drawer">
-            <dt className="mesh-text-caption">{t('members.col.role')}</dt>
-            <dd className="mesh-text-body">{t(`members.role.${detail.role}`)}</dd>
-            <dt className="mesh-text-caption">{t('members.col.status')}</dt>
-            <dd className="mesh-text-body">{t(`members.status.${detail.status}`)}</dd>
-            <dt className="mesh-text-caption">{t('members.detail.openIssues')}</dt>
-            <dd className="mesh-text-body mesh-tnum">{detail.counts.open_issues_assigned}</dd>
-          </dl>
+          <div className="mesh-members__drawer-content" data-testid="member-drawer">
+            {detailError !== null ? (
+              <ErrorState
+                title={t('state.errorTitle')}
+                description={detailError}
+                retryLabel={t('common.retry')}
+                onRetry={() => void openDetail(detailTarget)}
+              />
+            ) : null}
+            <dl className="mesh-members__drawer-dl">
+              <dt className="mesh-text-caption">{t('members.col.role')}</dt>
+              <dd className="mesh-text-body">
+                {t(`members.role.${(detail ?? detailTarget).role}`)}
+              </dd>
+              <dt className="mesh-text-caption">{t('members.col.status')}</dt>
+              <dd className="mesh-text-body">
+                {t(`members.status.${(detail ?? detailTarget).status}`)}
+              </dd>
+              {detailEmail !== null ? (
+                <>
+                  <dt className="mesh-text-caption">{t('members.col.contact')}</dt>
+                  <dd className="mesh-text-body">{detailEmail}</dd>
+                </>
+              ) : null}
+              <dt className="mesh-text-caption">{t('members.detail.openIssues')}</dt>
+              <dd className="mesh-text-body mesh-tnum">
+                {detail?.counts.open_issues_assigned ?? '—'}
+              </dd>
+              {detailTarget.member_type === 'agent' ? (
+                <>
+                  <dt className="mesh-text-caption">{t('members.detail.runtimeState')}</dt>
+                  <dd className="mesh-text-body" data-testid="member-detail-runtime">
+                    <RunStateBadge
+                      state={runStateOf(detailTarget)}
+                      label={t(`runState.${runStateOf(detailTarget)}`)}
+                      size="sm"
+                    />
+                  </dd>
+                  <dt className="mesh-text-caption">{t('members.detail.description')}</dt>
+                  <dd className="mesh-text-body">{memberSubtext(detail ?? detailTarget) || '—'}</dd>
+                  <dt className="mesh-text-caption">{t('members.detail.modelTier')}</dt>
+                  <dd className="mesh-text-body" data-testid="member-detail-model-tier">
+                    {detailAgent?.model_config.model_tier
+                      ? t(`agents.tier.${detailAgent.model_config.model_tier}`)
+                      : '—'}
+                  </dd>
+                  <dt className="mesh-text-caption">{t('members.detail.defaultRuntime')}</dt>
+                  <dd
+                    className="mesh-text-body mesh-tnum"
+                    data-testid="member-detail-default-runtime"
+                  >
+                    {detailAgent?.default_runtime_id ?? '—'}
+                  </dd>
+                </>
+              ) : null}
+            </dl>
+
+            {detailTarget.member_type === 'agent' ? (
+              <section className="mesh-members__drawer-section">
+                <h3 className="mesh-text-body-strong">{t('members.detail.capabilities')}</h3>
+                {detailCapabilities.length === 0 ? (
+                  <p className="mesh-text-caption">{t('members.detail.noCapabilities')}</p>
+                ) : (
+                  <ul
+                    className="mesh-members__drawer-list"
+                    data-testid="member-detail-capabilities"
+                  >
+                    {detailCapabilities.map((grant, index) => (
+                      <li key={`${capabilityLabel(grant)}-${index}`}>{capabilityLabel(grant)}</li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ) : null}
+
+            <section className="mesh-members__drawer-section">
+              <h3 className="mesh-text-body-strong">{t('members.detail.openIssueList')}</h3>
+              {detailIssues === null ? (
+                detailLoading ? (
+                  <Skeleton loadingLabel={t('common.loading')} />
+                ) : null
+              ) : openDetailIssues.length === 0 ? (
+                <p className="mesh-text-caption">{t('members.detail.noOpenIssues')}</p>
+              ) : (
+                <ul className="mesh-members__drawer-list">
+                  {openDetailIssues.slice(0, 5).map((issue) => (
+                    <li key={issue.id}>
+                      <Link to={workspaceRoute(workspace.workspace_slug, `/issues/${issue.id}`)}>
+                        {issue.identifier} · {issue.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="mesh-members__drawer-section">
+              <h3 className="mesh-text-body-strong">{t('members.detail.recentAssignedUpdates')}</h3>
+              {detailIssues !== null && recentlyUpdatedAssignedIssues.length === 0 ? (
+                <p className="mesh-text-caption">{t('members.detail.noRecentAssignedUpdates')}</p>
+              ) : (
+                <ul className="mesh-members__drawer-list">
+                  {recentlyUpdatedAssignedIssues.map((issue) => (
+                    <li key={issue.id}>
+                      <Link to={workspaceRoute(workspace.workspace_slug, `/issues/${issue.id}`)}>
+                        {issue.identifier} · {issue.title}
+                      </Link>{' '}
+                      <time className="mesh-text-caption mesh-tnum" dateTime={issue.updated_at}>
+                        {t('members.detail.updatedAt', { date: new Date(issue.updated_at) })}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {detailTarget.member_type === 'agent' && agentIdOf(detailTarget) !== null ? (
+              <Link
+                className="mesh-members__drawer-config-link"
+                to={workspaceRoute(workspace.workspace_slug, `/agents/${agentIdOf(detailTarget)!}`)}
+              >
+                {t('members.detail.openAgentSettings')}
+              </Link>
+            ) : null}
+          </div>
         </Drawer>
       ) : null}
 

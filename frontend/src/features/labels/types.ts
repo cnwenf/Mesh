@@ -33,6 +33,13 @@ export const CUSTOM_FIELD_TYPES: readonly CustomFieldType[] = [
 /** 枚举型字段(值取自 custom_field_options)。 */
 export const SELECT_FIELD_TYPES: readonly CustomFieldType[] = ['single_select', 'multi_select'];
 
+/** Issue 列表/看板投影里的紧凑标签快照。 */
+export interface CompactLabel {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+}
+
 export interface Label {
   readonly id: string;
   readonly workspace_id: string;
@@ -43,6 +50,11 @@ export interface Label {
   readonly scope: 'workspace' | 'project';
   readonly created_at: string;
   readonly updated_at: string;
+}
+
+/** GET /workspaces/{ws}/labels 的设置页形态，带真实使用数。 */
+export interface LabelWithUsage extends Label {
+  readonly issue_count: number;
 }
 
 export interface CustomFieldOption {

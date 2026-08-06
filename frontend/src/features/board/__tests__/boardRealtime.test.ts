@@ -4,12 +4,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import type { CustomFieldDef, CustomFieldType } from '../../labels/types';
 import type { BoardCard, BoardGroup, BoardLane, BoardProjectionColumn } from '../projection';
 import {
   applyBoardFrame,
   applyBoardLaneFrame,
+  applyCustomFieldDefinitionToGroups,
+  applyCustomFieldDefinitionToLanes,
+  applyLabelDefinitionToGroups,
+  applyLabelDefinitionToLanes,
   cardBelongsToView,
+  groupKeysForCard,
   groupKeyForCard,
+  mergeBoardCardForRealtime,
   rebucketGroups,
   NONE_KEY,
 } from '../boardRealtime';
@@ -104,6 +111,41 @@ const LANE_CTX = {
   belongs: () => true,
 };
 
+function customField(
+  type: CustomFieldType,
+  overrides: Partial<CustomFieldDef> = {},
+): CustomFieldDef {
+  return {
+    id: 'field-a',
+    workspace_id: 'w',
+    project_id: null,
+    name: 'Teams',
+    field_key: 'teams',
+    type,
+    is_required: false,
+    required_on: [],
+    default_value: null,
+    config: {},
+    position: 0,
+    is_active: true,
+    options: [
+      {
+        id: 'option-a',
+        field_def_id: 'field-a',
+        name: 'Backend',
+        color: null,
+        position: 0,
+        is_active: true,
+        created_at: '',
+        updated_at: '',
+      },
+    ],
+    created_at: '',
+    updated_at: '',
+    ...overrides,
+  };
+}
+
 describe('groupKeyForCard(§2.4)', () => {
   it('按 group_by 派生列 key', () => {
     const c = card({ assignee_id: 'm1', project_id: 'p1', priority: 'urgent' });
@@ -118,6 +160,583 @@ describe('groupKeyForCard(§2.4)', () => {
     const c = card();
     expect(groupKeyForCard(c, 'assignee')).toBe(NONE_KEY);
     expect(groupKeyForCard(c, 'project')).toBe(NONE_KEY);
+  });
+
+  it('label 与 multi_select 返回完整去重 memberships', () => {
+    const fieldId = '11111111-1111-4111-8111-111111111111';
+    const c = card({
+      labels: [
+        { id: 'label-a', name: 'A', color: '#111111' },
+        { id: 'label-b', name: 'B', color: '#222222' },
+      ],
+      custom_field_values: [
+        { field_def_id: fieldId, value_json: ['option-a', 'option-b', 'option-a'] },
+      ],
+    });
+    const definition = {
+      id: fieldId,
+      workspace_id: 'w',
+      project_id: null,
+      name: 'Teams',
+      field_key: 'teams',
+      type: 'multi_select' as const,
+      is_required: false,
+      required_on: [],
+      default_value: null,
+      config: {},
+      position: 0,
+      is_active: true,
+      options: [],
+      created_at: '',
+      updated_at: '',
+    };
+    expect(groupKeysForCard(c, 'label')).toEqual(['label-a', 'label-b']);
+    expect(groupKeysForCard(c, fieldId, [definition])).toEqual(['option-a', 'option-b']);
+  });
+
+  it.each([
+    ['text', { value_text: 'Alpha' }, 'Alpha'],
+    ['textarea', { value_text: 'Long form' }, 'Long form'],
+    ['url', { value_text: 'https://mesh.test' }, 'https://mesh.test'],
+    ['number', { value_number: 42 }, '42'],
+    ['date', { value_date: '2026-08-05' }, '2026-08-05'],
+    ['datetime', { value_date: '2026-08-05T12:00:00Z' }, '2026-08-05T12:00:00Z'],
+    ['member', { value_member_id: 'member-a' }, 'member-a'],
+    ['boolean', { value_boolean: false }, 'false'],
+    ['single_select', { value_json: 'option-a' }, 'option-a'],
+  ] as const)('按 %s 定义从类型化快照派生分组 key', (type, value, expected) => {
+    const item = card({
+      custom_field_values: [{ field_def_id: 'field-a', ...value }],
+    });
+    expect(groupKeysForCard(item, 'field-a', [customField(type)])).toEqual([expected]);
+  });
+
+  it('动态字段缺定义时仍兼容投影快照类型，并把空值归入 none', () => {
+    const keyFor = (value: Record<string, unknown>) =>
+      groupKeysForCard(
+        card({ custom_field_values: [{ field_def_id: 'field-a', ...value }] }),
+        'field-a',
+      );
+
+    expect(keyFor({ value_json: ['a', 1, 'b', 'a'] })).toEqual(['a', 'b']);
+    expect(keyFor({ value_json: 'single' })).toEqual(['single']);
+    expect(keyFor({ value_text: 'text' })).toEqual(['text']);
+    expect(keyFor({ value_number: 3 })).toEqual(['3']);
+    expect(keyFor({ value_date: '2026-08-05' })).toEqual(['2026-08-05']);
+    expect(keyFor({ value_member_id: 'member-a' })).toEqual(['member-a']);
+    expect(keyFor({ value_boolean: true })).toEqual(['true']);
+    expect(keyFor({ value_json: [null, 1] })).toEqual([NONE_KEY]);
+    expect(groupKeysForCard(card(), 'field-a')).toEqual([NONE_KEY]);
+    expect(groupKeysForCard(card(), 'label')).toEqual([NONE_KEY]);
+  });
+
+  it('multi_select 去重有效字符串，类型不匹配时归入 none', () => {
+    const definition = customField('multi_select');
+    expect(
+      groupKeysForCard(
+        card({
+          custom_field_values: [
+            { field_def_id: 'field-a', value_json: ['option-a', 1, 'option-a'] },
+          ],
+        }),
+        'field-a',
+        [definition],
+      ),
+    ).toEqual(['option-a']);
+    expect(
+      groupKeysForCard(
+        card({ custom_field_values: [{ field_def_id: 'field-a', value_json: 42 }] }),
+        'field-a',
+        [definition],
+      ),
+    ).toEqual([NONE_KEY]);
+
+    for (const definitionWithoutMatchingValue of [
+      customField('text'),
+      customField('number'),
+      customField('date'),
+      customField('member'),
+      customField('boolean'),
+      customField('single_select'),
+    ]) {
+      expect(
+        groupKeysForCard(
+          card({ custom_field_values: [{ field_def_id: 'field-a', value_json: null }] }),
+          'field-a',
+          [definitionWithoutMatchingValue],
+        ),
+      ).toEqual([NONE_KEY]);
+    }
+  });
+});
+
+describe('mergeBoardCardForRealtime 关联快照', () => {
+  it('custom_field_changed 替换目标值且不把帧元字段扩散进卡片', () => {
+    const merged = mergeBoardCardForRealtime(
+      card({
+        custom_field_values: [
+          { field_def_id: 'field-a', value_text: 'old' },
+          { field_def_id: 'field-b', value_number: 1 },
+        ],
+      }),
+      frame('custom_field_changed', {
+        issue_id: 'i1',
+        field_def_id: 'field-a',
+        field_key: 'teams',
+        value: { value_text: 'new' },
+        changes: { title: 'Updated' },
+      }),
+    );
+
+    expect(merged.title).toBe('Updated');
+    expect(merged.custom_field_values).toEqual([
+      { field_def_id: 'field-b', value_number: 1 },
+      { field_def_id: 'field-a', value_text: 'new' },
+    ]);
+    expect(merged).not.toHaveProperty('issue_id');
+    expect(merged).not.toHaveProperty('field_key');
+    expect(merged).not.toHaveProperty('value');
+  });
+
+  it('无对象值表示清除字段；缺少 field_def_id 时保持字段快照', () => {
+    const existing = card({
+      custom_field_values: [{ field_def_id: 'field-a', value_text: 'old' }],
+    });
+    expect(
+      mergeBoardCardForRealtime(
+        existing,
+        frame('custom_field_changed', { field_def_id: 'field-a', value: null }),
+      ).custom_field_values,
+    ).toEqual([]);
+    expect(
+      mergeBoardCardForRealtime(existing, frame('custom_field_changed', { value: {} }))
+        .custom_field_values,
+    ).toEqual(existing.custom_field_values);
+  });
+});
+
+describe('动态轴实时 memberships', () => {
+  it('label 全量集合按差集增删 placements，普通 updated 保留多列', () => {
+    const labelled = card({
+      labels: [{ id: 'label-a', name: 'A', color: '#111111' }],
+    });
+    const base: BoardGroup[] = [
+      { key: 'label-a', label: 'A', count: 1, wip: null, data: [labelled] },
+      { key: 'label-b', label: 'B', count: 0, wip: null, data: [] },
+      { key: NONE_KEY, label: 'No label', count: 0, wip: null, data: [] },
+    ];
+    const associated = applyBoardFrame(
+      base,
+      frame('issue.labels_changed', {
+        issue_id: 'i1',
+        labels: [
+          { id: 'label-a', name: 'A', color: '#111111' },
+          { id: 'label-b', name: 'B', color: '#222222' },
+        ],
+      }),
+      { groupBy: 'label', belongs: () => true },
+    );
+    expect(associated.groups.map((group) => [group.key, group.count])).toEqual([
+      ['label-a', 1],
+      ['label-b', 1],
+      [NONE_KEY, 0],
+    ]);
+
+    const updated = applyBoardFrame(
+      associated.groups,
+      frame('issue.updated', { id: 'i1', changes: { title: 'Patched' } }),
+      { groupBy: 'label', belongs: () => true },
+    );
+    expect(updated.groups.filter((group) => group.data[0]?.title === 'Patched')).toHaveLength(2);
+  });
+
+  it('双多值轴生成笛卡尔 placements，但 column/lane count 按 issue distinct', () => {
+    const fieldId = '11111111-1111-4111-8111-111111111111';
+    const definition = {
+      id: fieldId,
+      workspace_id: 'w',
+      project_id: null,
+      name: 'Teams',
+      field_key: 'teams',
+      type: 'multi_select' as const,
+      is_required: false,
+      required_on: [],
+      default_value: null,
+      config: {},
+      position: 0,
+      is_active: true,
+      options: [],
+      created_at: '',
+      updated_at: '',
+    };
+    const item = card({
+      labels: [{ id: 'label-a', name: 'A', color: '#111111' }],
+      custom_field_values: [{ field_def_id: fieldId, value_json: ['option-x', 'option-y'] }],
+    });
+    const columns: BoardProjectionColumn[] = [
+      { key: 'label-a', label: 'A', count: 1, wip: null },
+      { key: 'label-b', label: 'B', count: 0, wip: null },
+      { key: NONE_KEY, label: 'No label', count: 0, wip: null },
+    ];
+    const dynamicLanes: BoardLane[] = [
+      {
+        key: 'option-x',
+        label: 'X',
+        count: 1,
+        groups: [
+          { key: 'label-a', count: 1, data: [item] },
+          { key: 'label-b', count: 0, data: [] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+      {
+        key: 'option-y',
+        label: 'Y',
+        count: 1,
+        groups: [
+          { key: 'label-a', count: 1, data: [item] },
+          { key: 'label-b', count: 0, data: [] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+    ];
+    const result = applyBoardLaneFrame(
+      columns,
+      dynamicLanes,
+      frame('issue.labels_changed', {
+        issue_id: 'i1',
+        labels: [
+          { id: 'label-a', name: 'A', color: '#111111' },
+          { id: 'label-b', name: 'B', color: '#222222' },
+        ],
+      }),
+      { groupBy: 'label', subGroupBy: fieldId, customFields: [definition], belongs: () => true },
+    );
+    expect(result.columns.map((column) => [column.key, column.count])).toEqual([
+      ['label-a', 1],
+      ['label-b', 1],
+      [NONE_KEY, 0],
+    ]);
+    expect(result.lanes.map((lane) => [lane.key, lane.count])).toEqual([
+      ['option-x', 1],
+      ['option-y', 1],
+    ]);
+    expect(result.lanes.flatMap((lane) => lane.groups.flatMap((group) => group.data))).toHaveLength(
+      4,
+    );
+  });
+
+  it('label 定义 created/updated/deleted 局部维护 skeleton', () => {
+    const base: BoardGroup[] = [
+      { key: NONE_KEY, label: 'No label', count: 0, wip: null, data: [] },
+    ];
+    const created = applyLabelDefinitionToGroups(
+      base,
+      frame('label.created', { id: 'label-a', name: 'Backend', color: '#123456' }),
+    );
+    expect(created.map((group) => [group.key, group.label])).toEqual([
+      ['label-a', 'Backend'],
+      [NONE_KEY, 'No label'],
+    ]);
+    const updated = applyLabelDefinitionToGroups(
+      created,
+      frame('label.updated', { id: 'label-a', name: 'Platform', color: '#654321' }),
+    );
+    expect(updated[0]?.label).toBe('Platform');
+    expect(
+      applyLabelDefinitionToGroups(updated, frame('label.deleted', { id: 'label-a' })),
+    ).toEqual(base);
+  });
+
+  it('custom option updated 按名称/active 局部增删 skeleton', () => {
+    const fieldId = '11111111-1111-4111-8111-111111111111';
+    const base: BoardGroup[] = [
+      { key: NONE_KEY, label: 'No Teams', count: 0, wip: null, data: [] },
+    ];
+    const created = applyCustomFieldDefinitionToGroups(
+      base,
+      frame('custom_field_option.updated', {
+        field_def_id: fieldId,
+        change: 'created',
+        option: { id: 'option-a', name: 'Backend', is_active: true },
+      }),
+      fieldId,
+    );
+    expect(created.map((group) => [group.key, group.label])).toEqual([
+      ['option-a', 'Backend'],
+      [NONE_KEY, 'No Teams'],
+    ]);
+    const renamed = applyCustomFieldDefinitionToGroups(
+      created,
+      frame('custom_field_option.updated', {
+        field_def_id: fieldId,
+        change: 'updated',
+        option: { id: 'option-a', name: 'Platform', is_active: true },
+      }),
+      fieldId,
+    );
+    expect(renamed[0]?.label).toBe('Platform');
+    expect(
+      applyCustomFieldDefinitionToGroups(
+        renamed,
+        frame('custom_field_option.updated', {
+          field_def_id: fieldId,
+          change: 'updated',
+          option: { id: 'option-a', name: 'Platform', is_active: false },
+        }),
+        fieldId,
+      ),
+    ).toEqual(base);
+
+    expect(
+      applyCustomFieldDefinitionToGroups(
+        created,
+        frame('custom_field.updated', {
+          id: fieldId,
+          name: 'Teams',
+          change: 'updated',
+          is_active: false,
+        }),
+        fieldId,
+      ),
+    ).toEqual([]);
+    expect(
+      applyCustomFieldDefinitionToGroups(
+        created,
+        frame('custom_field.updated', { id: fieldId, change: 'deleted' }),
+        fieldId,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('二维定义帧局部维护 skeleton', () => {
+  it('label created/updated/deleted 同步双轴骨架、卡片快照与孤儿 none cell', () => {
+    const labelled = card({
+      labels: [{ id: 'label-a', name: 'Backend', color: '#111111' }],
+    });
+    const columns: BoardProjectionColumn[] = [
+      { key: 'label-a', label: 'Backend', count: 1, wip: null },
+      { key: NONE_KEY, label: 'No label', count: 0, wip: null },
+    ];
+    const labelLanes: BoardLane[] = [
+      {
+        key: 'label-a',
+        label: 'Backend',
+        count: 1,
+        groups: [
+          { key: 'label-a', count: 1, data: [labelled] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+      {
+        key: NONE_KEY,
+        label: 'No label',
+        count: 0,
+        groups: [
+          { key: 'label-a', count: 0, data: [] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+    ];
+    const context = { groupBy: 'label', subGroupBy: 'label', belongs: () => true };
+
+    const created = applyLabelDefinitionToLanes(
+      columns,
+      labelLanes,
+      frame('label.created', { id: 'label-b', name: 'Frontend', color: '#222222' }),
+      context,
+    );
+    expect(created.columns.map((column) => column.key)).toEqual(['label-a', 'label-b', NONE_KEY]);
+    expect(created.lanes.map((lane) => lane.key)).toEqual(['label-a', 'label-b', NONE_KEY]);
+    expect(created.lanes.find((lane) => lane.key === 'label-b')?.groups).toHaveLength(3);
+
+    const updated = applyLabelDefinitionToLanes(
+      created.columns,
+      created.lanes,
+      frame('label.updated', { id: 'label-a', name: 'Platform', color: '#abcdef' }),
+      context,
+    );
+    expect(updated.columns.find((column) => column.key === 'label-a')?.label).toBe('Platform');
+    const updatedLane = updated.lanes.find((lane) => lane.key === 'label-a');
+    expect(updatedLane?.label).toBe('Platform');
+    expect(updatedLane?.groups.find((group) => group.key === 'label-a')?.data[0]?.labels).toEqual([
+      { id: 'label-a', name: 'Platform', color: '#abcdef' },
+    ]);
+
+    const deleted = applyLabelDefinitionToLanes(
+      updated.columns,
+      updated.lanes,
+      frame('label.deleted', { id: 'label-a' }),
+      context,
+    );
+    expect(deleted.columns.map((column) => column.key)).toEqual(['label-b', NONE_KEY]);
+    expect(deleted.lanes.map((lane) => lane.key)).toEqual(['label-b', NONE_KEY]);
+    expect(
+      deleted.lanes
+        .find((lane) => lane.key === NONE_KEY)
+        ?.groups.find((group) => group.key === NONE_KEY)?.data[0],
+    ).toMatchObject({ id: 'i1', labels: [] });
+  });
+
+  it('label 非定义帧、非 label 轴及缺名称事件保持原投影引用', () => {
+    const baseLanes = lanes();
+    for (const [event, payload, context] of [
+      ['comment.created', { id: 'c1' }, LANE_CTX],
+      ['label.created', { id: 'label-a', name: 'Backend' }, LANE_CTX],
+      ['label.created', { id: 'label-a' }, { ...LANE_CTX, groupBy: 'label' }],
+      ['label.updated', { id: 'label-a' }, { ...LANE_CTX, subGroupBy: 'label' }],
+      ['label.archived', { id: 'label-a' }, { ...LANE_CTX, groupBy: 'label' }],
+    ] as const) {
+      const result = applyLabelDefinitionToLanes(
+        SWIMLANE_COLUMNS,
+        baseLanes,
+        frame(event, payload),
+        context,
+      );
+      expect(result.columns).toBe(SWIMLANE_COLUMNS);
+      expect(result.lanes).toBe(baseLanes);
+    }
+  });
+
+  it('custom option created/renamed/deleted 同步双轴，删除后孤儿落入 none cell', () => {
+    const item = card({
+      custom_field_values: [{ field_def_id: 'field-a', value_json: 'option-a' }],
+    });
+    const columns: BoardProjectionColumn[] = [
+      { key: 'option-a', label: 'Backend', count: 1, wip: null },
+      { key: NONE_KEY, label: 'No Teams', count: 0, wip: null },
+    ];
+    const customLanes: BoardLane[] = [
+      {
+        key: 'option-a',
+        label: 'Backend',
+        count: 1,
+        groups: [
+          { key: 'option-a', count: 1, data: [item] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+      {
+        key: NONE_KEY,
+        label: 'No Teams',
+        count: 0,
+        groups: [
+          { key: 'option-a', count: 0, data: [] },
+          { key: NONE_KEY, count: 0, data: [] },
+        ],
+      },
+    ];
+    const context = {
+      groupBy: 'field-a',
+      subGroupBy: 'field-a',
+      customFields: [customField('single_select')],
+      belongs: () => true,
+    };
+    const optionFrame = (change: string, option: Record<string, unknown>) =>
+      frame('custom_field_option.updated', { field_def_id: 'field-a', change, option });
+
+    const created = applyCustomFieldDefinitionToLanes(
+      columns,
+      customLanes,
+      optionFrame('created', { id: 'option-b', name: 'Frontend', is_active: true }),
+      context,
+    );
+    expect(created.columns.map((column) => [column.key, column.label])).toEqual([
+      ['option-a', 'Backend'],
+      ['option-b', 'Frontend'],
+      [NONE_KEY, 'No Teams'],
+    ]);
+    expect(created.lanes.map((lane) => lane.key)).toEqual(['option-a', 'option-b', NONE_KEY]);
+
+    const renamed = applyCustomFieldDefinitionToLanes(
+      created.columns,
+      created.lanes,
+      optionFrame('updated', { id: 'option-a', name: 'Platform', is_active: true }),
+      context,
+    );
+    expect(renamed.columns.find((column) => column.key === 'option-a')?.label).toBe('Platform');
+    expect(renamed.lanes.find((lane) => lane.key === 'option-a')?.label).toBe('Platform');
+
+    const deleted = applyCustomFieldDefinitionToLanes(
+      renamed.columns,
+      renamed.lanes,
+      optionFrame('deleted', { id: 'option-a', name: 'Platform', is_active: false }),
+      context,
+    );
+    expect(deleted.columns.map((column) => column.key)).toEqual(['option-b', NONE_KEY]);
+    expect(deleted.lanes.map((lane) => lane.key)).toEqual(['option-b', NONE_KEY]);
+    expect(
+      deleted.lanes
+        .find((lane) => lane.key === NONE_KEY)
+        ?.groups.find((group) => group.key === NONE_KEY)?.data[0]?.id,
+    ).toBe('i1');
+  });
+
+  it('custom field rename 更新 none 标签，双轴/单轴删除保持 skeleton 一致', () => {
+    const item = card({
+      custom_field_values: [{ field_def_id: 'field-a', value_json: 'option-a' }],
+    });
+    const base = singleCell(item, NONE_KEY, NONE_KEY);
+    const bothContext = {
+      groupBy: 'field-a',
+      subGroupBy: 'field-a',
+      customFields: [customField('single_select')],
+      belongs: () => true,
+    };
+    const renamed = applyCustomFieldDefinitionToLanes(
+      base.columns,
+      base.lanes,
+      frame('custom_field.updated', { id: 'field-a', name: 'Discipline' }),
+      bothContext,
+    );
+    expect(renamed.columns[0]?.label).toBe('No Discipline');
+    expect(renamed.lanes[0]?.label).toBe('No Discipline');
+
+    const removedBoth = applyCustomFieldDefinitionToLanes(
+      renamed.columns,
+      renamed.lanes,
+      frame('custom_field.updated', { id: 'field-a', change: 'deleted' }),
+      bothContext,
+    );
+    expect(removedBoth).toEqual({ columns: [], lanes: [] });
+
+    const removedColumn = applyCustomFieldDefinitionToLanes(
+      SWIMLANE_COLUMNS,
+      lanes(),
+      frame('custom_field.updated', { id: 'field-a', is_active: false }),
+      { ...LANE_CTX, groupBy: 'field-a' },
+    );
+    expect(removedColumn.columns).toEqual([]);
+    expect(removedColumn.lanes.every((lane) => lane.count === 0 && lane.groups.length === 0)).toBe(
+      true,
+    );
+
+    const removedLane = applyCustomFieldDefinitionToLanes(
+      SWIMLANE_COLUMNS,
+      lanes(),
+      frame('custom_field.updated', { id: 'field-a', change: 'deleted' }),
+      { ...LANE_CTX, subGroupBy: 'field-a' },
+    );
+    expect(removedLane.columns.every((column) => column.count === 0)).toBe(true);
+    expect(removedLane.lanes).toEqual([]);
+  });
+
+  it('不相关或不完整 custom definition 帧不扰动二维投影', () => {
+    const baseLanes = lanes();
+    for (const event of [
+      frame('custom_field.updated', { id: 'other', name: 'Other' }),
+      frame('custom_field_option.updated', { field_def_id: 'other', id: 'option-a' }),
+      frame('custom_field_option.updated', { field_def_id: 'field-a', option: { name: 'No id' } }),
+      frame('custom_field_option.updated', { field_def_id: 'field-a', id: 'option-a' }),
+    ]) {
+      const result = applyCustomFieldDefinitionToLanes(SWIMLANE_COLUMNS, baseLanes, event, {
+        ...LANE_CTX,
+        groupBy: 'field-a',
+      });
+      expect(result.columns).toBe(SWIMLANE_COLUMNS);
+      expect(result.lanes).toBe(baseLanes);
+    }
   });
 });
 
@@ -155,6 +774,17 @@ describe('applyBoardFrame 单卡增量(§3.5)', () => {
     const todo = result.groups.find((g) => g.key === 'todo');
     expect(todo?.data[0]?.priority).toBe('urgent');
     expect(todo?.count).toBe(1);
+  });
+
+  it('issue.labels_changed immediately updates the existing card label cache', () => {
+    const labels = [{ id: 'lbl-bug', name: 'bug', color: '#e5484d' }];
+    const result = applyBoardFrame(
+      groups(),
+      frame('issue.labels_changed', { issue_id: 'i1', labels }),
+      CTX,
+    );
+    expect(result.groups.find((group) => group.key === 'todo')?.data[0]?.labels).toEqual(labels);
+    expect(result.refetch).toBe(false);
   });
 
   it('不再 belongs → 从视图移除', () => {
@@ -689,7 +1319,7 @@ describe('cardBelongsToView 本地重判(§3.5)', () => {
     expect(cardBelongsToView(card(), range)).toBe(true);
   });
 
-  it('not_in 与不支持字段/label/q/自定义字段 → 保守', () => {
+  it('not_in/label 可本地评估，不支持字段与自定义字段仍保守', () => {
     const notIn = {
       operator: 'AND',
       conditions: [{ field: 'priority', op: 'not_in', value: ['low'] }],
@@ -702,7 +1332,10 @@ describe('cardBelongsToView 本地重判(§3.5)', () => {
     };
     expect(cardBelongsToView(card(), unknown)).toBe(true);
     const label = { operator: 'AND', conditions: [{ field: 'label', op: 'in', value: ['l'] }] };
-    expect(cardBelongsToView(card(), label)).toBe(true);
+    expect(cardBelongsToView(card(), label)).toBe(false);
+    expect(
+      cardBelongsToView(card({ labels: [{ id: 'l', name: 'bug', color: '#e5484d' }] }), label),
+    ).toBe(true);
     const custom = {
       operator: 'AND',
       conditions: [{ field_kind: 'custom_field', op: 'eq', value: 'x' }],

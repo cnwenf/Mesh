@@ -11,6 +11,7 @@ import type {
   CustomFieldDef,
   CustomFieldOption,
   Label,
+  LabelWithUsage,
   ListCustomFieldsParams,
   ListLabelsParams,
   UpdateCustomFieldBody,
@@ -53,8 +54,8 @@ export async function listLabels(
   client: MeshApiClient,
   workspaceId: string,
   params: ListLabelsParams = {},
-): Promise<Page<Label>> {
-  const envelope = await client.list<Label>(workspaceLabelsPath(workspaceId), {
+): Promise<Page<LabelWithUsage>> {
+  const envelope = await client.list<LabelWithUsage>(workspaceLabelsPath(workspaceId), {
     query: { project_id: params.project_id, limit: params.limit, cursor: params.cursor },
   });
   return { data: envelope.data, nextCursor: envelope.next_cursor };

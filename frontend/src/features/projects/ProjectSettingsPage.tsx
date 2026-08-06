@@ -95,6 +95,7 @@ export function ProjectSettingsPage(): React.JSX.Element {
     // 409 收敛:重放前先把表单对齐到服务端最新态,避免下一次保存拿陈旧 form
     // 重新 diff 把他人编辑覆盖回去(CWE-362 表单侧收敛)。
     onConflict: async (server) => {
+      setProject(server);
       setForm(formFromProject(server));
       return server;
     },
@@ -371,7 +372,7 @@ export function ProjectSettingsPage(): React.JSX.Element {
           closeLabel={t('common.close')}
         >
           <p data-testid="settings-delete-confirm-text">
-            {t('projects.detail.deleteConfirm', { name: project.name })}
+            {t('projects.detail.deleteConfirm', { name: project.name, key: project.key })}
           </p>
           <div className="mesh-projects__form-actions">
             <Button variant="secondary" onClick={() => setDeleteOpen(false)}>

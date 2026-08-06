@@ -9,7 +9,7 @@
  */
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Route, Routes } from 'react-router';
+import { Link, Route, Routes, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
@@ -59,12 +59,89 @@ const AGENT = {
   },
 };
 
+const AGENT_DETAIL = {
+  id: 'agt-9',
+  member: null,
+  display_name: 'Code Bot',
+  name: 'Code Bot',
+  avatar_url: null,
+  role_tag: '测试工程师',
+  badge_kind: 'ai',
+  lifecycle_status: 'active',
+  visibility: 'workspace',
+  trigger_on_assign: true,
+  owner_user_id: 'usr-owner',
+  created_at: '2026-02-01T08:00:00Z',
+  updated_at: '2026-02-02T08:00:00Z',
+  slug: null,
+  bio: 'fixes code',
+  system_instructions: null,
+  model_config: { model_tier: 'balanced' },
+  default_runtime_id: 'runtime-7',
+  active_config_version_id: 'cfg-2',
+  current_version: null,
+};
+
+const AGENT_CONFIG_VERSIONS = [
+  {
+    id: 'cfg-newer-but-inactive',
+    agent_id: 'agt-9',
+    snapshot: { capability_grants: ['inactive.grant'] },
+    change_summary: 'Inactive',
+    changed_by: 'mem-owner',
+    created_at: '2026-02-03T08:00:00Z',
+  },
+  {
+    id: 'cfg-2',
+    agent_id: 'agt-9',
+    snapshot: {
+      model_config: { model_tier: 'balanced' },
+      capability_grants: ['filesystem.write', { capability: 'issues.update' }],
+    },
+    change_summary: 'Current',
+    changed_by: 'mem-owner',
+    created_at: '2026-02-02T08:00:00Z',
+  },
+];
+
+const ASSIGNED_ISSUE = {
+  id: 'issue-1',
+  workspace_id: 'ws-1',
+  project_id: null,
+  project: null,
+  identifier_namespace_key: 'TEAM',
+  number: 7,
+  identifier: 'TEAM-7',
+  title: 'Fix the build',
+  description: null,
+  status: null,
+  status_id: 'status-1',
+  state_category: 'in_progress',
+  priority: 'high',
+  assignee: null,
+  assignee_id: 'mem-h',
+  reporter: null,
+  reporter_id: null,
+  estimate: null,
+  estimate_unit: null,
+  due_date: null,
+  start_date: null,
+  milestone_id: null,
+  cycle_id: null,
+  parent_id: null,
+  position: 1,
+  completed_at: null,
+  version: 1,
+  created_at: '2026-02-01T08:00:00Z',
+  updated_at: '2026-02-03T08:00:00Z',
+};
+
 interface Recorded {
   url: string;
   init?: RequestInit;
 }
 
-function makeFetch(members: unknown[]) {
+function makeFetch(members: unknown[], issues: unknown[] = []) {
   const calls: Recorded[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -91,12 +168,23 @@ function makeFetch(members: unknown[]) {
     if (method === 'POST' && url.endsWith('/agents')) {
       return fakeResponse({ body: { data: { id: 'agt-new' } } });
     }
+    if (method === 'GET' && url.includes('/config-versions')) {
+      return fakeResponse({ body: { data: AGENT_CONFIG_VERSIONS, next_cursor: null } });
+    }
+    if (method === 'GET' && /\/agents\/agt-9(?:\?|$)/.test(url)) {
+      return fakeResponse({ body: { data: AGENT_DETAIL } });
+    }
+    if (method === 'GET' && url.includes('/issues')) {
+      return fakeResponse({ body: { data: issues, next_cursor: null } });
+    }
     if (method === 'GET' && /\/members\/[^?]/.test(url)) {
       // member detail
+      const memberId = url.match(/\/members\/([^/?]+)/)?.[1];
+      const member = members.find((item) => (item as { id?: string }).id === memberId) ?? HUMAN;
       return fakeResponse({
         body: {
           data: {
-            ...HUMAN,
+            ...(member as object),
             display_override: null,
             disabled_at: null,
             counts: { open_issues_assigned: 3 },
@@ -125,8 +213,8 @@ function makeFetch(members: unknown[]) {
   return { impl, calls };
 }
 
-function stub(members: unknown[]) {
-  const { impl, calls } = makeFetch(members);
+function stub(members: unknown[], issues: unknown[] = []) {
+  const { impl, calls } = makeFetch(members, issues);
   vi.stubGlobal('fetch', impl);
   return calls;
 }
@@ -140,6 +228,19 @@ async function waitForTable(): Promise<HTMLElement> {
 async function openRowMenu(user: ReturnType<typeof userEvent.setup>, id: string): Promise<void> {
   const row = screen.getByTestId(`member-open-${id}`).closest('tr') as HTMLElement;
   await user.click(within(row).getByRole('button', { name: 'Row actions' }));
+}
+
+function WorkspaceSwitchHarness(props: { readonly client: unknown }): React.JSX.Element {
+  const { workspaceSlug = 'alpha' } = useParams<{ workspaceSlug: string }>();
+  const nextSlug = workspaceSlug === 'alpha' ? 'beta' : 'alpha';
+  return (
+    <>
+      <Link to={`/w/${nextSlug}/members`}>Switch workspace</Link>
+      <WorkspaceProvider slug={workspaceSlug} client={props.client as never}>
+        <MembersPage />
+      </WorkspaceProvider>
+    </>
+  );
 }
 
 describe('MembersPage', () => {
@@ -162,6 +263,10 @@ describe('MembersPage', () => {
     expect(
       screen.getByTestId('ai-badge-mem-a').querySelector('.mesh-badge--accent'),
     ).not.toBeNull();
+    expect(screen.getAllByRole('img', { name: 'Code Bot' })[0]).toHaveClass('mesh-avatar--agent');
+    expect(
+      screen.getAllByRole('tooltip').some((tooltip) => tooltip.textContent === 'fixes code'),
+    ).toBe(true);
     // 标题为「成员」(en: Members),h1 用 title-1 工具类
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Members');
   });
@@ -392,7 +497,7 @@ describe('MembersPage', () => {
 
   it('点击成员打开详情抽屉(经 GET 详情,展示名下进行中 issue)', async () => {
     const user = userEvent.setup();
-    stub([HUMAN, AGENT]);
+    const calls = stub([HUMAN, AGENT], [ASSIGNED_ISSUE]);
     renderWithProviders(<MembersPage />, { route: '/members' });
     await waitForTable();
 
@@ -400,6 +505,216 @@ describe('MembersPage', () => {
     const drawer = await screen.findByTestId('member-drawer');
     expect(screen.getByRole('dialog', { name: 'Jane Doe' })).toBeInTheDocument();
     expect(drawer).toHaveTextContent('3'); // open_issues_assigned
+    expect(drawer).toHaveTextContent('TEAM-7 · Fix the build');
+    expect(drawer).toHaveTextContent('Recently updated assigned issues');
+    expect(
+      calls.some(
+        (call) =>
+          call.url.includes('/issues') &&
+          call.url.includes('assignee_id=mem-h') &&
+          call.url.includes('limit=100'),
+      ),
+    ).toBe(true);
+  });
+
+  it('agent 也在成员详情抽屉展示运行态、能力与配置入口', async () => {
+    const user = userEvent.setup();
+    const calls = stub([AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await user.click(screen.getByTestId('member-open-mem-a'));
+    const drawer = await screen.findByTestId('member-drawer');
+    expect(drawer).toHaveTextContent('fixes code');
+    expect(screen.getByTestId('member-detail-runtime')).toBeInTheDocument();
+    expect(screen.getByTestId('member-detail-model-tier')).toHaveTextContent('Balanced');
+    expect(screen.getByTestId('member-detail-default-runtime')).toHaveTextContent('runtime-7');
+    expect(screen.getByTestId('member-detail-capabilities')).toHaveTextContent('filesystem.write');
+    expect(screen.getByTestId('member-detail-capabilities')).toHaveTextContent('issues.update');
+    expect(screen.getByTestId('member-detail-capabilities')).not.toHaveTextContent(
+      'inactive.grant',
+    );
+    expect(
+      calls.some(
+        (call) => call.url.includes('/agents/agt-9') && !call.url.includes('/config-versions'),
+      ),
+    ).toBe(true);
+    expect(calls.some((call) => call.url.includes('/agents/agt-9/config-versions'))).toBe(true);
+    expect(
+      calls.some((call) => call.url.includes('/issues') && call.url.includes('assignee_id=mem-a')),
+    ).toBe(true);
+    expect(screen.getByRole('link', { name: 'Open agent settings' })).toHaveAttribute(
+      'href',
+      '/w/team/agents/agt-9',
+    );
+  });
+
+  it('agent 成员抽屉复用 presence 实时帧呈现忙碌运行态', async () => {
+    const user = userEvent.setup();
+    const rt = makeFakeRealtime();
+    stub([AGENT]);
+    renderWithProviders(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试替身
+      <RealtimeContext.Provider value={rt as any}>
+        <MembersPage />
+      </RealtimeContext.Provider>,
+      { route: '/members' },
+    );
+    await waitForTable();
+    await waitFor(() => expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence'));
+    act(() => {
+      rt.emit({
+        channel: 'agent:agt-9:presence',
+        payload: { running: 1, queued: 0, awaiting_approval: 0 },
+      });
+    });
+
+    await user.click(screen.getByTestId('member-open-mem-a'));
+    expect(
+      (await screen.findByTestId('member-detail-runtime')).querySelector('[data-state="running"]'),
+    ).not.toBeNull();
+  });
+
+  it('关闭成员详情抽屉会中止仍在进行的详情请求', async () => {
+    const user = userEvent.setup();
+    let detailSignal: AbortSignal | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/users/me')) return Promise.resolve(fakeResponse({ body: { data: ME } }));
+        if (url.includes('/members/mem-h')) {
+          detailSignal = init?.signal ?? null;
+          return new Promise<Response>(() => undefined);
+        }
+        if (url.includes('/members')) {
+          return Promise.resolve(fakeResponse({ body: { data: [HUMAN], next_cursor: null } }));
+        }
+        return Promise.resolve(fakeResponse({ status: 404 }));
+      }) as typeof fetch,
+    );
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await user.click(screen.getByTestId('member-open-mem-h'));
+    expect(await screen.findByRole('dialog', { name: 'Jane Doe' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(detailSignal).not.toBeNull();
+    expect((detailSignal as unknown as AbortSignal).aborted).toBe(true);
+  });
+
+  it('成员主详情读取失败时显示可重试错误态并可恢复', async () => {
+    const user = userEvent.setup();
+    let detailCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+        if (url.includes('/issues')) {
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        }
+        if (url.includes('/members/mem-h')) {
+          detailCalls += 1;
+          return detailCalls === 1
+            ? fakeResponse({
+                status: 500,
+                body: { error: { code: 'internal_error', message: 'failed' } },
+              })
+            : fakeResponse({
+                body: {
+                  data: {
+                    ...HUMAN,
+                    display_override: null,
+                    disabled_at: null,
+                    counts: { open_issues_assigned: 3 },
+                  },
+                },
+              });
+        }
+        if (url.includes('/members')) {
+          return fakeResponse({ body: { data: [HUMAN], next_cursor: null } });
+        }
+        return fakeResponse({ status: 404 });
+      }) as typeof fetch,
+    );
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await user.click(screen.getByTestId('member-open-mem-h'));
+    const dialog = await screen.findByRole('dialog', { name: 'Jane Doe' });
+    expect(await within(dialog).findByText('Something went wrong')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(detailCalls).toBe(2));
+    expect(within(dialog).queryByText('Something went wrong')).toBeNull();
+    expect(within(dialog).getByText('3')).toBeInTheDocument();
+  });
+
+  it('切换工作区时关闭旧成员抽屉并中止旧租户请求', async () => {
+    const user = userEvent.setup();
+    let detailSignal: AbortSignal | null = null;
+    const memberships = [
+      { ...ME.memberships[0], workspace_id: 'ws-alpha', workspace_slug: 'alpha' },
+      { ...ME.memberships[0], workspace_id: 'ws-beta', workspace_slug: 'beta' },
+    ];
+    const providerClient = {
+      request: vi.fn(async (_method: string, path: string) => {
+        const slug = path.endsWith('/beta') ? 'beta' : 'alpha';
+        return {
+          id: `ws-${slug}`,
+          name: slug,
+          slug,
+          logo_url: null,
+          timezone: 'UTC',
+          settings: {},
+          my_role: 'owner',
+          created_at: '2026-08-04T00:00:00Z',
+          updated_at: '2026-08-04T00:00:00Z',
+        };
+      }),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/users/me')) {
+          return Promise.resolve(fakeResponse({ body: { data: { ...ME, memberships } } }));
+        }
+        if (url.includes('/workspaces/ws-alpha/members/mem-h')) {
+          detailSignal = init?.signal ?? null;
+          return new Promise<Response>(() => undefined);
+        }
+        if (url.includes('/issues')) {
+          return Promise.resolve(fakeResponse({ body: { data: [], next_cursor: null } }));
+        }
+        if (url.includes('/workspaces/ws-alpha/members')) {
+          return Promise.resolve(fakeResponse({ body: { data: [HUMAN], next_cursor: null } }));
+        }
+        if (url.includes('/workspaces/ws-beta/members')) {
+          return Promise.resolve(fakeResponse({ body: { data: [], next_cursor: null } }));
+        }
+        return Promise.resolve(fakeResponse({ status: 404 }));
+      }) as typeof fetch,
+    );
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/w/:workspaceSlug/members"
+          element={<WorkspaceSwitchHarness client={providerClient} />}
+        />
+      </Routes>,
+      { route: '/w/alpha/members' },
+    );
+    await waitForTable();
+
+    await user.click(screen.getByTestId('member-open-mem-h'));
+    expect(await screen.findByRole('dialog', { name: 'Jane Doe' })).toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'Switch workspace' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Jane Doe' })).toBeNull());
+    expect(detailSignal).not.toBeNull();
+    expect((detailSignal as unknown as AbortSignal).aborted).toBe(true);
   });
 
   it('停用成员行菜单含启用项,点击以 PATCH status=active 恢复', async () => {
@@ -791,6 +1106,21 @@ describe('MembersPage', () => {
       const url = String(input);
       calls.push({ url, init });
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/workspaces/ws-2/issues')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (url.includes('/workspaces/ws-2/members/mem-a')) {
+        return fakeResponse({
+          body: {
+            data: {
+              ...AGENT,
+              display_override: null,
+              disabled_at: null,
+              counts: { open_issues_assigned: 0 },
+            },
+          },
+        });
+      }
       if (url.includes('/workspaces/ws-2/members')) {
         return fakeResponse({ body: { data: [AGENT], next_cursor: null } });
       }
@@ -830,7 +1160,11 @@ describe('MembersPage', () => {
     expect(calls.some((call) => call.url.includes('/workspaces/ws-1/members'))).toBe(false);
 
     await user.click(screen.getByTestId('member-open-mem-a'));
-    expect(await screen.findByTestId('canonical-agent-route')).toBeInTheDocument();
+    expect(await screen.findByTestId('member-drawer')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open agent settings' })).toHaveAttribute(
+      'href',
+      '/w/beta/agents/agt-9',
+    );
   });
 
   it('workspace member events reload the roster and reject other channels', async () => {

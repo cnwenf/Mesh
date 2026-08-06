@@ -140,6 +140,43 @@ async def test_create_project_requires_membership(client):
     assert resp.status_code == 404  # workspace invisible to non-members
 
 
+async def test_project_key_availability_endpoint(client):
+    owner = await _register_and_login(client, "owner-key-check@corp.com")
+    ws = await _create_workspace(client, owner, "prj-key-check")
+    free = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/projects/key-availability?key=FREE",
+        headers=_auth(owner),
+    )
+    assert free.status_code == 200
+    assert free.json()["data"] == {"key": "FREE", "available": True}
+    await _create_project(client, owner, ws["id"], key="USED")
+    used = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/projects/key-availability?key=USED",
+        headers=_auth(owner),
+    )
+    assert used.status_code == 200
+    assert used.json()["data"] == {"key": "USED", "available": False}
+    created = await _create_project(client, owner, ws["id"], key="FOREVER", name="Forever")
+    deleted = await client.delete(
+        f"/api/v1/projects/{created['id']}", headers=_auth(owner)
+    )
+    assert deleted.status_code == 200
+    reserved = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/projects/key-availability?key=FOREVER",
+        headers=_auth(owner),
+    )
+    assert reserved.status_code == 200
+    assert reserved.json()["data"] == {"key": "FOREVER", "available": False}
+    for invalid_key in ("used", " USED", "USED ", ""):
+        invalid = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/projects/key-availability",
+            params={"key": invalid_key},
+            headers=_auth(owner),
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["error"]["code"] == "validation_error"
+
+
 async def test_create_project_guest_forbidden(client):
     owner = await _register_and_login(client, "owner-g@corp.com")
     ws = await _create_workspace(client, owner, "prj-g")

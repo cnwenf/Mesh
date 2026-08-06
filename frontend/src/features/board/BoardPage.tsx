@@ -33,6 +33,13 @@ import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import type { RealtimeEventFrame } from '../../types/realtime';
 import { getIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
+import {
+  listCustomFields,
+  projectChannel,
+  workspaceCustomFieldsChannel,
+  workspaceLabelsChannel,
+} from '../labels/api';
+import type { CustomFieldDef } from '../labels/types';
 import { fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
 import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
@@ -52,7 +59,12 @@ import { BoardSwimlanes } from './BoardSwimlanes';
 import {
   applyBoardFrame,
   applyBoardLaneFrame,
+  applyCustomFieldDefinitionToGroups,
+  applyCustomFieldDefinitionToLanes,
+  applyLabelDefinitionToGroups,
+  applyLabelDefinitionToLanes,
   cardBelongsToView,
+  mergeBoardCardForRealtime,
   rebucketGroups,
 } from './boardRealtime';
 import { columnsForView, deriveColumns, isRenderableLayout } from './columns';
@@ -234,6 +246,10 @@ export function BoardPage(): React.JSX.Element {
     : standaloneWsStatus;
   const [views, setViews] = useState<readonly View[]>([]);
   const [viewsStatus, setViewsStatus] = useState<LoadStatus>('loading');
+  const [customGroupFields, setCustomGroupFields] = useState<readonly CustomFieldDef[]>([]);
+  const customGroupFieldsRef = useRef(customGroupFields);
+  customGroupFieldsRef.current = customGroupFields;
+  const [customFieldsRefresh, setCustomFieldsRefresh] = useState(0);
   const [draft, setDraft] = useState<ViewDraft | null>(null);
   const [panel, setPanel] = useState<PanelKey | null>(null);
   const [busy, setBusy] = useState(false);
@@ -244,10 +260,12 @@ export function BoardPage(): React.JSX.Element {
   const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
   const [boardLanes, setBoardLanes] = useState<readonly BoardLane[]>([]);
   const [swimlaneColumns, setSwimlaneColumns] = useState<readonly BoardProjectionColumn[]>([]);
+  const [loadedGroupBy, setLoadedGroupBy] = useState<GroupByField>('state_category');
   const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>(
     {},
   );
   const [boardStatus, setBoardStatus] = useState<LoadStatus>('loading');
+  const [multiValueAxis, setMultiValueAxis] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [movePreview, setMovePreview] = useState<{
     plan: MovePlan;
@@ -418,8 +436,11 @@ export function BoardPage(): React.JSX.Element {
   // 已加载卡片按生效 group_by 本地重分桶(§4.2 分组切换即时反映);
   // 组标签由服务端按工作区 locale 本地化后下发(含无负责人/无项目列),客户端不再硬编码。
   const displayGroups = useMemo(
-    () => rebucketGroups(boardGroups, effectiveGroupBy),
-    [boardGroups, effectiveGroupBy],
+    () =>
+      effectiveGroupBy === loadedGroupBy
+        ? boardGroups
+        : rebucketGroups(boardGroups, effectiveGroupBy),
+    [boardGroups, effectiveGroupBy, loadedGroupBy],
   );
 
   const toastError = useCallback(
@@ -513,6 +534,48 @@ export function BoardPage(): React.JSX.Element {
     setDraft(selectedView === null ? null : draftFromView(selectedView));
   }, [selectedView]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setCustomGroupFields([]);
+    if (currentWorkspaceId === null || selectedView === null) return;
+    const projectId = selectedView.project_id;
+    void (async () => {
+      try {
+        const definitions: CustomFieldDef[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await listCustomFields(client, currentWorkspaceId, {
+            ...(projectId === null ? {} : { project_id: projectId }),
+            is_active: true,
+            limit: 200,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          definitions.push(...page.data);
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor !== undefined);
+        if (cancelled) return;
+        // Workspace views cannot use a project-scoped custom field as one
+        // global axis; project views receive workspace + exact-project defs.
+        const applicable =
+          projectId === null
+            ? definitions.filter((definition) => definition.project_id === null)
+            : definitions;
+        applicable.sort(
+          (left, right) =>
+            left.position - right.position ||
+            left.name.localeCompare(right.name) ||
+            left.id.localeCompare(right.id),
+        );
+        setCustomGroupFields(applicable);
+      } catch {
+        if (!cancelled) setCustomGroupFields([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, currentWorkspaceId, selectedView, customFieldsRefresh]);
+
   const selectView = useCallback(
     (nextId: string) => {
       navigate(`${routePrefixRef.current}/views/${encodeURIComponent(nextId)}`);
@@ -542,7 +605,9 @@ export function BoardPage(): React.JSX.Element {
         setBoardGroups(projection.groups);
         setBoardLanes(projection.lanes);
         setSwimlaneColumns(projection.columns);
+        setLoadedGroupBy(projection.group_by as GroupByField);
         setColumnTargetStatus(projection.column_target_status);
+        setMultiValueAxis(projection.multi_value_axis);
         setBoardStatus('ready');
       } catch (error) {
         if (seq !== loadSeqRef.current || selectedViewIdRef.current !== view.id) return;
@@ -574,6 +639,7 @@ export function BoardPage(): React.JSX.Element {
       setBoardGroups([]);
       setBoardLanes([]);
       setSwimlaneColumns([]);
+      setMultiValueAxis(false);
       setBoardStatus('loading');
       void loadBoard(selectedView);
     } else {
@@ -582,6 +648,7 @@ export function BoardPage(): React.JSX.Element {
       setBoardGroups([]);
       setBoardLanes([]);
       setSwimlaneColumns([]);
+      setMultiValueAxis(false);
       setBoardStatus('ready');
     }
   }, [selectedView, loadBoard]);
@@ -596,10 +663,15 @@ export function BoardPage(): React.JSX.Element {
     if (!isRenderableLayout(selectedView.layout)) return;
     const wsChannel = workspaceIssuesChannel(membership.workspace_id);
     const vChannel = viewChannel(selectedView.id);
+    const labelsChannel = workspaceLabelsChannel(membership.workspace_id);
+    const customFieldsChannel = workspaceCustomFieldsChannel(membership.workspace_id);
+    const channels = new Set([wsChannel, vChannel, labelsChannel, customFieldsChannel]);
+    if (selectedView.project_id !== null) channels.add(projectChannel(selectedView.project_id));
     const reconcileRequests = reconcileRequestsRef.current;
-    realtime.client.subscribe(wsChannel);
-    realtime.client.subscribe(vChannel);
+    for (const channel of channels) realtime.client.subscribe(channel);
     const reconcilePrefix = `${selectedView.id}:`;
+    const usesLabelAxis =
+      selectedView.group_by === 'label' || selectedView.sub_group_by === 'label';
     const belongsToSelectedView = (card: BoardCard): boolean =>
       (selectedView.project_id === null || card.project_id === selectedView.project_id) &&
       cardBelongsToView(card, filtersRef.current);
@@ -618,10 +690,11 @@ export function BoardPage(): React.JSX.Element {
           ) {
             return;
           }
+          const reconciledIssue = mergeBoardCardForRealtime(issue as BoardCard, sourceFrame);
           const createdFrame: RealtimeEventFrame = {
             ...sourceFrame,
             event: 'issue.created',
-            payload: { issue },
+            payload: { issue: reconciledIssue },
           };
           if (selectedView.sub_group_by !== null) {
             const result = applyBoardLaneFrame(
@@ -631,6 +704,7 @@ export function BoardPage(): React.JSX.Element {
               {
                 groupBy: selectedView.group_by ?? 'state_category',
                 subGroupBy: selectedView.sub_group_by,
+                customFields: customGroupFieldsRef.current,
                 belongs: belongsToSelectedView,
               },
             );
@@ -641,6 +715,7 @@ export function BoardPage(): React.JSX.Element {
           } else {
             const result = applyBoardFrame(boardGroupsRef.current, createdFrame, {
               groupBy: selectedView.group_by ?? 'state_category',
+              customFields: customGroupFieldsRef.current,
               belongs: belongsToSelectedView,
             });
             boardGroupsRef.current = result.groups;
@@ -656,10 +731,64 @@ export function BoardPage(): React.JSX.Element {
       })();
     };
     const offFrame = realtime.client.onFrame((frame) => {
-      if (frame.channel !== wsChannel && frame.channel !== vChannel) return;
+      if (!channels.has(frame.channel)) return;
       // 视图切换后晚到的帧属过期闭包:跳过(新视图订阅随即接管),
       // 杜绝以旧视图 id 发起多余投影请求(验收必修 1 竞态收口)。
       if (selectedViewIdRef.current !== selectedView.id) return;
+      if (frame.event.startsWith('custom_field')) {
+        setCustomFieldsRefresh((value) => value + 1);
+        if (selectedView.sub_group_by !== null) {
+          const result = applyCustomFieldDefinitionToLanes(
+            swimlaneColumnsRef.current,
+            boardLanesRef.current,
+            frame,
+            {
+              groupBy: selectedView.group_by ?? 'state_category',
+              subGroupBy: selectedView.sub_group_by,
+              customFields: customGroupFieldsRef.current,
+              belongs: belongsToSelectedView,
+            },
+          );
+          swimlaneColumnsRef.current = result.columns;
+          boardLanesRef.current = result.lanes;
+          setSwimlaneColumns(result.columns);
+          setBoardLanes(result.lanes);
+        } else if (selectedView.group_by !== null) {
+          const groups = applyCustomFieldDefinitionToGroups(
+            boardGroupsRef.current,
+            frame,
+            selectedView.group_by,
+          );
+          boardGroupsRef.current = groups;
+          setBoardGroups(groups);
+        }
+        return;
+      }
+      if (frame.event.startsWith('label.')) {
+        if (!usesLabelAxis) return;
+        if (selectedView.sub_group_by !== null) {
+          const result = applyLabelDefinitionToLanes(
+            swimlaneColumnsRef.current,
+            boardLanesRef.current,
+            frame,
+            {
+              groupBy: selectedView.group_by ?? 'state_category',
+              subGroupBy: selectedView.sub_group_by,
+              customFields: customGroupFieldsRef.current,
+              belongs: belongsToSelectedView,
+            },
+          );
+          swimlaneColumnsRef.current = result.columns;
+          boardLanesRef.current = result.lanes;
+          setSwimlaneColumns(result.columns);
+          setBoardLanes(result.lanes);
+        } else {
+          const groups = applyLabelDefinitionToGroups(boardGroupsRef.current, frame);
+          boardGroupsRef.current = groups;
+          setBoardGroups(groups);
+        }
+        return;
+      }
       if (frame.event === 'issue.deleted') {
         const id = (frame.payload as { id?: unknown }).id;
         if (typeof id === 'string') reconcileRequests.delete(`${reconcilePrefix}${id}`);
@@ -691,6 +820,7 @@ export function BoardPage(): React.JSX.Element {
           {
             groupBy: selectedView.group_by ?? 'state_category',
             subGroupBy: selectedView.sub_group_by,
+            customFields: customGroupFieldsRef.current,
             belongs: belongsToSelectedView,
           },
         );
@@ -708,6 +838,7 @@ export function BoardPage(): React.JSX.Element {
       }
       const result = applyBoardFrame(boardGroupsRef.current, frame, {
         groupBy: selectedView.group_by ?? 'state_category',
+        customFields: customGroupFieldsRef.current,
         belongs: belongsToSelectedView,
       });
       if (result.refetch) {
@@ -728,8 +859,7 @@ export function BoardPage(): React.JSX.Element {
     return () => {
       offFrame();
       offState();
-      realtime.client.unsubscribe(wsChannel);
-      realtime.client.unsubscribe(vChannel);
+      for (const channel of channels) realtime.client.unsubscribe(channel);
       for (const requestKey of reconcileRequests.keys()) {
         if (requestKey.startsWith(reconcilePrefix)) reconcileRequests.delete(requestKey);
       }
@@ -945,7 +1075,7 @@ export function BoardPage(): React.JSX.Element {
   const keyboardChangeStatus = (): void => {
     const grid = boardGridRef.current;
     const cardId = selectedCardIdRef.current;
-    if (cardId === null || selectedView === null) return;
+    if (cardId === null || selectedView === null || multiValueAxis) return;
     const fromKey = columnKeyOfCard(grid, cardId);
     if (fromKey === null) return;
     const toKey = nextColumnKey(grid, fromKey);
@@ -1182,7 +1312,7 @@ export function BoardPage(): React.JSX.Element {
     position: number,
     toSubGroupKey?: string,
   ): Promise<void> => {
-    if (selectedView === null) return;
+    if (selectedView === null || multiValueAxis) return;
     const isSwimlane = selectedView.sub_group_by !== null;
     if (isSwimlane && toSubGroupKey === undefined) return;
     const groupsSnapshot = boardGroupsRef.current;
@@ -1374,6 +1504,11 @@ export function BoardPage(): React.JSX.Element {
                 {t('board.groupBy.' + field)}
               </option>
             ))}
+            {customGroupFields.map((field) => (
+              <option key={field.id} value={field.id}>
+                {field.name}
+              </option>
+            ))}
           </Select>
           <Select
             label={t('board.subGroupByLabel')}
@@ -1392,6 +1527,11 @@ export function BoardPage(): React.JSX.Element {
             {GROUP_BY_OPTIONS.map((field) => (
               <option key={field} value={field}>
                 {t('board.groupBy.' + field)}
+              </option>
+            ))}
+            {customGroupFields.map((field) => (
+              <option key={field.id} value={field.id}>
+                {field.name}
               </option>
             ))}
           </Select>
@@ -1465,7 +1605,7 @@ export function BoardPage(): React.JSX.Element {
               collapsedColumns={draft.board_settings.collapsed_columns ?? []}
               cardFields={draft.board_settings.card_fields}
               canWrite={canWrite}
-              dragEnabled={canWrite && !dirty}
+              dragEnabled={canWrite && !dirty && !multiValueAxis}
               onToggleCollapse={toggleCollapse}
               onDropCard={(issueId, toGroupKey, position, toSubGroupKey) =>
                 void handleDropCard(issueId, toGroupKey, position, toSubGroupKey)
@@ -1482,7 +1622,7 @@ export function BoardPage(): React.JSX.Element {
               cardsByKey={cardsByKey}
               cardFields={draft.board_settings.card_fields}
               canWrite={canWrite}
-              dragEnabled={canWrite && !dirty}
+              dragEnabled={canWrite && !dirty && !multiValueAxis}
               onToggleCollapse={toggleCollapse}
               onDropCard={(issueId, toGroupKey, position) =>
                 void handleDropCard(issueId, toGroupKey, position)

@@ -24,6 +24,7 @@ import { formatDate, formatNumber, useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useShortcutRegistry } from '../../shortcuts';
 import { useSettingsStore } from '../../state/settingsStore';
+import { LabelDots } from '../labels/LabelDots';
 import { BoardCompact, useIsCompactViewport } from './BoardCompact';
 import { BoardDragLayer } from './BoardDragLayer';
 import { BoardTouchMoveSheet } from './BoardTouchMoveSheet';
@@ -88,9 +89,6 @@ export function computeDropPosition(cards: readonly BoardCard[], index: number |
 /** 列展示标签(动态分组直用服务端 label;类别/优先级走 i18n)。 */
 function resolveColumnLabel(column: BoardColumn, groupBy: string | null, t: TranslateFn): string {
   const isDynamic = groupBy !== null && groupBy !== 'state_category' && groupBy !== 'priority';
-  if (column.key === '__dynamic__') {
-    return t('board.dynamicColumnsPlaceholder', { groupBy: groupBy ?? '' });
-  }
   if (isDynamic) return column.label;
   return t(column.label);
 }
@@ -302,6 +300,7 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
         </span>
       </div>
       <span className="mesh-board__card-title">{card.title}</span>
+      {visible.has('labels') ? <LabelDots labels={card.labels ?? []} /> : null}
       {visible.has('description') && card.description ? (
         <span className="mesh-board__card-description">{card.description}</span>
       ) : null}

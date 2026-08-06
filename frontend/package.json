@@ -40,6 +40,7 @@
     "test:e2e:mes129": "playwright test -c playwright.mes129.config.ts",
     "test:e2e:mes130": "./e2e/mes130-real/run-e2e.sh",
     "test:e2e:mes130-contracts": "./e2e/mes130-real/test-contracts.sh",
+    "test:e2e:mes187": "./e2e/mes187-real/run-e2e.sh",
     "test:e2e:mes161": "playwright test -c playwright.mes161.config.ts",
     "test:e2e:mes128-contracts": "./e2e/mes128-real/test-contracts.sh"
   },

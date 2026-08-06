@@ -341,6 +341,7 @@
 
   /* 次行:状态 / 优先级 / 负责人 / 截止日 徽章带 */
   .mesh-issues__cell--status,
+  .mesh-issues__cell--labels,
   .mesh-issues__cell--priority,
   .mesh-issues__cell--assignee,
   .mesh-issues__cell--due {
@@ -694,4 +695,18 @@ textarea.mesh-issues-detail__description {
 .mesh-issues__squad-error {
   color: var(--color-danger);
   font-size: var(--font-size-sm);
+}
+.mesh-issues-detail__field-hint,
+.mesh-issues-detail__field-error {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+}
+
+.mesh-issues-detail__field-hint {
+  color: var(--color-text-muted);
+}
+
+.mesh-issues-detail__field-error {
+  color: var(--color-danger-fg);
 }

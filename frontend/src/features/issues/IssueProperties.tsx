@@ -29,6 +29,8 @@ export interface IssuePropertiesProps {
   readonly client: MeshApiClient;
   readonly realtime: RealtimeContextValue | null;
   readonly reloadKey: number;
+  readonly statusStrictMode: boolean;
+  readonly statusValidationError: string | null;
   readonly onPatch: (changes: Partial<IssueDetail>) => void;
   readonly onRequestMove: (targetProjectId: string | null) => void;
   readonly onIssueChanged: () => void;
@@ -47,10 +49,17 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
     client,
     realtime,
     reloadKey,
+    statusStrictMode,
+    statusValidationError,
     onPatch,
     onRequestMove,
     onIssueChanged,
   } = props;
+  const allowedTransitions = new Set(issue.status?.allowed_transitions ?? []);
+  const transitionIsDisabled = (targetId: string): boolean =>
+    statusStrictMode && targetId !== issue.status_id && !allowedTransitions.has(targetId);
+  const showAgentAssigneeHint =
+    members.find((member) => member.id === issue.assignee_id)?.member_type === 'agent';
 
   const groupedStatuses = STATE_CATEGORY_ORDER.map((category) => ({
     category,
@@ -59,22 +68,62 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
 
   return (
     <div className="mesh-issues-detail__properties">
-      <Select
-        label={t('issues.columns.status')}
-        value={issue.status_id ?? ''}
-        data-testid="issue-detail-status"
-        onChange={(event) => onPatch({ status_id: event.target.value, version: issue.version })}
-      >
-        {groupedStatuses.map((group) => (
-          <optgroup key={group.category} label={t(`issues.category.${group.category}`)}>
-            {group.items.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </Select>
+      <div className="mesh-issues-detail__status-control">
+        <Select
+          label={t('issues.columns.status')}
+          value={issue.status_id ?? ''}
+          data-testid="issue-detail-status"
+          aria-describedby={
+            statusValidationError !== null
+              ? 'issue-status-validation-error'
+              : statusStrictMode
+                ? 'issue-status-strict-hint'
+                : undefined
+          }
+          onChange={(event) => {
+            const statusId = event.target.value;
+            if (statusId === issue.status_id || transitionIsDisabled(statusId)) return;
+            onPatch({ status_id: statusId, version: issue.version });
+          }}
+        >
+          {groupedStatuses.map((group) => (
+            <optgroup key={group.category} label={t(`issues.category.${group.category}`)}>
+              {group.items.map((s) => {
+                const disabled = transitionIsDisabled(s.id);
+                return (
+                  <option
+                    key={s.id}
+                    value={s.id}
+                    disabled={disabled}
+                    title={disabled ? t('issues.strictTransitionUnavailable') : undefined}
+                  >
+                    {s.name}
+                  </option>
+                );
+              })}
+            </optgroup>
+          ))}
+        </Select>
+        {statusStrictMode ? (
+          <p
+            id="issue-status-strict-hint"
+            className="mesh-issues-detail__field-hint"
+            data-testid="issue-status-strict-hint"
+          >
+            {t('issues.strictModeHint')}
+          </p>
+        ) : null}
+        {statusValidationError !== null ? (
+          <p
+            id="issue-status-validation-error"
+            className="mesh-issues-detail__field-error"
+            role="alert"
+            data-testid="issue-status-validation-error"
+          >
+            {statusValidationError}
+          </p>
+        ) : null}
+      </div>
       <Select
         label={t('issues.priority.label')}
         value={issue.priority}
@@ -98,7 +147,9 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
         data-testid="issue-detail-assignee"
         onChange={(event) => {
           const value = event.target.value;
-          onPatch({ assignee_id: value === '' ? null : value, version: issue.version });
+          const assigneeId = value === '' ? null : value;
+          if (assigneeId === issue.assignee_id) return;
+          onPatch({ assignee_id: assigneeId, version: issue.version });
         }}
       >
         <option value="">{t('issues.unassigned')}</option>
@@ -111,6 +162,11 @@ export function IssueProperties(props: IssuePropertiesProps): React.JSX.Element 
             </option>
           ))}
       </Select>
+      {showAgentAssigneeHint ? (
+        <p className="mesh-issues-detail__field-hint" data-testid="issue-agent-assignee-hint">
+          {t('issues.agentAssigneeHint')}
+        </p>
+      ) : null}
       {/* 小队分派(§4.3-2):单一责任主体徽章 + 分派给小队入口(独立于人类负责人下拉)。 */}
       <IssueSquadAssignment
         workspaceId={issue.workspace_id}

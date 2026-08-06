@@ -313,13 +313,13 @@
 
 - [x] 名册表格：头像+名称(+类型徽章 人/agent) | 邮箱/简介 | 角色下拉 | 状态 | 加入时间 | 操作；筛选（全部/人类/AI agent/已停用）+ 搜索（依据: member.md §4.1）— 现状 ✅
 - [x] 「+邀请/添加」双 Tab 弹窗（邀请人类邮箱 / 添加 AI agent 从列表挑选）；`[ + 新建 Agent ]` 唯一 agent 创建入口（依据: member.md §4.2；agent.md §4.2）— 现状 ✅
-- [x] agent 行：AI 徽章 + 机器人头像样式 + 实时忙碌指示 + 悬停能力简介；角色下拉 owner 选项置灰（依据: member.md §4.2；agent.md §4.2）— 现状 ⬜ 待实机
-- [x] 成员详情抽屉：资料、名下进行中 issue、最近活动；agent 额外运行时状态与配置入口（依据: member.md §4.2）— 现状 ⬜ 待实机
+- [x] agent 行：AI 徽章 + 机器人头像样式 + 实时忙碌指示 + 悬停能力简介；角色下拉 owner 选项置灰（依据: member.md §4.2；agent.md §4.2）— 现状 ✅（`MembersPage.tsx`；`MembersPage.test.tsx` 覆盖 owner 禁用与 presence 五态）
+- [x] 成员详情抽屉：资料、名下进行中 issue、最近更新的已分派事项；agent 额外运行时状态、能力与配置入口（依据: member.md §4.2）— 现状 ✅（真实成员/issue/agent/config 请求；`MembersPage.test.tsx` 覆盖加载、重试、中止与工作区切换）
 - [x] 停用/移除二次确认：「是否把其名下未完成 issue 转派给…」+ 转派目标选择器（依据: member.md §4.2）— 现状 ✅（乐观更新）
 - [x] 行内改角色即时生效 + 留痕；last_owner / agent_owner_not_allowed 409 具名提示（依据: member.md §4.3）— 现状 ⬜ 待实机
 - [x] assignee 选择器（issue/看板复用）：人/agent 混列各带类型图标（依据: member.md §4.2）— 现状 ✅
 - [x] onboarding 管理员重置入口：「重置该成员上手进度」二次确认（依据: onboarding.md §4.2）— 现状 ⬜ 待实机
-- [x] 个人资料编辑：用户可更新自己的头像/昵称/时区（依据: member.md §3.1；canonical `users` 模型无 `bio`）— MES-185 已核销（`/settings/profile` 更新昵称与 HTTPS 头像地址；时区继续由 `/settings/appearance` 更新）
+- [x] 个人资料编辑：用户可更新自己的头像/昵称/时区（依据: member.md §3.1；canonical `users` 模型无 `bio`）— 现状 ✅（`/settings/profile` 支持显式 `avatar_url:null` 恢复默认并失败回滚；`ProfileSettingsSection.test.tsx`）
 - [x] guest 项目级可见性管理：按项目显式共享 read/write 的配置入口（依据: member.md member_project_access）— 现状 ⬜ 待实机
 - [x] 四组合走查：成员页 × 四组合（表格手机端降级形态）— 现状 ⬜
 
@@ -333,7 +333,7 @@
 - [x] 进度条基于 issue 完成率，悬停 done/total，project.updated 实时刷新（依据: project.md §4.2）— 现状 ⬜ 待实机
 - [x] 里程碑时间线横向时间轴，逾期标红（依据: project.md §4.2）— 现状 ✅
 - [x] 周期页：头部燃尽与点数 +「待办·未排期」区拖入排期；周期结束未完成 issue 顺延提示；auto-roll（依据: project.md §4.3）— 现状 ✅
-- [x] 创建项目 key 实时去重校验；删除二次确证明示前缀永久保留（依据: project.md §4.3）— 现状 ⬜ 待实机
+- [x] 创建项目 key 实时去重校验；删除二次确证明示前缀永久保留（依据: project.md §4.3）— 现状 ✅（可用性端点查永久注册表，创建仍以 409 为竞态权威；`CreateProjectDialog.test.tsx`、`test_project_api.py`）
 - [x] 项目状态更新流（状态更新留痕：作者+时间+说明）（依据: project.md §2.4）— 现状 ✅
 - [x] 四组合走查：项目列表/详情/周期 × 四组合 — 现状 ⬜
 
@@ -347,12 +347,12 @@
 - [x] 详情主体：富文本描述、子 issue 树（完成进度「3/5」+就地新增）、依赖列表（blocks/blocked by + 阻塞视觉提示）、活动流、评论区、附件区（依据: issue.md §4.2）— 现状 ✅
 - [x] 属性侧栏全集：assignee/reporter/priority/estimate/due/start/project/cycle/milestone/labels/自定义字段，每字段点击即编辑（依据: issue.md §4.2）— 现状 ✅
 - [x] 快速创建轻量表单（标题 + 展开更多字段，支持连续创建），`C` 键触发（依据: issue.md §4.2）— 现状 ✅
-- [x] 分派给 agent：选中 agent 浮出「保存后将自动开始工作」提示；再次选同一 assignee = no-op（依据: agent.md §4.6；README §6.9）— 现状 ⬜ 待实机
+- [x] 分派给 agent：选中 agent 浮出「保存后将自动开始工作」提示；再次选同一 assignee = no-op（依据: agent.md §4.6；README §6.9）— 现状 ✅（`IssueProperties.test.tsx` 覆盖提示、no-op 与失败回滚）
 - [x] 分派给小队：头部呈单一责任主体「leader 头像 + squad 徽章『X 小队 · leader Y 牵头』」（依据: squad.md §4.3）— 现状 ⬜ 待实机
 - [x] 跨项目迁移两步式：改 project/跨项目拖拽 → 迁移预览（映射/清除/保留清单）→ 确认单事务（依据: issue.md §3.8；README §6.14）— 现状 ✅（看板拖拽含迁移确认）
 - [x] 成环检测：父子环/依赖环就地报错不创建（依据: issue.md §4.3）— 现状 ⬜ 待实机
-- [x] 状态流转严格模式（可配「允许的下一步」）在选择器体现（依据: issue.md §3.4）— 现状 ⬜ 待实机
-- [x] 乐观并发：409 conflict 拉最新收敛无数据丢失（依据: issue.md §3.5）— 现状 ⬜ 待实机
+- [x] 状态流转严格模式（可配「允许的下一步」）在选择器体现（依据: issue.md §3.4）— 现状 ✅（非法目标禁用；409 `invalid_status_transition` 原位回滚且不重载，`IssueProperties.test.tsx` / `IssueDetailPage.test.tsx`）
+- [x] 乐观并发：409 conflict 拉最新收敛无数据丢失（依据: issue.md §3.5）— 现状 ✅（`IssueDetailPage.test.tsx` 与 `ProjectSettingsPage.test.tsx` 覆盖重取服务端快照且不盲重放陈旧变更）
 - [x] 实时更新：列表/收件箱收 issue.updated 按 id 增量合并行（非整页刷新）；WS 断 30s since 轮询（依据: issue.md §3.6）— 现状 ✅
 - [x] 智能链接：`#MES-123` 简写自动补全成链（依据: comment-inbox.md C6）— 现状 ⬜ 待实机
 - [x] 粘贴完整 issue URL 探测 + 引用卡片渲染（依据: comment-inbox.md 实现注记 9「延期项」）— 现状 ⚪ 可选（Spec 明确延期）
@@ -363,20 +363,20 @@
 页面：`/board`、`/views/:viewId`（依据: kanban.md §4）。
 
 - [x] 布局：顶部工具条（视图名|筛选|分组|排序|显示字段|保存/另存）+ 可选泳道 + 列容器横向滚动；列头（状态色+名称+计数+WIP `4/5`）+ 列底「+新增」（依据: kanban.md §4.1）— 现状 ✅
-- [x] 分组：status/priority/assignee/project/label + 泳道子分组（依据: kanban.md §4.2）— 现状 🟡（label/自定义字段分组依赖关联层门控 `projection_field_pending`）
+- [x] 分组：status/priority/assignee/project/label/自定义字段 + 泳道子分组（依据: kanban.md §4.2）— 现状 ✅（动态关联轴与二维双多值笛卡尔积已落地；`test_view_projection_service.py` / `BoardPage.projection.test.tsx`）
 - [x] 过滤构建器：多条件嵌套 AND/OR + 自定义字段 + 实时预览命中数（依据: kanban.md §4.2）— 现状 ✅
 - [x] WIP：warn=红色徽章+toast / block=落点禁用+422 弹回（依据: kanban.md §4.4）— 现状 ✅
 - [x] 拖拽换位：乐观落位 <50ms，列内排序浮点中点法（视图隔离），WIP 拦截，跨项目迁移确认（依据: kanban.md §4.3）— 现状 ✅（功能层）
 - [x] **拖拽视觉反馈**：目标列 dragover 高亮、落点占位条、卡片 ghost（依据: kanban.md §4.3）— 现状 ✅（§4 G7 已核销；原基线 ❌（零视觉反馈））
 - [x] **列底「+新增」快速建卡**：继承该列分组值，回车即现新卡片（依据: kanban.md §4.5）— 现状 ✅（§4 G7 已核销；原基线 ❌（按钮禁用，文案「arrives with the issue projection increment」））
 - [x] 视图体系：切换/保存/另存/重命名/复制/删除/设默认 + URL 同步 `/views/{id}` + 未保存改动「保存/另存/丢弃」（依据: kanban.md §4.2/§5.1）— 现状 ✅
-- [x] 卡片字段受 card_fields 控制（标签点/估点/子任务进度/assignee 头像）；列可折叠（依据: kanban.md §4.2）— MES-185 复核 🟡（当前投影已覆盖描述、项目、估算、截止日、负责人姓名和更新时间；标签、子任务进度及人/agent 类型头像仍需服务端投影增量，虚拟卡按性能契约隐藏扩展元数据）
-- [x] 实时增量合并：收 issue.* 本地重判归属单卡增删移，**禁止整板刷新**；丢弃旧于本地的事件无回退闪烁（依据: kanban.md §3.5/§5.2）— 现状 ✅
+- [x] 卡片字段受 card_fields 控制（标签点/估点/子任务进度/assignee 头像）；列可折叠（依据: kanban.md §4.2）— MES-187 复核 🟡（当前投影已覆盖描述、项目、估算、截止日、负责人姓名、更新时间与标签；子任务进度及 assignee 人/agent 类型头像仍未进入卡片投影，虚拟卡按性能契约隐藏扩展元数据）
+- [x] 实时增量合并：收 issue.* 本地重判归属单卡增删移，**禁止整板刷新**；丢弃旧于本地的事件无回退闪烁（依据: kanban.md §3.5/§5.2）— 现状 ✅（`labels_changed` / `custom_field_changed` 按 placement 集合差更新且不整板 refetch；`BoardPage.realtime.test.tsx` / `boardRealtime.test.ts`）
 - [x] **List 布局**：可配置列/列头排序/行内编辑/多选批量条（依据: kanban.md §1.2）— 现状 ✅（§4 G7 已核销；原基线 ❌（空态占位 `board.listPlaceholderTitle`））
 - [x] Timeline/Table 布局（依据: kanban.md §1.3）— 现状 ⚪ 可选（Spec 明确 YAGNI 延期，501 兜底为 board/list）
 - [x] 性能线：1000 卡片列滚动 ≥50fps（虚拟滚动）；单条实时事件本地处理 <16ms（依据: kanban.md §5.3）— 现状 🟡（§4 G7 已落地 ≥200 卡虚拟化 `VirtualColumnBody.tsx`；1000 卡 ≥50fps 与 <16ms 性能基线本期未跑，归后续性能专项）
 - [x] view.presence 协作者头像渲染（依据: kanban.md §3.5「可选」）— 现状 ⚪ 可选
-- [x] 动态分组列（分组值新增自动出现列）（依据: kanban.md 视图投影）— 现状 🟡（占位 `board.dynamicColumnsPlaceholder`）
+- [x] 动态分组列（分组值新增自动出现列）（依据: kanban.md 视图投影）— 现状 ✅（label created/updated/deleted 局部维护真实 skeleton 与列名，不整板 refetch；`BoardPage.realtime.test.tsx`）
 - [x] 四组合走查：看板 × 四组合（手机端横向滚动列 + 拖拽降级）— 现状 ✅（§4 G2 已核销；原基线 ❌（移动端未适配））
 
 ### 2.9 标签与自定义字段
@@ -385,11 +385,11 @@
 
 - [x] 标签列表：色点 | 名称 | 作用域 | 使用次数 | 操作（编辑/合并/删除）（依据: label-property.md §4.1）— 现状 ✅
 - [x] 标签选择器：输入联想 + 彩色 chip + 就地新建「新建 'xxx'」弹颜色选择；项目级标签仅对应项目联想中出现（依据: label-property.md §4.2）— 现状 ⬜ 待实机
-- [x] 标签合并 UI：选源→目标→确认影响数→执行，所有卡片色点更新（依据: label-property.md §4.4）— 现状 ⬜ 待实机
+- [x] 标签合并 UI：选源→目标→确认影响数→执行，所有卡片色点更新（依据: label-property.md §4.4）— 现状 ✅（`LabelsPanel.tsx`；`LabelsPanel.test.tsx` 覆盖影响数、同作用域目标与失败内联）
 - [x] 自定义字段 10 类型控件：text/textarea/url/number(精度)/date/datetime/single_select(带颜色)/multi_select(chip)/member(人+agent)/boolean（依据: label-property.md §4.3）— 现状 ✅
 - [x] 字段定义编辑器：选项增删改+拖拽排序+配色、必填开关、默认值、作用域、停用/激活（依据: label-property.md §4.3）— 现状 ✅
-- [x] 必填校验：状态流转到配置 category 时缺失就地阻断 `required_field_missing`（依据: label-property.md §4.5）— 现状 ⬜ 待实机
-- [x] 卡片/行标签色点紧凑呈现，多标签溢出 `+N`（依据: label-property.md §4.2）— 现状 ⬜ 待实机
+- [x] 必填校验：状态流转到配置 category 时缺失就地阻断 `required_field_missing`（依据: label-property.md §4.5）— 现状 ✅（错误详情解析真实字段名并原位阻断；`IssueProperties.test.tsx` / `IssueDetailPage.test.tsx`）
+- [x] 卡片/行标签色点紧凑呈现，多标签溢出 `+N`（依据: label-property.md §4.2）— 现状 ✅（共享 `LabelDots.tsx`；`LabelDots.test.tsx` 覆盖 `data-colour` 与 `+N`）
 - [x] 枚举选项停用后所有打开下拉的客户端即时更新（依据: label-property.md §5.3）— 现状 ⬜ 待实机（双开验证）
 - [x] 四组合走查：标签/字段设置页 × 四组合 — 现状 ⬜
 

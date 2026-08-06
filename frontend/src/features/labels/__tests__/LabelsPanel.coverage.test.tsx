@@ -3,14 +3,14 @@
  * 清理、删除取消(取消按钮 + 关闭 X)、删除/保存的非 API 错误回退、描述三态渲染
  * (null / 空串 / 非空)。realtime 经 mock 注入。
  */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MeshApiClient } from '../../../api';
 import { ToastProvider } from '../../../design';
 import { I18nProvider } from '../../../i18n';
 import { LabelsPanel } from '../LabelsPanel';
-import type { Label } from '../types';
+import type { LabelWithUsage } from '../types';
 
 const rt = vi.hoisted(() => ({
   frameCb: null as null | ((frame: { channel: string; event: string }) => void),
@@ -31,7 +31,7 @@ vi.mock('../../../shell/AppShell', () => ({
   }),
 }));
 
-function labelOf(overrides: Partial<Label> = {}): Label {
+function labelOf(overrides: Partial<LabelWithUsage> = {}): LabelWithUsage {
   return {
     id: 'lbl-1',
     workspace_id: 'ws-1',
@@ -40,13 +40,14 @@ function labelOf(overrides: Partial<Label> = {}): Label {
     color: '#e5484d',
     description: null,
     scope: 'workspace',
+    issue_count: 0,
     created_at: '2026-07-26T00:00:00Z',
     updated_at: '2026-07-26T00:00:00Z',
     ...overrides,
   };
 }
 
-function stub(labels: readonly Label[], requestImpl?: ReturnType<typeof vi.fn>) {
+function stub(labels: readonly LabelWithUsage[], requestImpl?: ReturnType<typeof vi.fn>) {
   const list = vi.fn().mockResolvedValue({ data: labels, next_cursor: null });
   const request = requestImpl ?? vi.fn().mockResolvedValue({});
   return { client: { list, request } as unknown as MeshApiClient, request, list };
@@ -54,7 +55,10 @@ function stub(labels: readonly Label[], requestImpl?: ReturnType<typeof vi.fn>) 
 
 function renderPanel(handle: ReturnType<typeof stub>, projectId?: string) {
   return render(
-    <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+    <I18nProvider
+      workspaceDefaultLocale={null}
+      reporter={{ report: () => undefined, reported: [] }}
+    >
       <ToastProvider regionLabel="notifications">
         <LabelsPanel client={handle.client} workspaceId="ws-1" projectId={projectId} />
       </ToastProvider>
@@ -77,10 +81,14 @@ describe('LabelsPanel coverage', () => {
     expect(rt.subscribe).toHaveBeenCalledWith('workspace:ws-1:labels');
     expect(rt.subscribe).toHaveBeenCalledWith('project:p-1');
     const before = handle.list.mock.calls.length;
-    rt.frameCb?.({ channel: 'workspace:ws-1:labels', event: 'label.updated' });
+    act(() => {
+      rt.frameCb?.({ channel: 'workspace:ws-1:labels', event: 'label.updated' });
+    });
     await waitFor(() => expect(handle.list.mock.calls.length).toBeGreaterThan(before));
     const after = handle.list.mock.calls.length;
-    rt.frameCb?.({ channel: 'workspace:ws-1:custom_fields', event: 'custom_field.updated' });
+    act(() => {
+      rt.frameCb?.({ channel: 'workspace:ws-1:custom_fields', event: 'custom_field.updated' });
+    });
     await waitFor(() => expect(handle.list.mock.calls.length).toBe(after));
     view.unmount();
     expect(rt.off).toHaveBeenCalled();

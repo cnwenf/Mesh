@@ -6,7 +6,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { MeshApiClient } from '../../api';
 import { MeshApiError, errorToI18nKey } from '../../api';
-import { Button, Dialog, EmptyState, ErrorState, IconButton, Input, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import {
@@ -18,7 +28,8 @@ import {
   workspaceLabelsChannel,
 } from './api';
 import { ColorPicker, isValidHexColor } from './ColorPicker';
-import type { Label } from './types';
+import { mergeLabel } from './associationApi';
+import type { Label, LabelWithUsage } from './types';
 
 interface LabelsPanelProps {
   readonly client: MeshApiClient;
@@ -44,8 +55,8 @@ async function fetchAllLabels(
   client: MeshApiClient,
   workspaceId: string,
   projectId?: string,
-): Promise<readonly Label[]> {
-  const collected: Label[] = [];
+): Promise<readonly LabelWithUsage[]> {
+  const collected: LabelWithUsage[] = [];
   let cursor: string | null = null;
   do {
     const page = await listLabels(client, workspaceId, {
@@ -59,13 +70,20 @@ async function fetchAllLabels(
   return collected;
 }
 
+/** Project-private targets may only receive a source from that same project. */
+function isSafeMergeTarget(source: Label, target: Label): boolean {
+  if (source.id === target.id) return false;
+  if (target.project_id === null) return true;
+  return source.project_id !== null && source.project_id === target.project_id;
+}
+
 export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
   const { client, workspaceId, projectId } = props;
   const t = useT();
   const { addToast } = useToast();
   const realtime = useRealtimeContext();
 
-  const [labels, setLabels] = useState<readonly Label[] | null>(null);
+  const [labels, setLabels] = useState<readonly LabelWithUsage[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
@@ -77,6 +95,10 @@ export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
 
   const [deleting, setDeleting] = useState<Label | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [mergeSource, setMergeSource] = useState<LabelWithUsage | null>(null);
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [isMerging, setIsMerging] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((tick) => tick + 1), []);
 
@@ -189,6 +211,42 @@ export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
     }
   };
 
+  const openMerge = (source: LabelWithUsage): void => {
+    setMergeSource(source);
+    setMergeTargetId('');
+    setMergeError(null);
+  };
+
+  const closeMerge = (): void => {
+    if (isMerging) return;
+    setMergeSource(null);
+    setMergeTargetId('');
+    setMergeError(null);
+  };
+
+  const handleMerge = async (): Promise<void> => {
+    if (mergeSource === null || mergeTargetId === '') return;
+    setIsMerging(true);
+    setMergeError(null);
+    try {
+      const result = await mergeLabel(client, mergeSource.id, mergeTargetId);
+      addToast(
+        t('labels.mergeSuccess', {
+          count: result.merged_issue_count,
+          target: result.target_label.name,
+        }),
+        { tone: 'success', closeLabel: t('common.close') },
+      );
+      setMergeSource(null);
+      setMergeTargetId('');
+      refresh();
+    } catch (err) {
+      setMergeError(t(err instanceof MeshApiError ? errorToI18nKey(err) : 'error.unknown'));
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
   const dialogTitle =
     dialogMode === 'create' ? t('labels.dialog.createTitle') : t('labels.dialog.editTitle');
 
@@ -229,7 +287,12 @@ export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
                 <span className="mesh-labels__desc">{label.description}</span>
               ) : null}
               <span className="mesh-labels__scope">
-                {label.scope === 'workspace' ? t('labels.scopeWorkspace') : t('labels.scopeProject')}
+                {label.scope === 'workspace'
+                  ? t('labels.scopeWorkspace')
+                  : t('labels.scopeProject')}
+              </span>
+              <span className="mesh-labels__usage">
+                {t('labels.issueCount', { count: label.issue_count ?? 0 })}
               </span>
               <span className="mesh-labels__actions">
                 <IconButton
@@ -240,6 +303,15 @@ export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
                   onClick={() => openEdit(label)}
                 >
                   {t('labels.editGlyph')}
+                </IconButton>
+                <IconButton
+                  label={t('labels.mergeButton', { name: label.name })}
+                  size="sm"
+                  variant="ghost"
+                  data-testid={'label-merge-' + label.name}
+                  onClick={() => openMerge(label)}
+                >
+                  {t('labels.mergeGlyph')}
                 </IconButton>
                 <IconButton
                   label={t('labels.deleteButton', { name: label.name })}
@@ -256,7 +328,12 @@ export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
         </ul>
       )}
 
-      <Dialog open={dialogMode !== 'closed'} onClose={closeDialog} title={dialogTitle} closeLabel={t('common.close')}>
+      <Dialog
+        open={dialogMode !== 'closed'}
+        onClose={closeDialog}
+        title={dialogTitle}
+        closeLabel={t('common.close')}
+      >
         <div className="mesh-labels__dialog-body">
           <Input
             label={t('labels.dialog.nameLabel')}
@@ -288,6 +365,56 @@ export function LabelsPanel(props: LabelsPanelProps): React.JSX.Element {
             </Button>
             <Button onClick={() => void handleSave()} isLoading={isSaving} data-testid="label-save">
               {t('common.save')}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={mergeSource !== null}
+        onClose={closeMerge}
+        title={t('labels.mergeTitle')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-labels__dialog-body">
+          <p data-testid="label-merge-source">
+            {t('labels.mergeSource', { name: mergeSource?.name ?? '' })}
+          </p>
+          <Select
+            label={t('labels.mergeTarget')}
+            value={mergeTargetId}
+            data-testid="label-merge-target"
+            onChange={(event) => setMergeTargetId(event.target.value)}
+          >
+            <option value="">{t('labels.mergeTargetPlaceholder')}</option>
+            {(labels ?? [])
+              .filter((label) => mergeSource !== null && isSafeMergeTarget(mergeSource, label))
+              .map((label) => (
+                <option key={label.id} value={label.id}>
+                  {label.name}
+                </option>
+              ))}
+          </Select>
+          <p data-testid="label-merge-impact">
+            {t('labels.mergeImpact', { count: mergeSource?.issue_count ?? 0 })}
+          </p>
+          {mergeError !== null ? (
+            <p role="alert" data-testid="label-merge-error">
+              {mergeError}
+            </p>
+          ) : null}
+          <div className="mesh-labels__dialog-footer">
+            <Button variant="secondary" onClick={closeMerge} disabled={isMerging}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => void handleMerge()}
+              isLoading={isMerging}
+              disabled={mergeTargetId === ''}
+              data-testid="label-merge-confirm"
+            >
+              {t('labels.mergeConfirm')}
             </Button>
           </div>
         </div>

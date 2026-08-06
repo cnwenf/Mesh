@@ -28,6 +28,7 @@ describe('fetchViewIssues(§3.2 分组整体游标)', () => {
     grouped.mockResolvedValueOnce({
       layout: 'board',
       group_by: 'state_category',
+      multi_value_axis: true,
       column_target_status: { todo: 'st_todo' },
       groups: [{ key: 'todo', label: 'Todo', count: 1, wip: null, data: [{ id: 'i1' }] }],
       next_cursor: 'c1',
@@ -37,6 +38,7 @@ describe('fetchViewIssues(§3.2 分组整体游标)', () => {
       query: { limit: 20, cursor: 'prev' },
     });
     expect(result.group_by).toBe('state_category');
+    expect(result.multi_value_axis).toBe(true);
     expect(result.column_target_status).toEqual({ todo: 'st_todo' });
     expect(result.groups[0]?.key).toBe('todo');
     expect(result.next_cursor).toBe('c1');
@@ -49,6 +51,7 @@ describe('fetchViewIssues(§3.2 分组整体游标)', () => {
     expect(result.layout).toBe('board');
     expect(result.group_by).toBe('state_category');
     expect(result.column_target_status).toEqual({});
+    expect(result.multi_value_axis).toBe(false);
     expect(result.next_cursor).toBeNull();
   });
 

@@ -2,15 +2,10 @@
  * Issue 模块实体类型(issue.md §2 / §3.3)。
  * 字段一律 snake_case(与后端信封逐字对齐);本地 UI 状态另用 camelCase。
  */
+import type { CompactLabel } from '../labels/types';
 
 export type StateCategory =
-  | 'backlog'
-  | 'todo'
-  | 'in_progress'
-  | 'in_review'
-  | 'blocked'
-  | 'done'
-  | 'cancelled';
+  'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'cancelled';
 
 export type IssuePriority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 
@@ -27,13 +22,7 @@ export const STATE_CATEGORY_ORDER: readonly StateCategory[] = [
   'cancelled',
 ];
 
-export const PRIORITY_ORDER: readonly IssuePriority[] = [
-  'urgent',
-  'high',
-  'medium',
-  'low',
-  'none',
-];
+export const PRIORITY_ORDER: readonly IssuePriority[] = ['urgent', 'high', 'medium', 'low', 'none'];
 
 /** 轻量成员引用(assignee/reporter):服务端解析显示名 + 类型快照(真源 members)。 */
 export interface IssueMemberRef {
@@ -74,6 +63,8 @@ export interface IssueSummary {
   readonly identifier: string;
   readonly title: string;
   readonly description: string | null;
+  /** 列表/实时帧携带的标签快照；旧服务响应缺失时按空数组防御。 */
+  readonly labels?: readonly CompactLabel[];
   readonly status: IssueStatusRef | null;
   readonly status_id: string;
   readonly state_category: StateCategory;

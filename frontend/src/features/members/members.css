@@ -3,14 +3,17 @@
  * 排版走 type-scale 工具类(见各元素 mesh-text-*);A-05:桌面表格 / 手机主次行卡片。
  */
 .mesh-members {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   min-block-size: 100%;
   padding: var(--space-4);
   max-inline-size: none;
+  min-inline-size: 0;
   margin-inline: 0;
   inline-size: 100%;
+  overflow-x: hidden;
   background: var(--color-surface);
 }
 
@@ -113,7 +116,10 @@
 /* 受控横向滚动容器 + 卡片表面(design-quality §7.6):窄屏表格内部横滚不溢出页面,
    首列粘住保持身份列常驻;桌面整体作为抬升卡片(表面 + 细边 + radius-lg + shadow-1)。 */
 .mesh-members__table-wrap {
+  box-sizing: border-box;
+  min-inline-size: 0;
   overflow-x: auto;
+  inline-size: 100%;
   max-inline-size: 100%;
   background: var(--color-surface);
   border: 0;
@@ -124,6 +130,7 @@
 
 .mesh-members__table {
   inline-size: 100%;
+  min-inline-size: 58rem;
   border-collapse: collapse;
 }
 
@@ -358,6 +365,50 @@
 .mesh-members__drawer-dl dd {
   margin: 0;
   color: var(--color-text);
+}
+
+.mesh-members__drawer-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-inline-size: 0;
+}
+
+.mesh-members__drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-block-start: var(--space-3);
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.mesh-members__drawer-section h3,
+.mesh-members__drawer-section p {
+  margin: 0;
+}
+
+.mesh-members__drawer-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-inline-start: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.mesh-members__drawer-list a,
+.mesh-members__drawer-config-link {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.mesh-members__drawer-list a:hover,
+.mesh-members__drawer-config-link:hover {
+  text-decoration: underline;
+}
+
+.mesh-members__drawer-config-link {
+  align-self: flex-start;
 }
 
 .mesh-members__dialog-body {

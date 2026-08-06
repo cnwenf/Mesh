@@ -2,7 +2,7 @@
 
 Real create_app() via ASGITransport against real PostgreSQL + Redis. Covers the
 README §6.14 grouped/overall-cursor envelope over the wire, group_by mapping,
-column_target_status, cross-workspace 404, and the label-grouping gate.
+column_target_status, cross-workspace 404, and dynamic label grouping.
 """
 
 from __future__ import annotations
@@ -181,14 +181,25 @@ async def test_get_view_issues_cross_workspace_not_found(client) -> None:
     assert resp.json()["error"]["code"] == "not_found"
 
 
-async def test_get_view_issues_label_group_by_gated(client) -> None:
+async def test_get_view_issues_label_group_by_returns_dynamic_skeleton(client) -> None:
     token = await _register_and_login(client, "owner-label@corp.com")
     ws = await _create_workspace(client, token, "proj-label")
     view = await _create_view(client, token, ws["id"], visibility="shared", group_by="label")
 
     resp = await client.get(f"/api/v1/views/{view['id']}/issues", headers=_auth(token))
-    assert resp.status_code == 400
-    assert resp.json()["error"]["code"] == "projection_field_pending"
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["group_by"] == "label"
+    assert payload["multi_value_axis"] is True
+    assert payload["groups"] == [
+        {
+            "key": "__none__",
+            "label": "No label",
+            "count": 0,
+            "wip": None,
+            "data": [],
+        }
+    ]
 
 
 async def test_get_view_issues_timeline_layout_501(client) -> None:
