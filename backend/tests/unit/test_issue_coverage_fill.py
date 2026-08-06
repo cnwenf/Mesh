@@ -321,8 +321,8 @@ async def test_guest_and_member_visibility_matrix(session_factory, issue_service
         await issue_service.get_issue(
             viewer=guest, workspace_id=ws.id, issue_id=uuid.UUID(plain_private_issue["id"])
         )
-    # member without project membership: 403 on private
-    with pytest.raises(ForbiddenError):
+    # member without project membership: 404 on private (LOW-S2 — no existence oracle)
+    with pytest.raises(NotFoundError):
         await issue_service.get_issue(
             viewer=member, workspace_id=ws.id, issue_id=uuid.UUID(plain_private_issue["id"])
         )

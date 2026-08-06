@@ -37,6 +37,13 @@ from dataclasses import dataclass
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mesh.agent.guardrails import (
+    SKIP_VISIBILITY_PRIVATE,
+    TriggerGuardrailConfig,
+    emit_trigger_skipped,
+    evaluate_assign_trigger,
+)
+from mesh.agent.service import WORKSPACE_AGENTS_CHANNEL
 from mesh.agent.snapshot import build_config_snapshot
 from mesh.auth.audit import write_audit
 from mesh.db.models.agent import Agent
@@ -57,6 +64,15 @@ def enqueue_idempotency_key(
 ) -> str:
     """README §6.5: sha256(agent_id | issue_id | trigger_event_id)."""
     return hashlib.sha256(f"{agent_key}|{issue_id}|{trigger_event_id}".encode()).hexdigest()
+
+
+def _mention_skip_key(
+    *, agent_member_id: uuid.UUID, issue_id: uuid.UUID, trigger_event_id: uuid.UUID
+) -> str:
+    """Stable key so outbox redelivery does not double-emit a skip event."""
+    return hashlib.sha256(
+        f"{agent_member_id}|{issue_id}|{trigger_event_id}|mention-trigger-skipped".encode()
+    ).hexdigest()
 
 
 async def agent_chain_depth(
@@ -127,6 +143,7 @@ async def enqueue_agent_executions(
     author_is_agent = author_member is not None and author_member.member_type == "agent"
     triggered: dict[uuid.UUID, uuid.UUID] = {}
     skipped: list[uuid.UUID] = []
+    agents_channel = WORKSPACE_AGENTS_CHANNEL.format(workspace_id=workspace_id)
 
     for agent in agent_mentions:
         # Self-mention never triggers: an agent cannot enqueue itself (§6.13
@@ -168,29 +185,69 @@ async def enqueue_agent_executions(
                 skipped.append(agent.id)
                 continue
 
-        agent_key = agent.agent_id or agent.id
-        # §3.7 S-09: mention path must use the same snapshot builder as
-        # assign/autopilot/squad — never enqueue with empty config.
-        config_snapshot: dict = {}
-        required_capabilities: list = []
+        # HIGH-2: the mention path passes the SAME guardrail gate as assign
+        # (agent.md §3.6 / §6.9) — lifecycle (paused/disabled/archived), roster
+        # membership and rate limit all apply to @-mentions, and a denial emits
+        # ``agent.trigger_skipped``. Chain depth stays governed by the
+        # mention-specific audit branch above, so ``chain_depth=0`` here keeps
+        # the shared gate from double-firing on it.
+        agent_row = None
         if agent.agent_id is not None:
             agent_row = await session.scalar(
                 select(Agent).where(
                     Agent.workspace_id == workspace_id, Agent.id == agent.agent_id
                 )
             )
-            if agent_row is not None:
-                mc = agent_row.model_config if isinstance(agent_row.model_config, dict) else {}
-                snapshot_parts = build_config_snapshot(
-                    agent_config_version_id=agent_row.active_config_version_id,
+        reason = await evaluate_assign_trigger(
+            session,
+            workspace_id=workspace_id,
+            agent=agent_row,
+            member=agent,
+            trigger="mention",
+            chain_depth=0,
+            config=TriggerGuardrailConfig(),
+        )
+        if reason is None and agent_row is not None and agent_row.visibility == "private":
+            # agent.md §3.5: a private agent is only triggerable by its owner.
+            author_user_id = author_member.user_id if author_member is not None else None
+            if author_user_id != agent_row.owner_user_id:
+                reason = SKIP_VISIBILITY_PRIVATE
+        if reason is not None:
+            await emit_trigger_skipped(
+                session,
+                workspace_id=workspace_id,
+                agent_id=agent.agent_id,
+                issue_id=issue_id,
+                trigger="mention",
+                reason=reason,
+                trigger_event_id=trigger_event_id,
+                channel=agents_channel,
+                idempotency_key=_mention_skip_key(
+                    agent_member_id=agent.id,
+                    issue_id=issue_id,
                     trigger_event_id=trigger_event_id,
-                    provider=mc.get("provider"),
-                    model=mc.get("model"),
-                    effort=mc.get("reasoning_effort"),
-                    system_instructions=agent_row.system_instructions,
-                )
-                config_snapshot = snapshot_parts["config_snapshot"]
-                required_capabilities = snapshot_parts["required_capabilities"]
+                ),
+            )
+            skipped.append(agent.id)
+            continue
+
+        agent_key = agent.agent_id or agent.id
+        # §3.7 S-09: mention path must use the same snapshot builder as
+        # assign/autopilot/squad — never enqueue with empty config.
+        config_snapshot: dict = {}
+        required_capabilities: list = []
+        if agent_row is not None:
+            mc = agent_row.model_config if isinstance(agent_row.model_config, dict) else {}
+            snapshot_parts = build_config_snapshot(
+                agent_config_version_id=agent_row.active_config_version_id,
+                trigger_event_id=trigger_event_id,
+                provider=mc.get("provider"),
+                model=mc.get("model"),
+                effort=mc.get("reasoning_effort"),
+                system_instructions=agent_row.system_instructions,
+            )
+            config_snapshot = snapshot_parts["config_snapshot"]
+            required_capabilities = snapshot_parts["required_capabilities"]
         enqueue_event: OutboxEvent = await emit_event(
             session,
             workspace_id=workspace_id,

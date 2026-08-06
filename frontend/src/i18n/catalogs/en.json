@@ -45,6 +45,7 @@
     "agents.triggerSkipped.rate_limited": "The agent did not start because its trigger rate limit was reached. Try again shortly.",
     "agents.triggerSkipped.trigger_on_assign_disabled": "The agent did not start because auto-start on assignment is disabled.",
     "agents.triggerSkipped.unknown": "The agent trigger was skipped by a safety rule.",
+    "agents.triggerSkipped.visibility_private": "The agent did not start because it is private and can only be triggered by its owner.",
     "agents.field.visibility": "Visibility",
     "agents.history.action": "Action",
     "agents.history.compare": "Compare with previous",

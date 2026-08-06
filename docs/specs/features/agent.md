@@ -434,7 +434,7 @@ erDiagram
 
 - 事件来源：`issue.assigned`（assignee 为 agent 且 `trigger_on_assign=true`）、`comment.created` / `comment.updated`（评论模块按 §6.9 对提及集合 diff 后产生 `mention.added` 派生事件）。**业务写库与 outbox 事件在同一事务提交**，杜绝"业务已提交但任务未入队"的永久丢失。
 - 处理器 `enqueue_agent_run(agent_id, issue_id, trigger, trigger_event_id)`（由 outbox relay 调用）：
-  1. 校验 agent 与触发护栏，被拒绝时发 `agent.trigger_skipped` 并不入队；`reason` 稳定枚为 `agent_not_found` / `lifecycle_not_active` / `member_not_active` / `trigger_on_assign_disabled` / `rate_limited` / `chain_depth_exceeded`，前端呈现契约见 §3.6；
+  1. 校验 agent 与触发护栏，被拒绝时发 `agent.trigger_skipped` 并不入队；`reason` 稳定枚为 `agent_not_found` / `lifecycle_not_active` / `member_not_active` / `trigger_on_assign_disabled` / `rate_limited` / `chain_depth_exceeded` / `visibility_private`，前端呈现契约见 §3.6；**@提及与分派共用同一护栏门**（提及路径同样校验生命周期 / 成员状态 / 频率，且 `visibility='private'` 的 agent 仅其所有者可触发，见 §3.5）；
   2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
   3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；**运行期上下文追加**（runtime.md `execution_context_appends`，如 IM `/btw` 命令，integrations.md §3.7）经心跳 `inject_context` 下行、daemon 在**下一 agent turn 边界**以不可信数据块注入当前对话（LLM 单轮不可打断；追加内容不作为指令执行，高风险动作仍走 `confirm_required`）；
   4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、`capability_grants`（**严格对象数组** `[{capability, permission}]`，由下述归一算法从绑定技能声明派生，README §6.11，**无工具主键**）、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
@@ -502,7 +502,7 @@ erDiagram
 | `workspace:{ws}:agents` | `agent.lifecycle_changed` | 暂停 / 停用 / 归档 / 恢复，含前后状态 |
 | `agent:{id}:presence` | `agent.presence` | 容量三元组「运行中 N / 排队 M / 需审批 K」（README §6.12，由 `task_executions` 聚合 + `approvals` 计数推导） |
 | `issue:{id}:runs` | `execution.queued` / `execution.started` / `execution.progress` / `execution.awaiting_approval` / `execution.completed` / `execution.failed` | 运行状态回流（事件词汇与 runtime.md 一致，均取自 README §6.7 注册表），卡片忙碌指示与进度条 |
-| `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 被生命周期、成员状态、用户开关、频率或链深护栏拒绝 |
+| `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 被生命周期、成员状态、用户开关、频率、链深或私有可见性（仅所有者可触发）护栏拒绝 |
 | `workspace:{ws}:approvals` / `execution:{id}` | `approval.created` / `approval.decided` | 高风险工具需人工确认——**统一 `approvals` 实体**（README §6.10），带内联批准 / 拒绝与过期时间 |
 
 `agent.trigger_skipped` 的 payload 固定为

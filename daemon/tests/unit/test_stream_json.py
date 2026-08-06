@@ -290,6 +290,7 @@ class TestResultRecord:
             cache_creation_tokens=4,
             cost_usd="0.015345",
             turns=1,
+            terminal=True,
         )
 
     @pytest.mark.parametrize(

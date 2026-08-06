@@ -597,3 +597,139 @@ async def test_notification_preferences_crud(env):
     rows = {row["event_type"]: row for row in put.json()["data"]}
     assert rows["all"]["quiet_hours_start"] == "22:00:00"
     assert rows["execution_finished"]["in_app"] is True
+
+
+# ---------------------------------------------------------------------------
+# MEDIUM-S1 / LOW-S2 — private-project comment visibility
+# ---------------------------------------------------------------------------
+
+
+async def _create_project(client, token, ws_id, key, **fields) -> dict:
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws_id}/projects",
+        json={"name": f"P {key}", "key": key, **fields},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["data"]
+
+
+async def _create_issue_in_project(client, token, ws_id, project_id, title="Bug") -> dict:
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws_id}/issues",
+        json={"title": title, "project_id": project_id},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["data"]
+
+
+async def test_private_project_comment_invisible_to_non_member_member(client):
+    """MEDIUM-S1: a workspace member who is NOT in a private project cannot
+    read or mutate that project's comments, even knowing the comment UUID.
+    LOW-S2: the denial is a 404 (no private-project existence oracle)."""
+    owner = await _register_and_login(client, "s1-owner@mesh.example")
+    workspace = await _create_workspace(client, owner, f"ws-{uuid.uuid4().hex[:10]}")
+    private_project = await _create_project(
+        client, owner, workspace["id"], "PRV", visibility="private"
+    )
+    issue = await _create_issue_in_project(
+        client, owner, workspace["id"], private_project["id"]
+    )
+    created = await _post_comment(client, owner, issue["id"], "secret comment")
+    assert created.status_code == 201, created.text
+    comment_id = created.json()["data"]["id"]
+
+    outsider = await _invite_accept(
+        client, owner, workspace["id"], "s1-outsider@mesh.example", role="member"
+    )
+
+    # read by UUID → 404 (not 403, not 200)
+    got = await client.get(f"/api/v1/comments/{comment_id}", headers=_auth(outsider))
+    assert got.status_code == 404
+    # thread resolve / reopen → 404
+    assert (
+        await client.post(f"/api/v1/comments/{comment_id}/resolve", headers=_auth(outsider))
+    ).status_code == 404
+    assert (
+        await client.post(f"/api/v1/comments/{comment_id}/reopen", headers=_auth(outsider))
+    ).status_code == 404
+    # reactions list / add / remove → 404
+    assert (
+        await client.get(f"/api/v1/comments/{comment_id}/reactions", headers=_auth(outsider))
+    ).status_code == 404
+    assert (
+        await client.post(
+            f"/api/v1/comments/{comment_id}/reactions",
+            json={"emoji": "👍"}, headers=_auth(outsider),
+        )
+    ).status_code == 404
+    assert (
+        await client.delete(
+            f"/api/v1/comments/{comment_id}/reactions/👍", headers=_auth(outsider)
+        )
+    ).status_code == 404
+    # replies list → 404 ; edit / delete → 404
+    assert (
+        await client.get(f"/api/v1/comments/{comment_id}/replies", headers=_auth(outsider))
+    ).status_code == 404
+    assert (
+        await client.patch(
+            f"/api/v1/comments/{comment_id}",
+            json={"body_markdown": "pwn"}, headers=_auth(outsider),
+        )
+    ).status_code == 404
+    assert (
+        await client.delete(f"/api/v1/comments/{comment_id}", headers=_auth(outsider))
+    ).status_code == 404
+    # issue-scoped comment list is also gated → 404
+    assert (
+        await client.get(f"/api/v1/issues/{issue['id']}/comments", headers=_auth(outsider))
+    ).status_code == 404
+    # the owner (workspace manager) still reads the comment fine
+    assert (
+        await client.get(f"/api/v1/comments/{comment_id}", headers=_auth(owner))
+    ).status_code == 200
+
+
+async def test_private_project_comment_invisible_to_guest(client):
+    """MEDIUM-S1: guests without a project grant also get 404 on the comment."""
+    owner = await _register_and_login(client, "s1g-owner@mesh.example")
+    workspace = await _create_workspace(client, owner, f"ws-{uuid.uuid4().hex[:10]}")
+    private_project = await _create_project(
+        client, owner, workspace["id"], "PRVG", visibility="private"
+    )
+    issue = await _create_issue_in_project(
+        client, owner, workspace["id"], private_project["id"]
+    )
+    created = await _post_comment(client, owner, issue["id"], "guest-secret")
+    comment_id = created.json()["data"]["id"]
+    guest = await _invite_accept(
+        client, owner, workspace["id"], "s1g-guest@mesh.example", role="guest"
+    )
+    assert (
+        await client.get(f"/api/v1/comments/{comment_id}", headers=_auth(guest))
+    ).status_code == 404
+    assert (
+        await client.post(f"/api/v1/comments/{comment_id}/resolve", headers=_auth(guest))
+    ).status_code == 404
+
+
+async def test_public_project_comment_visible_to_member(client):
+    """Control: comments on public-project issues stay readable by members."""
+    owner = await _register_and_login(client, "s1p-owner@mesh.example")
+    workspace = await _create_workspace(client, owner, f"ws-{uuid.uuid4().hex[:10]}")
+    public_project = await _create_project(
+        client, owner, workspace["id"], "PUB", visibility="public"
+    )
+    issue = await _create_issue_in_project(
+        client, owner, workspace["id"], public_project["id"]
+    )
+    created = await _post_comment(client, owner, issue["id"], "public comment")
+    comment_id = created.json()["data"]["id"]
+    member = await _invite_accept(
+        client, owner, workspace["id"], "s1p-member@mesh.example", role="member"
+    )
+    got = await client.get(f"/api/v1/comments/{comment_id}", headers=_auth(member))
+    assert got.status_code == 200
+    assert got.json()["data"]["body_markdown"] == "public comment"

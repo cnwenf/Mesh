@@ -333,7 +333,13 @@ class AttemptSupervisor:
                             hit_count,
                         )
                         return
-                    if _usage_regressed(usage, observed):
+                    if event.terminal and _usage_regressed(usage, observed):
+                        # HIGH-4: the monotonicity gate applies to the TERMINAL
+                        # cumulative frame only. Per-message usage frames on a
+                        # multi-turn stream are not cumulative-monotonic, so
+                        # gating them produced false isolations; spec §3.5
+                        # requires non-negative / decimal-string (checked above),
+                        # not cross-frame monotonicity, for mid-stream frames.
                         self._signal_operational_incident("usage_invariant_failed")
                         self._provider_done = True
                         await self._finalize(

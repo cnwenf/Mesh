@@ -1048,6 +1048,66 @@ async def test_group_by_state_category_overall_cursor(session_factory, issue_ser
 
 
 @pytest.mark.unit
+async def test_group_by_label_projects_multi_label_and_none_bucket(
+    session_factory, issue_service
+):
+    """HIGH-A: group_by=label projects each issue into every label group it
+    belongs to, counts the full filtered set, and lands unlabelled issues in
+    the canonical ``__none__`` bucket ordered last (issue.md §3.2)."""
+    from mesh.labels.association import IssueLabelService
+    from mesh.labels.service import LabelService
+
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    labels = LabelService(session_factory)
+    label_assoc = IssueLabelService(issue_service)
+    bug = await labels.create_label(
+        actor=owner, workspace_id=workspace.id, name="bug", color="#e5484d"
+    )
+    ux = await labels.create_label(
+        actor=owner, workspace_id=workspace.id, name="ux", color="#30a46c"
+    )
+
+    ids = {}
+    for title in ("a", "b", "c"):
+        rendered = await issue_service.create_issue(
+            actor=owner, workspace_id=workspace.id, body=CreateIssueRequest(title=title)
+        )
+        ids[title] = uuid.UUID(rendered["id"])
+    # a carries bug + ux; b carries bug; c carries no label.
+    await label_assoc.add_label(
+        actor=owner, workspace_id=workspace.id,
+        issue_id=ids["a"], label_id=uuid.UUID(bug["id"]),
+    )
+    await label_assoc.add_label(
+        actor=owner, workspace_id=workspace.id,
+        issue_id=ids["a"], label_id=uuid.UUID(ux["id"]),
+    )
+    await label_assoc.add_label(
+        actor=owner, workspace_id=workspace.id,
+        issue_id=ids["b"], label_id=uuid.UUID(bug["id"]),
+    )
+
+    result = await issue_service.list_issues(
+        viewer=owner, workspace_id=workspace.id, group_by="label"
+    )
+    assert "groups" in result and "next_cursor" in result
+    assert all("cursor" not in group for group in result["groups"])
+    by_key = {group["key"]: group for group in result["groups"]}
+    # multi-label: issue a appears in BOTH the bug and ux groups.
+    assert by_key[bug["id"]]["count"] == 2
+    assert {item["id"] for item in by_key[bug["id"]]["data"]} == {
+        str(ids["a"]), str(ids["b"])
+    }
+    assert by_key[ux["id"]]["count"] == 1
+    assert {item["id"] for item in by_key[ux["id"]]["data"]} == {str(ids["a"])}
+    # unlabelled issue lands in the canonical __none__ bucket, ordered last.
+    assert result["groups"][-1]["key"] == "__none__"
+    assert by_key["__none__"]["count"] == 1
+    assert {item["id"] for item in by_key["__none__"]["data"]} == {str(ids["c"])}
+
+
+@pytest.mark.unit
 async def test_priority_sort_semantic_order(session_factory, issue_service):
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")

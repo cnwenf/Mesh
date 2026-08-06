@@ -31,7 +31,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.auth.audit import write_audit
-from mesh.auth.rbac import assert_guest_project_visible
 from mesh.comment_inbox import subscriptions
 from mesh.comment_inbox.markdown import RenderedBody, preview_of, render_body
 from mesh.comment_inbox.mentions import enqueue_agent_executions
@@ -50,6 +49,7 @@ from mesh.errors import (
     PayloadTooLargeError,
     ValidationError,
 )
+from mesh.issue.visibility import assert_member_can_view_issue
 from mesh.member.display import resolve_display_name
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.redaction import scan_text_for_secrets
@@ -174,9 +174,10 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             issue = await self._load_issue(session, workspace_id, issue_id)
-            await assert_guest_project_visible(
-                session, member=author_member, project_id=issue.project_id
-            ) if issue.project_id is not None else None
+            if issue.project_id is not None:
+                await assert_member_can_view_issue(
+                    session, viewer=author_member, issue=issue
+                )
 
             if idempotency_key is not None:
                 existing = await session.scalar(
@@ -348,9 +349,7 @@ class CommentService:
             await set_tenant_context(session, workspace_id)
             issue = await self._load_issue(session, workspace_id, issue_id)
             if issue.project_id is not None:
-                await assert_guest_project_visible(
-                    session, member=member, project_id=issue.project_id
-                )
+                await assert_member_can_view_issue(session, viewer=member, issue=issue)
             stmt = select(Comment).where(
                 Comment.workspace_id == workspace_id,
                 Comment.issue_id == issue_id,
@@ -388,10 +387,14 @@ class CommentService:
         workspace_id: uuid.UUID,
         comment_id: uuid.UUID,
         viewer_member_id: uuid.UUID,
+        member: Member,
     ) -> dict:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
             comment = await self._find_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=member
+            )
             return await self._render_comment(
                 session, comment, viewer_member_id=viewer_member_id, with_counts=True
             )
@@ -402,6 +405,7 @@ class CommentService:
         workspace_id: uuid.UUID,
         comment_id: uuid.UUID,
         viewer_member_id: uuid.UUID,
+        member: Member,
         limit: int = 50,
         cursor: str | None = None,
     ) -> tuple[list[dict], str | None]:
@@ -410,6 +414,9 @@ class CommentService:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
             root = await self._find_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=root.issue_id, member=member
+            )
             if root.parent_id is not None:
                 raise BusinessRuleError(
                     "replies can only be listed for a thread root", code="not_thread_root"
@@ -456,6 +463,9 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             comment = await self._load_active_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=editor_member
+            )
             if comment.author_kind == "system":
                 raise ForbiddenError("system comments are read-only")
             if comment.author_id != editor_member.id and not is_manager:
@@ -617,6 +627,9 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             comment = await self._load_active_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=actor_member
+            )
             if comment.author_kind == "system":
                 raise ForbiddenError("system comments are read-only")
             if comment.author_id != actor_member.id and not is_manager:
@@ -648,6 +661,9 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             comment = await self._load_active_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=actor_member
+            )
             if comment.author_kind == "system":
                 raise ForbiddenError("system comments are read-only")
             if comment.parent_id is not None or comment.thread_root_id is not None:
@@ -732,6 +748,9 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             comment = await self._load_active_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=actor_member
+            )
             insert_stmt = (
                 pg_insert(CommentReaction)
                 .values(
@@ -775,6 +794,9 @@ class CommentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             comment = await self._load_active_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=actor_member
+            )
             result = await session.execute(
                 sa_delete(CommentReaction).where(
                     CommentReaction.workspace_id == workspace_id,
@@ -808,10 +830,14 @@ class CommentService:
         workspace_id: uuid.UUID,
         comment_id: uuid.UUID,
         viewer_member_id: uuid.UUID,
+        member: Member,
     ) -> list[dict]:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            await self._find_comment(session, workspace_id, comment_id)
+            comment = await self._find_comment(session, workspace_id, comment_id)
+            await self._assert_issue_visible(
+                session, workspace_id=workspace_id, issue_id=comment.issue_id, member=member
+            )
             return await self._reaction_aggregation(
                 session, workspace_id=workspace_id, comment_id=comment_id,
                 viewer_member_id=viewer_member_id,
@@ -875,6 +901,29 @@ class CommentService:
         if issue is None:
             raise NotFoundError(_ISSUE_NOT_FOUND)
         return issue
+
+    async def _assert_issue_visible(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        issue_id: uuid.UUID,
+        member: Member,
+    ) -> None:
+        """Issue-level read gate for comment access (MEDIUM-S1).
+
+        Single-comment paths are addressed by comment UUID and therefore bypass
+        the issue-scoped routes that already enforce project visibility. Enforce
+        the SAME visibility semantics for project-scoped issues: a private
+        project the viewer cannot see yields 404 for guests and members alike
+        (``assert_member_can_view_issue``, LOW-S2 semantics), so knowing a
+        comment UUID never leaks a private project's comments nor the project's
+        existence. Project-less issues keep the existing workspace-member
+        behaviour (no project to be private).
+        """
+        issue = await self._load_issue(session, workspace_id, issue_id)
+        if issue.project_id is not None:
+            await assert_member_can_view_issue(session, viewer=member, issue=issue)
 
     async def _find_comment(
         self, session: AsyncSession, workspace_id: uuid.UUID, comment_id: uuid.UUID

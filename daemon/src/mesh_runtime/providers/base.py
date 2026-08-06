@@ -68,7 +68,14 @@ class ToolCompleted:
 
 @dataclass(frozen=True)
 class UsageObserved:
-    """Cumulative usage (provider-reported); used for live truncation + audit."""
+    """Usage (provider-reported); used for live truncation + audit.
+
+    ``terminal`` marks the FINAL cumulative frame for the attempt (the result
+    record). Per-message frames on a multi-turn stream are NOT guaranteed to be
+    cumulative-monotonic, so the supervisor's regression gate (HIGH-4) applies
+    to the terminal frame only; every frame still satisfies the §3.5
+    non-negative / decimal-string invariants.
+    """
 
     input_tokens: int
     output_tokens: int
@@ -76,6 +83,7 @@ class UsageObserved:
     cache_creation_tokens: int = 0
     cost_usd: str = "0.000000"
     turns: int = 0  # provider-reported turn count (A3 result record carries it)
+    terminal: bool = False  # True only for the final cumulative usage frame
 
     @property
     def total_tokens(self) -> int:

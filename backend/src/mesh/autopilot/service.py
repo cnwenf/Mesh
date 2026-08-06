@@ -41,6 +41,7 @@ from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
 from mesh.outbox.service import emit_realtime
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 
 _ACTION_TYPES = frozenset(
     {"run_agent_prompt", "add_comment", "send_notification", "create_issue", "http_request"}
@@ -266,7 +267,11 @@ class AutopilotService:
             if trigger_type:
                 stmt = stmt.where(Autopilot.trigger_type == trigger_type)
             if search:
-                stmt = stmt.where(Autopilot.name.ilike(f"%{search}%"))
+                stmt = stmt.where(
+                    Autopilot.name.ilike(
+                        f"%{escape_like(search)}%", escape=LIKE_ESCAPE_CHAR
+                    )
+                )
             stmt = stmt.order_by(Autopilot.created_at.desc(), Autopilot.id.desc())
             if cursor:
                 position = decode_cursor(cursor)

@@ -9,6 +9,7 @@ const REASON_MESSAGE_KEYS = {
   trigger_on_assign_disabled: 'agents.triggerSkipped.trigger_on_assign_disabled',
   rate_limited: 'agents.triggerSkipped.rate_limited',
   chain_depth_exceeded: 'agents.triggerSkipped.chain_depth_exceeded',
+  visibility_private: 'agents.triggerSkipped.visibility_private',
 } as const;
 
 export interface AgentTriggerSkippedNotice {
