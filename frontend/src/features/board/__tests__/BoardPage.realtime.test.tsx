@@ -231,7 +231,7 @@ describe('看板实时增量合并接线', () => {
   });
 
   it('初始执行快照与终态帧驱动卡片处理中标记', async () => {
-    stub(view(), {}, [{ id: 'exec-1', issue_id: 'i1', status: 'running' }]);
+    stub(view(), {}, [], [], [{ id: 'exec-1', issue_id: 'i1', status: 'running' }]);
     const rt = makeRealtime();
     renderWithProviders(
       <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>

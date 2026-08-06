@@ -77,7 +77,6 @@ src/design/patterns/useListKeyboardSelection.ts
 src/design/ugcColorGuard.ts
 src/env.ts
 src/features/agents/__tests__/AgentWizard.test.tsx
-src/features/agents/__tests__/presence.test.tsx
 src/features/analytics/ChartFrame.tsx
 src/features/analytics/__tests__/Kpi.test.tsx
 src/features/analytics/__tests__/charts.test.tsx
@@ -211,8 +210,6 @@ src/features/projects/UpdatesPanel.tsx
 src/features/projects/__tests__/MilestonesPanel.test.tsx
 src/features/projects/__tests__/ProjectsPage.onboarding.test.tsx
 src/features/projects/__tests__/UpdatesPanel.test.tsx
-src/features/projects/api.ts
-src/features/runtimes/__tests__/ExecutionDetailPage.test.tsx
 src/features/runtimes/__tests__/RegisterRuntimeWizard.test.tsx
 src/features/runtimes/__tests__/format.test.ts
 src/features/search/__tests__/api.test.ts

@@ -711,7 +711,6 @@ textarea.mesh-issues-detail__description {
   color: var(--color-danger-fg);
 }
 
-
 /* ---- Issue 运行反查与人类监督(agent.md §4.10 / runtime.md §4.5) ---- */
 
 .mesh-issue-executions {

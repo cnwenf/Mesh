@@ -355,11 +355,14 @@ const DATA_FIXTURES: Record<Exclude<PageName, '登录' | '设置'>, DataPageFixt
       { path: `/api/v1/issues/${ISSUE_UUID}/activity`, transform: emptyList },
       { path: `/api/v1/issues/${ISSUE_UUID}/comments`, transform: emptyList },
       { path: `/api/v1/issues/${ISSUE_UUID}/attachments`, transform: emptyList },
+      // MES-188 批次②:issue 详情执行反查面板(runtime.md §4.5)——零运行
+      // 时渲染第三个 .mesh-issues-detail__empty 占位。
+      { path: '/api/v1/workspaces/ws-1/executions', transform: emptyList },
     ],
     empty: async (page) => {
       await expect(page.getByTestId('comments-empty')).toBeVisible();
       await expect(page.getByTestId('attachments-empty')).toBeVisible();
-      await expect(page.locator('.mesh-issues-detail__empty')).toHaveCount(2);
+      await expect(page.locator('.mesh-issues-detail__empty')).toHaveCount(3);
       await expect(page.getByText(/0\/0/)).toBeVisible();
     },
     longRules: [

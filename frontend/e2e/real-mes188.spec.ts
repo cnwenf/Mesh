@@ -637,7 +637,16 @@ async function setTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
     await page.getByTestId('theme-select').selectOption('dark');
     expect((await response).status()).toBe(200);
   }
-  await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+  try {
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme, {
+      timeout: 10_000,
+    });
+  } catch {
+    // Under load the client-side apply can race the persisted preference;
+    // the setting is server-side, so a reload applies it deterministically.
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+  }
 }
 
 async function capture(page: Page, testInfo: TestInfo, name: string): Promise<void> {

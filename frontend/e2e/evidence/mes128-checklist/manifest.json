@@ -2204,8 +2204,8 @@
         "desktop_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-light.png",
-          "sha256": "769ba58d9ff7fff04f384be6f881014534ea7545ac90431bce0b585c128aba81",
-          "byte_size": 112106,
+          "sha256": "b6f41834072c5d81ee1dd2c1b2f7dcd389265b4bbfae0306973e4fb6c811dbd1",
+          "byte_size": 112086,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -2226,8 +2226,8 @@
         "desktop_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-dark.png",
-          "sha256": "befcdd79f578a08020b804d112dac456693c09b037fb1e08e0c6e3a050efe6b5",
-          "byte_size": 103801,
+          "sha256": "386acd851cda0e2a46339ee8ddb519483cb8c41cc8a4ae8887d9f73e74e87df2",
+          "byte_size": 103717,
           "image": { "width": 1440, "height": 900 },
           "provenance": {
             "mode": "desktop",
@@ -2248,8 +2248,8 @@
         "mobile_light": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-light.png",
-          "sha256": "9a79096679f142a64d938b163163df26bc146e5d6135d53d83b1f8c32aec96bd",
-          "byte_size": 25431,
+          "sha256": "1a467db1b66e7c49abd13cd40c301977c7880290d8c27295f74d5b7ed0ea8e7e",
+          "byte_size": 25433,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
@@ -2270,8 +2270,8 @@
         "mobile_dark": {
           "status": "verified",
           "evidence_path": "e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-dark.png",
-          "sha256": "1b8cfdc81d481d6b72345aba634fed5c2db2412781ef539dfb35046655b00c16",
-          "byte_size": 22513,
+          "sha256": "0cdde3f3197673280fc508f46c215b2cee2769d4d2215af8928a4d75734fbf9d",
+          "byte_size": 22524,
           "image": { "width": 390, "height": 844 },
           "provenance": {
             "mode": "mobile",
