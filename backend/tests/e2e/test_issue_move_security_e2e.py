@@ -4,8 +4,10 @@
 Every case drives genuine uvicorn subprocesses over HTTP with real members
 (invited human accounts) at real roles — no mocks:
 
-- private source issue: non-project-member member → 403, guest → 404, and
-  neither response may carry a preview plan (the leak surface);
+- private source issue: non-project-member member → 404, guest → 404 (LOW-S2
+  anti-oracle convergence — a private project the viewer cannot see never
+  leaks existence), and neither response may carry a preview plan (the leak
+  surface);
 - invisible private target: member → 403, guest → 404 (confirm=false too);
 - foreign-workspace target → 404;
 - bulk unconfirmed with mixed ids → error markers ONLY for unauthorized
@@ -152,15 +154,15 @@ def _assert_envelope_no_plan(resp) -> dict:
 
 
 @pytest.mark.e2e
-async def test_move_unconfirmed_private_source_403_404_no_plan(api_client):
+async def test_move_unconfirmed_private_source_404_no_plan(api_client):
     ctx = await _security_setup(api_client, "sec-move-src")
     body = {"target_project_id": ctx["dst"], "confirm": False}
-    # non-project-member member → 403, no plan
+    # non-project-member member → 404 (LOW-S2 anti-oracle), no plan
     member_resp = await api_client.post(
         f"/api/v1/issues/{ctx['secret']['id']}/move", json=body, headers=_auth(ctx["member"])
     )
-    assert member_resp.status_code == 403
-    assert _assert_envelope_no_plan(member_resp)["code"] == "forbidden"
+    assert member_resp.status_code == 404
+    assert _assert_envelope_no_plan(member_resp)["code"] == "not_found"
     # guest → 404, no plan (invisible, not forbidden — no existence oracle)
     guest_resp = await api_client.post(
         f"/api/v1/issues/{ctx['secret']['id']}/move", json=body, headers=_auth(ctx["guest"])
@@ -190,7 +192,7 @@ async def test_move_preview_private_source_matrix_regression(api_client):
         json={"target_project_id": ctx["dst"]},
         headers=_auth(ctx["member"]),
     )
-    assert member_resp.status_code == 403
+    assert member_resp.status_code == 404
     guest_resp = await api_client.post(
         f"/api/v1/issues/{ctx['secret']['id']}/move-preview",
         json={"target_project_id": ctx["dst"]},
@@ -274,7 +276,8 @@ async def test_bulk_unconfirmed_mixed_ids_error_markers_only(api_client):
         "issue_ids": [ctx["open"]["id"], ctx["secret"]["id"]],
         "changes": {"project_id": ctx["dst"]},
     }
-    # member: own (public) issue gets a plan; the private one → forbidden
+    # member: own (public) issue gets a plan; the private one → not_found
+    # (LOW-S2 anti-oracle: a member outside the private project sees 404)
     member_resp = await api_client.post(
         "/api/v1/issues/bulk", json=body, headers=_auth(ctx["member"])
     )
@@ -283,9 +286,9 @@ async def test_bulk_unconfirmed_mixed_ids_error_markers_only(api_client):
     assert member_err["code"] == "move_confirmation_required"
     member_by_id = {p["issue_id"]: p for p in member_err["details"]["previews"]}
     assert "mapped_fields" in member_by_id[ctx["open"]["id"]]
-    forbidden_marker = member_by_id[ctx["secret"]["id"]]
-    assert forbidden_marker["error"] == "forbidden"
-    assert "mapped_fields" not in forbidden_marker and "identifier" not in forbidden_marker
+    not_found_marker = member_by_id[ctx["secret"]["id"]]
+    assert not_found_marker["error"] == "not_found"
+    assert "mapped_fields" not in not_found_marker and "identifier" not in not_found_marker
 
     # guest: the invisible issue is not_found (not forbidden — no oracle)
     guest_resp = await api_client.post(
