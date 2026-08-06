@@ -189,6 +189,12 @@ test.describe('手机可达性 @390×844', () => {
       expect(boardBox.x).toBeGreaterThanOrEqual(0);
       expect(boardBox.x + boardBox.width).toBeLessThanOrEqual(pageBox.clientWidth + 1);
     }
+    // 存证前先切换一个泳道列:证明列容器( lane tabs )整体留在视口内且可切换;
+    // 同时让本存证与 foundation 的同页存证产生确定性差异(evidence-unique 门禁)。
+    const laneTabs = page.getByRole('tablist').getByRole('tab');
+    if ((await laneTabs.count()) > 1) {
+      await laneTabs.nth(1).click();
+    }
     await page.screenshot({ path: `${EVIDENCE_DIR}/phone-board-light.png`, fullPage: true });
   });
 
