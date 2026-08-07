@@ -16,6 +16,7 @@
 - [x] B1 后端：approval_id 已在 checkpoint `3db6de95` 完成（producer + consumer + UT）；剩前端内联按钮 → 并入阶段 C 第 6 条（L206）
 - [x] C-2 L93 标签页标题 + 未读 favicon 徽标（`14e15c64`）✅ 新增 UT 16 例 + useDocumentTitle 补 3 例全绿；邻域回归 150 例全绿；typecheck/lint 净
 - [x] C-15 L513 键盘入口可发现性（`22966a11`）✅ UT 8 新增 + 邻域回归全绿；i18n 目录 version 已重算（附重算脚本）
+- [x] C-12 L252 API 契约 UI（见未完成区第 12 条注记）✅ 已提交：client 拦截层 429/Deprecation/Sunset 检测 → 契约通知总线（api/notices.ts，429 去抖 + 弃用每会话一次）→ shell/ApiNoticeToasts 桥以 i18n toast 呈现；UT 21 新增，全套 4894 例回归绿，per-file 门禁过
 
 ## 未完成
 
@@ -34,7 +35,7 @@
 9. [ ] L242 脏状态保护扩展（autopilot 编辑器/技能编辑/评论草稿）
 10. [ ] L247 批量操作 UI（issue 批量转派 + 技能 bulk UI + 成员批量转派复核）
 11. [ ] L251 Presence 前端（成员在线 + 看板谁在查看，依赖 B6）
-12. [ ] L252 API 契约 UI（429 退避提示 + Deprecation/Sunset 提示）
+12. [x] L252 API 契约 UI（429 退避提示 + Deprecation/Sunset 提示）✅ 已提交：notices 总线（429 秒数提示 + 2s 去抖；弃用头每会话一次）+ ApiNoticeToasts 桥（ToastProvider 内，App 层挂载）+ api.* 文案 3 键×2 目录（version 重算）；UT 21 例 + 全套 4894 例绿 + per-file 门禁过；e2e 走查归入阶段 D 四组合
 13. [ ] L480 小队消息着色 + 关联任务 chip
 14. [ ] L486 小队导出前端入口（后端已做）
 15. [x] L513 键盘入口一次性提示 + 顶栏占位符 ✅ 已提交 `22966a11`：KeyboardHintBanner（Banner onDismiss 通道）+ keyboardHint 本地记忆（localStorage，隐私模式降级不抛错）+ App 浮层 controls 已使用落记忆 + 顶栏占位「搜索或输入命令…（{combo}）」（formatCombo 平台感知）+ 目录 version 重算脚本；UT 8 新增 + TopBar/App/shell 回归 54+37 例全绿，i18n 125 例全绿
