@@ -218,6 +218,9 @@
     "analytics.workload.title": "负荷排行",
     "analytics.workload.typeAgent": "(agent)",
     "analytics.workload.typeHuman": "(人)",
+    "api.deprecated": "当前 API 版本即将退役——请升级 Mesh。",
+    "api.rateLimited": "请求过于频繁——请 {seconds} 秒后重试。",
+    "api.rateLimitedFallback": "请求过于频繁，请稍后再试。",
     "approvals.agentGated.hint": "为防止自我审批,审批仅对人类成员开放。",
     "approvals.agentGated.title": "Agent 无法审批",
     "approvals.approve": "批准",
@@ -2962,5 +2965,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "775b4b71"
+  "version": "eab3c931"
 }

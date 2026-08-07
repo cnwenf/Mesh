@@ -218,6 +218,9 @@
     "analytics.workload.title": "Workload",
     "analytics.workload.typeAgent": "(agent)",
     "analytics.workload.typeHuman": "(human)",
+    "api.deprecated": "This API version is being retired — please upgrade Mesh.",
+    "api.rateLimited": "Too many requests — retry in {seconds, plural, one {# second} other {# seconds}}.",
+    "api.rateLimitedFallback": "Too many requests — please try again shortly.",
     "approvals.agentGated.hint": "To prevent self-approval, only human members can review approvals.",
     "approvals.agentGated.title": "Agents can't approve",
     "approvals.approve": "Approve",
@@ -2962,5 +2965,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "331583a7"
+  "version": "69c803d1"
 }

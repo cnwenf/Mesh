@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../client';
 import { MeshApiError } from '../errors';
+import type { ApiNotice } from '../notices';
+import { onApiNotice, resetApiNoticeState } from '../notices';
 import { failingFetch, fakeResponse, headersOf, stubFetch } from './fetchStub';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -559,5 +561,105 @@ describe('401 全局兜底回调(MES-106)', () => {
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
     await expect(client.grouped('/api/v1/issues/grouped')).rejects.toBeInstanceOf(MeshApiError);
     expect(onUnauthorized).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('API 契约通知:429 退避 + Deprecation/Sunset 提示(L252)', () => {
+  beforeEach(() => {
+    resetApiNoticeState();
+  });
+
+  afterEach(() => {
+    resetApiNoticeState();
+  });
+
+  it('429 失败发出 rate_limited 通知并携带解析后的 Retry-After 秒数', async () => {
+    const notices: ApiNotice[] = [];
+    const unsubscribe = onApiNotice((notice) => {
+      notices.push(notice);
+    });
+    const { fetchImpl } = stubFetch(
+      fakeResponse({
+        status: 429,
+        body: { error: { code: 'rate_limited', message: 'slow' } },
+        headers: { 'Retry-After': '30' },
+      }),
+    );
+    await expect(makeClient(fetchImpl).request('GET', '/x')).rejects.toMatchObject({
+      status: 429,
+    });
+    expect(notices).toEqual([{ kind: 'rate_limited', retryAfterSeconds: 30 }]);
+    unsubscribe();
+  });
+
+  it('429 无 Retry-After 仍发出 rate_limited 通知(秒数 undefined)', async () => {
+    const notices: ApiNotice[] = [];
+    const unsubscribe = onApiNotice((notice) => {
+      notices.push(notice);
+    });
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ status: 429, body: { error: { code: 'rate_limited', message: 'slow' } } }),
+    );
+    await expect(makeClient(fetchImpl).request('GET', '/x')).rejects.toBeInstanceOf(MeshApiError);
+    expect(notices).toEqual([{ kind: 'rate_limited', retryAfterSeconds: undefined }]);
+    unsubscribe();
+  });
+
+  it('成功响应携带 Deprecation 头 → 发出一次 deprecated 通知;后续请求去抖不再发', async () => {
+    const notices: ApiNotice[] = [];
+    const unsubscribe = onApiNotice((notice) => {
+      notices.push(notice);
+    });
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ body: { data: {} }, headers: { Deprecation: 'true' } }),
+    );
+    const client = makeClient(fetchImpl);
+    await client.request('GET', '/x');
+    await client.request('GET', '/x');
+    expect(notices).toEqual([{ kind: 'deprecated', sunset: undefined }]);
+    unsubscribe();
+  });
+
+  it('仅携带 Sunset 头的成功响应同样触发一次性提示', async () => {
+    const notices: ApiNotice[] = [];
+    const unsubscribe = onApiNotice((notice) => {
+      notices.push(notice);
+    });
+    const { fetchImpl } = stubFetch(
+      fakeResponse({
+        body: { data: {} },
+        headers: { Sunset: 'Sun, 01 Nov 2026 00:00:00 GMT' },
+      }),
+    );
+    await makeClient(fetchImpl).request('GET', '/x');
+    expect(notices).toEqual([{ kind: 'deprecated', sunset: 'Sun, 01 Nov 2026 00:00:00 GMT' }]);
+    unsubscribe();
+  });
+
+  it('无 Deprecation/Sunset 头 → 不发 deprecated 通知', async () => {
+    const notices: ApiNotice[] = [];
+    const unsubscribe = onApiNotice((notice) => {
+      notices.push(notice);
+    });
+    const { fetchImpl } = stubFetch(fakeResponse({ body: { data: {} } }));
+    await makeClient(fetchImpl).request('GET', '/x');
+    expect(notices).toEqual([]);
+    unsubscribe();
+  });
+
+  it('列表/分组入口共享 execute 路径:契约头同样被侦测', async () => {
+    const notices: ApiNotice[] = [];
+    const unsubscribe = onApiNotice((notice) => {
+      notices.push(notice);
+    });
+    const { fetchImpl } = stubFetch(
+      fakeResponse({
+        body: { data: [], next_cursor: null },
+        headers: { Deprecation: 'true' },
+      }),
+    );
+    await makeClient(fetchImpl).list('/api/v1/issues');
+    expect(notices).toEqual([{ kind: 'deprecated', sunset: undefined }]);
+    unsubscribe();
   });
 });

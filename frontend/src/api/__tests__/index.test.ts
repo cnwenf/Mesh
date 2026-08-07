@@ -16,6 +16,9 @@ describe('api 桶导出(README §6.14/§6.5 公共符号)', () => {
     expect(api.bearerHeader).toBeTypeOf('function');
     expect(api.getToken).toBeTypeOf('function');
     expect(api.useAuthStore).toBeTypeOf('function');
+    expect(api.onApiNotice).toBeTypeOf('function');
+    expect(api.notifyRateLimited).toBeTypeOf('function');
+    expect(api.notifyDeprecation).toBeTypeOf('function');
   });
 
   it('导出常量值正确', () => {

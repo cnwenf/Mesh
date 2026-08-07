@@ -26,6 +26,7 @@ import { I18nProvider, useT } from './i18n';
 import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
 import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
+import { ApiNoticeToasts } from './shell/ApiNoticeToasts';
 import { ChatPage } from './features/chat';
 import { AgentDetailPage } from './features/agents/AgentDetailPage';
 import { ApprovalsPage } from './features/approvals/ApprovalsPage';
@@ -214,6 +215,8 @@ function ShellProviders(): React.JSX.Element {
 
   return (
     <ToastProvider regionLabel={t('a11y.notifications')}>
+      {/* L252 API 契约通知桥:429 退避 + Deprecation/Sunset 升级提示(client 拦截层 → toast) */}
+      <ApiNoticeToasts />
       <ShortcutProvider
         onOpenPalette={controls.openPalette}
         onOpenHelp={controls.openHelp}
