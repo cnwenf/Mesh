@@ -374,7 +374,7 @@ async def test_review_requested_carries_approval_id_to_payload_and_frame(env):
     notifications must carry the pending approval id end-to-end — stored
     payload snapshot AND the realtime ``notification.created`` frame — so an
     inbox row can offer inline approve/reject without a lookup."""
-    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    factory, workspace = env["factory"], env["workspace"]
     approval_id = uuid.uuid4()
     execution_id = uuid.uuid4()
     # issue_id omitted on purpose: implicit issue routing (reporter/assignee) is
@@ -405,7 +405,7 @@ async def test_review_requested_carries_approval_id_to_payload_and_frame(env):
 async def test_review_requested_aggregation_refreshes_approval_id(env):
     """A re-requested approval merged into the 60 s window refreshes the
     approval id so inline actions address the latest pending approval."""
-    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    factory, workspace = env["factory"], env["workspace"]
     execution_id = uuid.uuid4()
     group = f"execution:{execution_id}:approval"
     first_approval = uuid.uuid4()
