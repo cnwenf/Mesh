@@ -627,6 +627,7 @@
     "board.emptyDescription": "Create your first view to configure a board projection of your issues.",
     "board.emptyTitle": "No views yet",
     "board.expandColumn": "Expand column {name}",
+    "board.exportView": "Export this view",
     "board.filterAddCondition": "Add condition",
     "board.filterAddGroup": "Add group",
     "board.filterButton": "Filter",
@@ -978,6 +979,8 @@
     "dataJobs.export.scopeLabel": "Scope",
     "dataJobs.export.submit": "Start export",
     "dataJobs.export.title": "Export data",
+    "dataJobs.export.tooLargeBody": "About {estimate} rows match, above the {maxRows} row limit. Narrow the scope or add filters, then try again.",
+    "dataJobs.export.tooLargeDismiss": "Got it",
     "dataJobs.import.back": "Back",
     "dataJobs.import.confirm": "Confirm import",
     "dataJobs.import.confirmSummary": "Import {importable} rows; {skipped} rows will be skipped.",
@@ -1017,6 +1020,7 @@
     "dataJobs.page.exportProject": "Export this project",
     "dataJobs.page.importButton": "Import data",
     "dataJobs.page.importProject": "Import into this project",
+    "dataJobs.page.liveProgress": "● {succeeded}/{total}",
     "dataJobs.page.loadError": "Failed to load data jobs",
     "dataJobs.page.loading": "Loading data jobs…",
     "dataJobs.page.rowsExport": "{total} rows",
@@ -2113,6 +2117,7 @@
     "projects.detail.deleted": "Project deleted.",
     "projects.detail.deleteSubmit": "Delete",
     "projects.detail.deleteTitle": "Delete project",
+    "projects.detail.moreActions": "More project actions",
     "projects.detail.noDescription": "No description yet.",
     "projects.detail.settings": "Settings",
     "projects.detail.unarchive": "Unarchive",
@@ -2999,5 +3004,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "9f96a64e"
+  "version": "cad297c1"
 }

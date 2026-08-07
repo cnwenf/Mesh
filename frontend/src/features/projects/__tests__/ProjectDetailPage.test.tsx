@@ -285,18 +285,20 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('project-detail-header')).toBeNull();
   });
 
-  it('opens and closes project export and import dialogs', async () => {
+  it('opens and closes project export and import dialogs from the ⋯ menu (L543)', async () => {
     stubFetch();
     const user = userEvent.setup();
     renderDetail();
     await screen.findByText('Apollo');
 
-    await user.click(screen.getByTestId('export-project-button'));
+    await user.click(screen.getByRole('button', { name: 'More project actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Export this project' }));
     const exportDialog = await screen.findByRole('dialog', { name: 'Export data' });
     await user.click(within(exportDialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Export data' })).toBeNull());
 
-    await user.click(screen.getByTestId('import-project-button'));
+    await user.click(screen.getByRole('button', { name: 'More project actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Import into this project' }));
     const importDialog = await screen.findByRole('dialog', { name: 'Import data' });
     await user.click(within(importDialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Import data' })).toBeNull());

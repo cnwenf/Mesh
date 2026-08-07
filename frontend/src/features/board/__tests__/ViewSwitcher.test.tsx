@@ -86,6 +86,30 @@ describe('ViewSwitcher', () => {
     expect(screen.queryByTestId('view-menu-v1')).toBeNull();
   });
 
+  it('L543:只读视图提供「导出本视图」情境入口,隐藏写操作条目(§4.1)', () => {
+    const onExportView = vi.fn();
+    const target = view({ can_write: false });
+    render({ views: [target], canWrite: () => false, onExportView });
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    // 读权限条目:导出;写权限条目(重命名/删除等)不渲染。
+    expect(screen.getByRole('menuitem', { name: 'Export this view' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Duplicate' })).toBeNull();
+    expect(screen.queryByTestId('view-delete-open-v1')).toBeNull();
+    fireEvent.click(screen.getByTestId('view-export-v1'));
+    expect(onExportView).toHaveBeenCalledWith(target);
+    // 选择后菜单收起。
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('L543:可写视图的 ⋯ 菜单同时含导出与写操作条目', () => {
+    const onExportView = vi.fn();
+    render({ onExportView });
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    expect(screen.getByRole('menuitem', { name: 'Export this view' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeInTheDocument();
+  });
+
   it('新建视图表单通过共享控件提交名称、布局与可见性', async () => {
     const { onCreate } = render();
     fireEvent.click(screen.getByTestId('view-create-open'));

@@ -316,6 +316,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     column: 'State',
     importable: 98,
     skipped: 2,
+    // import-export §4.4 导出超限预警占位符(MES-189):估算行数 / 行数上限
+    estimate: 90000,
+    maxRows: 50000,
     // onboarding §4 文案占位符(MES-69):进度条已完成数 / 百分比
     completed: 2,
     // theme.md §4.1 主题占位标注(跟随工作区默认/跟随系统的当前解析值)

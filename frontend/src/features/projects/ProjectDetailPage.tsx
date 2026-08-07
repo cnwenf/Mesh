@@ -14,12 +14,14 @@ import {
   ErrorState,
   Icon,
   IconButton,
+  Menu,
   PageHeader,
   Skeleton,
   Tabs,
   buttonClasses,
   useToast,
 } from '../../design';
+import type { MenuEntry } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -260,6 +262,26 @@ export function ProjectDetailPage(): React.JSX.Element {
 
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
+  // L543(import-export.md §4.1):项目 ⋯ 情境入口 — 读权限可导出本项目;
+  // 写权限(admin/owner)可导入到本项目(import-export.md §3.1 权限闸门)。
+  const canImportToProject = workspace?.role === 'admin' || workspace?.role === 'owner';
+  const projectMenuEntries: readonly MenuEntry[] = [
+    {
+      key: 'export',
+      label: t('dataJobs.page.exportProject'),
+      onSelect: () => setExportOpen(true),
+    },
+    ...(canImportToProject
+      ? [
+          {
+            key: 'import',
+            label: t('dataJobs.page.importProject'),
+            disabled: project.archived,
+            onSelect: () => setImportOpen(true),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="mesh-projects">
@@ -338,23 +360,14 @@ export function ProjectDetailPage(): React.JSX.Element {
               >
                 {t('projects.detail.delete')}
               </Button>
-              <Button
-                variant="secondary"
-                data-testid="export-project-button"
-                onClick={() => setExportOpen(true)}
-              >
-                {t('dataJobs.page.exportProject')}
-              </Button>
-              {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
-                <Button
-                  variant="secondary"
-                  data-testid="import-project-button"
-                  disabled={project.archived}
-                  onClick={() => setImportOpen(true)}
-                >
-                  {t('dataJobs.page.importProject')}
-                </Button>
-              )}
+              {/* L543:导入/导出收进 ⋯ 情境菜单(import-export.md §4.1)。 */}
+              <Menu
+                trigger={<Icon name="more-horizontal" size={16} />}
+                triggerLabel={t('projects.detail.moreActions')}
+                align="end"
+                entries={projectMenuEntries}
+                className="mesh-projects__more-menu"
+              />
             </div>
           }
         />

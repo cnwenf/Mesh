@@ -520,6 +520,18 @@ describe('BoardPage', () => {
     });
   });
 
+  it('L543:视图 ⋯「导出本视图」打开范围预选 view 的导出对话框(import-export.md §4.1)', async () => {
+    stubFetchByRoute();
+    renderWithProviders(<BoardPage />, { route: '/board' });
+    await screen.findByTestId('board-columns');
+
+    fireEvent.click(screen.getByTestId('view-menu-view-1'));
+    fireEvent.click(screen.getByTestId('view-export-view-1'));
+    const dialog = await screen.findByRole('dialog', { name: 'Export data' });
+    const scopeSelect = within(dialog).getByTestId('export-scope-select') as HTMLSelectElement;
+    expect(scopeSelect.value).toBe('view');
+  });
+
   it('改动分组后草稿序列化进 ?draft=,丢弃后清除(L92)', async () => {
     stubFetchByRoute();
     renderWithProviders(

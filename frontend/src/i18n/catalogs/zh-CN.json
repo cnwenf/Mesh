@@ -627,6 +627,7 @@
     "board.emptyDescription": "创建首个视图,配置 issue 的看板投影。",
     "board.emptyTitle": "还没有视图",
     "board.expandColumn": "展开列 {name}",
+    "board.exportView": "导出本视图",
     "board.filterAddCondition": "添加条件",
     "board.filterAddGroup": "添加条件组",
     "board.filterButton": "筛选",
@@ -978,6 +979,8 @@
     "dataJobs.export.scopeLabel": "范围",
     "dataJobs.export.submit": "开始导出",
     "dataJobs.export.title": "导出数据",
+    "dataJobs.export.tooLargeBody": "匹配约 {estimate} 行，超过 {maxRows} 行上限。请缩小导出范围或增加筛选条件后重试。",
+    "dataJobs.export.tooLargeDismiss": "知道了",
     "dataJobs.import.back": "上一步",
     "dataJobs.import.confirm": "确认导入",
     "dataJobs.import.confirmSummary": "将导入 {importable} 行,跳过 {skipped} 行。",
@@ -1017,6 +1020,7 @@
     "dataJobs.page.exportProject": "导出本项目",
     "dataJobs.page.importButton": "导入数据",
     "dataJobs.page.importProject": "导入到本项目",
+    "dataJobs.page.liveProgress": "● {succeeded}/{total}",
     "dataJobs.page.loadError": "数据作业加载失败",
     "dataJobs.page.loading": "数据作业加载中…",
     "dataJobs.page.rowsExport": "{total} 行",
@@ -2113,6 +2117,7 @@
     "projects.detail.deleted": "项目已删除。",
     "projects.detail.deleteSubmit": "删除",
     "projects.detail.deleteTitle": "删除项目",
+    "projects.detail.moreActions": "项目更多操作",
     "projects.detail.noDescription": "暂无描述。",
     "projects.detail.settings": "设置",
     "projects.detail.unarchive": "取消归档",
@@ -2999,5 +3004,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "dd7f08ca"
+  "version": "87460d2c"
 }

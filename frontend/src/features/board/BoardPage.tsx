@@ -35,6 +35,7 @@ import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import type { RealtimeEventFrame } from '../../types/realtime';
 import { useFavorites } from '../favorites/useFavorites';
+import { ExportDialog } from '../data-jobs/ExportDialog';
 import { getIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
 import {
   listCustomFields,
@@ -318,6 +319,8 @@ export function BoardPage(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsName, setSaveAsName] = useState('');
+  // L543(import-export.md §4.1):视图 ⋯「导出本视图」情境入口目标。
+  const [exportView, setExportView] = useState<View | null>(null);
 
   // 投影层状态:整板分组 + 列目标状态映射 + 加载态。
   const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
@@ -1671,6 +1674,7 @@ export function BoardPage(): React.JSX.Element {
         onDelete={handleDelete}
         favoriteViewIds={viewFavorites.favoriteIds}
         onToggleFavorite={(view) => void viewFavorites.toggle(view.id)}
+        onExportView={(view) => setExportView(view)}
       />
       <div className="mesh-board__main">
         <header className="mesh-board__toolbar">
@@ -1935,6 +1939,20 @@ export function BoardPage(): React.JSX.Element {
           </div>
         </div>
       </Dialog>
+
+      {/* L543(import-export.md §4.1):视图 ⋯「导出本视图」→ 范围预选 view 的导出对话框;
+          每次打开重新挂载,保证 defaultScope/filters 随目标视图刷新。 */}
+      {exportView !== null && membership !== null ? (
+        <ExportDialog
+          open
+          onClose={() => setExportView(null)}
+          workspaceId={membership.workspace_id}
+          defaultScope="view"
+          filters={
+            exportView.project_id !== null ? { project_id: exportView.project_id } : undefined
+          }
+        />
+      ) : null}
     </div>
   );
 }

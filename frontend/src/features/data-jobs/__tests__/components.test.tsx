@@ -3,10 +3,11 @@
  * 客户端以 stub 注入(不触网);useWorkspace 经 vi.mock 提供。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../../../test-utils/render';
-import { getApiClient } from '../../../api';
+import { getApiClient, MeshApiError } from '../../../api';
 import type { MeshApiClient } from '../../../api';
+import { RealtimeContext } from '../../../shell/AppShell';
 import { DataManagementPage } from '../DataManagementPage';
 import { ExportDialog } from '../ExportDialog';
 import { ImportWizard } from '../ImportWizard';
@@ -86,6 +87,35 @@ describe('ImportWizard', () => {
   });
 });
 
+/** 最小可控实时 fake:记录订阅,可手工 emit 帧(与 MembersPage 测试同构)。 */
+interface FakeFrame {
+  channel: string;
+  event: string;
+  payload: unknown;
+}
+
+function makeFakeRealtime() {
+  const handlers: Array<(frame: FakeFrame) => void> = [];
+  const client = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    onFrame: vi.fn((handler: (frame: FakeFrame) => void) => {
+      handlers.push(handler);
+      return (): void => {
+        const index = handlers.indexOf(handler);
+        if (index >= 0) handlers.splice(index, 1);
+      };
+    }),
+    onState: vi.fn(() => () => undefined),
+  };
+  return {
+    client,
+    emit: (frame: FakeFrame): void => {
+      for (const handler of [...handlers]) handler(frame);
+    },
+  };
+}
+
 describe('ExportDialog', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -144,6 +174,43 @@ describe('ExportDialog', () => {
     expect((screen.getByTestId('export-download-link') as HTMLAnchorElement).href).toContain(
       'https://cdn/x.csv',
     );
+  });
+
+  it('shows the export_too_large pre-warning on 413 instead of a toast (§4.4)', async () => {
+    const tooLarge = new MeshApiError({
+      status: 413,
+      code: 'export_too_large',
+      message: 'export estimate exceeds the row ceiling',
+      details: { estimate: 90000, max_rows: 50000 },
+    });
+    const client = makeClient({ request: vi.fn().mockRejectedValue(tooLarge) });
+    renderWithProviders(
+      <ExportDialog open onClose={() => undefined} workspaceId="ws-1" client={client} />,
+    );
+    fireEvent.click(screen.getByTestId('export-submit-button'));
+    const warning = await screen.findByTestId('export-size-warning');
+    expect(warning.textContent).toContain('90000');
+    expect(warning.textContent).toContain('50000');
+    // 预警可消除,回到范围选择继续收窄重试。
+    fireEvent.click(screen.getByTestId('export-size-warning-dismiss'));
+    await waitFor(() => expect(screen.queryByTestId('export-size-warning')).toBeNull());
+    expect(screen.getByTestId('export-scope-select')).toBeTruthy();
+  });
+
+  it('keeps the toast path for non-size submission errors', async () => {
+    const client = makeClient({
+      request: vi
+        .fn()
+        .mockRejectedValue(
+          new MeshApiError({ status: 403, code: 'forbidden', message: 'forbidden' }),
+        ),
+    });
+    renderWithProviders(
+      <ExportDialog open onClose={() => undefined} workspaceId="ws-1" client={client} />,
+    );
+    fireEvent.click(screen.getByTestId('export-submit-button'));
+    await waitFor(() => expect(screen.queryByTestId('export-size-warning')).toBeNull());
+    expect(screen.getByTestId('export-submit-button')).toBeTruthy();
   });
 });
 
@@ -214,5 +281,78 @@ describe('DataManagementPage', () => {
     });
     fireEvent.click(screen.getByTestId('open-import-wizard'));
     expect(screen.getAllByText('Import data').length).toBeGreaterThan(0);
+  });
+
+  it('renders live row-level progress for running jobs (§4.4 text signal)', async () => {
+    const client = makeClient({
+      list: vi.fn().mockResolvedValue({
+        data: [
+          makeJob({
+            kind: 'import',
+            status: 'running',
+            total_rows: 1000,
+            succeeded_rows: 400,
+          }),
+        ],
+        next_cursor: null,
+      }),
+    });
+    vi.mocked(getApiClient).mockReturnValue(client);
+    renderWithProviders(<DataManagementPage />, { route: '/w/acme/settings/data' });
+    const progress = await screen.findByTestId('job-progress-dj-1');
+    expect(progress.textContent).toContain('400/1000');
+  });
+
+  it('subscribes running job channels and merges data_job.updated frames', async () => {
+    const client = makeClient({
+      list: vi.fn().mockResolvedValue({
+        data: [
+          makeJob({
+            kind: 'import',
+            status: 'running',
+            total_rows: 1000,
+            succeeded_rows: 400,
+          }),
+          makeJob({ id: 'dj-2', status: 'completed', total_rows: 5, succeeded_rows: 5 }),
+        ],
+        next_cursor: null,
+      }),
+    });
+    vi.mocked(getApiClient).mockReturnValue(client);
+    const realtime = makeFakeRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={realtime as never}>
+        <DataManagementPage />
+      </RealtimeContext.Provider>,
+      { route: '/w/acme/settings/data' },
+    );
+    await screen.findByTestId('job-progress-dj-1');
+    // 只订阅在途作业频道;终态作业不订阅。
+    expect(realtime.client.subscribe).toHaveBeenCalledWith('data_job:dj-1');
+    expect(realtime.client.subscribe).not.toHaveBeenCalledWith('data_job:dj-2');
+
+    // 帧合并 → 行级进度推进。
+    act(() => {
+      realtime.emit({
+        channel: 'data_job:dj-1',
+        event: 'data_job.updated',
+        payload: {
+          id: 'dj-1',
+          status: 'running',
+          succeeded_rows: 980,
+          updated_at: '2026-07-29T00:00:00Z',
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('job-progress-dj-1').textContent).toContain('980/1000'),
+    );
+
+    // 无关频道/畸形载荷不破坏列表。
+    act(() => {
+      realtime.emit({ channel: 'other:1', event: 'data_job.updated', payload: { id: 'dj-1' } });
+      realtime.emit({ channel: 'data_job:dj-1', event: 'data_job.updated', payload: null });
+    });
+    expect(screen.getByTestId('job-row-dj-1')).toBeTruthy();
   });
 });
