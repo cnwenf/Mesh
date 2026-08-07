@@ -20,6 +20,7 @@
 - [x] C-14 L486 小队导出前端入口（`0286840e`）✅ 已提交：squads/api.ts `exportSquadArchive` 独立 fetch（原始 markdown 非包络，Bearer 同构，非 2xx/网络失败归一 MeshApiError）+ 详情页头部 ⋯ Menu「导出归档」（Blob 下载 squad-{id}.md，读权限即可，导出中 disabled）+ 3 键×双语目录（version 重算）；UT 8 新增（含 403/非 API 失败/普通成员可见），全套 4902 例绿，per-file 门禁过
 - [x] C-13 L480 小队消息着色 + 关联任务 chip（`a027000b`）✅ 已提交：消息行按 kind 修饰类（指令蓝/汇报绿/闲聊灰/系统虚线/上下文蓝边，语义 token 双主题）+ 指令/汇报带 task_id 渲染「关联任务」chip 深链任务详情；i18n squads.relatedTask×2 目录（version 重算）；UT 3 新增，全套 4905 例绿，per-file 门禁过
 - [x] TD 顺手清偿：IssueExecutionsPanel 取消断言竞态修复（`d521b033`）——coverage 负载下偶发 flake，同步断言改 waitFor 等待行状态收敛
+- [x] C-6 L206 收件箱行内联审批（`f673b0ac`）✅ Notification 可选 approval_id + InboxApprovalActions（挂载即 GET 审批态，仅 pending 且未过 reaper 惰性窗口渲染批准/拒绝；决定后收敛状态徽标；服务端幂等兜底；approval.decided 帧跨会话收敛）+ InboxRow 行操作区接线 + inbox.css `> button` 子选择器；UT 11 新增（组件 9 + 页面接线 2），inbox 套件 136 例、全套 433 文件/4916 例绿，per-file 门禁过（新文件 stmts 99.2%/branch 91.5%）
 
 ## 未完成
 
@@ -32,7 +33,7 @@
 3. [ ] L182 离线乐观队列（api/optimisticQueue.ts）
 4. [ ] L186 专项恢复入口五条
 5. [ ] L202 通知聚合前端（后端归档已做；前端已读组归档视图）
-6. [ ] L206 内联审批前端（依赖 B1）
+6. [x] L206 内联审批前端（依赖 B1）✅ 已提交 `f673b0ac`（见已完成区 C-6）
 7. [ ] L207 邮件通道前端无直接 UI，后端 B3 承载
 8. [ ] L222 收藏入口（useFavorite + ⋯ 菜单）
 9. [ ] L242 脏状态保护扩展（autopilot 编辑器/技能编辑/评论草稿）
