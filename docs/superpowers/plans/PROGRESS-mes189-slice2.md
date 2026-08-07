@@ -18,6 +18,8 @@
 - [x] C-15 L513 键盘入口可发现性（`22966a11`）✅ UT 8 新增 + 邻域回归全绿；i18n 目录 version 已重算（附重算脚本）
 - [x] C-12 L252 API 契约 UI（见未完成区第 12 条注记）✅ 已提交：client 拦截层 429/Deprecation/Sunset 检测 → 契约通知总线（api/notices.ts，429 去抖 + 弃用每会话一次）→ shell/ApiNoticeToasts 桥以 i18n toast 呈现；UT 21 新增，全套 4894 例回归绿，per-file 门禁过
 - [x] C-14 L486 小队导出前端入口（`0286840e`）✅ 已提交：squads/api.ts `exportSquadArchive` 独立 fetch（原始 markdown 非包络，Bearer 同构，非 2xx/网络失败归一 MeshApiError）+ 详情页头部 ⋯ Menu「导出归档」（Blob 下载 squad-{id}.md，读权限即可，导出中 disabled）+ 3 键×双语目录（version 重算）；UT 8 新增（含 403/非 API 失败/普通成员可见），全套 4902 例绿，per-file 门禁过
+- [x] C-13 L480 小队消息着色 + 关联任务 chip（`a027000b`）✅ 已提交：消息行按 kind 修饰类（指令蓝/汇报绿/闲聊灰/系统虚线/上下文蓝边，语义 token 双主题）+ 指令/汇报带 task_id 渲染「关联任务」chip 深链任务详情；i18n squads.relatedTask×2 目录（version 重算）；UT 3 新增，全套 4905 例绿，per-file 门禁过
+- [x] TD 顺手清偿：IssueExecutionsPanel 取消断言竞态修复（`d521b033`）——coverage 负载下偶发 flake，同步断言改 waitFor 等待行状态收敛
 
 ## 未完成
 
@@ -37,7 +39,7 @@
 10. [ ] L247 批量操作 UI（issue 批量转派 + 技能 bulk UI + 成员批量转派复核）
 11. [ ] L251 Presence 前端（成员在线 + 看板谁在查看，依赖 B6）
 12. [x] L252 API 契约 UI（429 退避提示 + Deprecation/Sunset 提示）✅ 已提交：notices 总线（429 秒数提示 + 2s 去抖；弃用头每会话一次）+ ApiNoticeToasts 桥（ToastProvider 内，App 层挂载）+ api.* 文案 3 键×2 目录（version 重算）；UT 21 例 + 全套 4894 例绿 + per-file 门禁过；e2e 走查归入阶段 D 四组合
-13. [ ] L480 小队消息着色 + 关联任务 chip
+13. [x] L480 小队消息着色 + 关联任务 chip ✅ 已提交 `a027000b`：kind 修饰类五色（双主题语义 token）+ 指令/汇报 chip 深链；UT 3 例；e2e 走查归入阶段 D 四组合
 14. [x] L486 小队导出前端入口（后端已做）✅ 已提交 `0286840e`：exportSquadArchive（原始 markdown 独立 fetch + 错误归一）+ 头部 ⋯ Menu 条目（成功/失败 toast，读权限即可）+ i18n 3 键×2 目录；UT 8 例，全套 4902 例绿 + per-file 门禁过；e2e 走查归入阶段 D 四组合
 15. [x] L513 键盘入口一次性提示 + 顶栏占位符 ✅ 已提交 `22966a11`：KeyboardHintBanner（Banner onDismiss 通道）+ keyboardHint 本地记忆（localStorage，隐私模式降级不抛错）+ App 浮层 controls 已使用落记忆 + 顶栏占位「搜索或输入命令…（{combo}）」（formatCombo 平台感知）+ 目录 version 重算脚本；UT 8 新增 + TopBar/App/shell 回归 54+37 例全绿，i18n 125 例全绿
 16. [ ] L541–543 导入导出 UI（行级进度/413 预警/情境 ⋯ 入口）
