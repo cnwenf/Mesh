@@ -22,6 +22,7 @@
 - [x] TD 顺手清偿：IssueExecutionsPanel 取消断言竞态修复（`d521b033`）——coverage 负载下偶发 flake，同步断言改 waitFor 等待行状态收敛
 - [x] C-6 L206 收件箱行内联审批（`f673b0ac`）✅ Notification 可选 approval_id + InboxApprovalActions（挂载即 GET 审批态，仅 pending 且未过 reaper 惰性窗口渲染批准/拒绝；决定后收敛状态徽标；服务端幂等兜底；approval.decided 帧跨会话收敛）+ InboxRow 行操作区接线 + inbox.css `> button` 子选择器；UT 11 新增（组件 9 + 页面接线 2），inbox 套件 136 例、全套 433 文件/4916 例绿，per-file 门禁过（新文件 stmts 99.2%/branch 91.5%）
 - [x] C-8 L222 收藏入口（`b7d89e8a`）✅ 新增 `useFavorites(workspaceId, targetType)`（features/favorites/）：挂载拉成员集合、乐观 toggle（PUT/DELETE 幂等）、失败回滚 + danger toast、workspaceId 缺失不发请求、列表失败降级空集合；五处入口：IssueDetailPage ⋯ 菜单星标条目 / 看板列表 RowActionsMenu（桌面行 + 移动卡）/ ViewSwitcher 视图 ⋯ 菜单条目（删除项前，回调缺省不渲染）/ ProjectDetailPage 头部星标 IconButton（aria-pressed + filled）/ BoardPage 提供 issue+view 双实例下传；favorites.* 4 键×2 目录（version 重算）。顺手清偿：IssueDetailPage 测试阈值等待改 `queueCallCount` 排除 URL 感知旁路（收藏 GET 记入 calls 不消耗盲队列，直数会提前一格放行致 estimate 用例间歇红），估算用例 6/6 复跑全绿；UT 17 新增（hook 6 + 列表 3 + 视图 3 + 项目 2 + 详情 3），全套 434 文件/4930 例绿，per-file 门禁过（27 文件 ≥90%）
+- [x] C-1 L92 URL 状态同步（`cd8019b2`）✅ 新增共享 hook `useUrlState(key)`（null/空串删参、replace 缺省、保留其它键、函数式更新）；四面落地：InboxPage 筛选组合 ↔ ?filter= / IssueDetailPage 讨论/活动 Tab ↔ ?tab=（缺省 comments 不占参数）/ IssuesPage 分页 ↔ ?page=（深链游标补齐上限 20 页、loadMore 写参、筛选变更清参、非法值规范化清除）/ BoardPage 视图草稿 ↔ ?draft=（脏草稿序列化、深链恢复、损坏 JSON 结构校验回落 parseViewDraft）；UT 41 新增（useUrlState 7 + Inbox 已随前段 + Detail 3 + Issues 5 + Board 3 + parseViewDraft 9 + ProjectDetail 探针回归），全套 435 文件/4951 例绿，typecheck/lint 净（0 错误、25 基线 warning），per-file 门禁过（28 文件 ≥90%，BoardPage branches 由 89.87% 经 parseViewDraft 直测补齐至达标）
 
 ## 未完成
 
@@ -29,7 +30,7 @@
 - （无剩余 —— B1/B2/B3/B4/B5/B6 全部完成）
 
 ### 阶段 C 前端（17 条）
-1. [ ] L92 URL 状态同步（分页/收件箱筛选/详情 Tab/看板草稿态）
+1. [x] L92 URL 状态同步（分页/收件箱筛选/详情 Tab/看板草稿态）✅ 已提交 `cd8019b2`（见已完成区 C-1）
 2. [x] L93 标签页标题（Issues/IssueDetail/Board/Inbox + 未读 favicon）✅ 已提交 `14e15c64`：InboxBell 权威计数镜像 `state/unreadStore.ts` → `useDocumentTitle` 全局 (N) 前缀 + `applyUnreadFavicon` SVG 徽标（>9 显 9+，卸载清零恢复）；新增 UT 16 例（unreadStore 4 + unreadFavicon 10 + globalChrome 2）+ useDocumentTitle 补 3 例；回归 InboxBell×2/InboxPage/shell-title/IssuesPage/IssueDetailPage/BoardPage 150 例全绿，typecheck/lint 净
 3. [ ] L182 离线乐观队列（api/optimisticQueue.ts）
 4. [ ] L186 专项恢复入口五条
