@@ -1270,11 +1270,14 @@
     "inbox.action.archive": "Archive",
     "inbox.action.read": "Mark read",
     "inbox.archiveRead": "Archive read",
+    "inbox.archivedEmpty.description": "Archived notifications stay here and can be reviewed at any time.",
+    "inbox.archivedEmpty.title": "No archived notifications",
     "inbox.back": "Back to inbox",
     "inbox.empty": "Inbox zero",
     "inbox.emptyDescription": "Notifications about issues you follow will show up here.",
     "inbox.filter.agent": "Agent",
     "inbox.filter.all": "All",
+    "inbox.filter.archived": "Archived",
     "inbox.filter.assigned": "Assigned",
     "inbox.filter.mentions": "Mentions",
     "inbox.filter.unread": "Unread",
@@ -2977,5 +2980,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "1723f03e"
+  "version": "46d3256e"
 }

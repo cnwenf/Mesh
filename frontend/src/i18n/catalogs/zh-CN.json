@@ -1270,11 +1270,14 @@
     "inbox.action.archive": "归档",
     "inbox.action.read": "标已读",
     "inbox.archiveRead": "归档已读",
+    "inbox.archivedEmpty.description": "已归档的通知会保留在这里,可随时回查。",
+    "inbox.archivedEmpty.title": "暂无已归档通知",
     "inbox.back": "返回收件箱",
     "inbox.empty": "收件箱已清空",
     "inbox.emptyDescription": "你关注的 issue 通知会显示在这里。",
     "inbox.filter.agent": "Agent",
     "inbox.filter.all": "全部",
+    "inbox.filter.archived": "已归档",
     "inbox.filter.assigned": "分派",
     "inbox.filter.mentions": "提及我的",
     "inbox.filter.unread": "未读",
@@ -2977,5 +2980,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "7f976924"
+  "version": "cc590f66"
 }

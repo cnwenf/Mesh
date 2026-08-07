@@ -24,10 +24,13 @@ export interface InboxPreviewPaneProps {
   readonly workspaceSlug?: string | null;
   readonly onMarkRead: (notification: Notification) => void;
   readonly onArchive: (notification: Notification) => void;
+  /** L202 归档视图:行已归档,预览窗格不再提供归档操作(缺省 true)。 */
+  readonly showArchive?: boolean;
 }
 
 export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Element {
-  const { notification, isLoading, unknownId, locale, onMarkRead, onArchive } = props;
+  const { notification, isLoading, unknownId, locale, onMarkRead, onArchive, showArchive = true } =
+    props;
   const t = useT();
   const navigate = useNavigate();
   const inboxPath =
@@ -135,17 +138,19 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
             {t('inbox.preview.markRead')}
           </Button>
         ) : null}
-        <Button
-          variant="secondary"
-          size="sm"
-          data-testid="inbox-preview-archive"
-          onClick={() => {
-            onArchive(notification);
-            navigate(inboxPath);
-          }}
-        >
-          {t('inbox.preview.archive')}
-        </Button>
+        {showArchive ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid="inbox-preview-archive"
+            onClick={() => {
+              onArchive(notification);
+              navigate(inboxPath);
+            }}
+          >
+            {t('inbox.preview.archive')}
+          </Button>
+        ) : null}
         <Button
           size="sm"
           data-testid="inbox-preview-open"

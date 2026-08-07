@@ -44,6 +44,12 @@ describe('endpoint surface', () => {
     expect(url).toContain('grouped=true');
   });
 
+  it('L202: listInbox passes archived=true for the archived view', async () => {
+    await listInbox(client, { workspaceId: 'ws-1', archived: true });
+    const url = stub.calls[0].url;
+    expect(url).toContain('archived=true');
+  });
+
   it('reads the unread count', async () => {
     stub = stubFetch(fakeResponse({ body: { data: { count: 7 } } }));
     vi.stubGlobal('fetch', stub.fetchImpl);

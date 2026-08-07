@@ -84,6 +84,8 @@ export interface ListInboxParams {
   readonly filter?: InboxFilter;
   readonly type?: NotificationType;
   readonly grouped?: boolean;
+  /** L202 归档视图:仅返回已归档通知(comment-inbox.md §4.4「移出主视图,可回查」)。 */
+  readonly archived?: boolean;
 }
 
 /** Notification 运行时结构守卫(realtime 帧 / 边界处校验,不信任外部载荷)。 */

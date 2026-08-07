@@ -39,6 +39,7 @@ export async function listInbox(
       filter: params.filter,
       type: params.type,
       grouped: params.grouped,
+      archived: params.archived,
     },
   });
   return { data: envelope.data, nextCursor: envelope.next_cursor };
