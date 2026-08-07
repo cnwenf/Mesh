@@ -217,7 +217,7 @@
   inline-size: 9px;
   block-size: 9px;
   border-radius: var(--radius-full);
-  background: var(--color-success);
+  background: var(--color-success-fg);
   border: 2px solid var(--color-surface);
 }
 

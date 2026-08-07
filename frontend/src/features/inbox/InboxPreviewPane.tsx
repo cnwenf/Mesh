@@ -29,8 +29,15 @@ export interface InboxPreviewPaneProps {
 }
 
 export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Element {
-  const { notification, isLoading, unknownId, locale, onMarkRead, onArchive, showArchive = true } =
-    props;
+  const {
+    notification,
+    isLoading,
+    unknownId,
+    locale,
+    onMarkRead,
+    onArchive,
+    showArchive = true,
+  } = props;
   const t = useT();
   const navigate = useNavigate();
   const inboxPath =
@@ -43,7 +50,10 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
     // 切到未读 tab 深链已读),并非源实体被删;故用「未找到/已归档」文案,不得把裸 UUID
     // 当标题、不得误报 sourceDeleted(comment-inbox §5.3:该文案仅用于源实体删除)。
     return (
-      <div className="mesh-inbox-preview mesh-inbox-preview--missing" data-testid="inbox-preview-missing">
+      <div
+        className="mesh-inbox-preview mesh-inbox-preview--missing"
+        data-testid="inbox-preview-missing"
+      >
         <Button
           variant="ghost"
           size="sm"
@@ -63,10 +73,15 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
 
   if (notification === null) {
     if (isLoading) {
-      return <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox-preview__skeleton" />;
+      return (
+        <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox-preview__skeleton" />
+      );
     }
     return (
-      <div className="mesh-inbox-preview mesh-inbox-preview--empty" data-testid="inbox-preview-empty">
+      <div
+        className="mesh-inbox-preview mesh-inbox-preview--empty"
+        data-testid="inbox-preview-empty"
+      >
         <EmptyState
           title={t('inbox.preview.selectTitle')}
           description={t('inbox.preview.selectDescription')}
@@ -100,14 +115,15 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
               {t('inbox.priority.critical')}
             </Badge>
           ) : (
-            <Badge tone="neutral">
-              {t('inbox.priority.normal')}
-            </Badge>
+            <Badge tone="neutral">{t('inbox.priority.normal')}</Badge>
           )}
         </span>
       </div>
       {actor !== null ? (
-        <p className="mesh-inbox-preview__actor mesh-text-caption" data-testid="inbox-preview-actor">
+        <p
+          className="mesh-inbox-preview__actor mesh-text-caption"
+          data-testid="inbox-preview-actor"
+        >
           <Avatar name={actor.name} size={20} kind={actor.member_type} />
           <span>
             {actor.member_type === 'agent'
@@ -117,7 +133,10 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
         </p>
       ) : null}
       {sourceDeleted ? (
-        <p className="mesh-text-caption mesh-inbox-preview__note" data-testid="inbox-preview-deleted">
+        <p
+          className="mesh-text-caption mesh-inbox-preview__note"
+          data-testid="inbox-preview-deleted"
+        >
           {t('inbox.preview.sourceDeleted')}
         </p>
       ) : null}

@@ -96,7 +96,9 @@ describe('endpoint surface', () => {
     expect(stub.calls[0].url).toContain('/api/v1/notification-preferences');
     stub = stubFetch(fakeResponse({ body: { data: [] } }));
     vi.stubGlobal('fetch', stub.fetchImpl);
-    await updatePreferences(client, 'ws-1', [{ event_type: 'assigned', in_app: true, email: 'digest' }]);
+    await updatePreferences(client, 'ws-1', [
+      { event_type: 'assigned', in_app: true, email: 'digest' },
+    ]);
     expect(stub.calls[0].init?.method).toBe('PUT');
     expect(JSON.parse(String(stub.calls[0].init?.body))).toEqual({
       preferences: [{ event_type: 'assigned', in_app: true, email: 'digest' }],

@@ -48,11 +48,9 @@ describe('useCommentDraft', () => {
   });
 
   it('reports persisted=false when storage is unavailable; clear restores it (L242)', () => {
-    const setItem = vi
-      .spyOn(Storage.prototype, 'setItem')
-      .mockImplementation(() => {
-        throw new Error('quota/private mode');
-      });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota/private mode');
+    });
     const { result } = renderHook(() => useCommentDraft('iss-np'));
     act(() => result.current.setValue('memory only'));
     expect(result.current.persisted).toBe(false);
@@ -64,11 +62,9 @@ describe('useCommentDraft', () => {
   });
 
   it('key switch resets persisted (fresh load has no unsaved write) (L242)', () => {
-    const setItem = vi
-      .spyOn(Storage.prototype, 'setItem')
-      .mockImplementation(() => {
-        throw new Error('unavailable');
-      });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('unavailable');
+    });
     const { result, rerender } = renderHook(({ key }) => useCommentDraft(key), {
       initialProps: { key: 'k1' },
     });
