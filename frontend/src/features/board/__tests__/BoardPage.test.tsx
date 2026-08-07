@@ -4,13 +4,13 @@
  * 空态(无视图 → 主操作)。
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { Route, Routes } from 'react-router';
+import { Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import type { RecordedCall } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
-import { BoardPage } from '../BoardPage';
+import { BoardPage, parseViewDraft } from '../BoardPage';
 import type { View } from '../types';
 
 const workspaceContextState = vi.hoisted(() => ({
@@ -144,9 +144,17 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
   return calls;
 }
 
+/** L92 URL 断言探针:记录当前 search(含 ?draft=)。 */
+let latestSearch = '';
+function BoardSearchProbe(): null {
+  latestSearch = useLocation().search;
+  return null;
+}
+
 describe('BoardPage', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
+    latestSearch = '';
     workspaceContextState.workspace = {
       id: 'ws-1',
       name: 'Team',
@@ -485,5 +493,108 @@ describe('BoardPage', () => {
         calls.some((c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/duplicate')),
       ).toBe(true);
     });
+  });
+
+  it('改动分组后草稿序列化进 ?draft=,丢弃后清除(L92)', async () => {
+    stubFetchByRoute();
+    renderWithProviders(
+      <>
+        <BoardSearchProbe />
+        <BoardPage />
+      </>,
+      { route: '/board' },
+    );
+    await screen.findByTestId('board-columns');
+
+    fireEvent.change(screen.getByTestId('group-by-select'), { target: { value: 'priority' } });
+    await waitFor(() => expect(screen.getByTestId('view-save-bar')).toBeInTheDocument());
+    await waitFor(() => {
+      const raw = new URLSearchParams(latestSearch).get('draft');
+      expect(raw).not.toBeNull();
+      expect((JSON.parse(raw as string) as { group_by: string }).group_by).toBe('priority');
+    });
+
+    fireEvent.click(screen.getByTestId('view-discard'));
+    await waitFor(() => expect(screen.queryByTestId('view-save-bar')).not.toBeInTheDocument());
+    await waitFor(() => expect(new URLSearchParams(latestSearch).get('draft')).toBeNull());
+  });
+
+  it('深链 ?draft= 恢复未保存草稿(脏态保存条 + 草稿列投影,L92)', async () => {
+    stubFetchByRoute();
+    const draftJson = JSON.stringify({
+      group_by: 'priority',
+      sub_group_by: null,
+      filters: {},
+      sort: [],
+      board_settings: {},
+    });
+    renderWithProviders(<BoardPage />, {
+      route: `/board?draft=${encodeURIComponent(draftJson)}`,
+    });
+    await screen.findByTestId('board-columns');
+
+    expect(screen.getByTestId('view-save-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('board-column-urgent')).toBeInTheDocument();
+  });
+
+  it('损坏的 ?draft= 回落视图原值(L92 容错)', async () => {
+    stubFetchByRoute();
+    renderWithProviders(<BoardPage />, { route: '/board?draft=%7Bnot-json' });
+    await screen.findByTestId('board-columns');
+
+    expect(screen.queryByTestId('view-save-bar')).not.toBeInTheDocument();
+    expect(screen.getByTestId('board-column-todo')).toBeInTheDocument();
+  });
+});
+
+describe('parseViewDraft(L92 URL 草稿反序列化)', () => {
+  const validDraft = {
+    group_by: 'priority',
+    sub_group_by: null,
+    filters: {},
+    sort: [],
+    board_settings: {},
+  };
+
+  it('null 或空串返回 null', () => {
+    expect(parseViewDraft(null)).toBeNull();
+    expect(parseViewDraft('')).toBeNull();
+  });
+
+  it('非法 JSON 返回 null', () => {
+    expect(parseViewDraft('{not-json')).toBeNull();
+  });
+
+  it('非对象顶层值(数字/数组/null)返回 null', () => {
+    expect(parseViewDraft('5')).toBeNull();
+    expect(parseViewDraft('[1,2]')).toBeNull();
+    expect(parseViewDraft('null')).toBeNull();
+  });
+
+  it('group_by 非字符串且非 null 返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, group_by: 5 }))).toBeNull();
+  });
+
+  it('sub_group_by 非字符串且非 null 返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, sub_group_by: true }))).toBeNull();
+  });
+
+  it('filters 缺失/为 null/为数组均返回 null', () => {
+    const { filters: _omit, ...withoutFilters } = validDraft;
+    expect(parseViewDraft(JSON.stringify(withoutFilters))).toBeNull();
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, filters: null }))).toBeNull();
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, filters: [] }))).toBeNull();
+  });
+
+  it('sort 非数组返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, sort: 'created_at' }))).toBeNull();
+  });
+
+  it('board_settings 为数组返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, board_settings: [] }))).toBeNull();
+  });
+
+  it('合法草稿原样返回', () => {
+    expect(parseViewDraft(JSON.stringify(validDraft))).toEqual(validDraft);
   });
 });

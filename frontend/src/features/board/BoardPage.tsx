@@ -28,6 +28,7 @@ import {
   useToast,
 } from '../../design';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useUrlState } from '../../hooks/useUrlState';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
@@ -125,6 +126,48 @@ function draftDiffers(view: View, draft: ViewDraft): boolean {
     JSON.stringify(draft.sort) !== JSON.stringify(view.sort) ||
     JSON.stringify(draft.board_settings) !== JSON.stringify(view.board_settings)
   );
+}
+
+/**
+ * L92:URL ?draft= 反序列化为视图草稿(深链分享未保存改动)。
+ * 宽松结构校验 —— 只保证形状安全(group_by/sub_group_by 为字符串或 null、
+ * filters/board_settings 为对象、sort 为数组),非法/损坏一律 null(回落视图原值);
+ * 字段语义由视图层既有渲染路径消化,不在此重复校验。
+ */
+export function parseViewDraft(raw: string | null): ViewDraft | null {
+  if (raw === null || raw === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.group_by !== null && typeof record.group_by !== 'string') return null;
+  if (record.sub_group_by !== null && typeof record.sub_group_by !== 'string') return null;
+  if (
+    typeof record.filters !== 'object' ||
+    record.filters === null ||
+    Array.isArray(record.filters)
+  ) {
+    return null;
+  }
+  if (!Array.isArray(record.sort)) return null;
+  if (
+    typeof record.board_settings !== 'object' ||
+    record.board_settings === null ||
+    Array.isArray(record.board_settings)
+  ) {
+    return null;
+  }
+  return {
+    group_by: record.group_by as GroupByField | null,
+    sub_group_by: record.sub_group_by as GroupByField | null,
+    filters: record.filters as Filters,
+    sort: record.sort as readonly SortRule[],
+    board_settings: record.board_settings as BoardSettings,
+  };
 }
 
 type PanelKey = 'filter' | 'sort' | 'wip' | 'display';
@@ -264,6 +307,11 @@ export function BoardPage(): React.JSX.Element {
   customGroupFieldsRef.current = customGroupFields;
   const [customFieldsRefresh, setCustomFieldsRefresh] = useState(0);
   const [draft, setDraft] = useState<ViewDraft | null>(null);
+  // L92:未保存草稿经 URL(?draft=<json>)持久化 —— 刷新不丢、可分享;
+  // 经 ref 读取供视图初始化时恢复,写侧 effect 在草稿脏时序列化、收敛时清除。
+  const [draftParam, setDraftParam] = useUrlState('draft');
+  const draftParamRef = useRef<string | null>(null);
+  draftParamRef.current = draftParam;
   const [panel, setPanel] = useState<PanelKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
@@ -575,9 +623,27 @@ export function BoardPage(): React.JSX.Element {
   // L93 标签页标题:当前视图名(无视图时回落产品名)。
   useDocumentTitle(selectedView?.name ?? '');
 
+  // 视图初始化草稿:真正换视图(首次进入/切换)才重置 —— 优先恢复 URL 里的
+  // 未保存草稿(L92 深链);仅视图列表刷新(同 id 新对象)不得冲掉在改草稿。
+  const lastDraftedViewIdRef = useRef<string | null>(null);
   useEffect(() => {
-    setDraft(selectedView === null ? null : draftFromView(selectedView));
+    if (selectedView === null) {
+      lastDraftedViewIdRef.current = null;
+      setDraft(null);
+      return;
+    }
+    if (lastDraftedViewIdRef.current === selectedView.id) return;
+    lastDraftedViewIdRef.current = selectedView.id;
+    setDraft(parseViewDraft(draftParamRef.current) ?? draftFromView(selectedView));
   }, [selectedView]);
+
+  // L92:草稿脏时把序列化结果写入 ?draft=,收敛(保存/丢弃/换视图后追平)即清除。
+  // 未初始化(视图加载中/空)不动参数 —— 避免在恢复前把深链参数误删。
+  useEffect(() => {
+    if (draft === null || selectedView === null) return;
+    const serialized = draftDiffers(selectedView, draft) ? JSON.stringify(draft) : null;
+    if (draftParamRef.current !== serialized) setDraftParam(serialized);
+  }, [draft, selectedView, setDraftParam]);
 
   useEffect(() => {
     let cancelled = false;

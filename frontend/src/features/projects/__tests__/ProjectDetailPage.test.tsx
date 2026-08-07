@@ -948,14 +948,9 @@ describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
     await act(async () => {
       fireEvent.click(toggle);
     });
+    await waitFor(() => expect(callsTo(calls, 'PUT', '/favorites/project/prj-1').length).toBe(1));
     await waitFor(() =>
-      expect(callsTo(calls, 'PUT', '/favorites/project/prj-1').length).toBe(1),
-    );
-    await waitFor(() =>
-      expect(screen.getByTestId('project-favorite-toggle')).toHaveAttribute(
-        'aria-pressed',
-        'true',
-      ),
+      expect(screen.getByTestId('project-favorite-toggle')).toHaveAttribute('aria-pressed', 'true'),
     );
     expect(screen.getByText('Added to favorites')).toBeInTheDocument();
   });

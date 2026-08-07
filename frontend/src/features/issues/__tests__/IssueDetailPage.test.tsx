@@ -5,7 +5,7 @@
  * fetch 桩按调用序:GET issue → statuses / children / dependencies / activity / members。
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, headersOf } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -82,9 +82,9 @@ function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
   return <ToastProvider regionLabel={t('a11y.notifications')}>{props.children}</ToastProvider>;
 }
 
-function renderDetail(): void {
+function renderDetail(entry = '/w/ws/issues/iss-1'): void {
   render(
-    <MemoryRouter initialEntries={['/w/ws/issues/iss-1']}>
+    <MemoryRouter initialEntries={[entry]}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
@@ -1708,6 +1708,77 @@ describe('IssueDetailPage', () => {
         'Moving this item changes some fields. Please review and confirm the move.',
       ),
     ).toBeTruthy();
+  });
+});
+
+describe('IssueDetailPage 讨论/活动 Tab ↔ URL 同步(L92)', () => {
+  let latestSearch = '';
+
+  function LocationProbe(): null {
+    latestSearch = useLocation().search;
+    return null;
+  }
+
+  function renderDetailWithProbe(entry: string): void {
+    render(
+      <MemoryRouter initialEntries={[entry]}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <LocationProbe />
+              <Routes>
+                <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
+                <Route path="/w/:workspaceSlug/issues" element={<div data-testid="issue-list" />} />
+              </Routes>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function tabsOf(): ReturnType<typeof within> {
+    return within(screen.getByRole('tablist', { name: 'Comments and activity' }));
+  }
+
+  beforeEach(() => {
+    latestSearch = '';
+  });
+
+  it('深链 ?tab=activity 渲染活动 Tab 选中', async () => {
+    queue();
+    renderDetailWithProbe('/w/ws/issues/iss-1?tab=activity');
+    await screen.findByTestId('issue-detail');
+    const list = tabsOf();
+    expect(await list.findByRole('tab', { name: 'Activity' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(list.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('非法 ?tab= 值回落 comments 缺省', async () => {
+    queue();
+    renderDetailWithProbe('/w/ws/issues/iss-1?tab=bogus');
+    await screen.findByTestId('issue-detail');
+    const list = tabsOf();
+    expect(await list.findByRole('tab', { name: 'Comments' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('切换活动 Tab 写入 ?tab=activity,切回评论删除参数', async () => {
+    queue();
+    renderDetailWithProbe('/w/ws/issues/iss-1');
+    await screen.findByTestId('issue-detail');
+    const list = tabsOf();
+
+    fireEvent.click(await list.findByRole('tab', { name: 'Activity' }));
+    await waitFor(() => expect(latestSearch).toBe('?tab=activity'));
+
+    fireEvent.click(list.getByRole('tab', { name: 'Comments' }));
+    await waitFor(() => expect(latestSearch).toBe(''));
   });
 });
 

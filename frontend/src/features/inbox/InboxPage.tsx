@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
+import { useUrlState } from '../../hooks/useUrlState';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import {
   Avatar,
@@ -57,6 +58,11 @@ import './inbox.css';
 const FILTERS: readonly InboxFilter[] = ['all', 'unread', 'mentions', 'assigned', 'agent'];
 const PAGE_LIMIT = 30;
 
+/** URL filter 参数 → 合法枚举值;非法/缺失一律回落 all(L92 可分享、刷新不丢)。 */
+function filterFromParam(raw: string | null): InboxFilter {
+  return (FILTERS as readonly string[]).includes(raw ?? '') ? (raw as InboxFilter) : 'all';
+}
+
 export function InboxPage(): React.JSX.Element {
   const t = useT();
   useDocumentTitle(t('inbox.title')); // L93 标签页标题
@@ -69,7 +75,13 @@ export function InboxPage(): React.JSX.Element {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
 
-  const [filter, setFilter] = useState<InboxFilter>('all');
+  // L92:筛选同步 URL(?filter=),刷新不丢、可分享;all 为缺省不占参数。
+  const [filterParam, setFilterParam] = useUrlState('filter');
+  const filter = filterFromParam(filterParam);
+  const setFilter = useCallback(
+    (next: InboxFilter) => setFilterParam(next === 'all' ? null : next),
+    [setFilterParam],
+  );
   // 命令面板「标记全部已读」命令随当前视图 filter 口径(§1.2 S3 命令 ⑧)。
   useEffect(() => {
     setCurrentInboxView(workspaceId, filter);

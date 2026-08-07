@@ -36,6 +36,7 @@ import {
 } from '../../design';
 import { env } from '../../env';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useUrlState } from '../../hooks/useUrlState';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -311,7 +312,13 @@ export function IssueDetailPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('comments');
+  // L92:讨论/活动 Tab 同步 URL(?tab=),刷新不丢、可分享;缺省 comments 不占参数。
+  const [tabParam, setTabParam] = useUrlState('tab');
+  const activeTab = tabParam === 'activity' ? 'activity' : 'comments';
+  const setActiveTab = useCallback(
+    (value: string) => setTabParam(value === 'comments' ? null : value),
+    [setTabParam],
+  );
   const [statusValidationError, setStatusValidationError] = useState<string | null>(null);
   const statusStrictMode = workspaceContext?.workspace?.settings.status_strict_mode === true;
 
@@ -618,7 +625,7 @@ export function IssueDetailPage(): React.JSX.Element {
         closeLabel: t('common.close'),
       });
     },
-    [client, issue, t, toast],
+    [client, issue, setActiveTab, t, toast],
   );
 
   if (error !== null) {
