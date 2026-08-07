@@ -63,8 +63,15 @@ async def _make_issue(session_factory, workspace, owner, title="修复登录态�
     )
 
 
-def _assign_payload(*, issue_id: str, agent, action: str = "enqueue") -> dict:
-    return {
+def _assign_payload(
+    *,
+    issue_id: str,
+    agent,
+    action: str = "enqueue",
+    actor_user_id: uuid.UUID | str | None = None,
+    include_actor: bool = True,
+) -> dict:
+    payload = {
         "issue_id": issue_id,
         "agent_member_id": str(agent["member"]["id"]),
         "agent_id": agent["id"],
@@ -72,6 +79,12 @@ def _assign_payload(*, issue_id: str, agent, action: str = "enqueue") -> dict:
         "action": action,
         "trigger_event_id": str(TRIGGER_EVENT_ID),
     }
+    # apply_assign_triggers always carries the actor identity on enqueue
+    # events (TD-3 owner-only gate); ``include_actor=False`` simulates a
+    # legacy/pre-fix event row to prove the handler fails closed.
+    if include_actor:
+        payload["actor_user_id"] = str(actor_user_id) if actor_user_id else None
+    return payload
 
 
 async def _run_handler(session_factory, workspace, payload, *, config=None):
@@ -404,6 +417,174 @@ async def test_missing_agent_skips(session_factory):
     skipped = await _realtime_events(session_factory, "agent.trigger_skipped")
     assert skipped[0].payload["data"]["reason"] == "agent_not_found"
     assert await _enqueue_events(session_factory, workspace) == []
+
+
+# --- private agent owner-only gate on the assign path (TD-3 / DEBT-1) ----------
+
+
+async def _make_stranger(session_factory, workspace) -> Member:
+    """A human member that is NOT the agent owner (distinct user)."""
+    async with session_factory() as session, session.begin():
+        user = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Stranger",
+        )
+        session.add(user)
+        await session.flush()
+        member = Member(
+            workspace_id=workspace.id, member_type="human", user_id=user.id, role="member"
+        )
+        session.add(member)
+    return member
+
+
+async def _set_private(session_factory, agent) -> None:
+    from mesh.db.models.agent import Agent
+
+    async with session_factory() as session, session.begin():
+        row = await session.scalar(select(Agent).where(Agent.id == uuid.UUID(agent["id"])))
+        assert row is not None
+        row.visibility = "private"
+
+
+@pytest.mark.unit
+async def test_private_agent_assign_by_non_owner_skips_visibility(session_factory):
+    """TD-3: assigning an issue to a private agent as a non-owner must not
+    enqueue; the skip is broadcast with reason ``visibility_private``."""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    stranger = await _make_stranger(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)
+    await _set_private(session_factory, agent)
+    issue = await _make_issue(session_factory, workspace, owner)
+
+    await _run_handler(
+        session_factory,
+        workspace,
+        _assign_payload(issue_id=issue["id"], agent=agent, actor_user_id=stranger.user_id),
+    )
+
+    assert await _enqueue_events(session_factory, workspace) == []
+    skipped = await _realtime_events(session_factory, "agent.trigger_skipped")
+    assert len(skipped) == 1
+    data = skipped[0].payload["data"]
+    assert data["reason"] == "visibility_private"
+    assert data["trigger"] == "assign"
+    assert data["agent_id"] == agent["id"]
+
+
+@pytest.mark.unit
+async def test_private_agent_assign_without_actor_identity_skips(session_factory):
+    """Fail-closed: an enqueue trigger whose actor cannot be attributed to the
+    owner's user (agent-authored assign, or a legacy event without the field)
+    must not trigger a private agent."""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)
+    await _set_private(session_factory, agent)
+    issue = await _make_issue(session_factory, workspace, owner)
+
+    # actor_user_id present but null (agent-authored assign)
+    await _run_handler(
+        session_factory,
+        workspace,
+        _assign_payload(issue_id=issue["id"], agent=agent, actor_user_id=None),
+    )
+    # legacy event row without the field at all (distinct trigger event id —
+    # skip emission is idempotent per trigger_event_id, §6.5)
+    legacy = _assign_payload(issue_id=issue["id"], agent=agent, include_actor=False)
+    legacy["trigger_event_id"] = str(uuid.uuid4())
+    await _run_handler(session_factory, workspace, legacy)
+
+    assert await _enqueue_events(session_factory, workspace) == []
+    skipped = await _realtime_events(session_factory, "agent.trigger_skipped")
+    assert len(skipped) == 2
+    assert {s.payload["data"]["reason"] for s in skipped} == {"visibility_private"}
+
+
+@pytest.mark.unit
+async def test_private_agent_assign_by_owner_triggers(session_factory):
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)
+    await _set_private(session_factory, agent)
+    issue = await _make_issue(session_factory, workspace, owner)
+
+    await _run_handler(
+        session_factory,
+        workspace,
+        _assign_payload(issue_id=issue["id"], agent=agent, actor_user_id=owner.user_id),
+    )
+
+    enqueues = await _enqueue_events(session_factory, workspace)
+    assert len(enqueues) == 1
+    assert await _realtime_events(session_factory, "agent.trigger_skipped") == []
+
+
+@pytest.mark.unit
+async def test_public_agent_assign_by_non_owner_still_triggers(session_factory):
+    """Control: the owner-only gate applies to private visibility only."""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    stranger = await _make_stranger(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)  # default public
+    issue = await _make_issue(session_factory, workspace, owner)
+
+    await _run_handler(
+        session_factory,
+        workspace,
+        _assign_payload(issue_id=issue["id"], agent=agent, actor_user_id=stranger.user_id),
+    )
+
+    assert len(await _enqueue_events(session_factory, workspace)) == 1
+    assert await _realtime_events(session_factory, "agent.trigger_skipped") == []
+
+
+@pytest.mark.unit
+async def test_apply_assign_triggers_carries_actor_user_id(session_factory):
+    """The business txn embeds the assigning principal's user id so the relay
+    gate can enforce the owner-only rule out-of-process."""
+    from mesh.issue.triggers import apply_assign_triggers
+
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)
+    issue = await _make_issue(session_factory, workspace, owner)
+    agent_member_id = uuid.UUID(agent["member"]["id"])
+
+    async with session_factory() as session, session.begin():
+        from mesh.db.models.issue import Issue
+
+        row = await session.scalar(select(Issue).where(Issue.id == uuid.UUID(issue["id"])))
+        assert row is not None
+        row.assignee_id = agent_member_id
+        await session.flush()
+        await apply_assign_triggers(
+            session,
+            workspace_id=workspace.id,
+            issue=row,
+            previous_assignee_id=None,
+            trigger_event_id=TRIGGER_EVENT_ID,
+            actor=owner,
+        )
+
+    async with session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.workspace_id == workspace.id,
+                        OutboxEvent.event_type == "issue.assigned",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0].payload["actor_user_id"] == str(owner.user_id)
+    assert rows[0].payload["action"] == "enqueue"
 
 
 # --- reassignment supersede (§6.9) ---------------------------------------------------

@@ -69,6 +69,7 @@ async def apply_assign_triggers(
     issue: Issue,
     previous_assignee_id: uuid.UUID | None,
     trigger_event_id: uuid.UUID,
+    actor: Member,
 ) -> None:
     """Emit §6.9 assign-trigger events for a committed assignee diff.
 
@@ -78,6 +79,11 @@ async def apply_assign_triggers(
     realtime outbox event id of the issue change) is embedded in the
     payload — it anchors the §6.5 enqueue idempotency key and the §6.11
     snapshot.
+
+    ``actor`` is the member performing the assignment; the enqueue payload
+    embeds ``actor_user_id`` so the relay guardrail can enforce the agent.md
+    §3.5 owner-only rule for private agents (TD-3). Agent-authored assigns
+    carry ``user_id=None`` and fail that check closed.
     """
     new_agent = await _member_is_agent(session, issue.assignee_id)
     old_agent = await _member_is_agent(session, previous_assignee_id)
@@ -116,6 +122,7 @@ async def apply_assign_triggers(
                 "agent_id": str(new_agent.agent_id) if new_agent.agent_id else None,
                 "trigger": "assign",
                 "action": "enqueue",
+                "actor_user_id": str(actor.user_id) if actor.user_id is not None else None,
                 "previous_assignee_id": str(previous_assignee_id)
                 if previous_assignee_id is not None
                 else None,

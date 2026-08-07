@@ -771,6 +771,7 @@ class IssueService:
                 issue=issue,
                 previous_assignee_id=None,
                 trigger_event_id=realtime_event.id,
+                actor=actor,
             )
         await self._audit(
             session,
@@ -1429,6 +1430,7 @@ class IssueService:
                     issue=updated,
                     previous_assignee_id=uuid.UUID(previous) if previous else None,
                     trigger_event_id=realtime_event.id,
+                    actor=actor,
                 )
                 # squad.md §2.5 (issue_reassigned): if the issue moved away from
                 # its active squad leader, cancel that squad assignment in the

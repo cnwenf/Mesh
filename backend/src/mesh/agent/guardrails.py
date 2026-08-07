@@ -74,12 +74,19 @@ async def evaluate_assign_trigger(
     chain_depth: int = 0,
     config: TriggerGuardrailConfig | None = None,
     now: datetime | None = None,
+    actor_user_id: uuid.UUID | None = None,
 ) -> str | None:
     """Return the skip reason for an assign trigger, or ``None`` when allowed.
 
-    ``trigger`` is the trigger kind (``assign`` today; ``mention`` /
-    ``autopilot`` reuse this gate later). ``agent`` / ``member`` may be None
-    when the roster row points at an agent that no longer exists.
+    ``trigger`` is the trigger kind (``assign`` / ``mention`` share this gate;
+    agent.md §3.6「@提及与分派共用同一护栏门」). ``agent`` / ``member`` may be
+    None when the roster row points at an agent that no longer exists.
+
+    ``actor_user_id`` is the user identity of the principal performing the
+    triggering action (comment author for mention; assignee-setter for
+    assign). It is required to enforce the §3.5 owner-only rule for
+    ``private`` agents: a missing identity fails CLOSED (skip), because an
+    unattributable trigger can never be the owner.
     """
     cfg = config or TriggerGuardrailConfig()
     if agent is None or agent.deleted_at is not None:
@@ -104,6 +111,12 @@ async def evaluate_assign_trigger(
     )
     if (recent or 0) >= cfg.rate_limit:
         return SKIP_RATE_LIMITED
+    # agent.md §3.5 visibility: a ``private`` agent may only be triggered by
+    # its owner. Enforced here (not per-path) so mention AND assign share one
+    # gate (TD-3 / DEBT-1): roster enumeration of the agent's member id must
+    # not let a stranger trigger someone else's private agent via assignment.
+    if agent.visibility == "private" and actor_user_id != agent.owner_user_id:
+        return SKIP_VISIBILITY_PRIVATE
     return None
 
 

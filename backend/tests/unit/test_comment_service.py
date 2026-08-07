@@ -925,6 +925,30 @@ async def test_mention_disabled_or_archived_agent_skips(env, lifecycle):
     assert [frame.payload["data"]["reason"] for frame in skipped] == ["lifecycle_not_active"]
 
 
+async def test_mention_vanished_agent_row_skips_agent_not_found(env):
+    """TD-2: the roster member's agent row was deleted — the shared gate's
+    ``agent_not_found`` branch fires on the mention path (no enqueue)."""
+    from datetime import UTC, datetime
+
+    service, issue, agent, author = env["service"], env["issue"], env["agent"], env["author"]
+    async with env["factory"]() as session, session.begin():
+        row = await session.scalar(select(Agent).where(Agent.id == agent.agent_id))
+        assert row is not None
+        row.deleted_at = datetime.now(UTC)
+
+    created = await service.create_comment(
+        workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
+        body_markdown=_mention_link(agent.id),
+    )
+    assert created["triggered_execution_ids"] == []
+    assert await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT) == []
+    skipped = await _skipped_frames(env["factory"])
+    assert len(skipped) == 1
+    data = skipped[0].payload["data"]
+    assert data["reason"] == "agent_not_found"
+    assert data["trigger"] == "mention"
+
+
 async def test_mention_active_agent_still_triggers(env):
     """Control: an active agent is unaffected by the guardrail wiring."""
     service, issue, agent, author = env["service"], env["issue"], env["agent"], env["author"]
