@@ -1,7 +1,7 @@
 # MES-189 批次③ 第二切片 PROGRESS（接力清单）
 
 > 分支：`agent/mesh/mes189-slice2-frontend` · 计划：`docs/superpowers/plans/2026-08-07-mes189-batch3-slice2-frontend.md`
-> 更新：2026-08-07（续接 run，thrashing 后第二棒）
+> 更新：2026-08-08（阶段 D 收口，全部完成，进入交付）
 
 ## 已完成（已提交）
 
@@ -30,8 +30,16 @@
 - [x] C-20 L247 批量操作 UI 三面（`7219baf1`）✅ ① Issue 批量转派——IssuesBulkBar 新增「指派给…」Menu：活跃成员逐项 + 置顶「取消指派」（后端 POST /issues/bulk 约定 `assignee_id: ''` → 清空分派），停用成员不入项；IssuesPage 以 roster 下传。② 技能一绑多 agent——skills/api.ts `bulkBindSkill`（POST /workspaces/{ws}/skills/bulk-bind，BulkBindRequest/逐 agent 错误项契约）+ BulkBindDialog（活跃 agent 名册多选 + 全选半选态 + 空态；确认汇总「成功 N,失败 M」toast，失败附前 5 条 agent_id:code marker——与 issues/bulk 错误 marker 同约定；网络失败 danger toast 不关弹层）+ SkillDetailPage 安装行「Bind to agents…」按钮（canManage + 已安装），名册 effect 非数组包络边界降级空名册。③ 成员名下任务批量转派——ReassignMemberDialog（行操作菜单「Reassign open issues…」仅活跃成员行出现；目标下拉排除源成员本人，未选确认禁用；成功 toast 回报 reassigned_issues 条数，失败就地呈现不关弹层）+ MembersPage 行菜单接线。i18n +17 键×双语目录（issues.bulk.*2 + members.reassign.*7 + skills.bulkBind.*8，version 重算 en `a5372c4e` / zh `3b6c8ecc`）。UT 12 新增（BulkBindDialog 5 + skills api bulkBind 1 + SkillDetailPage 接线 1 + MembersPage 接线 1 + ReassignMemberDialog 3 + IssuesPage 批量转派 2），全套前端 443 文件/5028 例绿（typecheck/lint 净，0 错误 25 基线 warning），per-file 门禁过（47 文件 ≥90%；ReassignMemberDialog 100/100/100/100——空目标早退守卫因确认按钮 disabled 恒不可达，按 KISS 移除）
 - [x] C-21 L251 Presence 前端两面（`29045be4`）✅ ① 成员在线——members/api.ts `getMemberPresence`（GET /workspaces/{ws}/members/presence → {online_member_ids,count} 快照，member.md §3.1 落地契约）+ MembersPage 首屏快照装载（best-effort：快照失败静默降级「无人在线」不阻塞名册）+ workspace 频道 `member.presence` 帧增量（online/offline 只改在线集不触发整册重载；畸形 payload/异频道帧拒绝）+ 身份簇头像右下角 success 语义在线点（testid member-online-/card-member-online-{id}，title/aria-label「Online」）。② 看板谁在查看——接通原被丢弃的 `view.presence` 帧（kanban.md §3.5）：按 view_id 守卫更新 {online, subjects}，工具栏 layout chip 旁渲染观众头像簇（subject 经惰性 listMembers 名册映射显示名，未映射回落 subject 首字符；≤5 槽位，超出「+N」）+ 「N viewing」计数；online=0 不渲染；切换视图即清空；名册加载失败降级不弹错。i18n +2 键×双语目录（members.presence.online / board.viewPresence，version 重算 en `9f96a64e` / zh `dd7f08ca`）。UT 5 新增（members api 快照契约 1 + MembersPage 快照点/帧增量 2 + BoardPage 观众簇渲染/异视图忽略/online=0 2），全套前端 443 文件/5033 例绿（typecheck/lint 净，0 错误 25 基线 warning；SquadDetailPage 与 IssueDetailPage 各 1 例限时高负载 flake 单跑均绿），per-file 门禁过（48 文件 ≥90%）
 - [x] C-22 L541–543 导入导出 UI 三件（`6ed6fe2a`）✅ ① 行级实时进度——DataManagementPage 订阅非终态任务的 per-job 频道 `data_job:{id}`（后端 runner 唯一实时路径），`applyDataJobFrame` 纯合并帧（MERGE_KEYS 白名单 + updated_at 字符串比较防回退 + 只合并已在列表中的任务，无变更返回原引用），频道拼接串作 effect 依赖 + ref 持频道清单避免帧合并引发重订阅抖动；无 realtime 时 5s 轮询兜底；running 且 total_rows>0 的行渲染「● succeeded/total」文本进度（tabular-nums，色/动效不作唯一信号，§4.4）。② 413 前置预警——ExportDialog 提交遇 MeshApiError code=export_too_large（413，details {estimate,max_rows}）时不弹 toast，改在范围选择阶段就地渲染 role=alert 可关闭预警条（tooLargeBody 双占位符 + tooLargeDismiss），收窄后重试不离开当前弹层；其余错误仍走 toast 路径。③ 情境 ⋯ 入口——项目详情头两个独立按钮改 design Menu（more-horizontal 触发、align=end）：导出本项目恒可见、导入到本项目仅 admin/owner 且 archived 时 disabled（§4.1 读/写权限分层）；ViewSwitcher 新增 onExportView 可选 prop，只读视图 ⋯ 菜单仅露「导出本视图」+ 收藏（写条目重命名/复制/设默认/删除按 canWrite 门控），BoardPage 接线按条件挂载 ExportDialog（defaultScope=view，视图属项目时传 project_id 扁平过滤——后端只收 _FLAT_FILTER_KEYS）。i18n +5 键×双语目录（board.exportView / dataJobs.export.tooLargeBody / tooLargeDismiss / dataJobs.page.liveProgress / projects.detail.moreActions，version 重算 en `cad297c1` / zh `87460d2c`；catalogs.test dummyValues 补 estimate/maxRows 占位）。UT 7 新增（DataManagementPage 行级进度渲染 + 频道订阅/帧合并/异频道与 null payload 拒绝 2 + ExportDialog 413 预警/关闭/非 413 仍 toast 2 + ViewSwitcher 只读导出入口/可写并存 2 + BoardPage 范围预选 view 1）+ ProjectDetailPage ⋯ 菜单开关改写，全套前端 443 文件/5040 例绿（typecheck/lint 净，0 错误 25 基线 warning），per-file 门禁过（50 文件 ≥90%）
+- [x] 阶段 D-① 审计文档记账（`bd434b5c`）✅ 审计清单 §4.2 18 行移入 §4.1（retained 18→0）+ parity 清单闭合改写 + L486 锚点勘误注记
+- [x] 阶段 D-② 真实栈证据（契约 e2e `08f66352` + 证据基线 `bd11dc5a` + 契约 json 刷新 `2d4947a3`）✅ 六断言契约 e2e（邮件打开端点租户上下文修复随附）；四组合（desktop/phone × light/dark）走查 28 张证据截图重拍并逐张目检通过（根因：AppShell main 为固定高度滚动容器，OnboardingChecklist 渲染于 outlet 之上，fullPage 截图无法滚动嵌套容器致新深链场景被清单遮满——按真实用户行为在 spec setup 中 dismiss 清单修复）；real-stack-contract.json 断言全 PASS 刷新
+- [x] 阶段 D-③ 收口修复三连（真实栈走查发现）✅ `865350d4` 技能 bulk-bind 提交 agents 实体 id 而非成员行 id（+ UT）；`70bede91` 收件箱组头不再渲染字面 null（后端快照回填 + 前端防御渲染）；`3fd854fe` IssuesPage URL-sanitize 断言竞态改 waitFor + SkillDetailPage L259 名册剔除防御分支补测（per-file 覆盖率 L259 补齐）
+- [x] 阶段 D-③ 门禁全绿 ✅ 前端：audit 净（0 高危）、format 门禁过（历史债 273→259 路径，触碰文件全清）、typecheck 净、lint 0 错误/25 基线 warning、build 过、vitest 全套 443 文件/5042 例绿（覆盖率 ≥90%，per-file 门禁 `node scripts/verify-perfile-coverage.mjs` 过）、8 项 spec-check 脚本全绿（responsive/a11y-contract/legacy-token-debt/evidence/contrast/appica/tokens/stylelint）；后端：单元 4200 例 + e2e 380 例全绿，合并覆盖率 91.23% ≥90%；OpenAPI 契约测试绿（docs/api/openapi.yaml 与 live app 一致，286 paths）
+- [x] 阶段 D-④ Spec 同步 ✅ squad.md 导出登记 + member.md presence 落地说明（前段）；`2d4947a3` docs/api/openapi.yaml 重生成（新增四端点：inbox/{id}/open、members/presence、squads/{id}/export、skills/bulk-bind）
+- [x] 阶段 D-③ 收尾清理（`713ab98a`）✅ 触碰文件 prettier 格式化并从历史债基线除名；成员在线点迁移 legacy `--color-success` 别名 → 语义 `--color-success-fg`
 
 ## 未完成
+
+（无剩余 —— 阶段 A/B/C/D 全部完成，切片交付验收）
 
 ### 阶段 B 后端
 - （无剩余 —— B1/B2/B3/B4/B5/B6 全部完成）
@@ -55,11 +63,11 @@
 16. [x] L541–543 导入导出 UI（行级进度/413 预警/情境 ⋯ 入口）✅ 已提交 `6ed6fe2a`（见已完成区 C-22）
 
 ### 阶段 D
-- [ ] 审计文档 §4.2 18 行移入 §4.1 + 计数；parity 清单闭合改写；L486 锚点勘误注记
-- [ ] 证据：docs/evidence/mes-189/ 四组合截图 + real-stack-contract.json 断言
-- [ ] 门禁全绿（frontend quality 全套 + backend 全量 + spec-checks）
-- [ ] Spec 同步（squad.md 导出登记 ✅、member.md presence 落地说明 ✅、onboarding/import-export 段落待 L541–543 完成后补）
-- [ ] push + `gh pr ready` + @Mesh Leader（merge_queue=1，勿自合）
+- [x] 审计文档 §4.2 18 行移入 §4.1 + 计数；parity 清单闭合改写；L486 锚点勘误注记 ✅ `bd434b5c`
+- [x] 证据：docs/evidence/mes-189/ 四组合截图 + real-stack-contract.json 断言 ✅ `bd11dc5a`（28 张截图逐一目检通过）+ `2d4947a3`（契约 json 刷新，断言全 PASS）
+- [x] 门禁全绿（frontend quality 全套 + backend 全量 + spec-checks）✅ 见已完成区阶段 D-③
+- [x] Spec 同步（squad.md 导出登记 ✅、member.md presence 落地说明 ✅、openapi.yaml 重生成 `2d4947a3` ✅）
+- [x] push + `gh pr ready` + @Mesh Leader（merge_queue=1，勿自合）
 
 ## 环境与基建备忘（续接者必读）
 
