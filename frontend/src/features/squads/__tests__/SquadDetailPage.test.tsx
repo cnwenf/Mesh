@@ -672,3 +672,106 @@ describe('SquadDetailPage', () => {
     expect(String(posts[0].url)).toContain('/squads/sq-1/restore');
   });
 });
+
+describe('SquadDetailPage 归档导出入口(§4.6 / L486)', () => {
+  function stubObjectUrl(): {
+    createObjectURL: ReturnType<typeof vi.fn>;
+    revokeObjectURL: ReturnType<typeof vi.fn>;
+  } {
+    const createObjectURL = vi.fn(() => 'blob:squad-export');
+    const revokeObjectURL = vi.fn();
+    const NativeURL = URL;
+    class SquadTestURL extends NativeURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal('URL', SquadTestURL);
+    return { createObjectURL, revokeObjectURL };
+  }
+
+  it('⋯ 菜单导出归档:下载 markdown 并提示成功', async () => {
+    queueInitialLoad(fakeResponse({ rawText: '# Squad archive' }));
+    const { createObjectURL, revokeObjectURL } = stubObjectUrl();
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Squad actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export archive' }));
+
+    await screen.findByText('Archive exported.');
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe('text/markdown;charset=utf-8');
+    // jsdom Blob 无 text(),经 FileReader 读原文
+    const blobText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+    expect(blobText).toBe('# Squad archive');
+    expect(download).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:squad-export');
+  });
+
+  it('导出失败(403)→ danger toast,不触发下载', async () => {
+    queueInitialLoad(
+      fakeResponse({ status: 403, body: { error: { code: 'forbidden', message: 'no' } } }),
+    );
+    const { createObjectURL } = stubObjectUrl();
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Squad actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export archive' }));
+
+    await screen.findByText('You do not have permission to perform this action.');
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('导出过程意外失败(非 API 错误)→ 通用错误 toast,不触发下载', async () => {
+    queueInitialLoad(fakeResponse({ rawText: '# Squad archive' }));
+    const NativeURL = URL;
+    class ThrowingURL extends NativeURL {
+      static createObjectURL(): string {
+        throw new TypeError('object url denied');
+      }
+      static revokeObjectURL = vi.fn();
+    }
+    vi.stubGlobal('URL', ThrowingURL);
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Squad actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export archive' }));
+
+    await screen.findByText('We could not load this content. Please try again.');
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('普通成员(非 admin)也能看到 ⋯ 导出入口(读权限即可)', async () => {
+    const memberMe = {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    const emptyPage = { data: [], next_cursor: null };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: memberMe } }),
+      fakeResponse({ body: { data: squadFixture() } }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    expect(screen.queryByTestId('squad-edit-toggle')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Squad actions' })).toBeInTheDocument();
+  });
+});

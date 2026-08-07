@@ -2751,6 +2751,7 @@
     "squads.edit": "Edit",
     "squads.empty.description": "Create a squad to organize agents and people around shared work.",
     "squads.empty.title": "No squads yet",
+    "squads.exportArchive": "Export archive",
     "squads.filters.all": "All",
     "squads.filters.kind": "Kind",
     "squads.filters.search": "Search squads",
@@ -2782,6 +2783,7 @@
     "squads.messageKind.report": "Report",
     "squads.messageKind.system": "System",
     "squads.messages": "Messages",
+    "squads.moreMenu": "Squad actions",
     "squads.name": "Name",
     "squads.namePlaceholder": "e.g. Platform team",
     "squads.new": "New Squad",
@@ -2825,6 +2827,7 @@
     "squads.toast.archived": "Squad archived",
     "squads.toast.cancelled": "Task cancelled",
     "squads.toast.created": "Squad created",
+    "squads.toast.exported": "Archive exported.",
     "squads.toast.memberAdded": "Member added",
     "squads.toast.memberRemoved": "Member removed",
     "squads.toast.messageSent": "Message sent",
@@ -2965,5 +2968,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "69c803d1"
+  "version": "da078d03"
 }

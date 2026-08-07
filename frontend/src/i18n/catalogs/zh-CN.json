@@ -2751,6 +2751,7 @@
     "squads.edit": "编辑",
     "squads.empty.description": "创建一支小队，围绕共同工作组织智能体与成员。",
     "squads.empty.title": "还没有小队",
+    "squads.exportArchive": "导出归档",
     "squads.filters.all": "全部",
     "squads.filters.kind": "类型",
     "squads.filters.search": "搜索小队",
@@ -2782,6 +2783,7 @@
     "squads.messageKind.report": "汇报",
     "squads.messageKind.system": "系统",
     "squads.messages": "消息",
+    "squads.moreMenu": "小队操作",
     "squads.name": "名称",
     "squads.namePlaceholder": "例如：平台团队",
     "squads.new": "新建小队",
@@ -2825,6 +2827,7 @@
     "squads.toast.archived": "小队已归档",
     "squads.toast.cancelled": "任务已取消",
     "squads.toast.created": "小队已创建",
+    "squads.toast.exported": "归档已导出。",
     "squads.toast.memberAdded": "已添加成员",
     "squads.toast.memberRemoved": "已移除成员",
     "squads.toast.messageSent": "消息已发送",
@@ -2965,5 +2968,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "eab3c931"
+  "version": "1f490496"
 }

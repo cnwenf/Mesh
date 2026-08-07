@@ -1,7 +1,7 @@
 /**
  * Squad API 契约层测试(squad.md §3):路径 / 查询参数 / 方法 / 请求体 / 包络解包 / 频道名。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -28,12 +28,14 @@ import {
   moveTaskStatus,
   removeMember,
   rejectPlan,
+  exportSquadArchive,
   restoreSquad,
   sendMessage,
   squadChannel,
   taskStreamUrl,
   updateSquad,
 } from '../api';
+import { useAuthStore } from '../../../state/authStore';
 
 let stub: FetchStub;
 let client: MeshApiClient;
@@ -273,11 +275,64 @@ describe('messages and activity (§3.5)', () => {
   });
 
   it('lists activity with task_id/action/limit query params', async () => {
-    await listActivity(client, 'ws-1', 'sq-1', { taskId: 'tk-1', action: 'task_started', limit: 2 });
+    await listActivity(client, 'ws-1', 'sq-1', {
+      taskId: 'tk-1',
+      action: 'task_started',
+      limit: 2,
+    });
     const url = stub.calls[0].url;
     expect(url).toContain('/squads/sq-1/activity');
     expect(url).toContain('task_id=tk-1');
     expect(url).toContain('action=task_started');
     expect(url).toContain('limit=2');
+  });
+});
+describe('归档导出(§4.6 / L486)', () => {
+  afterEach(() => {
+    useAuthStore.getState().setToken(null);
+    vi.unstubAllGlobals();
+  });
+
+  function stubExport(response: Response): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async () => response);
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('GET export → markdown 原文 + 文件名 squad-{id}.md,携带 Authorization', async () => {
+    useAuthStore.getState().setToken('tok-1');
+    const fetchMock = stubExport(fakeResponse({ rawText: '# Squad archive' }));
+    const result = await exportSquadArchive('ws-1', 'sq-1');
+    expect(result).toEqual({ markdown: '# Squad archive', fileName: 'squad-sq-1.md' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/api/v1/workspaces/ws-1/squads/sq-1/export');
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer tok-1');
+  });
+
+  it('未登录时不带 Authorization 头', async () => {
+    const fetchMock = stubExport(fakeResponse({ rawText: '# Squad archive' }));
+    await exportSquadArchive('ws-1', 'sq-1');
+    const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+  });
+
+  it('错误包络 → 归一为 MeshApiError(状态 + 码)', async () => {
+    stubExport(
+      fakeResponse({ status: 403, body: { error: { code: 'forbidden', message: 'no' } } }),
+    );
+    await expect(exportSquadArchive('ws-1', 'sq-1')).rejects.toMatchObject({
+      status: 403,
+      code: 'forbidden',
+    });
+  });
+
+  it('网络失败 → MeshApiError network', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    );
+    await expect(exportSquadArchive('ws-1', 'sq-1')).rejects.toMatchObject({ code: 'network' });
   });
 });
