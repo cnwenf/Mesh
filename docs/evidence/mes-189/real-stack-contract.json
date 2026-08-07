@@ -4,8 +4,8 @@
   "contracts": {
     "inline_approval": {
       "verdict": "PASS",
-      "workspace_id": "6a4abf36-190e-4fd5-a30e-7a72a5192870",
-      "execution_id": "a0182a7e-ed13-4dba-a055-9a3eb018924a",
+      "workspace_id": "4bf861a8-110d-42a1-9ab9-8b58e6021e43",
+      "execution_id": "e906d605-4b01-49a4-80e0-f818a5016006",
       "database": {
         "approval_status": "approved",
         "decided_by_member_id_matches_recipient": true,
@@ -16,7 +16,7 @@
     },
     "notification_auto_archive": {
       "verdict": "PASS",
-      "workspace_id": "be261a38-8554-4b40-9dd6-8e804a6f174d",
+      "workspace_id": "dd76018c-3637-4051-8199-0c2c8141f67a",
       "database": {
         "sweep_archived_count": 1,
         "archived_at_set": true,
@@ -27,7 +27,7 @@
     },
     "email_open_token_mark_read": {
       "verdict": "PASS",
-      "workspace_id": "e566b7d7-22ca-4b13-bd7e-fd2f66f288eb",
+      "workspace_id": "0ecdcb47-a10d-4d38-8af8-dd40e1a358ea",
       "database": {
         "read_at_set_via_token": true,
         "unauthenticated_endpoint": true,
@@ -37,8 +37,8 @@
     },
     "squad_export": {
       "verdict": "PASS",
-      "workspace_id": "e3e53489-fd5e-4817-ad62-c47f4705ad91",
-      "squad_id": "890a5e39-abaa-4ed8-9495-157854384c98",
+      "workspace_id": "0356f8d0-4a89-4220-b8d4-6a63caf2a122",
+      "squad_id": "0e59877e-94dd-4459-9341-69fbe9da2881",
       "database": {
         "status_code": 200,
         "content_type_markdown": true,
@@ -48,8 +48,8 @@
     },
     "skill_bulk_bind": {
       "verdict": "PASS",
-      "workspace_id": "fc885413-b3c4-4a9a-b4ef-a7b603a6de1d",
-      "skill_installation_id": "c2ceb4e3-3155-49a1-bb87-c57533216d8f",
+      "workspace_id": "89b77624-ba22-4ffb-9de5-3c95c10a56c6",
+      "skill_installation_id": "df54a34d-764d-4ec6-b9d2-247b814f5839",
       "database": {
         "bound_count": 2,
         "repeat_conflict_markers": 2,
@@ -58,8 +58,8 @@
     },
     "assign_guardrail_private_agent": {
       "verdict": "PASS",
-      "workspace_id": "c876cd77-8d0c-4bfe-a952-8dc8c1eff66c",
-      "agent_id": "13177ccd-6025-4f6c-881b-a48dfaa2e1d9",
+      "workspace_id": "1c1dc1a8-8901-46f5-80da-b1f125ba94e9",
+      "agent_id": "6aebca95-de70-4b61-8d3f-6841b18fc4cc",
       "database": {
         "non_owner_skipped_reason": "visibility_private",
         "non_owner_enqueued_executions": 0,

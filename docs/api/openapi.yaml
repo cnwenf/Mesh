@@ -1482,6 +1482,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/members/presence:
+    get:
+      tags:
+      - member
+      summary: Members Presence
+      description: 'Workspace online-member snapshot (member.md §3.1/§3.5).
+
+
+        Backed by the gateway''s realtime connection set (member/presence.py);
+
+        workspace-scoped because a workspace-less presence path cannot be made
+
+        RLS-safe without a definer bypass.'
+      operationId: members_presence_api_v1_workspaces__workspace_id__members_presence_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Members Presence Api V1 Workspaces  Workspace Id  Members Presence Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/workspaces/{workspace_id}/agents/available:
     get:
       tags:
@@ -6073,6 +6109,13 @@ paths:
           type: boolean
           default: false
           title: Grouped
+      - name: archived
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Archived
       responses:
         '200':
           description: Successful Response
@@ -6180,6 +6223,53 @@ paths:
                 type: object
                 additionalProperties: true
                 title: Response Inbox Archive Read Api V1 Inbox Archive Read Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/inbox/{notification_id}/open:
+    get:
+      tags:
+      - comment-inbox
+      summary: Inbox Open From Email
+      description: 'Email deep-link entry (comment-inbox.md §4.4 点邮件链接回站内并标已读).
+
+
+        Unauthenticated by design — the signed one-time token IS the credential
+
+        (recipient + workspace bound, expiry enforced). Any verification failure
+
+        returns the same 404 as a missing notification (anti-oracle). On success
+
+        the notification is read-marked (idempotent) and the client is 302''d to
+
+        the in-site inbox anchor; without a configured app base URL the frame is
+
+        returned as JSON instead.'
+      operationId: inbox_open_from_email_api_v1_inbox__notification_id__open_get
+      parameters:
+      - name: notification_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Notification Id
+      - name: token
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -9767,6 +9857,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/skills/bulk-bind:
+    post:
+      tags:
+      - skill
+      summary: Bulk Bind Skill
+      description: 'Bind one installed skill to many agents at once (L247 批量操作).
+
+
+        Per-item isolation: each agent is bound in its own transaction; failures
+
+        come back as ``errors[]`` markers (issues/bulk convention) while the rest
+
+        succeed.'
+      operationId: bulk_bind_skill_api_v1_workspaces__workspace_id__skills_bulk_bind_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkBindRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Bulk Bind Skill Api V1 Workspaces  Workspace Id  Skills Bulk Bind Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/workspaces/{workspace_id}/agents/{agent_id}/skills/{binding_id}:
     patch:
       tags:
@@ -10032,6 +10164,38 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateSquadRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/squads/{squad_id}/export:
+    get:
+      tags:
+      - squad
+      summary: Export Squad
+      description: 'Markdown archive export: task messages + timeline (squad.md §4.5).'
+      operationId: export_squad_api_v1_workspaces__workspace_id__squads__squad_id__export_get
+      parameters:
+      - name: squad_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Squad Id
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
       responses:
         '200':
           description: Successful Response
@@ -13776,6 +13940,39 @@ components:
       - skill_installation_id
       title: BindRequest
       description: POST /workspaces/{ws}/agents/{agent_id}/skills.
+    BulkBindRequest:
+      properties:
+        skill_installation_id:
+          type: string
+          title: Skill Installation Id
+        agent_ids:
+          items:
+            type: string
+          type: array
+          maxItems: 50
+          minItems: 1
+          title: Agent Ids
+        skill_version_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skill Version Id
+        auto_trigger:
+          type: boolean
+          title: Auto Trigger
+          default: true
+        priority:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Priority
+          default: 100
+      type: object
+      required:
+      - skill_installation_id
+      - agent_ids
+      title: BulkBindRequest
+      description: POST /workspaces/{ws}/skills/bulk-bind — one skill to many agents (L247).
     BulkChanges:
       properties:
         status_id:
