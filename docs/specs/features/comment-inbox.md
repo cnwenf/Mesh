@@ -230,7 +230,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - GIN `idx_notifications_payload (payload)` — 按需。
 
 **设计要点(必须实现):**
-- **`payload` 存快照而非全靠外键回查**——评论/issue 被删除后通知仍可读。`payload` 至少含:`{actor_name, actor_avatar_url, preview, title, count}`;目标实体的类型与引用承载于 `payload` 与 `issue_id`/`comment_id`/`execution_id` 具体外键,**不设泛型「目标类型 + 目标 ID」判别列**(README §6.1)。
+- **`payload` 存快照而非全靠外键回查**——评论/issue 被删除后通知仍可读。`payload` 至少含:`{actor_name, actor_avatar_url, preview, title, count}`;`review_requested` 另携带 `approval_id`(统一 `approvals` 实体 id,README §6.10),收件箱据此渲染内联批准/拒绝(§4.2;MES-189 登记);目标实体的类型与引用承载于 `payload` 与 `issue_id`/`comment_id`/`execution_id` 具体外键,**不设泛型「目标类型 + 目标 ID」判别列**(README §6.1)。
 - **去重合并**:同 `group_key` **60s 聚合窗口**内合并为一条(更新 `payload.count` 与 `updated_at`),避免「连发 5 条评论」刷出 5 条(README §6.13)。
 
 ### 2.7 `notification_preferences` — 通知偏好
@@ -501,6 +501,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
   - 顶部筛选 tabs:`全部 / 未读 / 提及我的 / 分派 / Agent`(Agent 单列 tab,核心差异)。
   - 列表按 issue 分组:组头为 issue 标识 + 标题(组头提供「不再关注此 issue」一键静音,README §6.13);组内为通知行(actor 头像、动作描述、预览文本、相对时间、未读圆点)。
   - 行操作(hover 出现):标已读 / 归档 / 跳转。
+  - **内联审批(MES-189)**:`review_requested` 且 `payload.approval_id` 指向 pending 审批的行,直接渲染内联「批准 / 拒绝」按钮(复用 `POST /approvals/{id}/approve|reject`,README §6.10);已决 / 过期 / 取消的审批不渲染按钮(防 stale 操作,服务端幂等拒绝);决定后行内即时更新为已决态。
   - 顶部工具条:「全部已读」「归档已读」。
 - **空状态**:插画 + 「收件箱已清空」。
 - **通知偏好(Settings → Notifications)**:矩阵表格(行=事件类型,列=站内开关 + 邮件策略 无/实时/摘要);「Agent 执行通知」单独分区(核心差异);全局免打扰时段(quiet hours,标注 critical 事件穿透)、邮件摘要频率。

@@ -89,8 +89,8 @@
 - [x] Settings 不维护独立 Agents 名册；agent 唯一名册入口在成员页（依据: README §6.12「Agent 入口去重」）— 现状 ✅
 - [x] 九条规范深链全部可直达且用于通知/邮件外链：`/w/{ws}/issues/by-identifier/{KEY-N}`、`/projects/{id}`、`/members/{member_id}`、`/agents/{id}`、`/views/{view_id}`、`/executions/{id}`、`/chat/{session_id}`、`/squads/{squad_id}(/tasks/{task_id})`、`/approvals`（依据: README §6.12）— 现状 🟡（MES-111 批次④已补 `/approvals` 与 `/w/{ws}/approvals`，由 `App.tsx`、`features/approvals/ApprovalsPage.tsx` 及 `e2e/real-mes111-b4.spec.ts` 实测；`/members/{member_id}` 仍缺）
 - [x] 旧扁平路由（`/inbox`、`/board`…）经前端路由 replace 迁移到规范路由并保留 query/hash（依据: search-command-palette.md §3.4）— 现状 ⬜ 待实机
-- [x] URL 状态同步：列表筛选/分页/排序、详情 Tab、看板视图等页面状态同步到 URL，刷新不丢失、可分享可收藏（依据: kanban.md §5.1 视图 URL；MES-108 交互优化）— 现状 🟡（看板 `/views/{id}`、issue 列表 useSearchParams 已实现；其余页面待验）
-- [x] 浏览器标签页标题随页面语义变化（如「MES-123 修复登录 · Mesh」），通知未读可反映到标题/favicon（依据: MES-108 完成品体验）— 现状 🟡（MES-124 批次①经 `hooks/useDocumentTitle` 覆盖登录/注册/MFA/找回/重置/设备/邀请/首页；MES-111 批次④经 `shell/hooks/useDocumentTitle` 补设置、工作区设置、洞察、审批页及异步名称组合，单测见 `shell/hooks/__tests__/useDocumentTitle.test.ts`；其余应用实体页与未读标题/favicon 仍待补）
+- [x] URL 状态同步：列表筛选/分页/排序、详情 Tab、看板视图等页面状态同步到 URL，刷新不丢失、可分享可收藏（依据: kanban.md §5.1 视图 URL；MES-108 交互优化）— MES-189 闭合 ✅（`useUrlState` 四面落地：Issues 分页 ?page=、收件箱筛选 ?filter=、issue 详情 ?tab=、看板草稿 ?draft=；刷新/深链不丢，见 PROGRESS C-1）
+- [x] 浏览器标签页标题随页面语义变化（如「MES-123 修复登录 · Mesh」），通知未读可反映到标题/favicon（依据: MES-108 完成品体验）— MES-189 闭合 ✅（Issues/IssueDetail/Board/Inbox 语义标题补齐 + 未读 (N) 标题前缀与 applyUnreadFavicon 徽标 9+，见 PROGRESS C-2）
 - [x] 工作区切换器（左上角下拉）列出用户全部工作区 +「创建工作区」，切换后整页上下文刷新（依据: workspace.md §4.1）— 现状 ✅
 - [x] 404 页提供回首页/回工作区的可操作出口，非裸错误（依据: README §6.12 异常态矩阵）— 现状 ✅（MES-161：`NotFoundPage` standalone/embedded 双态；AppShell 内不重复主地标，工作区上下文可用时提供安全概览深链，真浏览器亮暗/桌面手机存证见 `e2e/evidence/mes161/`）
 
@@ -179,11 +179,11 @@
 - [x] empty = 空态插画 + 文案 + 主操作 + 深链既有向导（依据: onboarding.md §1.2.2）— 现状 ✅（六大空态已接入）
 - [x] error = 具名错误文案 + 重试按钮，非「网络错误」了事；97 个错误码本地化映射（依据: README §6.12；i18n.md §5.1）— 现状 ✅
 - [x] permission denied =「无权限」页 + 联系入口（依据: README §6.12）— 现状 ✅（MES-161：受保护 `/forbidden` 禁用工作区级命令面板并提供成员名册/首页安全出口；组件测试验证 Analytics 403 导向该隔离页，production 真栈验证恢复链接实际导航）
-- [x] offline = 顶部横幅「网络已断开」+ 乐观操作排队 + 自动重连（依据: README §6.12）— 现状 🟡（StatusBanner + StatusDot 六态已实现；「乐观操作排队」离线队列待验）
+- [x] offline = 顶部横幅「网络已断开」+ 乐观操作排队 + 自动重连（依据: README §6.12）— MES-189 闭合 ✅（`api/optimisticQueue.ts` 离线入队/在线回放/重试上限/容量护栏 + AppShell 横幅待回放计数，见 PROGRESS C-16）
 - [x] stale/resync =「正在重新同步…」对账后无感消失（依据: README §6.12）— 现状 ✅（StatusDot resyncing 态）
 - [x] partial failure = 逐项成功/失败标记 + 失败项重试（依据: README §6.12）— 现状 ✅（批量操作返回计数与原因）
 - [x] 全局 ErrorBoundary + ErrorPage（role=alert + 重试清边界）（依据: README §6.12）— 现状 ✅
-- [x] 专项恢复入口五条：看板断线顶部重连指示、日志按 offset 自动续传、附件扫描中占位、agent 无可用 runtime 分派提示链 runtime 页、审批过期「重新发起」（依据: README §6.12）— 现状 ⬜ 待实机逐条验
+- [x] 专项恢复入口五条：看板断线顶部重连指示、日志按 offset 自动续传、附件扫描中占位、agent 无可用 runtime 分派提示链 runtime 页、审批过期「重新发起」（依据: README §6.12）— MES-189 闭合 ✅（五条逐一落位：看板重连 StatusBanner、日志 offset 三合一段传、附件扫描占位、无 runtime 分派 warn toast、审批过期重新发起深链，见 PROGRESS C-17）
 
 ### 1.9 实时与重连
 
@@ -199,12 +199,12 @@
 - [x] 顶栏铃铛：未读红点 + 数字徽标 + 下拉最近若干条 +「查看全部」（依据: comment-inbox.md §4.2）— 现状 ✅
 - [x] 收件箱页：筛选 tabs（全部/未读/提及/分派/Agent 单列）、按 issue 分组（组头「不再关注此 issue」静音）、hover 行操作、全部已读/归档已读、空态插画（依据: comment-inbox.md §4.2）— 现状 ✅
 - [x] 通知分级唯一矩阵：执行成功 normal 默认不进箱；失败/审批/被分派/被@ critical 穿透 quiet hours；取消不通知发起者（依据: README §6.13）— 现状 ✅（后端矩阵）/ ⬜ 前端呈现待实机
-- [x] group_key 折叠 + 60s 窗口合并计数；已读+过期组自动归档（依据: README §6.13）— 现状 ⬜ 待实机
+- [x] group_key 折叠 + 60s 窗口合并计数；已读+过期组自动归档（依据: README §6.13）— MES-189 闭合 ✅（后端 B2 worker 自动归档已读+过期组 + 前端收件箱「已归档」第六 tab 可回查 ?filter=archived，见 PROGRESS C-18）
 - [x] 未读徽标多端同步 P95<1s；quiet hours 不抑制徽标（依据: comment-inbox.md §5.4）— 现状 ⬜ 待实机（双开验证）
 - [x] 点击通知直达评论锚点高亮闪烁并自动标已读；源实体被删凭 payload 快照可读，目标缺失提示「原内容已删除」（依据: comment-inbox.md §4.3/§5.3）— 现状 ⬜ 待实机
 - [x] 偏好矩阵页：事件类型 × 站内开关 × 邮件策略（无/实时/摘要）；Agent 执行通知单独分区；免打扰时段（标注 critical 穿透）+ 摘要频率（依据: comment-inbox.md §4.2）— 现状 ✅
-- [x] 「需人工确认」通知带内联批准/拒绝按钮（依据: agent.md §5.4）— 现状 ⬜ 待实机
-- [x] 邮件通道：摘要按收件人 locale 渲染、评论预览 HTML 转义、点邮件链接回站内对应锚点并自动标已读（依据: comment-inbox.md §4.4；i18n.md §5.1）— 现状 ⬜ 待实机
+- [x] 「需人工确认」通知带内联批准/拒绝按钮（依据: agent.md §5.4）— MES-189 闭合 ✅（review_requested 携带 approval_id，收件箱行 InboxApprovalActions 内联决定 + 已决/过期/取消不渲染，见 PROGRESS C-6）
+- [x] 邮件通道：摘要按收件人 locale 渲染、评论预览 HTML 转义、点邮件链接回站内对应锚点并自动标已读（依据: comment-inbox.md §4.4；i18n.md §5.1）— MES-189 闭合 ✅（后端 B3：收件人 locale 渲染 + 站内深链 + 一次性签名 token `GET /inbox/{id}/open` 标已读 302；邮件通道无前端 UI）
 
 ### 1.11 无障碍（a11y）
 
@@ -219,7 +219,7 @@
 
 - [x] 统一 favorites 模型（issue/project/view/chat_session），成员私有（依据: README §6.19）— 现状 🟡（chat 置顶经 favorites 已实现；issue/project/view 收藏入口待验）
 - [x] 命令面板空态 favorites 区（GET /favorites，收藏时间倒序）（依据: search-command-palette.md §4.2.1）— 现状 ✅（§4 G4 已核销；原基线 ❌（面板无 favorites 区））
-- [x] 收藏按钮 UI 入口（详情页/卡片 ⋯ 菜单或星标）与管理（依据: README §6.19）— 现状 ⬜ 待实机
+- [x] 收藏按钮 UI 入口（详情页/卡片 ⋯ 菜单或星标）与管理（依据: README §6.19）— MES-189 闭合 ✅（useFavorites + issue/卡片/项目/视图 ⋯ 星标条目 + FavoritesPage 管理，见 PROGRESS C-8）
 - [x] 聊天会话置顶区在上（置顶唯一真源 favorites，无独立 pin 端点）（依据: chat-session.md §3.2）— 现状 ✅
 
 ### 1.13 统一审批
@@ -239,17 +239,17 @@
 - [x] hover 操作浮现一致：行/卡片 hover 出操作按钮的交互在各页面表现一致（依据: MES-108 视觉一致性）— 现状 ⬜ 待实机
 - [x] 相对时间自动刷新（「3 分钟前」随停留时间推进更新），全时区一致（依据: i18n.md §4.4）— 现状 ⬜ 待实机
 - [x] 复制操作即时反馈：复制链接/复制激活码/复制 token 后 toast 或图标态变化（依据: MES-108 交互反馈）— 现状 ⬜ 待实机
-- [x] 表单脏状态保护：编辑器未保存离开时确认拦截（autopilot 编辑器/技能编辑/评论草稿）（依据: autopilot.md §4.2 保存草稿；MES-108 交互优化）— 现状 ⬜ 待实机
+- [x] 表单脏状态保护：编辑器未保存离开时确认拦截（autopilot 编辑器/技能编辑/评论草稿）（依据: autopilot.md §4.2 保存草稿；MES-108 交互优化）— MES-189 闭合 ✅（autopilot 编辑器 diff 判脏 + 技能创建对话框 onDirtyChange + 评论草稿未持久化上报，统一 requestLeave，见 PROGRESS C-19）
 
 ### 1.15 批量操作 / Feature Flags / 其他横切
 
 - [x] issue 批量：多选浮出底栏（状态/优先级/assignee/标签/删除），提交后「成功 N,失败 M」逐条原因（依据: issue.md §1.2.5）— 现状 ✅（issues 列表批量已实现）
-- [x] 收件箱批量已读/归档；成员批量转派；技能一绑多 agent；邀请多邮箱批量（依据: comment-inbox.md §3.2；member.md §3.1；skill.md §1.5；workspace.md §3.2）— 现状 ⬜ 待实机逐项核对
+- [x] 收件箱批量已读/归档；成员批量转派；技能一绑多 agent；邀请多邮箱批量（依据: comment-inbox.md §3.2；member.md §3.1；skill.md §1.5；workspace.md §3.2）— MES-189 闭合 ✅（issue 批量转派 Menu + skills bulk-bind 端点与对话框 + 成员行 ReassignMemberDialog，见 PROGRESS C-20）
 - [x] 批量失败可选短时撤销（依据: issue.md §1.2.5「可选」）— 现状 ⚪ 可选
 - [x] Feature flags 前端消费机制（工作区级功能开关下发 → UI 条件渲染）（依据: workspace.md §2.2 settings「功能开关」）— 现状 ✅（`workspace/featureFlags.tsx`；`autopilot` 关闭时同步过滤 Sidebar/MobileMoreDrawer/命令快捷键，直达路由显示禁用态；`featureFlags.test.ts` + `WorkspaceSettingsPage.test.tsx`）
 - [x] 浏览器桌面通知（Notification 权限流 + 尊重免打扰）（依据: comment-inbox.md §4.3「可选桌面 toast」）— 现状 ⚪ 可选
-- [x] Presence / 在线协作感知：成员在线状态、agent 忙碌指示（运行中 N/排队 M/需审批 K 三元组）、看板谁在查看（依据: agent.md §4.9；member.md §5.3；kanban.md §1.4）— 现状 🟡（agent presence 已接入成员页/看板；成员人类在线状态与看板 viewer presence 待验/可选）
-- [x] API 契约 UI 面：限流 429 + Retry-After 的退避提示、Deprecation/Sunset 头的用户可见提示（依据: cli.md §8）— 现状 ⬜ 待实机
+- [x] Presence / 在线协作感知：成员在线状态、agent 忙碌指示（运行中 N/排队 M/需审批 K 三元组）、看板谁在查看（依据: agent.md §4.9；member.md §5.3；kanban.md §1.4）— MES-189 闭合 ✅（成员在线：presence 快照 + member.presence 帧增量在线点；看板谁在查看：view.presence 观众头像簇 + N viewing，见 PROGRESS C-21）
+- [x] API 契约 UI 面：限流 429 + Retry-After 的退避提示、Deprecation/Sunset 头的用户可见提示（依据: cli.md §8）— MES-189 闭合 ✅（notices 总线 429 秒数提示 2s 去抖 + 弃用头每会话一次 + ApiNoticeToasts 桥）
 
 ### 1.16 前端安全渲染
 
@@ -477,13 +477,13 @@
 
 - [x] 列表卡片：头像/名称/形态徽标(常设/临时)/状态点/进行中任务计数/成员头像墙（leader 带 (L)、人/agent 异图标）（依据: squad.md §4.1）— 现状 ✅
 - [x] 详情页：左=成员区(+添加)/当前任务；右上=协作时间线（按任务/成员/action 过滤）；底=消息区（tabs 全部/指令/汇报/共享上下文，📌 置顶，@提及/关联任务/附件）（依据: squad.md §4.1）— 现状 ✅
-- [x] 消息着色：指令=蓝/汇报=绿/闲聊=灰/系统=虚线；指令/汇报带「关联任务」标签（依据: squad.md §4.2）— 现状 ⬜ 待实机
+- [x] 消息着色：指令=蓝/汇报=绿/闲聊=灰/系统=虚线；指令/汇报带「关联任务」标签（依据: squad.md §4.2）— MES-189 闭合 ✅（kind 修饰类五色双主题语义 token + 关联任务 chip 深链，`a027000b`）
 - [x] 拆解树视图：缩进层级 + 状态图标/执行人/阶段/依赖(「等待 st-9003」)/结果摘要；看板视图按子任务状态分列可拖拽（依据: squad.md §4.2）— 现状 ✅（原生拖拽）
 - [x] 审核横幅：awaiting_plan_approval 顶部高亮 [批准][驳回] + 方案 markdown 侧栏（依据: squad.md §4.2）— 现状 ✅
 - [x] 创建表单：名称/描述/头像/形态/组长模式/require_plan_approval/最大拆解层级(1-4) + 成员逐个设角色，至少一名组长否则置灰（依据: squad.md §4.2）— 现状 ⬜ 待实机
 - [x] 编排流 SSE（task.status/subtask.created/…）seq 断点重放，进度 {total,done,in_progress,pending,failed}（依据: squad.md §4.5）— 现状 ⬜ 待实机（长任务 e2e）
 - [x] 叫停整个任务：级联取消 + 终止 agent 运行（依据: squad.md §3.1）— 现状 ⬜ 待实机
-- [x] 任务消息+时间线导出 markdown 归档（依据: squad.md §4.5）— 现状 ⬜ 待实机
+- [x] 任务消息+时间线导出 markdown 归档（依据: squad.md §4.6；**锚点勘误**：原指向 §4.5，而 §4.5 主题为实时性与通知，导出要求已于 MES-189 登记至 §4.6）— MES-189 闭合 ✅（后端 POST /squads/{id}/export markdown 归档 + 前端头部 ⋯ 导出条目 `0286840e`）
 - [x] 运行中护栏：不可移除持有 in_progress 子任务者 422（依据: squad.md §3.1）— 现状 ⬜ 待实机
 - [x] 四组合走查：小队三页 × 四组合 — 现状 ⬜
 
@@ -510,7 +510,7 @@
 - [x] aha 庆祝态：末步达成切庆祝卡片（插画+文案+深链收件箱），尊重 reduced-motion，可收起（依据: onboarding.md §4.2）— 现状 ✅
 - [x] dismiss/恢复：「不再显示」收起；帮助菜单「重新显示上手清单」恢复（依据: onboarding.md §4.3）— 现状 ✅
 - [x] 六核心页面空状态四要素（插画+文案+主操作+深链），插画随主题适配亮/暗（依据: onboarding.md §1.2.2）— 现状 ✅（六大空态接入）
-- [x] 键盘入口可发现性：首次进入一次性内联提示（⌘K + ?），顶栏搜索占位「搜索或输入命令…(⌘K)」；已关闭不再现（依据: onboarding.md §4.2）— 现状 ⬜ 待实机（依赖顶栏搜索真实化）
+- [x] 键盘入口可发现性：首次进入一次性内联提示（⌘K + ?），顶栏搜索占位「搜索或输入命令…(⌘K)」；已关闭不再现（依据: onboarding.md §4.2）— MES-189 闭合 ✅（KeyboardHintBanner 一次性 localStorage 记忆 + 顶栏占位 formatCombo 平台感知，`22966a11`）
 - [x] 步骤完成实时增量刷新（onboarding.progress 私有频道）；WS 不可用 30s 轮询（依据: onboarding.md §4.5）— 现状 ⬜ 待实机
 - [x] 四组合走查：清单卡片/庆祝态/六空态 × 四组合 — 现状 🟡（`e2e/evidence/mes128-checklist/` 已覆盖清单卡片四组合，MES-161 真栈复验新账号桌面/手机入口；庆祝态与六空态的完整四组合仍待补）
 
@@ -538,9 +538,9 @@
 - [x] 导入向导分步可回退：上传 → 映射（源字段→Mesh 字段 + 值转换预览）→ dry-run 错误报告（行号/字段/原因 + 错误 CSV 下载 + 可回上一步改映射）→ 确认 → 进度（实时「成功 N/失败 M/共 T」）→ 结果（部分成功 + 错误报告 + 深链）（依据: import-export.md §4.2）— 现状 ✅（4 步 + 错误报告下载）
 - [x] 导出异步 UI：范围选择 + 预览匹配行数 + 格式/列/locale；「进行中,完成后通知」可关闭；data_job.updated 进度；completed 下载按钮（签名过期重签）（依据: import-export.md §4.3）— 现状 ✅
 - [x] 幂等 UI：重复点「确认导入」不重复建作业；running 期间按钮禁用显进度（依据: import-export.md §4.4）— 现状 ⬜ 待实机
-- [x] 大文件行级进度流式 UI；超大导出前置预警 `export_too_large`（依据: import-export.md §4.4）— 现状 ⬜ 待实机
-- [x] 状态信号「● 导入中 980/1000」文字+图标叠加（依据: import-export.md §4 引言）— 现状 ⬜ 待实机
-- [x] 项目页/视图页「⋯」情境入口「导出本项目/本视图」「导入到本项目」（依据: import-export.md §4.1）— 现状 ⬜ 待实机
+- [x] 大文件行级进度流式 UI；超大导出前置预警 `export_too_large`（依据: import-export.md §4.4）— MES-189 闭合 ✅（DataManagementPage 订阅 data_job:{id} 帧行级进度 + ExportDialog 413 内联预警，见 PROGRESS C-22）
+- [x] 状态信号「● 导入中 980/1000」文字+图标叠加（依据: import-export.md §4 引言）— MES-189 闭合 ✅（运行中任务行「● succeeded/total」文本信号，色/动效不作唯一信号，见 PROGRESS C-22）
+- [x] 项目页/视图页「⋯」情境入口「导出本项目/本视图」「导入到本项目」（依据: import-export.md §4.1）— MES-189 闭合 ✅（项目 ⋯ 导出/导入按读写权限分层 + 视图 ⋯ 只读可导出，`6ed6fe2a`，见 PROGRESS C-22）
 - [x] 四组合走查：导入导出流 × 四组合 — 现状 ⬜
 
 ### 2.20 Analytics / 洞察
