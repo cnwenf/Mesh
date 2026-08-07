@@ -15,6 +15,7 @@
 - [x] B6 Presence：`member/presence.py`（Redis hash 计数 + TTL，仅 0→1/1→0 边沿广播 member.presence）+ RealtimeSession 接线（首个订阅计在线 / 末订阅或断线离线）+ `GET /workspaces/{ws}/members/presence` 快照 ✅ 已提交（test_member_presence.py 7 例全绿；test_gateway_session/test_realtime_app/test_realtime_auth/test_view_presence/test_member_api/test_member_service/test_member_project_access 回归全绿）
 - [x] B1 后端：approval_id 已在 checkpoint `3db6de95` 完成（producer + consumer + UT）；剩前端内联按钮 → 并入阶段 C 第 6 条（L206）
 - [x] C-2 L93 标签页标题 + 未读 favicon 徽标（`14e15c64`）✅ 新增 UT 16 例 + useDocumentTitle 补 3 例全绿；邻域回归 150 例全绿；typecheck/lint 净
+- [x] C-15 L513 键盘入口可发现性（`22966a11`）✅ UT 8 新增 + 邻域回归全绿；i18n 目录 version 已重算（附重算脚本）
 
 ## 未完成
 
@@ -36,7 +37,7 @@
 12. [ ] L252 API 契约 UI（429 退避提示 + Deprecation/Sunset 提示）
 13. [ ] L480 小队消息着色 + 关联任务 chip
 14. [ ] L486 小队导出前端入口（后端已做）
-15. [ ] L513 键盘入口一次性提示 + 顶栏占位符
+15. [x] L513 键盘入口一次性提示 + 顶栏占位符 ✅ 已提交 `22966a11`：KeyboardHintBanner（Banner onDismiss 通道）+ keyboardHint 本地记忆（localStorage，隐私模式降级不抛错）+ App 浮层 controls 已使用落记忆 + 顶栏占位「搜索或输入命令…（{combo}）」（formatCombo 平台感知）+ 目录 version 重算脚本；UT 8 新增 + TopBar/App/shell 回归 54+37 例全绿，i18n 125 例全绿
 16. [ ] L541–543 导入导出 UI（行级进度/413 预警/情境 ⋯ 入口）
 
 ### 阶段 D
