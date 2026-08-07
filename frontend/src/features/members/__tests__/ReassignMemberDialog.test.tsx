@@ -99,8 +99,6 @@ describe('ReassignMemberDialog (L247)', () => {
     await user.selectOptions(screen.getByTestId('reassign-dialog-target'), 'mem-a');
     await user.click(screen.getByTestId('reassign-dialog-confirm'));
 
-    expect(
-      await screen.findByText('Something went wrong. Please try again.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Something went wrong. Please try again.')).toBeInTheDocument();
   });
 });

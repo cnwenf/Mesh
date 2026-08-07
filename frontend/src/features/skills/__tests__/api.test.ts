@@ -87,11 +87,9 @@ describe('versions 路径', () => {
     });
 
     await getVersion(client, 'ws-1', 's-1', 'v-1', true);
-    expect(request).toHaveBeenCalledWith(
-      'GET',
-      '/api/v1/workspaces/ws-1/skills/s-1/versions/v-1',
-      { query: { include_content: 'true' } },
-    );
+    expect(request).toHaveBeenCalledWith('GET', '/api/v1/workspaces/ws-1/skills/s-1/versions/v-1', {
+      query: { include_content: 'true' },
+    });
 
     const body = { version: '1.0.0', instructions: 'x', publish: true };
     await createVersion(client, 'ws-1', 's-1', body);
@@ -192,17 +190,12 @@ describe('agent 绑定路径', () => {
     });
 
     await updateBinding(client, 'ws-1', 'a-1', 'b-1', { enabled: false });
-    expect(request).toHaveBeenCalledWith(
-      'PATCH',
-      '/api/v1/workspaces/ws-1/agents/a-1/skills/b-1',
-      { body: { enabled: false } },
-    );
+    expect(request).toHaveBeenCalledWith('PATCH', '/api/v1/workspaces/ws-1/agents/a-1/skills/b-1', {
+      body: { enabled: false },
+    });
 
     await unbindSkill(client, 'ws-1', 'a-1', 'b-1');
-    expect(request).toHaveBeenCalledWith(
-      'DELETE',
-      '/api/v1/workspaces/ws-1/agents/a-1/skills/b-1',
-    );
+    expect(request).toHaveBeenCalledWith('DELETE', '/api/v1/workspaces/ws-1/agents/a-1/skills/b-1');
   });
 
   it('bulkBindSkill 命中 skills/bulk-bind 并透传多 agent 请求体(L247)', async () => {

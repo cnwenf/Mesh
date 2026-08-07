@@ -49,8 +49,15 @@ function stubBulkBind(body: unknown, status = 200): BulkBindStub {
   return { calls, fetchImpl };
 }
 
-function renderDialog(agents: readonly BulkBindAgentOption[] = AGENTS, stub: BulkBindStub = stubBulkBind({ data: { bound: [], errors: [] } })) {
-  const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken, fetchImpl: stub.fetchImpl });
+function renderDialog(
+  agents: readonly BulkBindAgentOption[] = AGENTS,
+  stub: BulkBindStub = stubBulkBind({ data: { bound: [], errors: [] } }),
+) {
+  const client = new MeshApiClient({
+    baseUrl: env.apiBaseUrl,
+    getToken,
+    fetchImpl: stub.fetchImpl,
+  });
   const onDone = vi.fn();
   const onClose = vi.fn();
   renderWithProviders(
@@ -69,7 +76,9 @@ function renderDialog(agents: readonly BulkBindAgentOption[] = AGENTS, stub: Bul
 
 describe('BulkBindDialog (L247)', () => {
   it('submits the selected agents to skills/bulk-bind and reports success', async () => {
-    const stub = stubBulkBind({ data: { bound: [{ binding_id: 'b-1' }, { binding_id: 'b-2' }], errors: [] } });
+    const stub = stubBulkBind({
+      data: { bound: [{ binding_id: 'b-1' }, { binding_id: 'b-2' }], errors: [] },
+    });
     const { onDone, onClose } = renderDialog(AGENTS, stub);
 
     fireEvent.click(screen.getByTestId('bulk-bind-agent-agent-entity-1'));
@@ -112,11 +121,17 @@ describe('BulkBindDialog (L247)', () => {
     const confirm = screen.getByTestId('bulk-bind-confirm') as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     fireEvent.click(screen.getByTestId('bulk-bind-select-all'));
-    expect((screen.getByTestId('bulk-bind-agent-agent-entity-1') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByTestId('bulk-bind-agent-agent-entity-2') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('bulk-bind-agent-agent-entity-1') as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect((screen.getByTestId('bulk-bind-agent-agent-entity-2') as HTMLInputElement).checked).toBe(
+      true,
+    );
     expect(confirm.disabled).toBe(false);
     fireEvent.click(screen.getByTestId('bulk-bind-select-all'));
-    expect((screen.getByTestId('bulk-bind-agent-agent-entity-1') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('bulk-bind-agent-agent-entity-1') as HTMLInputElement).checked).toBe(
+      false,
+    );
     expect(confirm.disabled).toBe(true);
   });
 

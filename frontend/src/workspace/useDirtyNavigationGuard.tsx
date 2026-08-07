@@ -97,9 +97,19 @@ export interface DirtyNavigationGuardDialogProps {
 }
 
 /** 离开确认 Dialog(stay/discard;discard 为破坏性 → danger 变体)。 */
-export function DirtyNavigationGuardDialog(props: DirtyNavigationGuardDialogProps): React.JSX.Element {
-  const { isConfirming, title, description, stayLabel, discardLabel, closeLabel, onStay, onDiscard } =
-    props;
+export function DirtyNavigationGuardDialog(
+  props: DirtyNavigationGuardDialogProps,
+): React.JSX.Element {
+  const {
+    isConfirming,
+    title,
+    description,
+    stayLabel,
+    discardLabel,
+    closeLabel,
+    onStay,
+    onDiscard,
+  } = props;
   return (
     <Dialog open={isConfirming} onClose={onStay} title={title} closeLabel={closeLabel}>
       <p className="mesh-settings-guard__description">{description}</p>
