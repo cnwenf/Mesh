@@ -98,6 +98,27 @@ const ME = {
   ],
 };
 
+const AGENT_MEMBERS = [
+  {
+    id: 'ag-1',
+    member_type: 'agent',
+    role: 'member',
+    status: 'active',
+    display_name: 'Planner',
+    joined_at: null,
+    profile: null,
+  },
+  {
+    id: 'ag-2',
+    member_type: 'agent',
+    role: 'member',
+    status: 'active',
+    display_name: 'Coder',
+    joined_at: null,
+    profile: null,
+  },
+];
+
 function setup(): { calls: { url: string; method: string }[] } {
   const calls: { url: string; method: string }[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -110,6 +131,8 @@ function setup(): { calls: { url: string; method: string }[] } {
       return fakeResponse({ body: { data: [VERSION], next_cursor: null } });
     if (url.includes('/skill-installations'))
       return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+    if (url.includes('/members'))
+      return fakeResponse({ body: { data: AGENT_MEMBERS, next_cursor: null } });
     if (url.includes('/skills/s-1')) return fakeResponse({ body: { data: SKILL } });
     return fakeResponse({ body: { data: SKILL } });
   }) as typeof fetch;
@@ -606,5 +629,46 @@ describe('SkillDetailPage', () => {
     );
     rendered.unmount();
     expect(realtimeClient.unsubscribe).toHaveBeenCalledWith('workspace:ws-1:skills');
+  });
+
+  it('bulk-bind 按钮打开对话框,确认后 POST skills/bulk-bind(L247)', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ url, method, body });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'POST' && url.includes('/bulk-bind'))
+        return fakeResponse({ body: { data: { bound: [{ binding_id: 'b-1' }], errors: [] } } });
+      if (url.includes('/versions/v-1')) return fakeResponse({ body: { data: VERSION } });
+      if (url.includes('/versions'))
+        return fakeResponse({ body: { data: [VERSION], next_cursor: null } });
+      if (url.includes('/skill-installations'))
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      if (url.includes('/members'))
+        return fakeResponse({ body: { data: AGENT_MEMBERS, next_cursor: null } });
+      return fakeResponse({ body: { data: SKILL } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await screen.findByTestId('skill-detail-name');
+
+    fireEvent.click(await screen.findByTestId('skill-bulk-bind-open'));
+    await screen.findByTestId('bulk-bind-body');
+    fireEvent.click(screen.getByTestId('bulk-bind-select-all'));
+    fireEvent.click(screen.getByTestId('bulk-bind-confirm'));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'POST' && c.url.includes('/skills/bulk-bind'))).toBe(
+        true,
+      ),
+    );
+    const post = calls.find((c) => c.method === 'POST' && c.url.includes('/skills/bulk-bind'));
+    expect(post?.body).toEqual({
+      skill_installation_id: 'i-1',
+      agent_ids: ['ag-1', 'ag-2'],
+    });
+    expect(await screen.findByText('Bulk bind: 1 succeeded, 0 failed')).toBeTruthy();
   });
 });

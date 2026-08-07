@@ -727,6 +727,7 @@ export function IssuesPage(): React.JSX.Element {
         <IssuesBulkBar
           selected={[...selected]}
           statuses={statuses}
+          members={roster}
           onDone={() => {
             setSelected(new Set());
             setReloadKey((k) => k + 1);

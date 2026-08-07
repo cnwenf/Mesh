@@ -573,6 +573,50 @@ describe('IssuesPage', () => {
     await waitFor(() => expect(screen.queryByTestId('bulk-bar')).toBeNull());
   });
 
+  it('bulk assign via menu sends changes.assignee_id; suspended members excluded (L247)', async () => {
+    const stub = queueInitialLoad(
+      fakeResponse({ body: { data: { succeeded: 1, failed: 0, errors: [] } } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    await screen.findByTestId('bulk-bar');
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to…' }));
+    // 活跃成员可选;停用成员不入候选
+    expect(screen.queryByRole('menuitem', { name: 'Suspended member' })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Planner' }));
+    await waitFor(() => {
+      const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+      expect(JSON.parse(String(posts[0].init?.body))).toEqual({
+        issue_ids: ['iss-1'],
+        changes: { assignee_id: 'agent-1' },
+      });
+    });
+  });
+
+  it('bulk unassign sends empty assignee_id (backend clears, L247)', async () => {
+    const stub = queueInitialLoad(
+      fakeResponse({ body: { data: { succeeded: 1, failed: 0, errors: [] } } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    await screen.findByTestId('bulk-bar');
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to…' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unassign' }));
+    await waitFor(() => {
+      const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+      expect(JSON.parse(String(posts[0].init?.body))).toEqual({
+        issue_ids: ['iss-1'],
+        changes: { assignee_id: '' },
+      });
+    });
+  });
+
   it('bulk failure (non-partial) shows a danger toast and keeps rows', async () => {
     queueInitialLoad(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),

@@ -10,7 +10,10 @@ import { Button, EmptyState, ErrorState, Icon, Select, Skeleton, useToast } from
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { listMembers } from '../members/api';
+import type { MemberSummary } from '../members/types';
 import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
+import { BulkBindDialog } from './BulkBindDialog';
 import {
   getSkill,
   getVersion,
@@ -235,6 +238,25 @@ export function SkillDetailPage(): React.JSX.Element {
   );
 
   const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
+
+  // L247 一绑多 agent:候选 = 活跃 agent 名册(打开过详情页即拉一次,失败不阻断页面)。
+  const [agentRoster, setAgentRoster] = useState<readonly MemberSummary[]>([]);
+  const [bulkBindOpen, setBulkBindOpen] = useState(false);
+  useEffect(() => {
+    if (workspaceId === null) return;
+    let cancelled = false;
+    void listMembers(client, workspaceId, { memberType: 'agent', status: 'active', limit: 100 })
+      .then((page) => {
+        // 边界防御:后端异常/桩回退可能给出非数组包络,降级为空名册而非崩溃。
+        if (!cancelled) setAgentRoster(Array.isArray(page.data) ? page.data : []);
+      })
+      .catch(() => {
+        // 名册拉取失败 → 对话框呈现空态,不影响详情页其余功能。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId]);
 
   // CRITICAL-3: roll the installation back to a historic version (§4.2/§5.1).
   const doRollback = useCallback(
@@ -541,7 +563,26 @@ export function SkillDetailPage(): React.JSX.Element {
                   {t('skills.disableButton')}
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                onClick={() => setBulkBindOpen(true)}
+                data-testid="skill-bulk-bind-open"
+              >
+                {t('skills.bulkBind.open')}
+              </Button>
             </div>
+          ) : null}
+
+          {canManage && workspaceId !== null && installation !== null ? (
+            <BulkBindDialog
+              open={bulkBindOpen}
+              onClose={() => setBulkBindOpen(false)}
+              client={client}
+              workspaceId={workspaceId}
+              installation={installation}
+              agents={agentRoster}
+              onDone={() => setReloadKey((k) => k + 1)}
+            />
           ) : null}
 
           {canManage &&

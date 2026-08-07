@@ -6,6 +6,7 @@ import type { MeshApiClient } from '../../../api';
 import {
   approveSkill,
   bindSkill,
+  bulkBindSkill,
   createSkill,
   createVersion,
   deleteSkill,
@@ -202,5 +203,17 @@ describe('agent 绑定路径', () => {
       'DELETE',
       '/api/v1/workspaces/ws-1/agents/a-1/skills/b-1',
     );
+  });
+
+  it('bulkBindSkill 命中 skills/bulk-bind 并透传多 agent 请求体(L247)', async () => {
+    const { client, request } = makeClient({ bound: [], errors: [] });
+    const result = await bulkBindSkill(client, 'ws-1', {
+      skill_installation_id: 'i-1',
+      agent_ids: ['a-1', 'a-2'],
+    });
+    expect(request).toHaveBeenCalledWith('POST', '/api/v1/workspaces/ws-1/skills/bulk-bind', {
+      body: { skill_installation_id: 'i-1', agent_ids: ['a-1', 'a-2'] },
+    });
+    expect(result).toEqual({ bound: [], errors: [] });
   });
 });

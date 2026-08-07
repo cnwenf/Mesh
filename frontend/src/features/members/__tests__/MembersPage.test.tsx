@@ -163,6 +163,9 @@ function makeFetch(members: unknown[], issues: unknown[] = []) {
     if (method === 'POST' && url.includes('/onboarding/reset')) {
       return fakeResponse({ body: { data: {} } });
     }
+    if (method === 'POST' && url.includes('/members/reassign')) {
+      return fakeResponse({ body: { data: { reassigned_issues: 2 } } });
+    }
     if (method === 'POST' && /\/agents\/[^/]+:(disable|enable)$/.test(url)) {
       return fakeResponse({ body: { data: AGENT } });
     }
@@ -540,6 +543,44 @@ describe('MembersPage', () => {
       ).toBe(true),
     );
     expect(await screen.findByText('Onboarding progress reset')).toBeInTheDocument();
+  });
+
+  it('行操作菜单转派名下任务:选目标 → POST /members/reassign → 汇总 toast(L247)', async () => {
+    const user = userEvent.setup();
+    const calls = stub([HUMAN, AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+
+    await openRowMenu(user, 'mem-h');
+    await user.click(screen.getByRole('menuitem', { name: 'Reassign open issues…' }));
+    const body = await screen.findByTestId('reassign-dialog-body');
+    expect(body.textContent).toContain('Jane Doe');
+
+    expect((screen.getByTestId('reassign-dialog-confirm') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    // 源成员本人不作为转派目标出现
+    expect(screen.queryByRole('option', { name: 'Jane Doe' })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByTestId('reassign-dialog-target'), 'mem-a');
+    expect((screen.getByTestId('reassign-dialog-confirm') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    await user.click(screen.getByTestId('reassign-dialog-confirm'));
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            (call.init?.method ?? 'GET') === 'POST' && call.url.includes('/members/reassign'),
+        ),
+      ).toBe(true),
+    );
+    const post = calls.find(
+      (call) => (call.init?.method ?? 'GET') === 'POST' && call.url.includes('/members/reassign'),
+    );
+    expect(post?.init?.body).toContain('"from_member_id":"mem-h"');
+    expect(post?.init?.body).toContain('"to_member_id":"mem-a"');
+    expect(await screen.findByText('2 issue(s) reassigned')).toBeInTheDocument();
   });
 
   it('点击成员打开详情抽屉(经 GET 详情,展示名下进行中 issue)', async () => {

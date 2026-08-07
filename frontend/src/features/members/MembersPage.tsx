@@ -53,6 +53,7 @@ import { getMember, listMembers, updateMember } from './api';
 import { AddMemberDialog } from './AddMemberDialog';
 import { RemoveMemberDialog } from './RemoveMemberDialog';
 import type { RemoveMode } from './RemoveMemberDialog';
+import { ReassignMemberDialog } from './ReassignMemberDialog';
 import type { MemberDetail, MemberRole, MemberSummary, MemberType } from './types';
 import { ROLE_ORDER } from './types';
 import { useWorkspaceMembership, workspaceRoute } from './useWorkspaceMembership';
@@ -216,6 +217,8 @@ export function MembersPage(): React.JSX.Element {
   const [agentActionError, setAgentActionError] = useState<string | null>(null);
   /** 管理员重置上手进度的二次确认目标(onboarding.md §4.2;仅人类成员行) */
   const [resetTarget, setResetTarget] = useState<MemberSummary | null>(null);
+  // L247 成员名下任务批量转派入口(POST /members/reassign)。
+  const [reassignSource, setReassignSource] = useState<MemberSummary | null>(null);
 
   // REST 快照先填充 agentId → 容量三元组,realtime 绝对帧随后覆盖。
   const agentIds = useMemo(
@@ -537,6 +540,14 @@ export function MembersPage(): React.JSX.Element {
         key: `enable-${member.id}`,
         label: t('members.enable.action'),
         onSelect: () => void handleEnable(member),
+      });
+    }
+    // L247 批量转派入口:活跃成员名下未完成 issue 整体转给另一名活跃成员。
+    if (member.status === 'active') {
+      entries.push({
+        key: `reassign-${member.id}`,
+        label: t('members.reassign.action'),
+        onSelect: () => setReassignSource(member),
       });
     }
     const canRemove = member.member_type === 'human' || agentIdOf(member) !== null;
@@ -1101,6 +1112,18 @@ export function MembersPage(): React.JSX.Element {
                 );
                 setReloadKey((key) => key + 1);
               }}
+            />
+          ) : null}
+          {reassignSource !== null ? (
+            <ReassignMemberDialog
+              open
+              onClose={() => setReassignSource(null)}
+              client={client}
+              workspaceId={workspace.workspace_id}
+              member={reassignSource}
+              targets={members.filter(
+                (member) => member.status === 'active' && member.id !== reassignSource.id,
+              )}
             />
           ) : null}
           <Dialog

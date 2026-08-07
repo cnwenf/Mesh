@@ -333,6 +333,36 @@ export interface PatchBindingBody {
   readonly priority?: number;
 }
 
+/** L247 一绑多 agent:POST /workspaces/{ws}/skills/bulk-bind(逐项隔离,部分成功)。 */
+export interface BulkBindBody {
+  readonly skill_installation_id: string;
+  readonly agent_ids: readonly string[];
+  readonly skill_version_id?: string | null;
+  readonly auto_trigger?: boolean;
+  readonly priority?: number;
+}
+
+export interface BulkBindErrorEntry {
+  readonly agent_id: string;
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface BulkBindResult {
+  readonly bound: readonly AgentSkillBinding[];
+  readonly errors: readonly BulkBindErrorEntry[];
+}
+
+export async function bulkBindSkill(
+  client: MeshApiClient,
+  workspaceId: string,
+  body: BulkBindBody,
+): Promise<BulkBindResult> {
+  return client.request<BulkBindResult>('POST', `${skillsPath(workspaceId)}/bulk-bind`, {
+    body,
+  });
+}
+
 export async function updateBinding(
   client: MeshApiClient,
   workspaceId: string,
