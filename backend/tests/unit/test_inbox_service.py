@@ -852,6 +852,33 @@ async def test_read_all_and_archive(env):
     assert result["archived_at"] is not None
 
 
+async def test_archived_only_listing(env):
+    """L202 归档视图:archived_only=True 只返回已归档通知(移出主视图,可回查)。"""
+    inbox = env["inbox"]
+    rows = await _seed_notifications(env, count=2)
+    await inbox.set_archived(
+        workspace_id=env["workspace"].id, member=env["bob"], notification_id=rows[0].id,
+    )
+    # 主视图只剩未归档行
+    main = await inbox.list_notifications(
+        workspace_id=env["workspace"].id, member=env["bob"],
+    )
+    assert [item["id"] for item in main["data"]] == [str(rows[1].id)]
+    # 归档视图只含已归档行,且 archived_at 非空
+    archived = await inbox.list_notifications(
+        workspace_id=env["workspace"].id, member=env["bob"], archived_only=True,
+    )
+    assert [item["id"] for item in archived["data"]] == [str(rows[0].id)]
+    assert all(item["archived_at"] is not None for item in archived["data"])
+    # 分组形态同样支持(两行同 group_key,归档视图内仅 1 组 1 条)
+    grouped = await inbox.list_notifications(
+        workspace_id=env["workspace"].id, member=env["bob"],
+        grouped=True, archived_only=True,
+    )
+    assert len(grouped["data"]) == 1
+    assert grouped["data"][0]["count"] == 1
+
+
 async def test_inbox_item_of_other_member_is_404(env):
     inbox = env["inbox"]
     rows = await _seed_notifications(env, count=1)

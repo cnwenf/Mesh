@@ -471,6 +471,7 @@ async def list_inbox(
     filter: str = Query(default="all"),
     type: str | None = Query(default=None),
     grouped: bool = Query(default=False),
+    archived: bool = Query(default=False),
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -483,6 +484,7 @@ async def list_inbox(
         inbox_filter=filter,
         notification_type=type,
         grouped=grouped,
+        archived_only=archived,
     )
 
 

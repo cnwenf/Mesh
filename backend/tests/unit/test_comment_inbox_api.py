@@ -560,6 +560,43 @@ async def test_inbox_requires_workspace_id(env):
     assert bad.status_code == 400
 
 
+async def test_inbox_archived_view(env):
+    """L202:GET /inbox?archived=true 只返回已归档通知(可回查);缺省不含归档行。"""
+    client, token, workspace = env["client"], env["token"], env["workspace"]
+    await _seed_inbox_notifications(env, count=2)  # 60s 窗口内聚合为 1 行
+    listing = await client.get(
+        "/api/v1/inbox", params={"workspace_id": workspace["id"]}, headers=_auth(token),
+    )
+    notification_id = listing.json()["data"][0]["id"]
+    archived_post = await client.post(
+        f"/api/v1/inbox/{notification_id}/archive",
+        params={"workspace_id": workspace["id"]}, headers=_auth(token),
+    )
+    assert archived_post.status_code == 200
+    # 缺省主视图不再含该行
+    main = await client.get(
+        "/api/v1/inbox", params={"workspace_id": workspace["id"]}, headers=_auth(token),
+    )
+    assert main.json()["data"] == []
+    # archived=true 回查:只含已归档行
+    archived = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": workspace["id"], "archived": "true"},
+        headers=_auth(token),
+    )
+    assert archived.status_code == 200
+    items = archived.json()["data"]
+    assert [item["id"] for item in items] == [notification_id]
+    assert items[0]["archived_at"] is not None
+    # archived 缺省为 false,显式 false 与缺省一致
+    explicit = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": workspace["id"], "archived": "false"},
+        headers=_auth(token),
+    )
+    assert explicit.json()["data"] == []
+
+
 async def test_mute_unmute_issue(env):
     client, token, issue = env["client"], env["token"], env["issue"]
     muted = await client.post(
