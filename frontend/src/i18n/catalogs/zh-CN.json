@@ -1169,6 +1169,10 @@
     "errorPage.description": "发生意外错误，请重试。",
     "errorPage.retry": "重试",
     "errorPage.title": "出错了",
+    "favorites.add": "添加收藏",
+    "favorites.addedToast": "已添加收藏",
+    "favorites.remove": "取消收藏",
+    "favorites.removedToast": "已取消收藏",
     "fields.activateButton": "重新启用字段 {name}",
     "fields.activatedToast": "字段已重新启用",
     "fields.activateGlyph": "▶",
@@ -2969,5 +2973,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "99a0c709"
+  "version": "96a310dc"
 }

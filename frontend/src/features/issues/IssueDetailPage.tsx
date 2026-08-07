@@ -46,6 +46,7 @@ import { useSettingsStore } from '../../state/settingsStore';
 import { CommentsPanel } from '../comments';
 import type { CommentMemberRef } from '../comments';
 import type { MentionCandidate } from '../comments/mentions';
+import { useFavorites } from '../favorites/useFavorites';
 import { fetchMe, listMembers } from '../members/api';
 import type { HumanProfile, MemberSummary } from '../members/types';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
@@ -288,6 +289,9 @@ export function IssueDetailPage(): React.JSX.Element {
   usePageContext('board', 'issue');
 
   const [issue, setIssue] = useState<IssueDetail | null>(null);
+  // L222 收藏入口:issue 目标类型成员集合 + 乐观切换(§6.19);
+  // 详情未解析完成时 workspaceId 为 null,hook 内部不发请求。
+  const favorites = useFavorites(issue?.workspace_id ?? null, 'issue');
   // L93 标签页标题:实体标识 + 标题(未解析完成前仅产品名)。
   useDocumentTitle(issue === null ? '' : `${issue.identifier} ${issue.title}`);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
@@ -673,6 +677,12 @@ export function IssueDetailPage(): React.JSX.Element {
         triggerLabel={t('issues.actions')}
         trigger={<Icon name="more-horizontal" size={16} />}
         entries={[
+          {
+            key: 'favorite',
+            label: favorites.favoriteIds.has(issue.id) ? t('favorites.remove') : t('favorites.add'),
+            icon: 'star',
+            onSelect: () => void favorites.toggle(issue.id),
+          },
           {
             key: 'delete',
             label: t('issues.detail.delete'),

@@ -51,6 +51,9 @@ export interface BoardListViewProps {
   readonly canWrite: boolean;
   readonly onOpenIssue: (issueId: string) => void;
   readonly onChanged: () => void;
+  /** L222:已收藏 issue id 集合(行操作菜单星标呈现);未提供则不渲染收藏条目。 */
+  readonly favoriteIssueIds?: ReadonlySet<string>;
+  readonly onToggleFavorite?: (issueId: string) => void;
 }
 
 /** 列 id → 表头 i18n 键。 */
@@ -107,15 +110,29 @@ interface RowRendererProps {
   readonly onToggleRow: (issueId: string) => void;
   readonly onOpenIssue: (issueId: string) => void;
   readonly onRequestDelete: (issueIds: readonly string[]) => void;
+  readonly favoriteIssueIds?: ReadonlySet<string>;
+  readonly onToggleFavorite?: (issueId: string) => void;
 }
 
 /** 单行渲染(表格 <tr>);所有行经此组件漏斗,便于日后虚拟化包裹。 */
 function RowRenderer(props: RowRendererProps): React.JSX.Element {
-  const { card, controller, visibleColumns, isSelected, onToggleRow, onOpenIssue, onRequestDelete } = props;
+  const {
+    card,
+    controller,
+    visibleColumns,
+    isSelected,
+    onToggleRow,
+    onOpenIssue,
+    onRequestDelete,
+    favoriteIssueIds,
+    onToggleFavorite,
+  } = props;
   const t = useT();
   return (
     <tr
-      className={isSelected ? 'mesh-board-list__row mesh-board-list__row--selected' : 'mesh-board-list__row'}
+      className={
+        isSelected ? 'mesh-board-list__row mesh-board-list__row--selected' : 'mesh-board-list__row'
+      }
       data-testid={`list-row-${card.id}`}
     >
       <td className="mesh-board-list__td mesh-board-list__td--select">
@@ -139,7 +156,13 @@ function RowRenderer(props: RowRendererProps): React.JSX.Element {
         </td>
       ))}
       <td className="mesh-board-list__td mesh-board-list__td--actions">
-        <RowActionsMenu card={card} onOpenIssue={onOpenIssue} onRequestDelete={onRequestDelete} />
+        <RowActionsMenu
+          card={card}
+          onOpenIssue={onOpenIssue}
+          onRequestDelete={onRequestDelete}
+          isFavorite={favoriteIssueIds?.has(card.id) ?? false}
+          onToggleFavorite={onToggleFavorite}
+        />
       </td>
     </tr>
   );
@@ -157,7 +180,9 @@ function CellValue(props: CellValueProps): React.JSX.Element {
   const { column, card, controller, onOpenIssue } = props;
   switch (column) {
     case 'identifier':
-      return <span className="mesh-board-list__identifier mesh-text-caption">{card.identifier}</span>;
+      return (
+        <span className="mesh-board-list__identifier mesh-text-caption">{card.identifier}</span>
+      );
     case 'title':
       return <TitleCell card={card} controller={controller} onOpenIssue={onOpenIssue} />;
     case 'status':
@@ -177,11 +202,21 @@ interface MobileRowProps {
   readonly onToggleRow: (issueId: string) => void;
   readonly onOpenIssue: (issueId: string) => void;
   readonly onRequestDelete: (issueIds: readonly string[]) => void;
+  readonly favoriteIssueIds?: ReadonlySet<string>;
+  readonly onToggleFavorite?: (issueId: string) => void;
 }
 
 /** 移动端堆叠卡片(≤599px 显现):主行编号+标题,副行状态/优先级/负责人/时间。 */
 function MobileRow(props: MobileRowProps): React.JSX.Element {
-  const { card, isSelected, onToggleRow, onOpenIssue, onRequestDelete } = props;
+  const {
+    card,
+    isSelected,
+    onToggleRow,
+    onOpenIssue,
+    onRequestDelete,
+    favoriteIssueIds,
+    onToggleFavorite,
+  } = props;
   const t = useT();
   return (
     <li className="mesh-board-list__card" data-testid={`list-card-${card.id}`}>
@@ -207,7 +242,13 @@ function MobileRow(props: MobileRowProps): React.JSX.Element {
         <PriorityText card={card} />
         <AssigneeCell card={card} />
         <UpdatedCell card={card} />
-        <RowActionsMenu card={card} onOpenIssue={onOpenIssue} onRequestDelete={onRequestDelete} />
+        <RowActionsMenu
+          card={card}
+          onOpenIssue={onOpenIssue}
+          onRequestDelete={onRequestDelete}
+          isFavorite={favoriteIssueIds?.has(card.id) ?? false}
+          onToggleFavorite={onToggleFavorite}
+        />
       </div>
     </li>
   );
@@ -225,13 +266,26 @@ interface GroupSectionProps {
   readonly onToggleRow: (issueId: string) => void;
   readonly onOpenIssue: (issueId: string) => void;
   readonly onRequestDelete: (issueIds: readonly string[]) => void;
+  readonly favoriteIssueIds?: ReadonlySet<string>;
+  readonly onToggleFavorite?: (issueId: string) => void;
 }
 
 /** 分组区:桌面为 <tbody>(分组头行 + 数据行),移动为堆叠卡片清单。 */
 function GroupSection(props: GroupSectionProps): React.JSX.Element {
   const {
-    group, cards, label, isCollapsed, controller, visibleColumns, selected,
-    onToggleGroup, onToggleRow, onOpenIssue, onRequestDelete,
+    group,
+    cards,
+    label,
+    isCollapsed,
+    controller,
+    visibleColumns,
+    selected,
+    onToggleGroup,
+    onToggleRow,
+    onOpenIssue,
+    onRequestDelete,
+    favoriteIssueIds,
+    onToggleFavorite,
   } = props;
   const t = useT();
   const colSpan = visibleColumns.length + 2;
@@ -268,6 +322,8 @@ function GroupSection(props: GroupSectionProps): React.JSX.Element {
               onToggleRow={onToggleRow}
               onOpenIssue={onOpenIssue}
               onRequestDelete={onRequestDelete}
+              favoriteIssueIds={favoriteIssueIds}
+              onToggleFavorite={onToggleFavorite}
             />
           ))}
     </tbody>
@@ -275,7 +331,16 @@ function GroupSection(props: GroupSectionProps): React.JSX.Element {
 }
 
 export function BoardListView(props: BoardListViewProps): React.JSX.Element {
-  const { view, groups, columnTargetStatus, canWrite, onOpenIssue, onChanged } = props;
+  const {
+    view,
+    groups,
+    columnTargetStatus,
+    canWrite,
+    onOpenIssue,
+    onChanged,
+    favoriteIssueIds,
+    onToggleFavorite,
+  } = props;
   const t = useT();
   const toast = useToast();
 
@@ -291,7 +356,9 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
   const [cellErrors, setCellErrors] = useState<Readonly<Record<string, string>>>({});
   const [savingCells, setSavingCells] = useState<ReadonlySet<string>>(new Set());
   // 乐观覆盖层:成功后按 card.id 叠加补丁字段(不改动 props,渲染时合并)。
-  const [cardOverrides, setCardOverrides] = useState<Readonly<Record<string, Partial<BoardCard>>>>({});
+  const [cardOverrides, setCardOverrides] = useState<Readonly<Record<string, Partial<BoardCard>>>>(
+    {},
+  );
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<readonly string[] | null>(null);
 
@@ -304,16 +371,29 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
   );
 
   const commit = useCallback(
-    async (card: BoardCard, field: CellField, patch: UpdateIssueBody, override: Partial<BoardCard>) => {
+    async (
+      card: BoardCard,
+      field: CellField,
+      patch: UpdateIssueBody,
+      override: Partial<BoardCard>,
+    ) => {
       const cellKey = `${card.id}:${field}`;
       setSavingCells((prev) => new Set(prev).add(cellKey));
       try {
-        await updateIssue(getApiClient(), card.id, { ...patch, version: card.version }, card.updated_at);
+        await updateIssue(
+          getApiClient(),
+          card.id,
+          { ...patch, version: card.version },
+          card.updated_at,
+        );
         setCardOverrides((prev) => ({ ...prev, [card.id]: { ...prev[card.id], ...override } }));
         setCellErrors((prev) => withoutKey(prev, cellKey));
         setEditingCell(null);
         onChanged();
-        toast.addToast(t('board.list.savedToast'), { tone: 'success', closeLabel: t('common.close') });
+        toast.addToast(t('board.list.savedToast'), {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        });
       } catch (err) {
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
         setCellErrors((prev) => ({ ...prev, [cellKey]: t(key) }));
@@ -404,7 +484,10 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
 
   // 全选作用于「已加载且展开分组」的行(折叠分组不可见,不参与)。
   const visibleIds = useMemo(
-    () => groups.flatMap((group) => (collapsed.has(group.key) ? [] : group.data.map((card) => card.id))),
+    () =>
+      groups.flatMap((group) =>
+        collapsed.has(group.key) ? [] : group.data.map((card) => card.id),
+      ),
     [groups, collapsed],
   );
   const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
@@ -418,10 +501,13 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
     async (body: BulkBody) => {
       try {
         const result = await bulkIssues(getApiClient(), body);
-        toast.addToast(t('board.list.result', { succeeded: result.succeeded, failed: result.failed }), {
-          tone: result.failed > 0 ? 'warn' : 'success',
-          closeLabel: t('common.close'),
-        });
+        toast.addToast(
+          t('board.list.result', { succeeded: result.succeeded, failed: result.failed }),
+          {
+            tone: result.failed > 0 ? 'warn' : 'success',
+            closeLabel: t('common.close'),
+          },
+        );
       } catch (err) {
         reportBulkError(err, t, toast);
       } finally {
@@ -452,8 +538,12 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
   if (groups.length === 0) {
     return (
       <div className="mesh-board-list" data-testid="list-empty">
-        <p className="mesh-board-list__empty-title mesh-text-title-3">{t('board.list.emptyTitle')}</p>
-        <p className="mesh-board-list__empty-description mesh-text-body">{t('board.list.emptyDescription')}</p>
+        <p className="mesh-board-list__empty-title mesh-text-title-3">
+          {t('board.list.emptyTitle')}
+        </p>
+        <p className="mesh-board-list__empty-description mesh-text-body">
+          {t('board.list.emptyDescription')}
+        </p>
       </div>
     );
   }
@@ -540,6 +630,8 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
             onToggleRow={toggleRow}
             onOpenIssue={onOpenIssue}
             onRequestDelete={setConfirmDeleteIds}
+            favoriteIssueIds={favoriteIssueIds}
+            onToggleFavorite={onToggleFavorite}
           />
         ))}
       </table>
@@ -547,7 +639,11 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
       <div className="mesh-board-list__mobile">
         {groups.map((group) =>
           collapsed.has(group.key) ? null : (
-            <ul key={group.key} className="mesh-board-list__cards" data-testid={`list-cards-${group.key}`}>
+            <ul
+              key={group.key}
+              className="mesh-board-list__cards"
+              data-testid={`list-cards-${group.key}`}
+            >
               {sortGroupCards(group.data).map((card) => (
                 <MobileRow
                   key={card.id}
@@ -556,6 +652,8 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
                   onToggleRow={toggleRow}
                   onOpenIssue={onOpenIssue}
                   onRequestDelete={setConfirmDeleteIds}
+                  favoriteIssueIds={favoriteIssueIds}
+                  onToggleFavorite={onToggleFavorite}
                 />
               ))}
             </ul>
@@ -603,7 +701,12 @@ export function BoardListView(props: BoardListViewProps): React.JSX.Element {
           <Button variant="secondary" size="md" onClick={() => setConfirmDeleteIds(null)}>
             {t('common.cancel')}
           </Button>
-          <Button variant="danger" size="md" data-testid="list-delete-confirm" onClick={confirmDelete}>
+          <Button
+            variant="danger"
+            size="md"
+            data-testid="list-delete-confirm"
+            onClick={confirmDelete}
+          >
             {t('board.list.deleteConfirm')}
           </Button>
         </div>

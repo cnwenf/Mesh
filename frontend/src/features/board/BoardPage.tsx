@@ -33,6 +33,7 @@ import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import type { RealtimeEventFrame } from '../../types/realtime';
+import { useFavorites } from '../favorites/useFavorites';
 import { getIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
 import {
   listCustomFields,
@@ -252,6 +253,10 @@ export function BoardPage(): React.JSX.Element {
           ? 'empty'
           : 'error'
     : standaloneWsStatus;
+  // L222 收藏入口:列表行 issue 星标 + 视图 ⋯ 菜单收藏条目(§6.19);
+  // membership 未就绪时 workspaceId 为 null,hook 内部不发请求。
+  const issueFavorites = useFavorites(membership?.workspace_id ?? null, 'issue');
+  const viewFavorites = useFavorites(membership?.workspace_id ?? null, 'view');
   const [views, setViews] = useState<readonly View[]>([]);
   const [viewsStatus, setViewsStatus] = useState<LoadStatus>('loading');
   const [customGroupFields, setCustomGroupFields] = useState<readonly CustomFieldDef[]>([]);
@@ -1053,6 +1058,8 @@ export function BoardPage(): React.JSX.Element {
           onDuplicate={handleDuplicate}
           onSetDefault={handleSetDefault}
           onDelete={handleDelete}
+          favoriteViewIds={viewFavorites.favoriteIds}
+          onToggleFavorite={(view) => void viewFavorites.toggle(view.id)}
         />
         <EmptyState
           illustration={<EmptyBoardColumns />}
@@ -1545,6 +1552,8 @@ export function BoardPage(): React.JSX.Element {
         onDuplicate={handleDuplicate}
         onSetDefault={handleSetDefault}
         onDelete={handleDelete}
+        favoriteViewIds={viewFavorites.favoriteIds}
+        onToggleFavorite={(view) => void viewFavorites.toggle(view.id)}
       />
       <div className="mesh-board__main">
         <header className="mesh-board__toolbar">
@@ -1717,6 +1726,8 @@ export function BoardPage(): React.JSX.Element {
                 navigate(`${routePrefixRef.current}/issues/${encodeURIComponent(id)}`)
               }
               onChanged={() => void loadBoard(selectedView)}
+              favoriteIssueIds={issueFavorites.favoriteIds}
+              onToggleFavorite={(issueId) => void issueFavorites.toggle(issueId)}
             />
           )
         ) : (

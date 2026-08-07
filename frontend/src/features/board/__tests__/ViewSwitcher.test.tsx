@@ -146,4 +146,26 @@ describe('ViewSwitcher', () => {
     });
     expect(onRename).toHaveBeenCalledWith(editable, '重命名看板');
   });
+
+  it('行内菜单含收藏条目:未收藏显示添加文案,点击回调该视图并收起菜单(L222)', () => {
+    const onToggleFavorite = vi.fn();
+    render({ onToggleFavorite, favoriteViewIds: new Set<string>() });
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add to favorites' }));
+    expect(onToggleFavorite).toHaveBeenCalledWith(expect.objectContaining({ id: 'v1' }));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('已收藏视图的行内菜单条目显示移除文案(L222)', () => {
+    const onToggleFavorite = vi.fn();
+    render({ onToggleFavorite, favoriteViewIds: new Set(['v1']) });
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    expect(screen.getByRole('menuitem', { name: 'Remove from favorites' })).toBeInTheDocument();
+  });
+
+  it('未提供收藏回调时仍渲染原有菜单(不出现收藏条目)(L222)', () => {
+    render();
+    fireEvent.click(screen.getByTestId('view-menu-v1'));
+    expect(screen.queryByTestId('view-favorite-toggle-v1')).toBeNull();
+  });
 });

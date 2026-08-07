@@ -1169,6 +1169,10 @@
     "errorPage.description": "An unexpected error occurred. Please try again.",
     "errorPage.retry": "Try again",
     "errorPage.title": "Something went wrong",
+    "favorites.add": "Add to favorites",
+    "favorites.addedToast": "Added to favorites",
+    "favorites.remove": "Remove from favorites",
+    "favorites.removedToast": "Removed from favorites",
     "fields.activateButton": "Reactivate field {name}",
     "fields.activatedToast": "Field reactivated",
     "fields.activateGlyph": "▶",
@@ -2969,5 +2973,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "9b5330c7"
+  "version": "c8264745"
 }

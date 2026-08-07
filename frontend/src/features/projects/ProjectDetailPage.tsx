@@ -13,6 +13,7 @@ import {
   EmptyState,
   ErrorState,
   Icon,
+  IconButton,
   PageHeader,
   Skeleton,
   Tabs,
@@ -22,6 +23,7 @@ import {
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { useFavorites } from '../favorites/useFavorites';
 import { fetchMe } from '../members/api';
 import {
   archiveProject,
@@ -85,6 +87,8 @@ export function ProjectDetailPage(): React.JSX.Element {
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  // L222 收藏入口:项目头部星标(§6.19);workspace 未解析时不发请求。
+  const projectFavorites = useFavorites(workspace?.workspace_id ?? null, 'project');
   const projectListPath =
     workspace?.workspace_slug !== undefined
       ? projectsRoute(workspace.workspace_slug)
@@ -287,6 +291,21 @@ export function ProjectDetailPage(): React.JSX.Element {
           }
           actions={
             <div className="mesh-projects__detail-actions">
+              {/* L222 项目收藏星标:已收藏呈实心星,aria-pressed 暴露切换态(§6.19)。 */}
+              <IconButton
+                variant="secondary"
+                className="mesh-projects__favorite-toggle"
+                data-testid="project-favorite-toggle"
+                label={
+                  projectFavorites.favoriteIds.has(project.id)
+                    ? t('favorites.remove')
+                    : t('favorites.add')
+                }
+                aria-pressed={projectFavorites.favoriteIds.has(project.id)}
+                onClick={() => void projectFavorites.toggle(project.id)}
+              >
+                <Icon name="star" size={16} filled={projectFavorites.favoriteIds.has(project.id)} />
+              </IconButton>
               <Button
                 variant="secondary"
                 data-testid="update-status-button"

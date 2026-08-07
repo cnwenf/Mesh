@@ -417,6 +417,33 @@ describe('BoardListView', () => {
     );
   });
 
+  it('行操作菜单:未收藏显示添加条目,点击回调 issue id(L222)', () => {
+    const onToggleFavorite = vi.fn();
+    renderList({ favoriteIssueIds: new Set<string>(), onToggleFavorite });
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }),
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add to favorites' }));
+    expect(onToggleFavorite).toHaveBeenCalledWith('i1');
+  });
+
+  it('行操作菜单:已收藏 issue 显示移除条目(L222)', () => {
+    renderList({ favoriteIssueIds: new Set(['i1']), onToggleFavorite: vi.fn() });
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }),
+    );
+    expect(screen.getByRole('menuitem', { name: 'Remove from favorites' })).toBeInTheDocument();
+  });
+
+  it('行操作菜单:未提供收藏回调时不渲染收藏条目(L222)', () => {
+    renderList();
+    fireEvent.click(
+      within(screen.getByTestId('list-row-i1')).getByRole('button', { name: 'Row actions' }),
+    );
+    expect(screen.queryByRole('menuitem', { name: 'Add to favorites' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Remove from favorites' })).toBeNull();
+  });
+
   it('批量非 MeshApiError 回退通用错误 toast', async () => {
     vi.mocked(bulkIssues).mockRejectedValue(new Error('boom'));
     renderList();

@@ -11,12 +11,7 @@ import type { MenuItem } from '../../design';
 import { useT } from '../../i18n';
 import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from '../issues/types';
 import type { UpdateIssueBody } from '../issues/types';
-import {
-  buildCellPatch,
-  categoryKey,
-  priorityLabelText,
-  statusTone,
-} from './listCellEdit';
+import { buildCellPatch, categoryKey, priorityLabelText, statusTone } from './listCellEdit';
 import type { CellField } from './listCellEdit';
 import type { BoardCard } from './projection';
 
@@ -235,7 +230,11 @@ export function StatusCell(props: {
 
   return (
     <span className="mesh-board-list__status">
-      <Menu trigger={<StatusBadge card={card} />} triggerLabel={t('board.list.editStatus')} entries={entries} />
+      <Menu
+        trigger={<StatusBadge card={card} />}
+        triggerLabel={t('board.list.editStatus')}
+        entries={entries}
+      />
       {savingCells.has(cellKey) ? (
         <Icon name="refresh" size={16} label={t('board.list.saving')} />
       ) : null}
@@ -280,12 +279,24 @@ interface RowActionsMenuProps {
   readonly card: BoardCard;
   readonly onOpenIssue: (issueId: string) => void;
   readonly onRequestDelete: (issueIds: readonly string[]) => void;
+  /** L222:该 issue 是否已收藏(与 onToggleFavorite 同时提供时渲染星标条目)。 */
+  readonly isFavorite?: boolean;
+  readonly onToggleFavorite?: (issueId: string) => void;
 }
 
-/** 行操作菜单(打开 / 删除);hover/focus-within 显现,触屏恒显(CSS 控制)。 */
+/** 行操作菜单(打开 / 收藏? / 删除);hover/focus-within 显现,触屏恒显(CSS 控制)。 */
 export function RowActionsMenu(props: RowActionsMenuProps): React.JSX.Element {
-  const { card, onOpenIssue, onRequestDelete } = props;
+  const { card, onOpenIssue, onRequestDelete, isFavorite = false, onToggleFavorite } = props;
   const t = useT();
+  const favoriteEntry: MenuItem | null =
+    onToggleFavorite === undefined
+      ? null
+      : {
+          key: 'favorite',
+          label: isFavorite ? t('favorites.remove') : t('favorites.add'),
+          icon: 'star',
+          onSelect: () => onToggleFavorite(card.id),
+        };
   const entries: MenuItem[] = [
     {
       key: 'open',
@@ -293,6 +304,7 @@ export function RowActionsMenu(props: RowActionsMenuProps): React.JSX.Element {
       icon: 'external',
       onSelect: () => onOpenIssue(card.id),
     },
+    ...(favoriteEntry === null ? [] : [favoriteEntry]),
     {
       key: 'delete',
       label: t('board.list.delete'),
