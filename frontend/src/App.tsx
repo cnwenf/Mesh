@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router';
 import { getApiClient } from './api/instance';
 import { useAuthStore } from './state/authStore';
-import { restoreActiveOnboarding } from './features/onboarding';
+import { dismissKeyboardHint, restoreActiveOnboarding } from './features/onboarding';
 import { getIssueByIdentifier } from './features/issues/api';
 import { ThemeProvider, ToastProvider } from './design';
 import { StyleguidePage } from './design/StyleguidePage';
@@ -172,15 +172,20 @@ function ShellProviders(): React.JSX.Element {
     () => ({
       openPalette: () => {
         if (!globalOverlaysEnabled) return;
+        dismissKeyboardHint(); // L513:已使用过效率入口 → 本地记忆,提示不再出现
         setPaletteQuery('');
         setPaletteOpen(true);
       },
       openHelp: () => {
-        if (globalOverlaysEnabled) setHelpOpen(true);
+        if (globalOverlaysEnabled) {
+          dismissKeyboardHint(); // L513:同上
+          setHelpOpen(true);
+        }
       },
       // 统一搜索入口(design-quality A-02):顶栏搜索键入/回车携带查询展开同一面板
       openSearch: (query: string) => {
         if (!globalOverlaysEnabled) return;
+        dismissKeyboardHint(); // L513:同上
         setPaletteQuery(query);
         setPaletteOpen(true);
       },

@@ -14,6 +14,11 @@
   color: var(--color-text);
 }
 
+/* 键盘入口一次性提示(onboarding.md §4.2 / L513):与上手清单同节奏的下边距 */
+.mesh-onboarding__keyboard-hint {
+  margin-block-end: var(--space-4);
+}
+
 .mesh-onboarding__head {
   display: flex;
   align-items: center;

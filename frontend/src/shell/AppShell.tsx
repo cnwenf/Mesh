@@ -27,7 +27,7 @@ import { useT } from '../i18n';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
-import { OnboardingChecklist } from '../features/onboarding';
+import { KeyboardHintBanner, OnboardingChecklist } from '../features/onboarding';
 import { useAuthStore } from '../state/authStore';
 import { usePaletteContext } from '../shortcuts/usePaletteContext';
 import type { RealtimeEventFrame } from '../types/realtime';
@@ -396,6 +396,9 @@ export function AppShell(): React.JSX.Element {
       <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />
+        {/* 键盘入口一次性提示(onboarding.md §4.2 / L513):仅工作区上下文内呈现,
+            已关闭/已使用即自隐藏(本地记忆,不进服务端) */}
+        {workspaceSlug !== undefined ? <KeyboardHintBanner /> : null}
         {outlet}
       </main>
       {/* 手机导航(design-quality §4.3):0–599px 底部主导航 + 「更多」全高抽屉;

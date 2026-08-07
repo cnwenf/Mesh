@@ -169,6 +169,11 @@ describe('TopBar', () => {
     expect(screen.getByTestId('topbar-search')).toHaveAttribute('data-slot', 'input');
     expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
     expect(screen.getByTestId('open-palette')).toHaveTextContent('Ctrl+K');
+    // L513:占位文案即可发现性提示——搜索或输入命令 + 平台组合键(onboarding.md §4.2)
+    expect(screen.getByTestId('topbar-search')).toHaveAttribute(
+      'placeholder',
+      'Search or type a command… (Ctrl+K)',
+    );
   });
 
   it.each(['connecting', 'reconnecting', 'resyncing', 'offline'])(

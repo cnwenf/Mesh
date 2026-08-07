@@ -2027,6 +2027,9 @@
     "onboarding.empty.projects.action": "新建项目",
     "onboarding.empty.projects.description": "用项目聚合一组相关 issue",
     "onboarding.empty.projects.title": "还没有项目",
+    "onboarding.keyboardHint.dismiss": "知道了",
+    "onboarding.keyboardHint.help": "按 ? 打开快捷键帮助层——当前上下文的全部键位。",
+    "onboarding.keyboardHint.palette": "按 {combo} 打开命令面板——跨模块搜索 + 命令全集。",
     "onboarding.percentLabel": "{percent}%",
     "onboarding.progressLabel": "已完成 {completed},共 {total} 步",
     "onboarding.reset.action": "重置上手进度",
@@ -2877,6 +2880,7 @@
     "tokens.scopes": "权限",
     "tokens.scopesLabel": "权限范围(逗号分隔)",
     "tokens.title": "API 令牌",
+    "topbar.searchPlaceholder": "搜索或输入命令…（{combo}）",
     "topbar.userMenu.logout": "登出",
     "topbar.userMenu.open": "打开用户菜单",
     "topbar.userMenu.personalSettings": "个人设置",
@@ -2958,5 +2962,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "26a247e6"
+  "version": "775b4b71"
 }

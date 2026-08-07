@@ -10,6 +10,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App';
+import { isKeyboardHintDismissed } from '../../features/onboarding';
 import { useAuthStore } from '../../state/authStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useShortcutRegistry } from '../../shortcuts';
@@ -48,6 +49,7 @@ function signIn(): void {
 
 describe('App 路由', () => {
   beforeEach(() => {
+    window.localStorage.clear(); // L513 键盘提示本地记忆按用例隔离
     useAuthStore.getState().clearToken();
     useSettingsStore.getState().resetPreferences();
     useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
@@ -279,6 +281,27 @@ describe('App 路由', () => {
     expect(screen.getByText('Command palette')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('open-help'));
     expect(screen.getByText('Keyboard shortcuts')).toBeInTheDocument();
+  });
+
+  it('打开命令面板即把键盘入口提示标记为已使用(L513)', () => {
+    signIn();
+    navigateTo('/');
+    render(<App />);
+    expect(isKeyboardHintDismissed()).toBe(false);
+    fireEvent.click(screen.getByTestId('open-palette'));
+    expect(isKeyboardHintDismissed()).toBe(true);
+  });
+
+  it('工作区路由呈现一次性键盘入口提示,关闭后落本地记忆(onboarding.md §4.2 / L513)', async () => {
+    signIn();
+    navigateTo('/w/ws/issues');
+    render(<App />);
+    const hint = await screen.findByTestId('keyboard-hint');
+    expect(hint.textContent).toContain('Ctrl+K');
+    expect(hint.textContent).toContain('?');
+    fireEvent.click(within(hint).getByRole('button', { name: 'Got it' }));
+    expect(screen.queryByTestId('keyboard-hint')).not.toBeInTheDocument();
+    expect(isKeyboardHintDismissed()).toBe(true);
   });
 
   it('顶栏搜索键入即展开统一结果视图并携带查询(杜绝无行为输入框,A-02 / §4.9)', async () => {

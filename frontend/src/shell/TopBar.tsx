@@ -306,7 +306,7 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
           className="mesh-topbar__search"
           inputSize="md"
           type="search"
-          placeholder={t('common.search')}
+          placeholder={t('topbar.searchPlaceholder', { combo: formatCombo('mod+k') })}
           aria-label={t('common.search')}
           role="combobox"
           aria-haspopup="listbox"

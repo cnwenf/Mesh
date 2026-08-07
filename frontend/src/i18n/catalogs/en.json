@@ -2027,6 +2027,9 @@
     "onboarding.empty.projects.action": "New project",
     "onboarding.empty.projects.description": "Group related issues with a project.",
     "onboarding.empty.projects.title": "No projects yet",
+    "onboarding.keyboardHint.dismiss": "Got it",
+    "onboarding.keyboardHint.help": "Press ? for the shortcut cheat sheet — every keybinding in the current context.",
+    "onboarding.keyboardHint.palette": "Press {combo} for the command palette — search every module and run any command.",
     "onboarding.percentLabel": "{percent}%",
     "onboarding.progressLabel": "{completed} of {total}",
     "onboarding.reset.action": "Reset onboarding",
@@ -2877,6 +2880,7 @@
     "tokens.scopes": "Scopes",
     "tokens.scopesLabel": "Scopes (comma-separated)",
     "tokens.title": "API tokens",
+    "topbar.searchPlaceholder": "Search or type a command… ({combo})",
     "topbar.userMenu.logout": "Sign out",
     "topbar.userMenu.open": "Open user menu",
     "topbar.userMenu.personalSettings": "Personal settings",
@@ -2958,5 +2962,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "33668746"
+  "version": "331583a7"
 }

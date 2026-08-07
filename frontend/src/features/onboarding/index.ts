@@ -2,6 +2,8 @@
  * 上手引导模块公共 API(onboarding.md)。
  */
 export { OnboardingChecklist } from './OnboardingChecklist';
+export { KeyboardHintBanner } from './KeyboardHintBanner';
+export { dismissKeyboardHint, isKeyboardHintDismissed } from './keyboardHint';
 export { useOnboarding, ONBOARDING_POLL_INTERVAL_MS } from './useOnboarding';
 export { restoreActiveOnboarding } from './restore';
 export {
