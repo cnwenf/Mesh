@@ -483,7 +483,7 @@
 - [x] 创建表单：名称/描述/头像/形态/组长模式/require_plan_approval/最大拆解层级(1-4) + 成员逐个设角色，至少一名组长否则置灰（依据: squad.md §4.2）— 现状 ⬜ 待实机
 - [x] 编排流 SSE（task.status/subtask.created/…）seq 断点重放，进度 {total,done,in_progress,pending,failed}（依据: squad.md §4.5）— 现状 ⬜ 待实机（长任务 e2e）
 - [x] 叫停整个任务：级联取消 + 终止 agent 运行（依据: squad.md §3.1）— 现状 ⬜ 待实机
-- [x] 任务消息+时间线导出 markdown 归档（依据: squad.md §4.6；**锚点勘误**：原指向 §4.5，而 §4.5 主题为实时性与通知，导出要求已于 MES-189 登记至 §4.6）— MES-189 闭合 ✅（后端 POST /squads/{id}/export markdown 归档 + 前端头部 ⋯ 导出条目 `0286840e`）
+- [x] 任务消息+时间线导出 markdown 归档（依据: squad.md §4.6；**锚点勘误**：原指向 §4.5，而 §4.5 主题为实时性与通知，导出要求已于 MES-189 登记至 §4.6）— MES-189 闭合 ✅（后端 GET /squads/{id}/export markdown 归档（squad/routes.py）+ 前端头部 ⋯ 导出条目 `0286840e`）
 - [x] 运行中护栏：不可移除持有 in_progress 子任务者 422（依据: squad.md §3.1）— 现状 ⬜ 待实机
 - [x] 四组合走查：小队三页 × 四组合 — 现状 ⬜
 

@@ -15,6 +15,7 @@ import pytest
 import redis.asyncio as aioredis
 
 from mesh.api.app import create_app
+from mesh.comment_inbox.notifications import issue_email_open_token
 from mesh.config import load_settings
 
 PASSWORD = "a-strong-passw0rd"
@@ -558,6 +559,52 @@ async def test_inbox_requires_workspace_id(env):
         "/api/v1/inbox", params={"workspace_id": "nope"}, headers=_auth(token)
     )
     assert bad.status_code == 400
+
+
+async def test_email_open_link_marks_read_and_rejects_invalid_tokens(env, app):
+    """comment-inbox.md §4.4:the signed one-time email link marks the
+    notification read over an UNAUTHENTICATED route; every verification
+    failure collapses to the same 404 (anti-oracle). MES-189 regression
+    surface for the tenant-context fix found by the real-stack e2e."""
+    client, token, workspace = env["client"], env["token"], env["workspace"]
+    await _seed_inbox_notifications(env, count=1)
+    notification = (
+        await client.get(
+            "/api/v1/inbox", params={"workspace_id": workspace["id"]}, headers=_auth(token),
+        )
+    ).json()["data"][0]
+    assert notification["read_at"] is None
+
+    roster = await client.get(
+        f"/api/v1/workspaces/{workspace['id']}/members", headers=_auth(token)
+    )
+    alice_member = next(m for m in roster.json()["data"] if m["member_type"] == "human")
+
+    open_token = issue_email_open_token(
+        app.state.settings,
+        notification_id=uuid.UUID(notification["id"]),
+        workspace_id=uuid.UUID(workspace["id"]),
+        recipient_member_id=uuid.UUID(alice_member["id"]),
+    )
+
+    opened = await client.get(
+        f"/api/v1/inbox/{notification['id']}/open", params={"token": open_token}
+    )
+    assert opened.status_code == 200, opened.text
+    frame = opened.json()["data"]
+    assert frame["read_at"] is not None
+
+    # unified 404: tampered token / swapped notification id / missing token
+    tampered = await client.get(
+        f"/api/v1/inbox/{notification['id']}/open", params={"token": open_token + "x"}
+    )
+    assert tampered.status_code == 404
+    swapped = await client.get(
+        f"/api/v1/inbox/{uuid.uuid4()}/open", params={"token": open_token}
+    )
+    assert swapped.status_code == 404
+    missing = await client.get(f"/api/v1/inbox/{notification['id']}/open")
+    assert missing.status_code == 404
 
 
 async def test_inbox_archived_view(env):

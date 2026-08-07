@@ -40,6 +40,7 @@ from mesh.comment_inbox.schemas import (
 from mesh.comment_inbox.service import CommentService
 from mesh.config import Settings
 from mesh.db.models.member import Member
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, NotFoundError, ValidationError
 
 router = APIRouter(prefix="/api/v1", tags=["comment-inbox"])
@@ -587,6 +588,10 @@ async def inbox_open_from_email(
     if resolved is None:
         raise NotFoundError("notification not found")
     workspace_id, member_id = resolved
+    # Unauthenticated route: the auth middleware never sets the tenant GUC,
+    # so establish it from the VERIFIED token's workspace before any RLS
+    # query on the request session (MES-189 e2e found the 500/empty read).
+    await set_tenant_context(session, workspace_id)
     member = await session.scalar(
         select(Member).where(
             Member.workspace_id == workspace_id,

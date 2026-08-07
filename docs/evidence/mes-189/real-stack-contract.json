@@ -1,0 +1,72 @@
+{
+  "verdict": "PASS",
+  "issue": "MES-189",
+  "contracts": {
+    "inline_approval": {
+      "verdict": "PASS",
+      "workspace_id": "6a4abf36-190e-4fd5-a30e-7a72a5192870",
+      "execution_id": "a0182a7e-ed13-4dba-a055-9a3eb018924a",
+      "database": {
+        "approval_status": "approved",
+        "decided_by_member_id_matches_recipient": true,
+        "execution_requeued": true,
+        "inbox_notification_type": "review_requested",
+        "inbox_payload_approval_id": true
+      }
+    },
+    "notification_auto_archive": {
+      "verdict": "PASS",
+      "workspace_id": "be261a38-8554-4b40-9dd6-8e804a6f174d",
+      "database": {
+        "sweep_archived_count": 1,
+        "archived_at_set": true,
+        "read_at_set": true,
+        "main_view_hides_archived": true,
+        "archived_view_returns_row": true
+      }
+    },
+    "email_open_token_mark_read": {
+      "verdict": "PASS",
+      "workspace_id": "e566b7d7-22ca-4b13-bd7e-fd2f66f288eb",
+      "database": {
+        "read_at_set_via_token": true,
+        "unauthenticated_endpoint": true,
+        "tampered_token_404": true,
+        "wrong_notification_404": true
+      }
+    },
+    "squad_export": {
+      "verdict": "PASS",
+      "workspace_id": "e3e53489-fd5e-4817-ad62-c47f4705ad91",
+      "squad_id": "890a5e39-abaa-4ed8-9495-157854384c98",
+      "database": {
+        "status_code": 200,
+        "content_type_markdown": true,
+        "header_and_sections_present": true,
+        "non_member_denied": true
+      }
+    },
+    "skill_bulk_bind": {
+      "verdict": "PASS",
+      "workspace_id": "fc885413-b3c4-4a9a-b4ef-a7b603a6de1d",
+      "skill_installation_id": "c2ceb4e3-3155-49a1-bb87-c57533216d8f",
+      "database": {
+        "bound_count": 2,
+        "repeat_conflict_markers": 2,
+        "bindings_persisted_per_agent": true
+      }
+    },
+    "assign_guardrail_private_agent": {
+      "verdict": "PASS",
+      "workspace_id": "c876cd77-8d0c-4bfe-a952-8dc8c1eff66c",
+      "agent_id": "13177ccd-6025-4f6c-881b-a48dfaa2e1d9",
+      "database": {
+        "non_owner_skipped_reason": "visibility_private",
+        "non_owner_enqueued_executions": 0,
+        "owner_assign_enqueued": true,
+        "owner_execution_materialized": true
+      }
+    }
+  },
+  "provider_credentials_redacted": true
+}
