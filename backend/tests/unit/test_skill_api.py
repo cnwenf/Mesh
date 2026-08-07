@@ -327,6 +327,67 @@ async def test_install_bind_unbind_rollback(client) -> None:
     )).status_code == 204
 
 
+async def test_bulk_bind_one_skill_to_many_agents(client) -> None:
+    """L247 批量操作:POST /skills/bulk-bind binds one installation to many
+    agents in a single call with per-item error markers."""
+    token = await _register_login(client, f"bb-{uuid.uuid4().hex[:8]}@mesh-sk.com")
+    ws = await _workspace(client, token, f"bb-{uuid.uuid4().hex[:8]}")
+    skill = (await client.post(
+        f"/api/v1/workspaces/{ws}/skills", json={"name": "N", "summary": "S"},
+        headers=_auth(token),
+    )).json()["data"]["id"]
+    version_id = (await client.post(
+        f"/api/v1/workspaces/{ws}/skills/{skill}/versions",
+        json={"version": "1.0.0", "instructions": "do", "publish": True},
+        headers=_auth(token),
+    )).json()["data"]["id"]
+    installation_id = (await client.post(
+        f"/api/v1/workspaces/{ws}/skill-installations",
+        json={"skill_id": skill, "skill_version_id": version_id, "scope": "workspace"},
+        headers=_auth(token),
+    )).json()["data"]["id"]
+
+    agent_ids = []
+    for _ in range(2):
+        agent_id = (await client.post(
+            f"/api/v1/workspaces/{ws}/agents",
+            json={"name": "Bot", "system_instructions": "x"}, headers=_auth(token),
+        )).json()["data"]["id"]
+        agent_ids.append(agent_id)
+
+    # bind both agents in one call
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws}/skills/bulk-bind",
+        json={"skill_installation_id": installation_id, "agent_ids": agent_ids},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert {b["agent_id"] for b in data["bound"]} == set(agent_ids)
+    assert data["errors"] == []
+
+    # repeat → both already bound → conflict markers, nothing bound
+    again = await client.post(
+        f"/api/v1/workspaces/{ws}/skills/bulk-bind",
+        json={"skill_installation_id": installation_id, "agent_ids": agent_ids},
+        headers=_auth(token),
+    )
+    assert again.status_code == 200
+    data2 = again.json()["data"]
+    assert data2["bound"] == []
+    assert {e["agent_id"] for e in data2["errors"]} == set(agent_ids)
+    assert all(e["code"] == "conflict" for e in data2["errors"])
+
+    # empty agent_ids → 400 validation_error (schema min_length=1)
+    empty = await client.post(
+        f"/api/v1/workspaces/{ws}/skills/bulk-bind",
+        json={"skill_installation_id": installation_id, "agent_ids": []},
+        headers=_auth(token),
+    )
+    assert empty.status_code == 400
+    assert empty.json()["error"]["code"] == "validation_error"
+
+
 async def test_import_ssrf_and_validation(client) -> None:
     token = await _register_login(client, f"s-{uuid.uuid4().hex[:8]}@mesh-sk.com")
     ws = await _workspace(client, token, f"s-{uuid.uuid4().hex[:8]}")

@@ -420,6 +420,10 @@ class Settings(BaseSettings):
     max_agent_chain_depth: int = Field(default=5, ge=1)
     notification_aggregation_window: float = Field(default=60.0, gt=0)
     notification_digest_interval: float = Field(default=21600.0, gt=0)
+    # Read + stale inbox groups are auto-archived (README §6.13 分组与归档):
+    # ``archived_at`` only moves them out of the main inbox view.
+    notification_archive_retention: timedelta = Field(default=timedelta(days=7))
+    notification_archive_interval: float = Field(default=900.0, gt=0)
     # Due-soon reminder sweep (comment-inbox.md §2.2 ``due_soon`` producer):
     # open issues whose due date falls inside the horizon get one fan-out
     # per issue+due-date (relay-side matrix/routing applies).

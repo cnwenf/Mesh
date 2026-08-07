@@ -369,6 +369,64 @@ async def test_aggregation_window_merges_same_group(env):
     assert rows[0].payload["preview"] == "msg 2"  # latest wins
 
 
+async def test_review_requested_carries_approval_id_to_payload_and_frame(env):
+    """Unified approvals (README §6.10 / agent.md §5.4): review_requested
+    notifications must carry the pending approval id end-to-end — stored
+    payload snapshot AND the realtime ``notification.created`` frame — so an
+    inbox row can offer inline approve/reject without a lookup."""
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    approval_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    # issue_id omitted on purpose: implicit issue routing (reporter/assignee) is
+    # covered elsewhere — this contract is approval_id propagation only.
+    event = await _emit_fanout(
+        factory, workspace,
+        notification_type="review_requested",
+        actor_member_id=env["agent"].id, actor_name="reviewer",
+        execution_id=execution_id,
+        recipient_ids=[env["bob"].id],
+        group_key=f"execution:{execution_id}:approval",
+        title="Approval needed", preview="tool: shell",
+        extra={"approval_id": str(approval_id)},
+    )
+    await _run_fanout(factory, event)
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["approval_id"] == str(approval_id)
+
+    frames = await _realtime_events(factory, "notification.created")
+    frames = [f for f in frames if f.workspace_id == workspace.id]
+    assert len(frames) == 1
+    assert frames[0].payload["data"]["approval_id"] == str(approval_id)
+    assert frames[0].payload["data"]["type"] == "review_requested"
+
+
+async def test_review_requested_aggregation_refreshes_approval_id(env):
+    """A re-requested approval merged into the 60 s window refreshes the
+    approval id so inline actions address the latest pending approval."""
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    execution_id = uuid.uuid4()
+    group = f"execution:{execution_id}:approval"
+    first_approval = uuid.uuid4()
+    second_approval = uuid.uuid4()
+    for approval_id, offset in ((first_approval, 0), (second_approval, 10)):
+        event = await _emit_fanout(
+            factory, workspace,
+            notification_type="review_requested",
+            execution_id=execution_id,
+            recipient_ids=[env["bob"].id], group_key=group,
+            title="Approval needed", preview="tool: shell",
+            extra={"approval_id": str(approval_id)},
+        )
+        await _run_fanout(factory, event, clock=T0 + timedelta(seconds=offset))
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["count"] == 2
+    assert rows[0].payload["approval_id"] == str(second_approval)
+
+
 async def test_aggregation_outside_window_creates_new_row(env):
     factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
     group = f"issue:{issue.id}:comment_created"

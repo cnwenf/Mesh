@@ -86,6 +86,7 @@ from mesh.workers.attachment_processor import (
 from mesh.workers.device_auth_sweep import device_auth_sweep_loop
 from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
+from mesh.workers.notification_archive import notification_archive_loop
 from mesh.workers.notification_digest import notification_digest_loop
 from mesh.workers.queue_retention import integration_queue_audit_retention_loop
 from mesh.workers.retention import (
@@ -461,6 +462,14 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     session_factory,
                     mailer=mailer,
                     interval=settings.notification_digest_interval,
+                    stop=stop,
+                ),
+            ),
+            TaskSpec(
+                "notification-archive",
+                lambda: notification_archive_loop(
+                    session_factory,
+                    settings=settings,
                     stop=stop,
                 ),
             ),

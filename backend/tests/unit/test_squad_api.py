@@ -231,6 +231,49 @@ async def test_cross_workspace_not_found(client):
     assert resp.status_code == 404
 
 
+async def test_export_markdown_archive(client):
+    """L486: GET /squads/{id}/export returns the task-message + timeline
+    archive as a downloadable markdown document."""
+    token = await _register_and_login(client, "squad-exp@corp.com")
+    ws = await _create_workspace(client, token, "squad-exp")
+    owner_id = await _owner_member_id(client, token, ws["id"])
+    squad = await _make_squad(client, token, ws["id"], owner_id, "Exp Squad")
+    sent = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/squads/{squad['id']}/messages",
+        json={"kind": "instruction", "body_markdown": "先做幂等校验"},
+        headers=_auth(token),
+    )
+    assert sent.status_code == 201, sent.text
+
+    resp = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/squads/{squad['id']}/export", headers=_auth(token)
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in resp.headers["content-disposition"]
+    body = resp.text
+    assert "# 小队归档：Exp Squad" in body
+    assert "【指令】" in body
+    assert "先做幂等校验" in body
+    assert "## 时间线" in body
+
+
+async def test_export_denied_for_outsider(client):
+    """A principal outside the workspace cannot reach the export (the read
+    gate 404s — no squad/workspace existence oracle)."""
+    token = await _register_and_login(client, "squad-exp2@corp.com")
+    ws = await _create_workspace(client, token, "squad-exp2")
+    owner_id = await _owner_member_id(client, token, ws["id"])
+    squad = await _make_squad(client, token, ws["id"], owner_id, "Closed Squad")
+
+    outsider = await _register_and_login(client, "squad-exp2-out@corp.com")
+    resp = await client.get(
+        f"/api/v1/workspaces/{ws['id']}/squads/{squad['id']}/export",
+        headers=_auth(outsider),
+    )
+    assert resp.status_code == 404
+
+
 async def test_sse_stream_terminal(client, session_factory):
     token = await _register_and_login(client, "squad-sse@corp.com")
     ws = await _create_workspace(client, token, "squad-sse")

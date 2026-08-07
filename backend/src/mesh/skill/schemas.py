@@ -129,6 +129,16 @@ class BindRequest(BaseModel):
     priority: int = Field(default=100, ge=0, le=1000)
 
 
+class BulkBindRequest(BaseModel):
+    """POST /workspaces/{ws}/skills/bulk-bind — one skill to many agents (L247)."""
+
+    skill_installation_id: str
+    agent_ids: list[str] = Field(min_length=1, max_length=50)
+    skill_version_id: str | None = None
+    auto_trigger: bool = True
+    priority: int = Field(default=100, ge=0, le=1000)
+
+
 class PatchBindingRequest(BaseModel):
     """PATCH /workspaces/{ws}/agents/{agent_id}/skills/{binding_id}."""
 

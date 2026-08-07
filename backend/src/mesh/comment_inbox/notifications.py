@@ -512,6 +512,10 @@ def _notification_payload(fanout: dict[str, Any]) -> dict[str, Any]:
         "count": 1,
         "changes": fanout.get("changes"),
         "execution_status": fanout.get("execution_status"),
+        # Unified approvals (README §6.10 / agent.md §5.4): review_requested
+        # notifications carry the pending approval id so inbox rows can offer
+        # inline approve/reject without a lookup round-trip.
+        "approval_id": fanout.get("approval_id"),
     }
 
 
@@ -727,7 +731,7 @@ class NotificationFanoutHandler:
             if existing is not None:
                 payload = dict(existing.payload or {})
                 payload["count"] = int(payload.get("count") or 1) + 1
-                for key in ("preview", "title", "actor_name", "actor_member_type"):
+                for key in ("preview", "title", "actor_name", "actor_member_type", "approval_id"):
                     if fanout.get(key) is not None:
                         payload[key] = fanout[key]
                 if comment_id is not None:
@@ -904,6 +908,7 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
         "issue": issue,
         "comment_id": str(notification.comment_id) if notification.comment_id else None,
         "execution_id": str(notification.execution_id) if notification.execution_id else None,
+        "approval_id": payload.get("approval_id"),
         "group_key": notification.group_key,
         "actor": actor,
         "preview": payload.get("preview"),
@@ -918,20 +923,103 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
     }
 
 
-def _email_body(notification: Notification) -> str:
-    """Plain-text email body; previews are HTML-escaped (§4.4 injection guard)."""
+def _email_body(notification: Notification, *, locale: str = "en", link: str | None = None) -> str:
+    """Plain-text email body rendered in the recipient locale (§4.4 / i18n §5.1).
+
+    Previews are HTML-escaped (§4.4 injection guard). ``link`` is the in-site
+    deep link back to the notification (auto read-marked when opened).
+    """
+    strings = _EMAIL_STRINGS.get(_locale_key(locale), _EMAIL_STRINGS["en"])
     payload = notification.payload or {}
     actor = html.escape(str(payload.get("actor_name") or ""), quote=True)
     title = html.escape(str(payload.get("title") or ""), quote=True)
     preview = html.escape(str(payload.get("preview") or ""), quote=True)
-    lines = [f"Mesh notification: {notification.type}"]
+    lines = [strings["header"].format(type=notification.type)]
     if actor:
-        lines.append(f"From: {actor}")
+        lines.append(f"{strings['from']}{actor}")
     if title:
-        lines.append(f"Issue: {title}")
+        lines.append(f"{strings['issue']}{title}")
     if preview:
-        lines.append(f"Preview: {preview}")
+        lines.append(f"{strings['preview']}{preview}")
+    if link:
+        lines.extend(["", strings["open"], link])
     return "\n".join(lines) + "\n"
+
+
+# Locale-specific email strings (i18n.md §5.1: server renders each recipient's
+# digest in their own locale; en is the fallback). Only fixed chrome is
+# translated — actor/title/preview are data and stay verbatim (escaped).
+_EMAIL_STRINGS: dict[str, dict[str, str]] = {
+    "en": {
+        "header": "Mesh notification: {type}",
+        "from": "From: ",
+        "issue": "Issue: ",
+        "preview": "Preview: ",
+        "open": "Open this notification (marks it read):",
+        "digest": "Mesh notification digest ({count} items)",
+    },
+    "zh-CN": {
+        "header": "Mesh 通知：{type}",
+        "from": "来自：",
+        "issue": "事项：",
+        "preview": "预览：",
+        "open": "打开该通知（打开即标记已读）：",
+        "digest": "Mesh 通知摘要（共 {count} 条）",
+    },
+}
+
+
+def _locale_key(locale: str | None) -> str:
+    """Map a stored locale to an email-template key (zh-* → zh-CN, else en)."""
+    if not locale:
+        return "en"
+    normalized = locale.strip().lower()
+    if normalized.startswith("zh"):
+        return "zh-CN"
+    return "en"
+
+
+async def resolve_recipient_locale(
+    session: AsyncSession, *, recipient_member_id: uuid.UUID, workspace_id: uuid.UUID
+) -> str:
+    """Negotiation chain (i18n.md §5.1): users.settings.locale →
+    workspaces.settings.default_locale → ``en``."""
+    from mesh.db.models.workspace import Workspace
+
+    user_locale = await session.scalar(
+        select(User.settings["locale"])
+        .join(Member, Member.user_id == User.id)
+        .where(
+            Member.workspace_id == workspace_id,
+            Member.id == recipient_member_id,
+        )
+    )
+    if isinstance(user_locale, str) and user_locale.strip():
+        return user_locale
+    workspace_locale = await session.scalar(
+        select(Workspace.settings["default_locale"]).where(
+            Workspace.id == workspace_id
+        )
+    )
+    if isinstance(workspace_locale, str) and workspace_locale.strip():
+        return workspace_locale
+    return "en"
+
+
+async def workspace_slug_for(session: AsyncSession, *, workspace_id: uuid.UUID) -> str | None:
+    from mesh.db.models.workspace import Workspace
+
+    return await session.scalar(select(Workspace.slug).where(Workspace.id == workspace_id))
+
+
+def notification_deep_link(
+    app_base_url: str | None, workspace_slug: str | None, notification_id: uuid.UUID
+) -> str | None:
+    """In-site anchor for an email notification (opens + auto read-marks)."""
+    if not app_base_url or not workspace_slug:
+        return None
+    base = app_base_url.rstrip("/")
+    return f"{base}/w/{workspace_slug}/inbox/{notification_id}"
 
 
 # ---------------------------------------------------------------------------

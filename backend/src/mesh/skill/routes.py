@@ -22,6 +22,7 @@ from mesh.skill.installations import InstallationService
 from mesh.skill.schemas import (
     ApproveRequest,
     BindRequest,
+    BulkBindRequest,
     CreateSkillRequest,
     CreateVersionRequest,
     ImportRequest,
@@ -583,6 +584,42 @@ async def bind_skill(
         **_client_meta(request),
     )
     return {"data": binding}
+
+
+@router.post("/workspaces/{workspace_id}/skills/bulk-bind", status_code=200)
+async def bulk_bind_skill(
+    body: BulkBindRequest,
+    request: Request,
+    response: Response,
+    user: User = Depends(get_current_user),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    """Bind one installed skill to many agents at once (L247 批量操作).
+
+    Per-item isolation: each agent is bound in its own transaction; failures
+    come back as ``errors[]`` markers (issues/bulk convention) while the rest
+    succeed.
+    """
+    await _rate_limit_write(request, user, response)
+    service = _binding_service(request)
+    agent_ids = [_path_uuid(raw, not_found="invalid agent_id") for raw in body.agent_ids]
+    result = await service.bulk_bind(
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        agent_ids=agent_ids,
+        skill_installation_id=_body_uuid(
+            body.skill_installation_id, field="skill_installation_id"
+        ),
+        skill_version_id=(
+            _body_uuid(body.skill_version_id, field="skill_version_id")
+            if body.skill_version_id
+            else None
+        ),
+        auto_trigger=body.auto_trigger,
+        priority=body.priority,
+        **_client_meta(request),
+    )
+    return {"data": result}
 
 
 @router.patch("/workspaces/{workspace_id}/agents/{agent_id}/skills/{binding_id}")
