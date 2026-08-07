@@ -44,6 +44,7 @@ import {
 } from './api';
 import { setCurrentInboxView } from './currentFilter';
 import { groupNotifications } from './grouping';
+import { InboxApprovalActions } from './InboxApprovalActions';
 import { InboxPreviewPane } from './InboxPreviewPane';
 import { extractQuietHours, isInQuietHours } from './quietHours';
 import type { QuietHours } from './quietHours';
@@ -323,6 +324,7 @@ export function InboxPage(): React.JSX.Element {
                   <InboxRow
                     key={notification.id}
                     notification={notification}
+                    workspaceId={workspaceId}
                     isSelected={notification.id === selectedId}
                     locale={locale}
                     onSelect={handleSelect}
@@ -402,6 +404,7 @@ export function InboxPage(): React.JSX.Element {
 
 interface InboxRowProps {
   readonly notification: Notification;
+  readonly workspaceId: string;
   readonly isSelected: boolean;
   readonly locale: string;
   readonly onSelect: (notification: Notification) => void;
@@ -415,7 +418,7 @@ interface InboxRowProps {
  * 徽标表达优先级;来源者在标题前显迷你头像。行操作 hover/focus 出现,≤720px 常驻。
  */
 function InboxRow(props: InboxRowProps): React.JSX.Element {
-  const { notification, isSelected, locale, onSelect, onMarkRead, onArchive } = props;
+  const { notification, workspaceId, isSelected, locale, onSelect, onMarkRead, onArchive } = props;
   const t = useT();
   const unread = isUnread(notification);
   const rowClasses = [
@@ -497,6 +500,9 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
         </time>
       </button>
       <span className="mesh-inbox__row-actions">
+        {notification.type === 'review_requested' && notification.approval_id != null ? (
+          <InboxApprovalActions workspaceId={workspaceId} approvalId={notification.approval_id} />
+        ) : null}
         {unread ? (
           <button
             type="button"

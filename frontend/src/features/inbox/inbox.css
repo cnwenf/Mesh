@@ -364,7 +364,9 @@
   pointer-events: auto;
 }
 
-.mesh-inbox__row-actions button {
+/* 仅直接子级按钮走行操作链接样式;内联审批按钮(.mesh-inbox__row-approval
+ * 包裹的 Button 组件)保持自身 primary/secondary 视觉(L206)。 */
+.mesh-inbox__row-actions > button {
   border: none;
   background: transparent;
 
@@ -382,15 +384,22 @@
     background-color var(--motion-fast);
 }
 
-.mesh-inbox__row-actions button:hover {
+.mesh-inbox__row-actions > button:hover {
   color: var(--color-accent);
   background: var(--color-surface-hover);
 }
 
-.mesh-inbox__row-actions button:focus-visible {
+.mesh-inbox__row-actions > button:focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: -2px;
   opacity: 1;
+}
+
+/* 内联审批入口(L206):批准/拒绝按钮组或已决状态徽标。 */
+.mesh-inbox__row-approval {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
 }
 
 @media (max-width: 599px) {

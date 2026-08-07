@@ -50,6 +50,11 @@ export interface Notification {
   readonly latest_comment_id: string | null;
   /** 分组渲染所需的 issue 快照(§3.2;可选,缺失时组头退回 id)。 */
   readonly issue?: NotificationIssueRef;
+  /**
+   * review_requested 携带的待审 approval id(agent.md §5.4 / README §6.10,L206);
+   * 行内联批准/拒绝据此渲染。历史行(B1 fanout 之前)可能缺失,故为可选。
+   */
+  readonly approval_id?: string | null;
 }
 
 /** 通知偏好(§2.7):event_type 为通知类型或 'all'。 */
