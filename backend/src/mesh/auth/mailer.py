@@ -35,6 +35,10 @@ _LINK_PATHS = {
     "email_verification": "/verify-email",
     "password_reset": "/reset-password",
 }
+# Notification mails carry their own fully-rendered body (locale chrome,
+# escaped previews, deep link — comment-inbox.md §4.4); the ``token`` slot is
+# the body itself, never wrapped in the one-time-code chrome.
+_PASSTHROUGH_KINDS = {"notification_digest", "notification_realtime"}
 _BODIES = {
     "email_verification": (
         "Hi,\n\nPlease confirm your email address to finish setting up your Mesh "
@@ -90,11 +94,14 @@ class SmtpMailDelivery:
         msg["Subject"] = _SUBJECTS.get(kind, "Mesh notification")
         msg["From"] = self._settings.smtp_from
         msg["To"] = email
-        body = _BODIES.get(kind, "Your code is: {token}\n").format(token=token)
-        base = self._settings.app_base_url
-        path = _LINK_PATHS.get(kind)
-        if base and path:
-            body += f"\nOr open: {base.rstrip('/')}{path}?token={token}\n"
+        if kind in _PASSTHROUGH_KINDS:
+            body = token
+        else:
+            body = _BODIES.get(kind, "Your code is: {token}\n").format(token=token)
+            base = self._settings.app_base_url
+            path = _LINK_PATHS.get(kind)
+            if base and path:
+                body += f"\nOr open: {base.rstrip('/')}{path}?token={token}\n"
         msg.set_content(body)
         return msg
 

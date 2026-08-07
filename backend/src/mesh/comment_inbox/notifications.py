@@ -535,10 +535,14 @@ class NotificationFanoutHandler:
         aggregation_window_seconds: float = DEFAULT_AGGREGATION_WINDOW_SECONDS,
         mailer: Any | None = None,
         clock: Any | None = None,
+        settings: Any | None = None,
     ) -> None:
         self._window = timedelta(seconds=aggregation_window_seconds)
         self._mailer = mailer
         self._clock = clock or (lambda: datetime.now(UTC))
+        # Settings gate the email deep-link (app_base_url) and open-token
+        # signing (jwt_secret); absent settings keep bodies link-less.
+        self._settings = settings
 
     async def __call__(self, session: AsyncSession, event: OutboxEvent) -> None:
         await self.handle(session, event)
@@ -815,7 +819,9 @@ class NotificationFanoutHandler:
         if email_address is None:
             return
         if send_now and self._mailer is not None:
-            body = _email_body(notification)
+            body = await self._render_email_body(
+                session, notification=notification, recipient=recipient
+            )
             try:
                 await self._mailer.deliver(email_address, EMAIL_KIND_REALTIME, body)
                 await self._record_delivery(
@@ -855,6 +861,37 @@ class NotificationFanoutHandler:
             external_target=email_address,
             state="pending",
         )
+
+    async def _render_email_body(
+        self,
+        session: AsyncSession,
+        *,
+        notification: Notification,
+        recipient: Member,
+    ) -> str:
+        """Locale-rendered body + token-gated deep link (i18n.md §5.1 / §4.4)."""
+        locale = await resolve_recipient_locale(
+            session,
+            recipient_member_id=recipient.id,
+            workspace_id=notification.workspace_id,
+        )
+        link: str | None = None
+        if self._settings is not None:
+            link = await email_open_link(
+                session,
+                self._settings,
+                notification_id=notification.id,
+                workspace_id=notification.workspace_id,
+                recipient_member_id=recipient.id,
+            )
+        if link is None:
+            # Fall back to the plain in-site anchor (requires a logged-in
+            # session) when no base URL/slug or no signing settings exist.
+            slug = await workspace_slug_for(session, workspace_id=notification.workspace_id)
+            link = notification_deep_link(
+                getattr(self._settings, "app_base_url", None), slug, notification.id
+            )
+        return _email_body(notification, locale=locale, link=link)
 
     async def _recipient_email(self, session: AsyncSession, recipient: Member) -> str | None:
         if recipient.user_id is None:
@@ -1022,6 +1059,93 @@ def notification_deep_link(
     return f"{base}/w/{workspace_slug}/inbox/{notification_id}"
 
 
+# One-time email open tokens (comment-inbox.md §4.4: 点邮件链接回站内并标已读).
+# A signed JWT is the credential: the open endpoint is unauthenticated, so the
+# token carries the recipient/workspace binding and an expiry; verification is
+# fail-closed (any mismatch/expiry → 404, no existence oracle). The read-mark
+# itself is idempotent, so a replayed link after first use is harmless.
+EMAIL_OPEN_TOKEN_PURPOSE = "email_open"
+EMAIL_OPEN_TOKEN_TTL = timedelta(days=7)
+
+
+def issue_email_open_token(
+    settings: Any,
+    *,
+    notification_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    recipient_member_id: uuid.UUID,
+    now: datetime | None = None,
+) -> str:
+    """Sign a short-lived open token bound to one notification+recipient."""
+    import jwt as pyjwt
+
+    moment = now or datetime.now(UTC)
+    claims = {
+        "purpose": EMAIL_OPEN_TOKEN_PURPOSE,
+        "sub": str(notification_id),
+        "ws": str(workspace_id),
+        "member": str(recipient_member_id),
+        "iat": int(moment.timestamp()),
+        "exp": moment + EMAIL_OPEN_TOKEN_TTL,
+    }
+    return pyjwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def verify_email_open_token(
+    settings: Any, token: str | None, *, notification_id: uuid.UUID
+) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Verify signature/expiry/purpose/subject; return (workspace, member).
+
+    Returns None on ANY failure — the caller turns that into a 404 so token
+    probing never distinguishes causes (anti-oracle, LOW-S2 lineage).
+    """
+    import jwt as pyjwt
+
+    if not token:
+        return None
+    try:
+        claims = pyjwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
+    except Exception:  # noqa: BLE001 — every failure mode is just "invalid"
+        return None
+    if claims.get("purpose") != EMAIL_OPEN_TOKEN_PURPOSE:
+        return None
+    if claims.get("sub") != str(notification_id):
+        return None
+    try:
+        workspace_id = uuid.UUID(str(claims.get("ws")))
+        member_id = uuid.UUID(str(claims.get("member")))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return workspace_id, member_id
+
+
+async def email_open_link(
+    session: AsyncSession,
+    settings: Any,
+    *,
+    notification_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    recipient_member_id: uuid.UUID,
+) -> str | None:
+    """The emailed link: token-gated open endpoint that read-marks then 302s
+    to the in-site anchor. None when no app base URL / slug is configured."""
+    base = (settings.app_base_url or "").rstrip("/")
+    if not base:
+        return None
+    slug = await workspace_slug_for(session, workspace_id=workspace_id)
+    if not slug:
+        return None
+    token = issue_email_open_token(
+        settings,
+        notification_id=notification_id,
+        workspace_id=workspace_id,
+        recipient_member_id=recipient_member_id,
+    )
+    return f"{base}/api/v1/inbox/{notification_id}/open?token={token}"
+
+
 # ---------------------------------------------------------------------------
 # due-soon sweep producer (H1 — §2.2 type enum ``due_soon``)
 # ---------------------------------------------------------------------------
@@ -1102,13 +1226,17 @@ async def send_digest_emails(
     session: AsyncSession,
     *,
     mailer: Any,
+    settings: Any | None = None,
     batch_size: int = 200,
 ) -> int:
     """One digest sweep: aggregate pending email rows per recipient, send,
     and mark the ledger sent. Returns the number of emails sent.
 
-    ``uq_delivery`` keeps the sweep idempotent across crashes; failures are
-    recorded as ``failed`` with the reason only (R3 — never routing data).
+    Each digest is rendered in the recipient's own locale (i18n.md §5.1) and
+    every item carries its token-gated deep link back into the inbox
+    (comment-inbox.md §4.4). ``uq_delivery`` keeps the sweep idempotent
+    across crashes; failures are recorded as ``failed`` with the reason only
+    (R3 — never routing data).
     """
     pending = (
         (
@@ -1145,8 +1273,45 @@ async def send_digest_emails(
             .scalars()
             .all()
         )
-        rendered = [_email_body(notification) for notification in notifications]
-        body = f"Mesh notification digest ({len(rendered)} items)\n\n" + "\n---\n".join(rendered)
+        if not notifications:
+            continue
+        # One digest per email target: locale from the recipient of the first
+        # item (a shared inbox address still belongs to one member in
+        # practice; the chain degrades to workspace default → en anyway).
+        first = notifications[0]
+        await set_tenant_context(session, first.workspace_id)
+        locale = (
+            await resolve_recipient_locale(
+                session,
+                recipient_member_id=first.recipient_id,
+                workspace_id=first.workspace_id,
+            )
+            if first.recipient_id is not None
+            else "en"
+        )
+        rendered: list[str] = []
+        for notification in notifications:
+            link: str | None = None
+            if notification.recipient_id is not None:
+                if settings is not None:
+                    link = await email_open_link(
+                        session,
+                        settings,
+                        notification_id=notification.id,
+                        workspace_id=notification.workspace_id,
+                        recipient_member_id=notification.recipient_id,
+                    )
+                if link is None:
+                    slug = await workspace_slug_for(
+                        session, workspace_id=notification.workspace_id
+                    )
+                    link = notification_deep_link(
+                        getattr(settings, "app_base_url", None), slug, notification.id
+                    )
+            rendered.append(_email_body(notification, locale=locale, link=link))
+        strings = _EMAIL_STRINGS.get(_locale_key(locale), _EMAIL_STRINGS["en"])
+        header = strings["digest"].format(count=len(rendered))
+        body = f"{header}\n\n" + "\n---\n".join(rendered)
         try:
             await mailer.deliver(target, EMAIL_KIND_DIGEST, body)
             for row in rows:
@@ -1165,13 +1330,19 @@ async def send_digest_emails(
 __all__ = [
     "EMAIL_KIND_DIGEST",
     "EMAIL_KIND_REALTIME",
+    "EMAIL_OPEN_TOKEN_TTL",
     "FANOUT_EVENT_TYPE",
     "NotificationFanoutHandler",
     "NotificationPolicy",
+    "email_open_link",
     "emit_due_soon_notifications",
     "emit_notification_fanout",
     "in_quiet_hours",
     "inbox_channel",
+    "issue_email_open_token",
+    "notification_deep_link",
     "policy_for",
+    "resolve_recipient_locale",
     "send_digest_emails",
+    "verify_email_open_token",
 ]

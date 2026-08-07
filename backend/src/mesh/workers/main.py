@@ -274,6 +274,7 @@ def build_relay(
             NotificationFanoutHandler(
                 aggregation_window_seconds=settings.notification_aggregation_window,
                 mailer=mailer,
+                settings=settings,
             ),
             max_chunks=settings.im_max_chunks,
         ),
@@ -463,6 +464,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     mailer=mailer,
                     interval=settings.notification_digest_interval,
                     stop=stop,
+                    settings=settings,
                 ),
             ),
             TaskSpec(
