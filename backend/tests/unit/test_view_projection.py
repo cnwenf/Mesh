@@ -202,6 +202,50 @@ def test_text_contains_escapes_like_wildcards() -> None:
     assert "a\\%b\\_c" in sql
 
 
+def test_custom_field_contains_escapes_like_wildcards() -> None:
+    # TD-1: direct coverage of the custom-field `contains` branch
+    # (projection.py _compile_custom_field) — user-supplied % / _ / \ must
+    # match as literal substring characters against value_text, never widen
+    # the LIKE match set (MEDIUM-D / security LOW-1 family).
+    clause = compile_view_filters(
+        {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field_kind": "custom_field",
+                    "field_def_id": "00000000-0000-0000-0000-000000000201",
+                    "op": "contains",
+                    "value": "50%_off\\sale",
+                }
+            ],
+        }
+    )
+    sql = str(clause.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "escape" in sql
+    assert "issue_custom_field_values.value_text" in sql
+    # Every wildcard character arrives backslash-escaped (literal match):
+    assert "50\\%\\_off\\\\sale" in sql
+
+
+def test_custom_field_contains_requires_text_value() -> None:
+    # TD-1: the branch rejects non-string values at compile time (§3.3).
+    with pytest.raises(ValidationError) as exc:
+        compile_view_filters(
+            {
+                "operator": "AND",
+                "conditions": [
+                    {
+                        "field_kind": "custom_field",
+                        "field_def_id": "00000000-0000-0000-0000-000000000201",
+                        "op": "contains",
+                        "value": 42,
+                    }
+                ],
+            }
+        )
+    assert "contains requires a text value" in str(exc.value)
+
+
 def test_null_operators() -> None:
     clause = compile_view_filters(
         {

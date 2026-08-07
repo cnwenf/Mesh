@@ -920,10 +920,22 @@ class CommentService:
         comment UUID never leaks a private project's comments nor the project's
         existence. Project-less issues keep the existing workspace-member
         behaviour (no project to be private).
+
+        DEBT-2 (anti-existence-inference): every denial on these comment-UUID
+        paths surfaces the SAME ``comment not found`` message — a missing
+        comment, a deleted issue and an invisible issue are indistinguishable,
+        so a known comment UUID cannot be used to probe whether the comment
+        exists in a project the viewer cannot see.
         """
-        issue = await self._load_issue(session, workspace_id, issue_id)
+        try:
+            issue = await self._load_issue(session, workspace_id, issue_id)
+        except NotFoundError as exc:
+            raise NotFoundError(_COMMENT_NOT_FOUND) from exc
         if issue.project_id is not None:
-            await assert_member_can_view_issue(session, viewer=member, issue=issue)
+            try:
+                await assert_member_can_view_issue(session, viewer=member, issue=issue)
+            except NotFoundError as exc:
+                raise NotFoundError(_COMMENT_NOT_FOUND) from exc
 
     async def _find_comment(
         self, session: AsyncSession, workspace_id: uuid.UUID, comment_id: uuid.UUID
