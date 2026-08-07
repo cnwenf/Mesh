@@ -35,6 +35,7 @@ import {
   useToast,
 } from '../../design';
 import { env } from '../../env';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -287,6 +288,8 @@ export function IssueDetailPage(): React.JSX.Element {
   usePageContext('board', 'issue');
 
   const [issue, setIssue] = useState<IssueDetail | null>(null);
+  // L93 标签页标题:实体标识 + 标题(未解析完成前仅产品名)。
+  useDocumentTitle(issue === null ? '' : `${issue.identifier} ${issue.title}`);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
   const [members, setMembers] = useState<MemberSummary[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);

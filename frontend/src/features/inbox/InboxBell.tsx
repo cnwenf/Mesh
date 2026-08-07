@@ -14,11 +14,13 @@ import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
+import { useUnreadStore } from '../../state/unreadStore';
 import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { inboxChannel, listInbox, markRead, unreadCount } from './api';
 import { notificationTargetPath } from './links';
 import { applyInboxFrame, extractUnreadCount } from './realtime';
 import type { Notification } from './types';
+import { applyUnreadFavicon } from './unreadFavicon';
 import { useInboxContext } from './useInboxContext';
 
 const DROPDOWN_LIMIT = 5;
@@ -33,6 +35,7 @@ export function InboxBell(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [latest, setLatest] = useState<readonly Notification[]>([]);
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
+  const setGlobalUnreadCount = useUnreadStore((state) => state.setCount);
   const rootRef = useRef<HTMLDivElement>(null);
   const dropdownId = useId();
 
@@ -72,6 +75,22 @@ export function InboxBell(): React.JSX.Element {
       realtime.client.unsubscribe(channel);
     };
   }, [realtime, memberId]);
+
+  // L93:本铃铛是未读计数的权威持有者(REST 快照 + inbox.unread_count 帧);
+  // 计数变化镜像到全局 store,驱动标签页标题前缀(useDocumentTitle)与
+  // favicon 徽标(applyUnreadFavicon)。卸载(登出/离开 shell)时清零并恢复
+  // 原始 favicon,避免残留上一工作区的未读状态。
+  useEffect(() => {
+    setGlobalUnreadCount(count);
+    applyUnreadFavicon(count);
+  }, [count, setGlobalUnreadCount]);
+  useEffect(
+    () => () => {
+      setGlobalUnreadCount(0);
+      applyUnreadFavicon(0);
+    },
+    [setGlobalUnreadCount],
+  );
 
   // 下拉打开时:外部 pointerdown 与 Esc 关闭(卸载/关闭时解绑)。
   useEffect(() => {
@@ -186,9 +205,7 @@ export function InboxBell(): React.JSX.Element {
             data-testid="inbox-bell-all"
             onClick={() => {
               setOpen(false);
-              navigate(
-                workspaceSlug === null ? '/inbox' : workspaceRoute(workspaceSlug, 'inbox'),
-              );
+              navigate(workspaceSlug === null ? '/inbox' : workspaceRoute(workspaceSlug, 'inbox'));
             }}
           >
             {t('inbox.viewAll')}

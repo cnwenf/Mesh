@@ -27,6 +27,7 @@ import {
   Skeleton,
   useToast,
 } from '../../design';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
@@ -566,6 +567,8 @@ export function BoardPage(): React.JSX.Element {
     return scopedViews.find((view) => view.is_default) ?? scopedViews[0] ?? null;
   }, [scopedViews, viewId]);
   selectedViewIdRef.current = selectedView?.id ?? null;
+  // L93 标签页标题:当前视图名(无视图时回落产品名)。
+  useDocumentTitle(selectedView?.name ?? '');
 
   useEffect(() => {
     setDraft(selectedView === null ? null : draftFromView(selectedView));

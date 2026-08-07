@@ -25,6 +25,7 @@ import {
 } from '../../design';
 import type { FilterChip } from '../../design';
 import { env } from '../../env';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
@@ -83,6 +84,7 @@ function matchesFilters(
 
 export function IssuesPage(): React.JSX.Element {
   const t = useT();
+  useDocumentTitle(t('issues.pageTitle')); // L93 标签页标题
   const toast = useToast();
   const navigate = useNavigate();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);

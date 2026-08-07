@@ -25,6 +25,7 @@ import {
   useToast,
 } from '../../design';
 import { env } from '../../env';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -57,6 +58,7 @@ const PAGE_LIMIT = 30;
 
 export function InboxPage(): React.JSX.Element {
   const t = useT();
+  useDocumentTitle(t('inbox.title')); // L93 标签页标题
   const toast = useToast();
   const navigate = useNavigate();
   const { notificationId } = useParams();
@@ -152,9 +154,7 @@ export function InboxPage(): React.JSX.Element {
       if (workspaceId === null || notification.read_at !== null) return;
       void markRead(client, workspaceId, notification.id).catch(() => {
         setNotifications((prev) =>
-          prev.map((item) =>
-            item.id === notification.id ? { ...item, read_at: null } : item,
-          ),
+          prev.map((item) => (item.id === notification.id ? { ...item, read_at: null } : item)),
         );
         notifyFailure();
       });
@@ -268,9 +268,7 @@ export function InboxPage(): React.JSX.Element {
 
   const groups = groupNotifications(notifications);
   const selectedNotification =
-    selectedId === null
-      ? null
-      : notifications.find((item) => item.id === selectedId) ?? null;
+    selectedId === null ? null : (notifications.find((item) => item.id === selectedId) ?? null);
   const unknownId =
     selectedId !== null && !isLoading && selectedNotification === null ? selectedId : null;
 
@@ -290,11 +288,7 @@ export function InboxPage(): React.JSX.Element {
           title={t('onboarding.empty.inbox.title')}
           description={t('onboarding.empty.inbox.description')}
           action={
-            <Button
-              size="sm"
-              data-testid="inbox-empty-action"
-              onClick={() => navigate(boardPath)}
-            >
+            <Button size="sm" data-testid="inbox-empty-action" onClick={() => navigate(boardPath)}>
               {t('onboarding.empty.inbox.action')}
             </Button>
           }
@@ -302,7 +296,11 @@ export function InboxPage(): React.JSX.Element {
       ) : (
         <div className="mesh-inbox__groups" data-testid="inbox-groups">
           {groups.map((group) => (
-            <section key={group.issueId} className="mesh-inbox__group" data-testid={`inbox-group-${group.issueId}`}>
+            <section
+              key={group.issueId}
+              className="mesh-inbox__group"
+              data-testid={`inbox-group-${group.issueId}`}
+            >
               <header className="mesh-inbox__group-head">
                 <span className="mesh-inbox__group-title mesh-text-caption">
                   {group.issue !== null
@@ -361,10 +359,20 @@ export function InboxPage(): React.JSX.Element {
         title={t('inbox.title')}
         actions={
           <div className="mesh-inbox__toolbar">
-            <Button size="sm" variant="secondary" data-testid="inbox-read-all" onClick={handleReadAll}>
+            <Button
+              size="sm"
+              variant="secondary"
+              data-testid="inbox-read-all"
+              onClick={handleReadAll}
+            >
               {t('inbox.readAll')}
             </Button>
-            <Button size="sm" variant="secondary" data-testid="inbox-archive-read" onClick={handleArchiveRead}>
+            <Button
+              size="sm"
+              variant="secondary"
+              data-testid="inbox-archive-read"
+              onClick={handleArchiveRead}
+            >
               {t('inbox.archiveRead')}
             </Button>
           </div>
@@ -436,10 +444,17 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
       >
         <span className="mesh-inbox__row-lead">
           {unread ? (
-            <span className="mesh-inbox__dot" aria-hidden="true" data-testid={`inbox-unread-dot-${notification.id}`} />
+            <span
+              className="mesh-inbox__dot"
+              aria-hidden="true"
+              data-testid={`inbox-unread-dot-${notification.id}`}
+            />
           ) : null}
           {notification.actor !== null ? (
-            <span className="mesh-inbox__row-actor" data-testid={`inbox-row-actor-${notification.id}`}>
+            <span
+              className="mesh-inbox__row-actor"
+              data-testid={`inbox-row-actor-${notification.id}`}
+            >
               <Avatar
                 name={notification.actor.name}
                 size={20}
@@ -452,7 +467,10 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
           <span className={titleClasses} title={notification.title}>
             {notification.title}
           </span>
-          <span className="mesh-inbox__row-preview mesh-text-caption mesh-truncate" title={notification.preview}>
+          <span
+            className="mesh-inbox__row-preview mesh-text-caption mesh-truncate"
+            title={notification.preview}
+          >
             {notification.preview}
           </span>
         </span>
@@ -462,7 +480,10 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
           </span>
         ) : null}
         {notification.priority === 'critical' ? (
-          <span className="mesh-inbox__row-priority" data-testid={`inbox-row-priority-${notification.id}`}>
+          <span
+            className="mesh-inbox__row-priority"
+            data-testid={`inbox-row-priority-${notification.id}`}
+          >
             <Badge icon="warning" tone="warning">
               {t('inbox.priority.critical')}
             </Badge>
