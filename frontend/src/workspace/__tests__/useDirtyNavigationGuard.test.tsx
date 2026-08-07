@@ -62,6 +62,44 @@ function renderAt(dirty: boolean, route = '/page-a'): ReturnType<typeof renderWi
   );
 }
 
+function RequestLeaveHarness(): React.JSX.Element {
+  const guard = useDirtyNavigationGuard(true);
+  return (
+    <div>
+      <Link to="/page-b" data-testid="link-b">
+        Go B
+      </Link>
+      <button type="button" data-testid="leave-b" onClick={() => guard.requestLeave('/page-b')}>
+        Leave B
+      </button>
+      <button type="button" data-testid="leave-c" onClick={() => guard.requestLeave('/page-c')}>
+        Leave C
+      </button>
+      <DirtyNavigationGuardDialog
+        isConfirming={guard.isConfirming}
+        title="Discard unsaved changes?"
+        description="You have unsaved changes."
+        stayLabel="Stay"
+        discardLabel="Discard"
+        closeLabel="Close"
+        onStay={guard.stay}
+        onDiscard={guard.discard}
+      />
+    </div>
+  );
+}
+
+function renderRequestLeave(): ReturnType<typeof renderWithProviders> {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/page-a" element={<RequestLeaveHarness />} />
+      <Route path="/page-b" element={<div data-testid="page-b" />} />
+      <Route path="/page-c" element={<div data-testid="page-c" />} />
+    </Routes>,
+    { route: '/page-a' },
+  );
+}
+
 describe('useDirtyNavigationGuard', () => {
   it('干净态点击内部链接正常导航(无确认)', async () => {
     const user = userEvent.setup();
@@ -128,5 +166,36 @@ describe('useDirtyNavigationGuard', () => {
     const event = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('requestLeave → 弹出确认;discard 前往请求的路径', async () => {
+    const user = userEvent.setup();
+    renderRequestLeave();
+    await user.click(screen.getByTestId('leave-c'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByTestId('page-c')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('dirty-guard-discard'));
+    expect(screen.getByTestId('page-c')).toBeInTheDocument();
+  });
+
+  it('requestLeave → stay 留在原页并关闭确认', async () => {
+    const user = userEvent.setup();
+    renderRequestLeave();
+    await user.click(screen.getByTestId('leave-b'));
+    await user.click(screen.getByTestId('dirty-guard-stay'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('page-b')).not.toBeInTheDocument();
+  });
+
+  it('已有待确认目标时 requestLeave 不覆盖(先到的导航请求优先)', async () => {
+    const user = userEvent.setup();
+    renderRequestLeave();
+    await user.click(screen.getByTestId('leave-b'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // 第二次请求不覆盖第一次的目标
+    await user.click(screen.getByTestId('leave-c'));
+    await user.click(screen.getByTestId('dirty-guard-discard'));
+    expect(screen.getByTestId('page-b')).toBeInTheDocument();
+    expect(screen.queryByTestId('page-c')).not.toBeInTheDocument();
   });
 });

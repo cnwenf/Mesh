@@ -929,6 +929,10 @@
     "common.save": "保存",
     "common.search": "搜索",
     "common.unknownError": "出错了，请重试。",
+    "common.unsavedDescription": "你有未保存的更改。现在离开将会丢失这些更改。",
+    "common.unsavedDiscard": "放弃更改",
+    "common.unsavedStay": "继续编辑",
+    "common.unsavedTitle": "放弃未保存的更改？",
     "common.yes": "是",
     "cycles.action.activate": "开始",
     "cycles.action.complete": "完成",
@@ -2493,10 +2497,6 @@
     "settings.timezone": "时区",
     "settings.timezoneBrowser": "跟随浏览器",
     "settings.title": "设置",
-    "settings.unsavedDescription": "你有未保存的更改。现在离开将会丢失这些更改。",
-    "settings.unsavedDiscard": "放弃更改",
-    "settings.unsavedStay": "继续编辑",
-    "settings.unsavedTitle": "放弃未保存的更改？",
     "shortcuts.actionCopyDeepLink": "复制当前深链",
     "shortcuts.actionFocusSearch": "聚焦搜索",
     "shortcuts.actionGoAutopilot": "前往自动值守",
@@ -2980,5 +2980,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "cc590f66"
+  "version": "d5b1ebc6"
 }

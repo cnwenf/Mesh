@@ -929,6 +929,10 @@
     "common.save": "Save",
     "common.search": "Search",
     "common.unknownError": "Something went wrong. Please try again.",
+    "common.unsavedDescription": "You have unsaved changes. If you leave now, they will be lost.",
+    "common.unsavedDiscard": "Discard changes",
+    "common.unsavedStay": "Keep editing",
+    "common.unsavedTitle": "Discard unsaved changes?",
     "common.yes": "Yes",
     "cycles.action.activate": "Start",
     "cycles.action.complete": "Complete",
@@ -2493,10 +2497,6 @@
     "settings.timezone": "Timezone",
     "settings.timezoneBrowser": "Browser default",
     "settings.title": "Settings",
-    "settings.unsavedDescription": "You have unsaved changes. If you leave now, they will be lost.",
-    "settings.unsavedDiscard": "Discard changes",
-    "settings.unsavedStay": "Keep editing",
-    "settings.unsavedTitle": "Discard unsaved changes?",
     "shortcuts.actionCopyDeepLink": "Copy link to current page",
     "shortcuts.actionFocusSearch": "Focus search",
     "shortcuts.actionGoAutopilot": "Go to Autopilots",
@@ -2980,5 +2980,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "46d3256e"
+  "version": "16bdd70e"
 }

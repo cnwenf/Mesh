@@ -5,7 +5,7 @@
  * Cmd/Ctrl+Enter 提交、按 issue 草稿本地暂存、乐观提交(失败保留草稿供重试)。
  * 数据获取/乐观落在父级(onSubmit 返回 Promise);本组件只编排输入态。
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { Button, Checkbox, Textarea } from '../../design';
 import { useT } from '../../i18n';
@@ -23,6 +23,11 @@ export interface CommentComposerProps {
   /** 父级执行乐观插入 + API 调用;reject 时本组件保留草稿并呈现重试。 */
   readonly onSubmit: (body: string, opts: { suppressTriggers: boolean }) => Promise<void>;
   readonly autoFocus?: boolean;
+  /**
+   * L242 脏态上报:草稿非空且未能持久化(localStorage 不可用)时为 true,
+   * 供父级挂离开确认;草稿已写穿本地存储时不打扰导航。
+   */
+  readonly onDirtyChange?: (dirty: boolean) => void;
 }
 
 type SubmitState = 'idle' | 'sending' | 'error';
@@ -40,6 +45,15 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
   const [suppress, setSuppress] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
+
+  // L242:仅当草稿因存储不可用而只驻留内存时才视为脏(已持久化的草稿导航不丢)。
+  const draftDirty = draft.value.trim() !== '' && !draft.persisted;
+  const { onDirtyChange } = props;
+  useEffect(() => {
+    onDirtyChange?.(draftDirty);
+    // 卸载/键切换时摘除本 composer 的脏标记,避免残留。
+    return () => onDirtyChange?.(false);
+  }, [draftDirty, onDirtyChange]);
 
   const filtered = useMemo(
     () => filterCandidates(props.candidates, mentionQuery),

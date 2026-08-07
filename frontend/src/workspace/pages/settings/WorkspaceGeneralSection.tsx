@@ -254,10 +254,10 @@ export function WorkspaceGeneralSection(): React.JSX.Element {
 
       <DirtyNavigationGuardDialog
         isConfirming={guard.isConfirming}
-        title={t('settings.unsavedTitle')}
-        description={t('settings.unsavedDescription')}
-        stayLabel={t('settings.unsavedStay')}
-        discardLabel={t('settings.unsavedDiscard')}
+        title={t('common.unsavedTitle')}
+        description={t('common.unsavedDescription')}
+        stayLabel={t('common.unsavedStay')}
+        discardLabel={t('common.unsavedDiscard')}
         closeLabel={t('a11y.closeDialog')}
         onStay={guard.stay}
         onDiscard={guard.discard}
