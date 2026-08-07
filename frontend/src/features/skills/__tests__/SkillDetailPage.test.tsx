@@ -98,24 +98,39 @@ const ME = {
   ],
 };
 
+// 真实名册行形态(member/service.py render_row):行 id 是 members 行主键,
+// agent 实体 id 在 profile.id。两类 id 故意取不同值 —— 回归守护
+// 「bulk-bind 误把成员行 id 当 agent_ids 提交」这一缺陷(后端按 Agent.id 解析)。
 const AGENT_MEMBERS = [
   {
-    id: 'ag-1',
+    id: 'mem-agent-1',
     member_type: 'agent',
     role: 'member',
     status: 'active',
     display_name: 'Planner',
     joined_at: null,
-    profile: null,
+    profile: {
+      id: 'agent-entity-1',
+      name: 'Planner',
+      description: null,
+      avatar_url: null,
+      is_active: true,
+    },
   },
   {
-    id: 'ag-2',
+    id: 'mem-agent-2',
     member_type: 'agent',
     role: 'member',
     status: 'active',
     display_name: 'Coder',
     joined_at: null,
-    profile: null,
+    profile: {
+      id: 'agent-entity-2',
+      name: 'Coder',
+      description: null,
+      avatar_url: null,
+      is_active: true,
+    },
   },
 ];
 
@@ -665,9 +680,10 @@ describe('SkillDetailPage', () => {
       ),
     );
     const post = calls.find((c) => c.method === 'POST' && c.url.includes('/skills/bulk-bind'));
+    // 提交体必须是 agents 实体 id(profile.id),绝非成员行 id(mem-agent-*)。
     expect(post?.body).toEqual({
       skill_installation_id: 'i-1',
-      agent_ids: ['ag-1', 'ag-2'],
+      agent_ids: ['agent-entity-1', 'agent-entity-2'],
     });
     expect(await screen.findByText('Bulk bind: 1 succeeded, 0 failed')).toBeTruthy();
   });

@@ -11,9 +11,9 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { listMembers } from '../members/api';
-import type { MemberSummary } from '../members/types';
 import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
 import { BulkBindDialog } from './BulkBindDialog';
+import type { BulkBindAgentOption } from './BulkBindDialog';
 import {
   getSkill,
   getVersion,
@@ -240,7 +240,9 @@ export function SkillDetailPage(): React.JSX.Element {
   const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
 
   // L247 一绑多 agent:候选 = 活跃 agent 名册(打开过详情页即拉一次,失败不阻断页面)。
-  const [agentRoster, setAgentRoster] = useState<readonly MemberSummary[]>([]);
+  // 名册行 id 是 members.id,而 skills/bulk-bind 按 agents 表主键解析 agent_ids,
+  // 因此必须映射为 profile.id(agent 实体 id);缺 profile 的行无法绑定,直接剔除。
+  const [agentRoster, setAgentRoster] = useState<readonly BulkBindAgentOption[]>([]);
   const [bulkBindOpen, setBulkBindOpen] = useState(false);
   useEffect(() => {
     if (workspaceId === null) return;
@@ -248,7 +250,15 @@ export function SkillDetailPage(): React.JSX.Element {
     void listMembers(client, workspaceId, { memberType: 'agent', status: 'active', limit: 100 })
       .then((page) => {
         // 边界防御:后端异常/桩回退可能给出非数组包络,降级为空名册而非崩溃。
-        if (!cancelled) setAgentRoster(Array.isArray(page.data) ? page.data : []);
+        const rows = Array.isArray(page.data) ? page.data : [];
+        if (cancelled) return;
+        setAgentRoster(
+          rows.flatMap((member) =>
+            member.member_type === 'agent' && member.profile !== null && member.profile.id
+              ? [{ id: member.profile.id, displayName: member.display_name }]
+              : [],
+          ),
+        );
       })
       .catch(() => {
         // 名册拉取失败 → 对话框呈现空态,不影响详情页其余功能。

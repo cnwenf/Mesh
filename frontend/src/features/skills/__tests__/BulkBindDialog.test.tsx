@@ -8,8 +8,8 @@ import { MeshApiClient, getToken } from '../../../api';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { env } from '../../../env';
 import { renderWithProviders } from '../../../test-utils/render';
-import type { MemberSummary } from '../../members/types';
 import { BulkBindDialog } from '../BulkBindDialog';
+import type { BulkBindAgentOption } from '../BulkBindDialog';
 import type { SkillInstallation } from '../types';
 
 const INSTALLATION = {
@@ -28,9 +28,11 @@ const INSTALLATION = {
   updated_at: '2026-01-01T00:00:00Z',
 } as const satisfies SkillInstallation;
 
-const AGENTS: readonly MemberSummary[] = [
-  { id: 'ag-1', member_type: 'agent', role: 'member', status: 'active', display_name: 'Planner', joined_at: null, profile: null },
-  { id: 'ag-2', member_type: 'agent', role: 'member', status: 'active', display_name: 'Coder', joined_at: null, profile: null },
+// id 为 agents 实体表主键(skills/bulk-bind 的 agent_ids 按 Agent.id 解析),
+// 不是成员名册行 id —— 命名上显式区分,防止两类 id 再次混用。
+const AGENTS: readonly BulkBindAgentOption[] = [
+  { id: 'agent-entity-1', displayName: 'Planner' },
+  { id: 'agent-entity-2', displayName: 'Coder' },
 ];
 
 interface BulkBindStub {
@@ -47,7 +49,7 @@ function stubBulkBind(body: unknown, status = 200): BulkBindStub {
   return { calls, fetchImpl };
 }
 
-function renderDialog(agents: readonly MemberSummary[] = AGENTS, stub: BulkBindStub = stubBulkBind({ data: { bound: [], errors: [] } })) {
+function renderDialog(agents: readonly BulkBindAgentOption[] = AGENTS, stub: BulkBindStub = stubBulkBind({ data: { bound: [], errors: [] } })) {
   const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken, fetchImpl: stub.fetchImpl });
   const onDone = vi.fn();
   const onClose = vi.fn();
@@ -70,15 +72,15 @@ describe('BulkBindDialog (L247)', () => {
     const stub = stubBulkBind({ data: { bound: [{ binding_id: 'b-1' }, { binding_id: 'b-2' }], errors: [] } });
     const { onDone, onClose } = renderDialog(AGENTS, stub);
 
-    fireEvent.click(screen.getByTestId('bulk-bind-agent-ag-1'));
-    fireEvent.click(screen.getByTestId('bulk-bind-agent-ag-2'));
+    fireEvent.click(screen.getByTestId('bulk-bind-agent-agent-entity-1'));
+    fireEvent.click(screen.getByTestId('bulk-bind-agent-agent-entity-2'));
     fireEvent.click(screen.getByTestId('bulk-bind-confirm'));
 
     await waitFor(() => expect(stub.calls.length).toBe(1));
     expect(stub.calls[0].url).toContain('/workspaces/ws-1/skills/bulk-bind');
     expect(stub.calls[0].body).toEqual({
       skill_installation_id: 'i-1',
-      agent_ids: ['ag-1', 'ag-2'],
+      agent_ids: ['agent-entity-1', 'agent-entity-2'],
     });
     expect(await screen.findByText('Bulk bind: 2 succeeded, 0 failed')).toBeTruthy();
     expect(onDone).toHaveBeenCalled();
@@ -89,7 +91,7 @@ describe('BulkBindDialog (L247)', () => {
     const stub = stubBulkBind({
       data: {
         bound: [{ binding_id: 'b-1' }],
-        errors: [{ agent_id: 'ag-2', code: 'conflict', message: 'already bound' }],
+        errors: [{ agent_id: 'agent-entity-2', code: 'conflict', message: 'already bound' }],
       },
     });
     const { onDone, onClose } = renderDialog(AGENTS, stub);
@@ -98,7 +100,8 @@ describe('BulkBindDialog (L247)', () => {
     fireEvent.click(screen.getByTestId('bulk-bind-confirm'));
 
     const toast = await screen.findByText(/Bulk bind: 1 succeeded, 1 failed/);
-    expect(toast.textContent).toContain('ag-2: conflict');
+    // error marker 取 agent_id 前 8 位('agent-entity-2' → 'agent-en')。
+    expect(toast.textContent).toContain('agent-en: conflict');
     expect(onDone).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
@@ -109,11 +112,11 @@ describe('BulkBindDialog (L247)', () => {
     const confirm = screen.getByTestId('bulk-bind-confirm') as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     fireEvent.click(screen.getByTestId('bulk-bind-select-all'));
-    expect((screen.getByTestId('bulk-bind-agent-ag-1') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByTestId('bulk-bind-agent-ag-2') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('bulk-bind-agent-agent-entity-1') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('bulk-bind-agent-agent-entity-2') as HTMLInputElement).checked).toBe(true);
     expect(confirm.disabled).toBe(false);
     fireEvent.click(screen.getByTestId('bulk-bind-select-all'));
-    expect((screen.getByTestId('bulk-bind-agent-ag-1') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('bulk-bind-agent-agent-entity-1') as HTMLInputElement).checked).toBe(false);
     expect(confirm.disabled).toBe(true);
   });
 
@@ -127,7 +130,7 @@ describe('BulkBindDialog (L247)', () => {
     const stub = stubBulkBind({ error: { code: 'internal', message: 'boom' } }, 500);
     const { onClose } = renderDialog(AGENTS, stub);
 
-    fireEvent.click(screen.getByTestId('bulk-bind-agent-ag-1'));
+    fireEvent.click(screen.getByTestId('bulk-bind-agent-agent-entity-1'));
     fireEvent.click(screen.getByTestId('bulk-bind-confirm'));
 
     expect(await screen.findByText('Bulk bind failed.')).toBeTruthy();

@@ -7,9 +7,18 @@ import { useCallback, useMemo, useState } from 'react';
 import { Button, Checkbox, Dialog, useToast } from '../../design';
 import { useT } from '../../i18n';
 import type { MeshApiClient } from '../../api';
-import type { MemberSummary } from '../members/types';
 import { bulkBindSkill } from './api';
 import type { SkillInstallation } from './types';
+
+/**
+ * 可绑定候选 agent。`id` 必须是 **agents 实体表主键**(skills/bulk-bind
+ * 后端按 `Agent.id` 解析 `agent_ids`),不是成员名册行 id(members.id)——
+ * 名册行的 profile.id 才是 agent 实体 id,调用方映射后再传入。
+ */
+export interface BulkBindAgentOption {
+  readonly id: string;
+  readonly displayName: string;
+}
 
 interface BulkBindDialogProps {
   readonly open: boolean;
@@ -17,8 +26,8 @@ interface BulkBindDialogProps {
   readonly client: MeshApiClient;
   readonly workspaceId: string;
   readonly installation: SkillInstallation;
-  /** 可绑定的活跃 agent 名册。 */
-  readonly agents: readonly MemberSummary[];
+  /** 可绑定的活跃 agent 名册(已映射为 agent 实体 id)。 */
+  readonly agents: readonly BulkBindAgentOption[];
   readonly onDone: () => void;
 }
 
@@ -64,7 +73,10 @@ export function BulkBindDialog(props: BulkBindDialogProps): React.JSX.Element {
       onDone();
       onClose();
     } catch {
-      toast.addToast(t('skills.bulkBind.failed'), { tone: 'danger', closeLabel: t('common.close') });
+      toast.addToast(t('skills.bulkBind.failed'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
     } finally {
       setIsBusy(false);
     }
@@ -75,7 +87,7 @@ export function BulkBindDialog(props: BulkBindDialogProps): React.JSX.Element {
       agents.map((agent) => (
         <Checkbox
           key={agent.id}
-          label={agent.display_name}
+          label={agent.displayName}
           checked={checked.has(agent.id)}
           onChange={(event) => toggle(agent.id, event.target.checked)}
           data-testid={`bulk-bind-agent-${agent.id}`}
@@ -85,7 +97,12 @@ export function BulkBindDialog(props: BulkBindDialogProps): React.JSX.Element {
   );
 
   return (
-    <Dialog open={open} onClose={onClose} title={t('skills.bulkBind.title')} closeLabel={t('common.close')}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t('skills.bulkBind.title')}
+      closeLabel={t('common.close')}
+    >
       <div className="mesh-skills__bulk-bind-body" data-testid="bulk-bind-body">
         <p className="mesh-text-body-sm">{t('skills.bulkBind.description')}</p>
         {agents.length === 0 ? (
