@@ -21,6 +21,7 @@
 - [x] C-13 L480 小队消息着色 + 关联任务 chip（`a027000b`）✅ 已提交：消息行按 kind 修饰类（指令蓝/汇报绿/闲聊灰/系统虚线/上下文蓝边，语义 token 双主题）+ 指令/汇报带 task_id 渲染「关联任务」chip 深链任务详情；i18n squads.relatedTask×2 目录（version 重算）；UT 3 新增，全套 4905 例绿，per-file 门禁过
 - [x] TD 顺手清偿：IssueExecutionsPanel 取消断言竞态修复（`d521b033`）——coverage 负载下偶发 flake，同步断言改 waitFor 等待行状态收敛
 - [x] C-6 L206 收件箱行内联审批（`f673b0ac`）✅ Notification 可选 approval_id + InboxApprovalActions（挂载即 GET 审批态，仅 pending 且未过 reaper 惰性窗口渲染批准/拒绝；决定后收敛状态徽标；服务端幂等兜底；approval.decided 帧跨会话收敛）+ InboxRow 行操作区接线 + inbox.css `> button` 子选择器；UT 11 新增（组件 9 + 页面接线 2），inbox 套件 136 例、全套 433 文件/4916 例绿，per-file 门禁过（新文件 stmts 99.2%/branch 91.5%）
+- [x] C-8 L222 收藏入口（`b7d89e8a`）✅ 新增 `useFavorites(workspaceId, targetType)`（features/favorites/）：挂载拉成员集合、乐观 toggle（PUT/DELETE 幂等）、失败回滚 + danger toast、workspaceId 缺失不发请求、列表失败降级空集合；五处入口：IssueDetailPage ⋯ 菜单星标条目 / 看板列表 RowActionsMenu（桌面行 + 移动卡）/ ViewSwitcher 视图 ⋯ 菜单条目（删除项前，回调缺省不渲染）/ ProjectDetailPage 头部星标 IconButton（aria-pressed + filled）/ BoardPage 提供 issue+view 双实例下传；favorites.* 4 键×2 目录（version 重算）。顺手清偿：IssueDetailPage 测试阈值等待改 `queueCallCount` 排除 URL 感知旁路（收藏 GET 记入 calls 不消耗盲队列，直数会提前一格放行致 estimate 用例间歇红），估算用例 6/6 复跑全绿；UT 17 新增（hook 6 + 列表 3 + 视图 3 + 项目 2 + 详情 3），全套 434 文件/4930 例绿，per-file 门禁过（27 文件 ≥90%）
 
 ## 未完成
 
@@ -35,7 +36,7 @@
 5. [ ] L202 通知聚合前端（后端归档已做；前端已读组归档视图）
 6. [x] L206 内联审批前端（依赖 B1）✅ 已提交 `f673b0ac`（见已完成区 C-6）
 7. [ ] L207 邮件通道前端无直接 UI，后端 B3 承载
-8. [ ] L222 收藏入口（useFavorite + ⋯ 菜单）
+8. [x] L222 收藏入口（useFavorite + ⋯ 菜单）✅ 已提交 `b7d89e8a`（见已完成区 C-8）
 9. [ ] L242 脏状态保护扩展（autopilot 编辑器/技能编辑/评论草稿）
 10. [ ] L247 批量操作 UI（issue 批量转派 + 技能 bulk UI + 成员批量转派复核）
 11. [ ] L251 Presence 前端（成员在线 + 看板谁在查看，依赖 B6）
