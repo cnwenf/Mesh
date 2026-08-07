@@ -354,7 +354,7 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
           {visible.map((message) => (
             <li
               key={message.id}
-              className="mesh-squads__message"
+              className={`mesh-squads__message mesh-squads__message--${message.kind}`}
               data-testid={`squad-message-${message.id}`}
             >
               <span className="mesh-squads__message-sender">
@@ -366,6 +366,19 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
               <span className="mesh-squads__message-time">
                 {timestamp(message.created_at, intl.locale)}
               </span>
+              {message.task_id !== null &&
+              (message.kind === 'instruction' || message.kind === 'report') ? (
+                <Link
+                  to={workspaceRoute(
+                    workspace.workspace_slug,
+                    `/squads/${squad.id}/tasks/${message.task_id}`,
+                  )}
+                  className="mesh-squads__message-task"
+                  data-testid={`squad-message-task-${message.id}`}
+                >
+                  {t('squads.relatedTask')}
+                </Link>
+              ) : null}
               <p className="mesh-squads__message-body">{message.body_markdown}</p>
             </li>
           ))}

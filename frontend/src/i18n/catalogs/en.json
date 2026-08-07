@@ -2789,6 +2789,7 @@
     "squads.new": "New Squad",
     "squads.noWorkspace": "Select a workspace to view its squads.",
     "squads.pageTitle": "Squads",
+    "squads.relatedTask": "Related task",
     "squads.requirePlanApproval": "Require plan approval",
     "squads.restore": "Restore",
     "squads.role.leader": "Leader",
@@ -2968,5 +2969,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "da078d03"
+  "version": "9b5330c7"
 }

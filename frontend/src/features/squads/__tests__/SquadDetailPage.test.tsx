@@ -775,3 +775,82 @@ describe('SquadDetailPage 归档导出入口(§4.6 / L486)', () => {
     expect(screen.getByRole('button', { name: 'Squad actions' })).toBeInTheDocument();
   });
 });
+
+describe('SquadDetailPage 消息着色与关联任务 chip(§4.2 / L480)', () => {
+  function messageFixture(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'msg-9',
+      squad_id: 'sq-1',
+      task_id: null,
+      sender: AGENT_SNAP,
+      recipient: null,
+      kind: 'chat',
+      body_markdown: 'hello',
+      body_html: null,
+      pinned: false,
+      attachment_ids: [],
+      created_at: '2026-07-02T02:00:00Z',
+      ...overrides,
+    };
+  }
+
+  async function renderWithMessages(rows: Array<Record<string, unknown>>) {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: squadFixture() } }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({ body: { data: rows, next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+  }
+
+  it('按 kind 渲染着色修饰类:指令/汇报/闲聊/系统/上下文', async () => {
+    await renderWithMessages([
+      messageFixture({ id: 'm-instr', kind: 'instruction' }),
+      messageFixture({ id: 'm-rep', kind: 'report' }),
+      messageFixture({ id: 'm-chat', kind: 'chat' }),
+      messageFixture({ id: 'm-sys', kind: 'system', sender: null }),
+      messageFixture({ id: 'm-ctx', kind: 'context' }),
+    ]);
+    expect(screen.getByTestId('squad-message-m-instr').className).toContain(
+      'mesh-squads__message--instruction',
+    );
+    expect(screen.getByTestId('squad-message-m-rep').className).toContain(
+      'mesh-squads__message--report',
+    );
+    expect(screen.getByTestId('squad-message-m-chat').className).toContain(
+      'mesh-squads__message--chat',
+    );
+    expect(screen.getByTestId('squad-message-m-sys').className).toContain(
+      'mesh-squads__message--system',
+    );
+    expect(screen.getByTestId('squad-message-m-ctx').className).toContain(
+      'mesh-squads__message--context',
+    );
+  });
+
+  it('指令/汇报携带 task_id → 关联任务 chip 深链任务详情', async () => {
+    await renderWithMessages([
+      messageFixture({ id: 'm-instr', kind: 'instruction', task_id: 'tk-9' }),
+      messageFixture({ id: 'm-rep', kind: 'report', task_id: 'tk-9' }),
+    ]);
+    const chips = screen.getAllByTestId(/^squad-message-task-/);
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveAttribute('href', '/w/team/squads/sq-1/tasks/tk-9');
+    expect(chips[1]).toHaveAttribute('href', '/w/team/squads/sq-1/tasks/tk-9');
+  });
+
+  it('闲聊/系统/上下文及无任务的指令/汇报不渲染 chip', async () => {
+    await renderWithMessages([
+      messageFixture({ id: 'm-chat', kind: 'chat', task_id: 'tk-9' }),
+      messageFixture({ id: 'm-instr', kind: 'instruction', task_id: null }),
+      messageFixture({ id: 'm-sys', kind: 'system', sender: null, task_id: 'tk-9' }),
+      messageFixture({ id: 'm-ctx', kind: 'context', task_id: 'tk-9' }),
+    ]);
+    expect(screen.queryAllByTestId(/^squad-message-task-/)).toHaveLength(0);
+  });
+});

@@ -2789,6 +2789,7 @@
     "squads.new": "新建小队",
     "squads.noWorkspace": "选择工作区以查看其小队。",
     "squads.pageTitle": "小队",
+    "squads.relatedTask": "关联任务",
     "squads.requirePlanApproval": "需要计划审批",
     "squads.restore": "恢复",
     "squads.role.leader": "队长",
@@ -2968,5 +2969,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "1f490496"
+  "version": "99a0c709"
 }
