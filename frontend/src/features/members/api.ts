@@ -122,6 +122,26 @@ export async function reassignIssues(
   );
 }
 
+export interface MemberPresenceSnapshot {
+  readonly workspace_id: string;
+  readonly online_member_ids: readonly string[];
+  readonly count: number;
+}
+
+/**
+ * 工作区在线成员快照(member.md §3.1 GET /workspaces/{ws}/members/presence)。
+ * 实时变化另走 `member.presence` 帧(§3.5);本快照只负责首屏。
+ */
+export async function getMemberPresence(
+  client: MeshApiClient,
+  workspaceId: string,
+): Promise<MemberPresenceSnapshot> {
+  return client.request<MemberPresenceSnapshot>(
+    'GET',
+    `${workspaceMembersPath(workspaceId)}/presence`,
+  );
+}
+
 /** 可加入名册的 agent(agents 表落地前恒为空列表;入口保留占位态)。 */
 export async function listAvailableAgents(
   client: MeshApiClient,

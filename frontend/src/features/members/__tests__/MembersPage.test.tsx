@@ -142,7 +142,11 @@ interface Recorded {
   init?: RequestInit;
 }
 
-function makeFetch(members: unknown[], issues: unknown[] = []) {
+function makeFetch(
+  members: unknown[],
+  issues: unknown[] = [],
+  onlineIds: readonly string[] = [],
+) {
   const calls: Recorded[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -180,6 +184,14 @@ function makeFetch(members: unknown[], issues: unknown[] = []) {
     }
     if (method === 'GET' && url.includes('/issues')) {
       return fakeResponse({ body: { data: issues, next_cursor: null } });
+    }
+    if (method === 'GET' && url.includes('/members/presence')) {
+      // L251 在线快照(member.md §3.1):onlineIds 桩参数驱动,默认无人在线。
+      return fakeResponse({
+        body: {
+          data: { workspace_id: 'ws-1', online_member_ids: onlineIds, count: onlineIds.length },
+        },
+      });
     }
     if (method === 'GET' && /\/members\/[^?]/.test(url)) {
       // member detail
@@ -228,8 +240,8 @@ function makeFetch(members: unknown[], issues: unknown[] = []) {
   return { impl, calls };
 }
 
-function stub(members: unknown[], issues: unknown[] = []) {
-  const { impl, calls } = makeFetch(members, issues);
+function stub(members: unknown[], issues: unknown[] = [], onlineIds: readonly string[] = []) {
+  const { impl, calls } = makeFetch(members, issues, onlineIds);
   vi.stubGlobal('fetch', impl);
   return calls;
 }
@@ -1297,6 +1309,68 @@ describe('MembersPage', () => {
       });
     });
     await waitFor(() => expect(rosterCalls()).toBeGreaterThan(before));
+  });
+
+  it('在线快照渲染成员在线点,未在线成员无点(L251)', async () => {
+    stub([HUMAN, AGENT], [], ['mem-h']);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+
+    const table = await waitForTable();
+    const dot = await within(table).findByTestId('member-online-mem-h');
+    expect(dot).toHaveAttribute('title', 'Online');
+    expect(within(table).queryByTestId('member-online-mem-a')).toBeNull();
+  });
+
+  it('member.presence 帧增量更新在线点,异频道与畸形帧忽略(L251)', async () => {
+    const rt = makeFakeRealtime();
+    stub([HUMAN, AGENT]);
+    renderWithProviders(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试替身
+      <RealtimeContext.Provider value={rt as any}>
+        <MembersPage />
+      </RealtimeContext.Provider>,
+      { route: '/members' },
+    );
+    await waitForTable();
+    expect(screen.queryByTestId('member-online-mem-h')).toBeNull();
+
+    // 畸形负载(缺 presence 字段)不产生在线点。
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1',
+        event: 'member.presence',
+        payload: { member_id: 'mem-h' },
+      });
+    });
+    expect(screen.queryByTestId('member-online-mem-h')).toBeNull();
+
+    // 异频道帧被拒。
+    act(() => {
+      rt.emit({
+        channel: 'workspace:other',
+        event: 'member.presence',
+        payload: { member_id: 'mem-h', presence: 'online' },
+      });
+    });
+    expect(screen.queryByTestId('member-online-mem-h')).toBeNull();
+
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1',
+        event: 'member.presence',
+        payload: { member_id: 'mem-h', presence: 'online' },
+      });
+    });
+    expect(await screen.findByTestId('member-online-mem-h')).toBeInTheDocument();
+
+    act(() => {
+      rt.emit({
+        channel: 'workspace:ws-1',
+        event: 'member.presence',
+        payload: { member_id: 'mem-h', presence: 'offline' },
+      });
+    });
+    await waitFor(() => expect(screen.queryByTestId('member-online-mem-h')).toBeNull());
   });
 });
 

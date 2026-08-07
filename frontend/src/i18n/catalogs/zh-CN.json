@@ -767,6 +767,7 @@
     "board.viewActions": "视图 {name} 的操作",
     "board.viewLayoutLabel": "布局",
     "board.viewNameLabel": "名称",
+    "board.viewPresence": "{count} 人正在查看",
     "board.viewSwitcherLabel": "视图切换器",
     "board.viewVisibilityLabel": "可见性",
     "board.visibility.private": "私有",
@@ -1945,6 +1946,7 @@
     "members.joined": "加入于 {date, date, medium}",
     "members.newAgent": "+ 新建 Agent",
     "members.noWorkspace": "你还不是任何工作区的成员。",
+    "members.presence.online": "在线",
     "members.reassign.action": "批量转派任务…",
     "members.reassign.confirm": "将 {name} 名下未完成的任务全部转派给另一名活跃成员?",
     "members.reassign.result": "已转派 {count} 个任务",
@@ -2997,5 +2999,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "3b6c8ecc"
+  "version": "dd7f08ca"
 }

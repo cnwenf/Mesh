@@ -183,6 +183,8 @@ const GROUP_BY_OPTIONS: readonly GroupByField[] = [
 
 /** 新建卡片插入高亮保持时长(§9.3.4)。 */
 const HIGHLIGHT_MS = 1200;
+/** 工具栏观众头像槽位上限(L251 协作感知):超出部分折叠为「+N」。 */
+const MAX_VIEWER_AVATARS = 5;
 
 /** 从整体游标分组包络拉取整板卡片(遍历 next_cursor 至末页,§6.14)。 */
 export async function loadAllGroups(
@@ -361,6 +363,15 @@ export function BoardPage(): React.JSX.Element {
   selectedCardIdRef.current = selectedCardId;
   const boardGridRef = useRef<BoardGrid>([]);
   const membersCacheRef = useRef<readonly MemberSummary[] | null>(null);
+
+  // —— 协作感知(kanban.md §3.5 view.presence):同看板在线观众(可选特性,best-effort)——
+  const [viewPresence, setViewPresence] = useState<{
+    readonly online: number;
+    readonly subjects: readonly string[];
+  } | null>(null);
+  /** subject(用户 id)→ 成员显示名的映射名册,首个 presence 帧后惰性加载。 */
+  const [viewerRoster, setViewerRoster] = useState<readonly MemberSummary[] | null>(null);
+  const viewerRosterLoadingRef = useRef(false);
 
   // 规范路由前缀:挂载于 /w/{slug}/* 时内部导航保持 workspace-scoped 规范形态。
   const workspaceRouteMatch = useMatch('/w/:workspaceSlug/*');
@@ -620,6 +631,34 @@ export function BoardPage(): React.JSX.Element {
     return scopedViews.find((view) => view.is_default) ?? scopedViews[0] ?? null;
   }, [scopedViews, viewId]);
   selectedViewIdRef.current = selectedView?.id ?? null;
+  // 切换视图/工作区时清空上一视图的观众态,避免残留串看板。
+  useEffect(() => {
+    setViewPresence(null);
+  }, [selectedView?.id]);
+  // 有观众且名册未加载时惰性拉一次成员名册,把 subject 映射为显示名。
+  // 失败降级为无名册(仍显示计数与原始 subject 首字母),不弹错——可选特性。
+  useEffect(() => {
+    if (membership === null || selectedView === null) return;
+    if (viewPresence === null || viewPresence.subjects.length === 0) return;
+    if (viewerRoster !== null || viewerRosterLoadingRef.current) return;
+    viewerRosterLoadingRef.current = true;
+    listMembers(client, membership.workspace_id, { limit: 100 })
+      .then((page) => setViewerRoster(page.data))
+      .catch(() => setViewerRoster([]))
+      .finally(() => {
+        viewerRosterLoadingRef.current = false;
+      });
+  }, [client, membership, selectedView, viewPresence, viewerRoster]);
+  /** 观众头像槽位:subject(用户 id)经名册映射为显示名,未映射者用 subject 首字符。 */
+  const viewerSlots = useMemo(() => {
+    if (viewPresence === null) return [];
+    return viewPresence.subjects.slice(0, MAX_VIEWER_AVATARS).map((subject) => {
+      const member =
+        viewerRoster?.find((entry) => entry.profile?.id === subject) ?? null;
+      const name = member?.display_name ?? subject;
+      return { key: member?.id ?? subject, name, initial: name.slice(0, 1).toUpperCase() };
+    });
+  }, [viewPresence, viewerRoster]);
   // L93 标签页标题:当前视图名(无视图时回落产品名)。
   useDocumentTitle(selectedView?.name ?? '');
 
@@ -932,7 +971,19 @@ export function BoardPage(): React.JSX.Element {
           reconcileRequests.delete(`${reconcilePrefix}${issue.id}`);
         }
       }
-      if (frame.event === 'view.presence') return;
+      if (frame.event === 'view.presence') {
+        // 协作感知(kanban.md §3.5):更新同看板观众计数/名单,供工具栏头像簇渲染。
+        const d = frame.payload as { view_id?: unknown; online?: unknown; members?: unknown };
+        if (d.view_id === selectedView.id) {
+          setViewPresence({
+            online: typeof d.online === 'number' ? d.online : 0,
+            subjects: Array.isArray(d.members)
+              ? d.members.filter((s): s is string => typeof s === 'string')
+              : [],
+          });
+        }
+        return;
+      }
       // §4.4/§5.1: warn 超限放行后,服务端广播 view.wip_exceeded → 顶部 toast
       // (拖拽者本人与同视图协作者均可见),与列头红色徽章并存。
       if (frame.event === 'view.wip_exceeded') {
@@ -1629,6 +1680,29 @@ export function BoardPage(): React.JSX.Element {
           <span className="mesh-board__layout-chip">
             {t('board.layout.' + selectedView.layout)}
           </span>
+          {viewPresence !== null && viewPresence.online > 0 ? (
+            <span
+              className="mesh-board__view-presence"
+              data-testid="board-view-presence"
+              title={viewerSlots.map((slot) => slot.name).join(', ')}
+            >
+              <span className="mesh-board__viewer-stack" aria-hidden="true">
+                {viewerSlots.map((slot) => (
+                  <span key={slot.key} className="mesh-board__viewer">
+                    {slot.initial}
+                  </span>
+                ))}
+                {viewPresence.subjects.length > MAX_VIEWER_AVATARS ? (
+                  <span className="mesh-board__viewer mesh-board__viewer--more">
+                    +{viewPresence.subjects.length - MAX_VIEWER_AVATARS}
+                  </span>
+                ) : null}
+              </span>
+              <span className="mesh-board__viewer-count mesh-text-caption mesh-tnum">
+                {t('board.viewPresence', { count: viewPresence.online })}
+              </span>
+            </span>
+          ) : null}
           <Select
             label={t('board.groupByLabel')}
             value={draft.group_by ?? 'state_category'}

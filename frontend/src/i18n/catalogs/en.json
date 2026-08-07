@@ -767,6 +767,7 @@
     "board.viewActions": "Actions for view {name}",
     "board.viewLayoutLabel": "Layout",
     "board.viewNameLabel": "Name",
+    "board.viewPresence": "{count} viewing",
     "board.viewSwitcherLabel": "View switcher",
     "board.viewVisibilityLabel": "Visibility",
     "board.visibility.private": "Private",
@@ -1945,6 +1946,7 @@
     "members.joined": "Joined {date, date, medium}",
     "members.newAgent": "+ New Agent",
     "members.noWorkspace": "You are not a member of any workspace yet.",
+    "members.presence.online": "Online",
     "members.reassign.action": "Reassign open issues…",
     "members.reassign.confirm": "Reassign all open issues of {name} to another active member?",
     "members.reassign.result": "{count} issue(s) reassigned",
@@ -2997,5 +2999,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "a5372c4e"
+  "version": "9f96a64e"
 }

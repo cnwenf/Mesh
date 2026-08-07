@@ -3,7 +3,7 @@
  * fetch 桩驱动:列骨架渲染、视图切换、分组切换、配置草稿保存条、WIP 徽章、
  * 空态(无视图 → 主操作)。
  */
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
@@ -82,6 +82,28 @@ interface StubOptions {
   readonly failListOnce?: boolean;
 }
 
+/** L251 观众名册桩:subject(用户 id)→ 成员显示名映射来源。 */
+const VIEWER_ROSTER = [
+  {
+    id: 'mem-1',
+    member_type: 'human',
+    role: 'owner',
+    status: 'active',
+    display_name: 'Owner',
+    joined_at: null,
+    profile: { id: 'usr-owner', full_name: 'Owner', email: 'owner@acme.com', avatar_url: null },
+  },
+  {
+    id: 'mem-2',
+    member_type: 'human',
+    role: 'member',
+    status: 'active',
+    display_name: 'Alice',
+    joined_at: null,
+    profile: { id: 'usr-2', full_name: 'Alice', email: 'alice@acme.com', avatar_url: null },
+  },
+];
+
 function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
   const views = options.views ?? [makeView()];
   const calls: RecordedCall[] = [];
@@ -137,6 +159,9 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
     }
     if (method === 'DELETE') {
       return fakeResponse({ status: 204 });
+    }
+    if (method === 'GET' && url.includes('/members')) {
+      return fakeResponse({ body: { data: VIEWER_ROSTER, next_cursor: null } });
     }
     return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
   }) as typeof fetch;
@@ -545,7 +570,98 @@ describe('BoardPage', () => {
     expect(screen.queryByTestId('view-save-bar')).not.toBeInTheDocument();
     expect(screen.getByTestId('board-column-todo')).toBeInTheDocument();
   });
+
+  it('view.presence 帧渲染同看板观众簇与计数,异视图帧忽略(L251)', async () => {
+    stubFetchByRoute();
+    const rt = makeEmittingRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/board' },
+    );
+    await screen.findByTestId('board-columns');
+    expect(screen.queryByTestId('board-view-presence')).toBeNull();
+
+    // 其他视图的 presence 帧不渲染本看板观众簇。
+    act(() => {
+      rt.emit({
+        channel: 'view:view-1',
+        event: 'view.presence',
+        payload: { view_id: 'view-other', online: 3, members: ['usr-2'] },
+      });
+    });
+    expect(screen.queryByTestId('board-view-presence')).toBeNull();
+
+    act(() => {
+      rt.emit({
+        channel: 'view:view-1',
+        event: 'view.presence',
+        payload: {
+          view_id: 'view-1',
+          online: 2,
+          subject: 'usr-2',
+          joined: true,
+          members: ['usr-owner', 'usr-2'],
+        },
+      });
+    });
+    const chip = await screen.findByTestId('board-view-presence');
+    expect(chip.textContent).toContain('2 viewing');
+    // 名册惰性加载完成后,subject(用户 id)映射为成员显示名。
+    await waitFor(() => expect(chip.getAttribute('title')).toBe('Owner, Alice'));
+  });
+
+  it('view.presence online=0 不渲染观众簇(L251)', async () => {
+    stubFetchByRoute();
+    const rt = makeEmittingRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/board' },
+    );
+    await screen.findByTestId('board-columns');
+
+    act(() => {
+      rt.emit({
+        channel: 'view:view-1',
+        event: 'view.presence',
+        payload: { view_id: 'view-1', online: 0, subject: 'usr-2', joined: false, members: [] },
+      });
+    });
+    expect(screen.queryByTestId('board-view-presence')).toBeNull();
+  });
 });
+
+interface EmitFrame {
+  channel: string;
+  event?: string;
+  payload?: unknown;
+}
+
+/** 可主动发帧的 realtime 测试替身(BoardPage 需要 onFrame + onState)。 */
+function makeEmittingRealtime() {
+  const handlers: Array<(frame: EmitFrame) => void> = [];
+  const client = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    onFrame: vi.fn((handler: (frame: EmitFrame) => void) => {
+      handlers.push(handler);
+      return (): void => {
+        const index = handlers.indexOf(handler);
+        if (index >= 0) handlers.splice(index, 1);
+      };
+    }),
+    onState: vi.fn(() => () => undefined),
+  };
+  return {
+    client,
+    emit: (frame: EmitFrame): void => {
+      for (const handler of [...handlers]) handler(frame);
+    },
+  };
+}
 
 describe('parseViewDraft(L92 URL 草稿反序列化)', () => {
   const validDraft = {
