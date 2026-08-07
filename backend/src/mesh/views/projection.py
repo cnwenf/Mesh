@@ -74,6 +74,7 @@ from mesh.search.cursor import (
 from mesh.search.cursor import (
     encode_cursor as encode_signed_cursor,
 )
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 from mesh.views.config import PRIORITY_KEYS, STATE_CATEGORY_KEYS, validate_group_axes
 
 if TYPE_CHECKING:
@@ -262,7 +263,11 @@ def _compile_custom_field(condition: dict) -> Any:
         value = condition.get("value")
         if not isinstance(value, str):
             raise _invalid_filters("contains requires a text value", field="field_def_id")
-        match = IssueCustomFieldValue.value_text.ilike(f"%{value}%")
+        # MEDIUM-D / LOW-1: escape LIKE wildcards so the value matches as a
+        # literal substring (a raw ``%``/``_`` must not widen the match set).
+        match = IssueCustomFieldValue.value_text.ilike(
+            f"%{escape_like(value)}%", escape=LIKE_ESCAPE_CHAR
+        )
     elif op in _LIST_OPS:
         raw = condition.get("value")
         if not isinstance(raw, list) or not raw:
@@ -304,8 +309,12 @@ def _compile_leaf(condition: dict) -> Any:
 
     if field == "q":
         # title/identifier search (contains only, kanban §2.3).
-        pattern = f"%{condition.get('value', '')}%"
-        return or_(Issue.title.ilike(pattern), Issue.identifier.ilike(pattern))
+        # MEDIUM-D / LOW-1: escape LIKE wildcards in the user term.
+        pattern = f"%{escape_like(str(condition.get('value', '')))}%"
+        return or_(
+            Issue.title.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+            Issue.identifier.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+        )
 
     if field not in _FILTER_COLUMNS:
         raise _invalid_filters("unknown filter field", field=str(field)[:32])
@@ -326,7 +335,10 @@ def _compile_leaf(condition: dict) -> Any:
         # Only meaningful on text columns; reject type/op mismatch (§3.3).
         if field in _UUID_FIELDS or field in _DATE_FIELDS or field in _DATETIME_FIELDS:
             raise _invalid_filters("contains is not valid for this field", field=field)
-        return column.ilike(f"%{condition.get('value', '')}%")
+        # MEDIUM-D / LOW-1: escape LIKE wildcards in the user term.
+        return column.ilike(
+            f"%{escape_like(str(condition.get('value', '')))}%", escape=LIKE_ESCAPE_CHAR
+        )
 
     value = _coerce_scalar(field, condition.get("value"))
     if op == "eq":

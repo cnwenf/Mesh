@@ -670,7 +670,9 @@ async def test_cancel_private_issue_execution_requires_issue_visibility(
         json={},
         headers={"Authorization": f"Bearer {viewer_token}"},
     )
-    assert denied.status_code == 403
+    # LOW-S2: issue-visibility denial converges to 404 for members too (no
+    # private-project existence oracle); approval gates below stay 403.
+    assert denied.status_code == 404
     hidden_list = await app_client.get(
         f"/api/v1/workspaces/{ws_id}/approvals",
         headers={"Authorization": f"Bearer {viewer_token}"},
@@ -681,13 +683,16 @@ async def test_cancel_private_issue_execution_requires_issue_visibility(
         f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}",
         headers={"Authorization": f"Bearer {viewer_token}"},
     )
-    assert hidden_detail.status_code == 403
+    # LOW-S2 convergence: the approval detail/decision gates reuse the issue
+    # read gate, so an approval on an invisible private-project execution is
+    # hidden with 404 (no existence oracle), matching the filtered list above.
+    assert hidden_detail.status_code == 404
     hidden_decision = await app_client.post(
         f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/approve",
         json={},
         headers={"Authorization": f"Bearer {viewer_token}"},
     )
-    assert hidden_decision.status_code == 403
+    assert hidden_decision.status_code == 404
     async with session_factory() as session:
         unchanged = await session.get(TaskExecution, execution_id)
         approval_unchanged = await session.get(Approval, approval_id)

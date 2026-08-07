@@ -11,7 +11,7 @@ from mesh.auth.rbac import role_satisfies
 from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.project import Project, ProjectMember
-from mesh.errors import ForbiddenError, NotFoundError
+from mesh.errors import NotFoundError
 
 
 def issue_visibility_clause(viewer: Member, workspace_id: uuid.UUID):
@@ -85,7 +85,11 @@ async def assert_member_can_view_issue(
         )
     )
     if project_role is None:
-        raise ForbiddenError("project is private")
+        # LOW-S2: unify the member branch with the guest branch — a private
+        # project the viewer cannot see is reported as 404, not 403, so the
+        # response does not become an existence oracle for private projects
+        # (project.md §3.3 「其他成员访问返回 403/404」, §5.3 no-existence-oracle).
+        raise NotFoundError("issue not found")
 
 
 __all__ = ["assert_member_can_view_issue", "issue_visibility_clause"]

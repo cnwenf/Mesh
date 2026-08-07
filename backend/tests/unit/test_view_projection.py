@@ -172,6 +172,36 @@ def test_q_contains_maps_to_title_or_identifier() -> None:
     assert "like" in sql
 
 
+def test_q_contains_escapes_like_wildcards() -> None:
+    # MEDIUM-D / LOW-1: user-supplied % / _ must match literally, never widen
+    # the match set. The compiled clause carries an ESCAPE clause and the value's
+    # wildcards arrive backslash-escaped.
+    clause = compile_view_filters(
+        {
+            "operator": "AND",
+            "conditions": [{"field": "q", "op": "contains", "value": "100%_x"}],
+        }
+    )
+    sql = str(clause.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "escape" in sql
+    assert "100\\%\\_x" in sql
+
+
+def test_text_contains_escapes_like_wildcards() -> None:
+    # Same guarantee for the generic `contains` operator on a text column.
+    clause = compile_view_filters(
+        {
+            "operator": "AND",
+            "conditions": [
+                {"field": "state_category", "op": "contains", "value": "a%b_c"}
+            ],
+        }
+    )
+    sql = str(clause.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "escape" in sql
+    assert "a\\%b\\_c" in sql
+
+
 def test_null_operators() -> None:
     clause = compile_view_filters(
         {

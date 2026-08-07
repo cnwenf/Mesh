@@ -13,6 +13,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select, text
 
+from mesh.db.models.agent import Agent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
 from mesh.errors import BusinessRuleError
 from mesh.runtime.claim import claim_execution
@@ -308,3 +309,66 @@ async def test_requeue_claims_attempt_number_two(session_factory):
     assert result is not None
     assert result.attempt["attempt_number"] == 2
     assert result.attempt["working_branch"] == f"agent/{execution.id}/a2"
+
+
+async def _set_agent_lifecycle(session_factory, agent_id, *, lifecycle=None, deleted=False):
+    async with session_factory() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        if lifecycle is not None:
+            agent.lifecycle_status = lifecycle
+        if deleted:
+            from datetime import UTC, datetime
+
+            agent.deleted_at = datetime.now(UTC)
+
+
+@pytest.mark.parametrize("lifecycle", ["paused", "disabled", "archived"])
+async def test_claim_skips_non_active_agent_execution(session_factory, lifecycle):
+    """HIGH-3: a queued execution whose agent is paused/disabled/archived is
+    never dispatched; the claim returns None and leaves capacity untouched."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(session_factory, world["ws_id"], world["agent_id"])
+    await _set_agent_lifecycle(session_factory, world["agent_id"], lifecycle=lifecycle)
+
+    result = await _claim(session_factory, runtime)
+
+    assert result is None
+    fresh = await _load(session_factory, runtime.id)
+    assert fresh.current_load == 0
+    async with session_factory() as session:
+        stored = (
+            await session.execute(select(TaskExecution).where(TaskExecution.id == execution.id))
+        ).scalar_one()
+    assert stored.status == "queued"  # not dispatched, stays queued
+
+
+async def test_claim_skips_soft_deleted_agent_execution(session_factory):
+    """HIGH-3: a soft-deleted agent's queued executions are never dispatched."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(session_factory, world["ws_id"], world["agent_id"])
+    await _set_agent_lifecycle(session_factory, world["agent_id"], deleted=True)
+
+    result = await _claim(session_factory, runtime)
+
+    assert result is None
+    async with session_factory() as session:
+        stored = (
+            await session.execute(select(TaskExecution).where(TaskExecution.id == execution.id))
+        ).scalar_one()
+    assert stored.status == "queued"
+
+
+async def test_claim_active_agent_execution_still_dispatched(session_factory):
+    """HIGH-3 control: an active, non-deleted agent's execution claims fine."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(session_factory, world["ws_id"], world["agent_id"])
+
+    result = await _claim(session_factory, runtime)
+
+    assert result is not None
+    assert result.execution["id"] == str(execution.id)
+    assert result.execution["status"] == "claimed"

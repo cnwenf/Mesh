@@ -45,6 +45,7 @@
     "agents.triggerSkipped.rate_limited": "Agent 已达到触发频率上限，请稍后重试。",
     "agents.triggerSkipped.trigger_on_assign_disabled": "Agent 已关闭分派自动启动，因此未开始运行。",
     "agents.triggerSkipped.unknown": "安全规则跳过了本次 Agent 触发。",
+    "agents.triggerSkipped.visibility_private": "该 Agent 为私有，仅其所有者可触发，因此未开始运行。",
     "agents.field.visibility": "可见性",
     "agents.history.action": "操作",
     "agents.history.compare": "对比上一版",
@@ -2957,5 +2958,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "2177c76f"
+  "version": "26a247e6"
 }

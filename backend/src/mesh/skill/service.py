@@ -54,6 +54,7 @@ from mesh.errors import (
 )
 from mesh.outbox.service import emit_realtime
 from mesh.skill.manifest import SEMVER_PATTERN, validate_manifest
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 
 WORKSPACE_SKILLS_CHANNEL = "workspace:{workspace_id}:skills"
 
@@ -416,8 +417,11 @@ class SkillService:
             if source_type != "all":
                 stmt = stmt.where(SkillSource.source_type == source_type)
             if q:
-                pattern = f"%{q.strip()}%"
-                stmt = stmt.where(Skill.name.ilike(pattern) | Skill.summary.ilike(pattern))
+                pattern = f"%{escape_like(q.strip())}%"
+                stmt = stmt.where(
+                    Skill.name.ilike(pattern, escape=LIKE_ESCAPE_CHAR)
+                    | Skill.summary.ilike(pattern, escape=LIKE_ESCAPE_CHAR)
+                )
             if cursor is not None:
                 position = decode_cursor(cursor)
                 stmt = stmt.where(

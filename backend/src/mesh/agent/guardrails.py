@@ -50,6 +50,9 @@ SKIP_MEMBER_NOT_ACTIVE = "member_not_active"
 SKIP_TRIGGER_ON_ASSIGN_DISABLED = "trigger_on_assign_disabled"
 SKIP_RATE_LIMITED = "rate_limited"
 SKIP_CHAIN_DEPTH = "chain_depth_exceeded"
+# agent.md §3.5 visibility: a ``private`` agent may only be triggered by its
+# owner; a trigger from any other principal is skipped (HIGH-2).
+SKIP_VISIBILITY_PRIVATE = "visibility_private"
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,7 @@ __all__ = [
     "SKIP_MEMBER_NOT_ACTIVE",
     "SKIP_RATE_LIMITED",
     "SKIP_TRIGGER_ON_ASSIGN_DISABLED",
+    "SKIP_VISIBILITY_PRIVATE",
     "TriggerGuardrailConfig",
     "evaluate_assign_trigger",
     "emit_trigger_skipped",

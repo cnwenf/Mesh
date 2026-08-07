@@ -218,7 +218,7 @@ async def test_reply_threading_depth_one(env):
 
     replies, _ = await service.list_replies(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(root["id"]),
-        viewer_member_id=author.id,
+        viewer_member_id=author.id, member=author,
     )
     assert [r["id"] for r in replies] == [reply["id"], reply2["id"]]
 
@@ -270,7 +270,7 @@ async def test_soft_delete_placeholder_and_gone(env):
     )
     fetched = await service.get_comment(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(created["id"]),
-        viewer_member_id=author.id,
+        viewer_member_id=author.id, member=author,
     )
     assert fetched["deleted_at"] is not None
     assert fetched["body_markdown"] == ""  # placeholder, body redacted
@@ -374,7 +374,7 @@ async def test_reaction_add_duplicate_remove(env):
     )
     listed = await service.list_reactions(
         workspace_id=env["workspace"].id, comment_id=uuid.UUID(created["id"]),
-        viewer_member_id=author.id,
+        viewer_member_id=author.id, member=author,
     )
     assert listed[0]["count"] == 2
     assert {a["name"] for a in listed[0]["actors"]} == {"Alice", "Bob"}
@@ -872,3 +872,129 @@ async def test_cross_issue_parent_rejected_by_db(env):
                 )
             )
             await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# HIGH-2: mention path passes the lifecycle/visibility guardrail gate
+# ---------------------------------------------------------------------------
+
+
+async def _set_agent_lifecycle(factory, agent_member: Member, lifecycle_status: str) -> None:
+    async with factory() as session, session.begin():
+        agent = await session.scalar(
+            select(Agent).where(Agent.id == agent_member.agent_id)
+        )
+        assert agent is not None
+        agent.lifecycle_status = lifecycle_status
+
+
+async def _skipped_frames(factory, event_type: str = "realtime.publish") -> list:
+    rows = await _outbox_rows(factory, event_type)
+    return [r for r in rows if r.payload.get("event") == "agent.trigger_skipped"]
+
+
+async def test_mention_paused_agent_skips_with_trigger_skipped(env):
+    service, issue, agent, author = env["service"], env["issue"], env["agent"], env["author"]
+    await _set_agent_lifecycle(env["factory"], agent, "paused")
+    created = await service.create_comment(
+        workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
+        body_markdown=_mention_link(agent.id),
+    )
+    assert created["triggered_execution_ids"] == []
+    assert await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT) == []
+    skipped = await _skipped_frames(env["factory"])
+    assert len(skipped) == 1
+    data = skipped[0].payload["data"]
+    assert data["reason"] == "lifecycle_not_active"
+    assert data["trigger"] == "mention"
+    assert data["agent_id"] == str(agent.agent_id)
+    assert skipped[0].payload["channel"] == f"workspace:{env['workspace'].id}:agents"
+
+
+@pytest.mark.parametrize("lifecycle", ["disabled", "archived"])
+async def test_mention_disabled_or_archived_agent_skips(env, lifecycle):
+    service, issue, agent, author = env["service"], env["issue"], env["agent"], env["author"]
+    await _set_agent_lifecycle(env["factory"], agent, lifecycle)
+    created = await service.create_comment(
+        workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
+        body_markdown=_mention_link(agent.id),
+    )
+    assert created["triggered_execution_ids"] == []
+    assert await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT) == []
+    skipped = await _skipped_frames(env["factory"])
+    assert [frame.payload["data"]["reason"] for frame in skipped] == ["lifecycle_not_active"]
+
+
+async def test_mention_active_agent_still_triggers(env):
+    """Control: an active agent is unaffected by the guardrail wiring."""
+    service, issue, agent, author = env["service"], env["issue"], env["agent"], env["author"]
+    await service.create_comment(
+        workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
+        body_markdown=_mention_link(agent.id),
+    )
+    enqueues = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
+    assert len(enqueues) == 1
+    assert await _skipped_frames(env["factory"]) == []
+
+
+async def _private_agent_setup(session_factory):
+    """A private agent plus its owner member and an unrelated stranger member."""
+    workspace = await _workspace(session_factory)
+    owner_user = User(
+        email=f"owner-{uuid.uuid4().hex[:6]}@x.io", display_name="Owner"
+    )
+    async with session_factory() as session, session.begin():
+        session.add(owner_user)
+        await session.flush()
+        owner_member = Member(
+            workspace_id=workspace.id, member_type="human",
+            user_id=owner_user.id, role="member",
+        )
+        session.add(owner_member)
+    agent = await _agent(session_factory, workspace, "private-helper")
+    # Re-point ownership at the owner member's user and make it private.
+    async with session_factory() as session, session.begin():
+        row = await session.scalar(select(Agent).where(Agent.id == agent.agent_id))
+        assert row is not None
+        row.owner_user_id = owner_user.id
+        row.visibility = "private"
+    stranger = await _human(session_factory, workspace, "Stranger")
+    issue = await _issue(session_factory, workspace, owner_member)
+    service = CommentService(session_factory, max_agent_chain_depth=3)
+    return {
+        "factory": session_factory,
+        "workspace": workspace,
+        "owner_member": owner_member,
+        "stranger": stranger,
+        "agent": agent,
+        "issue": issue,
+        "service": service,
+    }
+
+
+async def test_mention_private_agent_by_non_owner_skips_visibility(session_factory):
+    env = await _private_agent_setup(session_factory)
+    created = await env["service"].create_comment(
+        workspace_id=env["workspace"].id, issue_id=env["issue"].id,
+        author_member=env["stranger"], body_markdown=_mention_link(env["agent"].id),
+    )
+    assert created["triggered_execution_ids"] == []
+    assert await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT) == []
+    skipped = await _skipped_frames(env["factory"])
+    assert len(skipped) == 1
+    data = skipped[0].payload["data"]
+    assert data["reason"] == "visibility_private"
+    assert data["trigger"] == "mention"
+
+
+async def test_mention_private_agent_by_owner_triggers(session_factory):
+    env = await _private_agent_setup(session_factory)
+    created = await env["service"].create_comment(
+        workspace_id=env["workspace"].id, issue_id=env["issue"].id,
+        author_member=env["owner_member"], body_markdown=_mention_link(env["agent"].id),
+    )
+    enqueues = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
+    assert len(enqueues) == 1
+    assert enqueues[0].payload["trigger"] == "mention"
+    assert await _skipped_frames(env["factory"]) == []
+    assert created is not None

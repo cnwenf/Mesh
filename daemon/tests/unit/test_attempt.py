@@ -561,11 +561,14 @@ class TestUnexpectedProviderError:
                     turns=2,
                     cost_usd="0.002000",
                 )
+                # HIGH-4: the monotonicity gate fires on the TERMINAL cumulative
+                # frame only — mark it terminal so the regression is enforced.
                 yield UsageObserved(
                     input_tokens=8,
                     output_tokens=4,
                     turns=1,
                     cost_usd="0.001000",
+                    terminal=True,
                 )
                 yield FinalResult(summary="must not complete", exit_code=0)
 
@@ -581,6 +584,59 @@ class TestUnexpectedProviderError:
         assert outcome.status == "failed"
         assert outcome.failure_reason == "executor_unavailable"
         assert incidents == ["usage_invariant_failed"]
+
+    async def test_per_message_usage_regression_does_not_isolate(self, journal, ctx):
+        """HIGH-4 multi-turn negative: per-message frames may legitimately
+        decrease mid-stream; only the terminal cumulative frame is gated, so a
+        run whose terminal frame is consistent must complete (no isolation)."""
+        reported = {}
+        incidents = []
+
+        class CapturingApi(RenewOkApi):
+            async def transition(self, attempt_id, *, lease_seq, status, result=None,
+                                 failure_reason=None):
+                if result is not None:
+                    reported.update(result)
+                return await super().transition(
+                    attempt_id, lease_seq=lease_seq, status=status,
+                    result=result, failure_reason=failure_reason,
+                )
+
+        class MultiTurnProvider:
+            name = "multi-turn-usage"
+
+            async def run(self, request):
+                yield SessionStarted(session_id="sess-mt", model="m")
+                # Turn 1 reports more than turn 2's per-message frame — this is
+                # legal on a multi-turn stream and must NOT isolate.
+                yield UsageObserved(
+                    input_tokens=10, output_tokens=4, turns=1, cost_usd="0.002000"
+                )
+                yield UsageObserved(
+                    input_tokens=3, output_tokens=2, turns=1, cost_usd="0.000500"
+                )
+                # Terminal cumulative frame is consistent (non-regressing) → ok.
+                yield UsageObserved(
+                    input_tokens=13,
+                    output_tokens=6,
+                    turns=2,
+                    cost_usd="0.002500",
+                    terminal=True,
+                )
+                yield FinalResult(summary="done", exit_code=0)
+
+        sup = make_supervisor(
+            CapturingApi(),
+            journal,
+            FakeClock(),
+            on_operational_incident=incidents.append,
+        )
+
+        outcome = await sup.supervise(ctx, MultiTurnProvider(), run_request())
+
+        assert outcome.status == "completed"
+        assert incidents == []
+        assert reported["usage"]["turns"] == 2
 
     async def test_cleanup_failure_isolates_runtime(self, journal, ctx):
         from mesh_runtime.cleanup import CleanupReport

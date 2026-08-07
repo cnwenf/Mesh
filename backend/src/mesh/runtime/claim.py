@@ -128,7 +128,10 @@ async def claim_execution(
             # 2) Pick the highest-priority, oldest matching queued task.
             # INNER JOIN agents per §2.5 — a claimable execution always has an
             # executor (the enqueue path sets agent_id); agent-less rows are
-            # not dispatchable.
+            # not dispatchable. HIGH-3: the join also enforces the agent
+            # lifecycle/soft-delete gate — a queued execution whose agent has
+            # been paused/disabled/archived or soft-deleted is never dispatched
+            # (defense in depth under the lifecycle cancel path).
             picked_id = (
                 await session.execute(
                     select(TaskExecution.id)
@@ -138,6 +141,8 @@ async def claim_execution(
                         and_(
                             Agent.id == TaskExecution.agent_id,
                             Agent.workspace_id == TaskExecution.workspace_id,
+                            Agent.deleted_at.is_(None),
+                            Agent.lifecycle_status == "active",
                         ),
                     )
                     .where(

@@ -214,7 +214,8 @@ async def get_comment(
         not_found_message=_COMMENT_NOT_FOUND,
     )
     data = await _comments(request).get_comment(
-        workspace_id=workspace_id, comment_id=parsed, viewer_member_id=context.member.id
+        workspace_id=workspace_id, comment_id=parsed, viewer_member_id=context.member.id,
+        member=context.member,
     )
     return {"data": data}
 
@@ -300,6 +301,7 @@ async def list_replies(
         workspace_id=workspace_id,
         comment_id=parsed,
         viewer_member_id=context.member.id,
+        member=context.member,
         limit=limit,
         cursor=cursor,
     )
@@ -377,7 +379,8 @@ async def list_reactions(
         not_found_message=_COMMENT_NOT_FOUND,
     )
     data = await _comments(request).list_reactions(
-        workspace_id=workspace_id, comment_id=parsed, viewer_member_id=context.member.id
+        workspace_id=workspace_id, comment_id=parsed, viewer_member_id=context.member.id,
+        member=context.member,
     )
     return {"data": data}
 

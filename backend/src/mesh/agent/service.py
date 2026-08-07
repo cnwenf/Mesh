@@ -58,6 +58,7 @@ from mesh.runtime.agent_presence import (
     empty_agent_presence,
 )
 from mesh.search.projection import recompute_for_agent, sync_member_search_name
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
 WORKSPACE_AGENTS_CHANNEL = "workspace:{workspace_id}:agents"
@@ -539,8 +540,13 @@ class AgentService:
             if owner_id is not None:
                 stmt = stmt.where(Agent.owner_user_id == owner_id)
             if q:
-                pattern = f"%{q.strip()}%"
-                stmt = stmt.where(or_(Agent.name.ilike(pattern), Agent.role_tag.ilike(pattern)))
+                pattern = f"%{escape_like(q.strip())}%"
+                stmt = stmt.where(
+                    or_(
+                        Agent.name.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                        Agent.role_tag.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    )
+                )
             if cursor is not None:
                 c_status, c_created, c_id = _decode_list_cursor(cursor)
                 stmt = stmt.where(

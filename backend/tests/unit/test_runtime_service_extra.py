@@ -21,7 +21,7 @@ from mesh.db.models.runtime import (
 )
 from mesh.db.models.user import User
 from mesh.db.tenant import set_tenant_context
-from mesh.errors import ForbiddenError, NotFoundError
+from mesh.errors import NotFoundError
 from mesh.runtime.approvals import decide_approval, request_tool_approval
 from mesh.runtime.attempts import cancel_execution, freeze_execution, transition_attempt
 from mesh.runtime.claim import claim_execution
@@ -547,15 +547,19 @@ async def test_execution_observability_filters_private_project_issues(session_fa
         workspace_id=world["ws_id"], viewer=viewer, limit=20
     )
     assert [item["id"] for item in page["data"]] == [str(visible.id)]
-    with pytest.raises(ForbiddenError):
+    # LOW-S2 anti-oracle: execution detail/log/list-by-issue paths all reuse the
+    # issue read gate (assert_member_can_view_issue), so an invisible private
+    # project surfaces as 404 not_found for every member type — never 403,
+    # matching GET /issues/{id} (issue.md §3.8, project.md §5.3).
+    with pytest.raises(NotFoundError):
         await service.list_executions(
             workspace_id=world["ws_id"], viewer=viewer, issue_id=issue_id
         )
-    with pytest.raises(ForbiddenError):
+    with pytest.raises(NotFoundError):
         await service.get_execution(
             workspace_id=world["ws_id"], execution_id=hidden.id, viewer=viewer
         )
-    with pytest.raises(ForbiddenError):
+    with pytest.raises(NotFoundError):
         await read_execution_logs(
             session_factory,
             None,

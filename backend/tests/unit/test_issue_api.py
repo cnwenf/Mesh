@@ -256,7 +256,7 @@ async def test_list_filter_params_sort_and_pagination(client):
             headers=_auth(owner),
         )
     ).status_code == 400
-    # group_by by assignee/priority/project; label rejected
+    # group_by by assignee/priority/project; HIGH-A: label is now supported
     grouped = await client.get(
         f"/api/v1/workspaces/{ws['id']}/issues?group_by=priority", headers=_auth(owner)
     )
@@ -264,7 +264,7 @@ async def test_list_filter_params_sort_and_pagination(client):
     label = await client.get(
         f"/api/v1/workspaces/{ws['id']}/issues?group_by=label", headers=_auth(owner)
     )
-    assert label.status_code == 400
+    assert label.status_code == 200 and "groups" in label.json()
     # structured filters: in / gte / is_null operators
     sf = await client.get(
         f"/api/v1/workspaces/{ws['id']}/issues",

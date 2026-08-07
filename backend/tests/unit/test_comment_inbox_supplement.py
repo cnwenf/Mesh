@@ -181,7 +181,7 @@ async def test_list_replies_on_a_reply_is_rejected(session_factory):
     with pytest.raises(BusinessRuleError) as exc:
         await service.list_replies(
             workspace_id=workspace.id, comment_id=uuid.UUID(reply["id"]),
-            viewer_member_id=author.id,
+            viewer_member_id=author.id, member=author,
         )
     assert exc.value.code == "not_thread_root"
 

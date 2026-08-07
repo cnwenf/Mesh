@@ -88,7 +88,7 @@ DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 200
 
 SORT_FIELDS = ("position", "created_at", "priority", "due_date")
-GROUP_FIELDS = ("state_category", "assignee", "priority", "project", "cycle")
+GROUP_FIELDS = ("state_category", "assignee", "priority", "project", "label", "cycle")
 _PRIORITY_RANK = {
     "urgent": 0,
     "high": 1,
@@ -917,11 +917,6 @@ class IssueService:
         if order not in ("asc", "desc"):
             raise ValidationError("invalid order", details={"order": order})
         if group_by is not None:
-            if group_by == "label":
-                raise ValidationError(
-                    "group_by=label awaits the label-property increment",
-                    details={"group_by": group_by},
-                )
             if group_by not in GROUP_FIELDS:
                 raise ValidationError(
                     "invalid group_by", details={"group_by": group_by}
@@ -1165,6 +1160,14 @@ class IssueService:
         groups; ``count`` is the FULL per-group total while ``data`` is the
         current page slice; per-group cursors are forbidden.
         """
+        if group_by == "label":
+            return await self._group_by_label_response(
+                session,
+                base_stmt=base_stmt,
+                rendered=rendered,
+                workspace_id=workspace_id,
+                next_cursor=next_cursor,
+            )
         by_id = {item["id"]: item for item in rendered}
         group_keys: list[str] = []
         page_membership: dict[str, list[dict]] = {}
@@ -1210,6 +1213,89 @@ class IssueService:
                     "label": label,
                     "count": counts.get(key, len(page_membership.get(key, []))),
                     "data": page_membership.get(key, []),
+                }
+            )
+        return {"groups": groups, "next_cursor": next_cursor}
+
+    async def _group_by_label_response(
+        self,
+        session: AsyncSession,
+        *,
+        base_stmt,
+        rendered: list[dict],
+        workspace_id: uuid.UUID,
+        next_cursor: str | None,
+    ) -> dict:
+        """Project each issue into every label group it belongs to (HIGH-A).
+
+        Label is the generic issue list's only multi-valued grouping axis, so a
+        card may appear in multiple groups. Counts cover the complete filtered
+        issue set while each group's data contains only the current
+        overall-cursor page. Unlabelled issues use the canonical ``__none__``
+        bucket, which is always ordered last (issue.md §3.2 / README §6.14).
+        """
+        filtered_issue_ids = base_stmt.with_only_columns(Issue.id).subquery(
+            "filtered_issue_ids"
+        )
+        label_count_rows = (
+            await session.execute(
+                select(IssueLabel.label_id, Label.name, func.count(IssueLabel.issue_id))
+                .select_from(IssueLabel)
+                .join(
+                    filtered_issue_ids,
+                    filtered_issue_ids.c.id == IssueLabel.issue_id,
+                )
+                .join(
+                    Label,
+                    and_(
+                        Label.workspace_id == IssueLabel.workspace_id,
+                        Label.id == IssueLabel.label_id,
+                    ),
+                )
+                .where(IssueLabel.workspace_id == workspace_id)
+                .group_by(IssueLabel.label_id, Label.name)
+            )
+        ).all()
+        label_count_rows.sort(key=lambda row: (row.name.casefold(), str(row.label_id)))
+
+        has_label = (
+            select(IssueLabel.issue_id)
+            .where(
+                IssueLabel.workspace_id == workspace_id,
+                IssueLabel.issue_id == filtered_issue_ids.c.id,
+            )
+            .correlate(filtered_issue_ids)
+            .exists()
+        )
+        empty_count = int(
+            await session.scalar(
+                select(func.count()).select_from(filtered_issue_ids).where(~has_label)
+            )
+            or 0
+        )
+
+        page_membership: dict[str, list[dict]] = {}
+        for item in rendered:
+            keys = [label["id"] for label in item.get("labels", [])] or ["__none__"]
+            for key in keys:
+                page_membership.setdefault(key, []).append(item)
+
+        groups = [
+            {
+                "key": str(row.label_id),
+                "label": row.name,
+                "count": int(row[2]),
+                "data": page_membership.get(str(row.label_id), []),
+            }
+            for row in label_count_rows
+        ]
+        if empty_count:
+            groups.append(
+                {
+                    "key": "__none__",
+                    "label": "No label",
+                    "count": empty_count,
+                    "data": page_membership.get("__none__", []),
                 }
             )
         return {"groups": groups, "next_cursor": next_cursor}

@@ -166,13 +166,13 @@ async def _private_source_setup(session_factory, issue_service, project_service)
 
 
 @pytest.mark.unit
-async def test_move_unconfirmed_private_source_member_forbidden_no_plan(
+async def test_move_unconfirmed_private_source_member_not_found_no_plan(
     session_factory, issue_service, move_service, project_service
 ):
     workspace, _owner, outsider, _guest, _source, issue = await _private_source_setup(
         session_factory, issue_service, project_service
     )
-    with pytest.raises(ForbiddenError) as exc_info:
+    with pytest.raises(NotFoundError) as exc_info:
         await move_service.move(
             actor=outsider,
             workspace_id=workspace.id,
@@ -233,8 +233,8 @@ async def test_move_unconfirmed_invisible_source_leaks_no_target_existence_guest
 async def test_move_unconfirmed_invisible_source_leaks_no_target_existence_member(
     session_factory, issue_service, move_service, project_service
 ):
-    """Same guarantee for members: 403 'project is private' regardless of
-    whether the swept target exists."""
+    """Same guarantee for members: 404 'issue not found' regardless of
+    whether the swept target exists (LOW-S2 — no existence oracle)."""
     workspace, owner, outsider, _guest, _source, issue = await _private_source_setup(
         session_factory, issue_service, project_service
     )
@@ -243,7 +243,7 @@ async def test_move_unconfirmed_invisible_source_leaks_no_target_existence_membe
     )
     errors = []
     for target in (uuid.UUID(real_target["id"]), uuid.uuid4()):
-        with pytest.raises(ForbiddenError) as exc_info:
+        with pytest.raises(NotFoundError) as exc_info:
             await move_service.move(
                 actor=outsider,
                 workspace_id=workspace.id,
@@ -257,13 +257,13 @@ async def test_move_unconfirmed_invisible_source_leaks_no_target_existence_membe
 
 
 @pytest.mark.unit
-async def test_move_preview_private_source_member_forbidden(
+async def test_move_preview_private_source_member_not_found(
     session_factory, issue_service, move_service, project_service
 ):
     workspace, _owner, outsider, _guest, _source, issue = await _private_source_setup(
         session_factory, issue_service, project_service
     )
-    with pytest.raises(ForbiddenError):
+    with pytest.raises(NotFoundError):
         await move_service.preview(
             viewer=outsider,
             workspace_id=workspace.id,
@@ -409,7 +409,7 @@ async def test_move_unconfirmed_authorized_owner_still_gets_preview(
 
 
 @pytest.mark.unit
-async def test_bulk_unconfirmed_mixed_ids_forbidden_marker_not_plan(
+async def test_bulk_unconfirmed_mixed_ids_invisible_marker_not_plan(
     session_factory, issue_service, bulk_service, project_service
 ):
     workspace = await _make_workspace(session_factory)
@@ -440,10 +440,11 @@ async def test_bulk_unconfirmed_mixed_ids_forbidden_marker_not_plan(
     assert exc_info.value.code == "move_confirmation_required"
     previews = exc_info.value.details["previews"]
     by_id = {p["issue_id"]: p for p in previews}
-    # authorized item → plan; unauthorized → marker ONLY (no plan fields)
+    # authorized item → plan; invisible private item → not_found marker ONLY
+    # (LOW-S2: members no longer leak existence via a 403 marker, no plan fields)
     assert "mapped_fields" in by_id[my_issue["id"]]
     marker = by_id[secret_issue["id"]]
-    assert marker["error"] == "forbidden"
+    assert marker["error"] == "not_found"
     assert "mapped_fields" not in marker and "identifier" not in marker
 
 

@@ -200,9 +200,14 @@ def _parse_result(record: dict) -> ParsedRecord:
         input_tokens=effective_usage.input_tokens if effective_usage else 0,
         output_tokens=effective_usage.output_tokens if effective_usage else 0,
         cache_read_tokens=effective_usage.cache_read_tokens if effective_usage else 0,
-        cache_creation_tokens=effective_usage.cache_creation_tokens if effective_usage else 0,
+        cache_creation_tokens=(
+            effective_usage.cache_creation_tokens if effective_usage else 0
+        ),
         cost_usd=cost,
         turns=num_turns,
+        # HIGH-4: the result record is the authoritative cumulative frame — the
+        # only one the supervisor's monotonicity gate may compare.
+        terminal=True,
     )
     final = FinalResult(
         summary=result_text[:SUMMARY_MAX_CHARS],

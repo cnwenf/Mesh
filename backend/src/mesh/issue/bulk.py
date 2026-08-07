@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.db.models.member import Member
 from mesh.errors import (
     BusinessRuleError,
-    ForbiddenError,
     MeshError,
     NotFoundError,
     ValidationError,
@@ -93,13 +92,11 @@ class BulkService:
                     # MES-46 H2: the preview carries each issue's field
                     # manifest, so every item is gated on the read permission
                     # exactly like GET /issues/{id} — invisible issues land
-                    # as error markers (404→not_found for guests,
-                    # 403→forbidden for members), NEVER as a plan.
+                    # as a not_found error marker (guests AND members, LOW-S2:
+                    # a private project the viewer cannot see never leaks
+                    # existence), NEVER as a plan.
                     try:
                         await self._issues.assert_can_view_issue(session, viewer=actor, issue=issue)
-                    except ForbiddenError:
-                        previews.append({"issue_id": raw_id, "error": "forbidden"})
-                        continue
                     except NotFoundError:
                         previews.append({"issue_id": raw_id, "error": "not_found"})
                         continue
