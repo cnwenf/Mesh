@@ -47,7 +47,12 @@ export function ReassignMemberDialog(props: ReassignMemberDialogProps): React.JS
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={t('members.reassign.title')} closeLabel={t('common.close')}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t('members.reassign.title')}
+      closeLabel={t('common.close')}
+    >
       <div className="mesh-members__dialog-body">
         <p data-testid="reassign-dialog-body">
           {t('members.reassign.confirm', { name: member.display_name })}

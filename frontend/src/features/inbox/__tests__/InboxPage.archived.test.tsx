@@ -108,7 +108,10 @@ afterEach(() => {
 
 describe('InboxPage archived view (L202)', () => {
   it('archived tab fetches with archived=true and hides main-view affordances', async () => {
-    const stub = queue(undefined, fakeResponse({ body: { data: [ARCHIVED_NOTIF], next_cursor: null } }));
+    const stub = queue(
+      undefined,
+      fakeResponse({ body: { data: [ARCHIVED_NOTIF], next_cursor: null } }),
+    );
     renderInbox();
     await screen.findByTestId('inbox-row-n-1');
 

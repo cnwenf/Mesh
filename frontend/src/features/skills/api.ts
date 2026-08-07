@@ -108,10 +108,9 @@ export async function listVersions(
   skillId: string,
   params: { limit?: number; cursor?: string } = {},
 ): Promise<{ data: SkillVersion[]; nextCursor: string | null }> {
-  const envelope = await client.list<SkillVersion>(
-    `${skillPath(workspaceId, skillId)}/versions`,
-    { query: { limit: params.limit, cursor: params.cursor } },
-  );
+  const envelope = await client.list<SkillVersion>(`${skillPath(workspaceId, skillId)}/versions`, {
+    query: { limit: params.limit, cursor: params.cursor },
+  });
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
 

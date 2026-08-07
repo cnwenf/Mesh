@@ -142,11 +142,7 @@ interface Recorded {
   init?: RequestInit;
 }
 
-function makeFetch(
-  members: unknown[],
-  issues: unknown[] = [],
-  onlineIds: readonly string[] = [],
-) {
+function makeFetch(members: unknown[], issues: unknown[] = [], onlineIds: readonly string[] = []) {
   const calls: Recorded[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);

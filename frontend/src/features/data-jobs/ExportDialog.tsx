@@ -228,9 +228,7 @@ export function ExportDialog(props: ExportDialogProps): React.JSX.Element | null
       {submitted && job !== null && (
         <section aria-label={t('dataJobs.export.progress')}>
           <p data-testid="export-status">{t(`dataJobs.status.${job.status}`)}</p>
-          {!isTerminalDataJobStatus(job.status) && (
-            <p>{t('dataJobs.export.runningHint')}</p>
-          )}
+          {!isTerminalDataJobStatus(job.status) && <p>{t('dataJobs.export.runningHint')}</p>}
           {job.status === 'failed' && job.failure_reason !== null && (
             <p>{t('dataJobs.import.failureReason', { reason: job.failure_reason })}</p>
           )}

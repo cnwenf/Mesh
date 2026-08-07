@@ -656,8 +656,7 @@ export function BoardPage(): React.JSX.Element {
   const viewerSlots = useMemo(() => {
     if (viewPresence === null) return [];
     return viewPresence.subjects.slice(0, MAX_VIEWER_AVATARS).map((subject) => {
-      const member =
-        viewerRoster?.find((entry) => entry.profile?.id === subject) ?? null;
+      const member = viewerRoster?.find((entry) => entry.profile?.id === subject) ?? null;
       const name = member?.display_name ?? subject;
       return { key: member?.id ?? subject, name, initial: name.slice(0, 1).toUpperCase() };
     });
