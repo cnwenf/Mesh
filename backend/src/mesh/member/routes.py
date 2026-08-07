@@ -7,10 +7,11 @@ endpoint is gated at membership only so a member can edit their OWN
 ``display_override`` — admin-or-self is enforced in the service (member.md
 §3.4). Last-owner / agent-owner protections live server-side, never the client.
 
-Presence (``GET /members/{id}/presence``) is spec-optional (§3.1 "(可选)") and
-deferred: there is no presence source yet, and a workspace-less path cannot be
-made RLS-safe without a definer bypass (YAGNI). ``member.presence`` stays
-registered in the §6.7 vocabulary for when presence lands.
+Presence (member.md §3.1 "(可选)") is served workspace-scoped as
+``GET /workspaces/{ws}/members/presence`` — the gateway's realtime connection
+set is the source (member/presence.py), and a workspace-less path cannot be
+made RLS-safe without a definer bypass. Transitions broadcast ``member.presence``
+on the workspace channel (member.md §3.5).
 """
 
 from __future__ import annotations
@@ -109,6 +110,31 @@ async def list_members(
         cursor=cursor,
     )
     return {"data": items, "next_cursor": next_cursor}
+
+
+@router.get("/workspaces/{workspace_id}/members/presence")
+async def members_presence(
+    request: Request,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    """Workspace online-member snapshot (member.md §3.1/§3.5).
+
+    Backed by the gateway's realtime connection set (member/presence.py);
+    workspace-scoped because a workspace-less presence path cannot be made
+    RLS-safe without a definer bypass.
+    """
+    from mesh.member.presence import member_presence_snapshot
+
+    online = await member_presence_snapshot(
+        request.app.state.redis, workspace_id=context.workspace.id
+    )
+    return {
+        "data": {
+            "workspace_id": str(context.workspace.id),
+            "online_member_ids": online,
+            "count": len(online),
+        }
+    }
 
 
 @router.get("/workspaces/{workspace_id}/agents/available")
