@@ -25,11 +25,12 @@ export interface NotificationActor {
   readonly name: string;
 }
 
-/** 关联 issue 快照(分组组头渲染:标识 + 标题;源实体删除时由 payload 兜底)。 */
+/** 关联 issue 快照(分组组头渲染:标识 + 标题;源实体删除时由 payload 兜底)。
+ * 旧行/缺快照的生产者可能给出 null,渲染侧须防御(不得出现字面 "null")。 */
 export interface NotificationIssueRef {
   readonly id: string;
-  readonly identifier: string;
-  readonly title: string;
+  readonly identifier: string | null;
+  readonly title: string | null;
 }
 
 export interface Notification {
@@ -42,7 +43,7 @@ export interface Notification {
   readonly group_key: string | null;
   readonly actor: NotificationActor | null;
   readonly preview: string;
-  readonly title: string;
+  readonly title: string | null;
   readonly count: number;
   readonly read_at: string | null;
   readonly archived_at: string | null;

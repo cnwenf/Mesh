@@ -427,6 +427,61 @@ async def test_review_requested_aggregation_refreshes_approval_id(env):
     assert rows[0].payload["approval_id"] == str(second_approval)
 
 
+async def test_missing_snapshot_fields_are_backfilled_from_live_issue(env):
+    """Producers that only carry ids (assigned / review_requested) must still
+    render readable inbox text: the handler backfills issue_identifier/title
+    from the live issue so group headers never stringify a bare "null"
+    (MES-189 evidence finding)."""
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    execution_id = uuid.uuid4()
+    event = await _emit_fanout(
+        factory, workspace,
+        notification_type="review_requested",
+        execution_id=execution_id,
+        issue_id=issue.id,
+        recipient_ids=[env["bob"].id],
+        group_key=f"execution:{execution_id}:approval",
+        preview="tool: shell",
+    )
+    await _run_fanout(factory, event)
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["issue_identifier"] == issue.identifier
+    assert rows[0].payload["title"] == issue.title
+
+    frames = await _realtime_events(factory, "notification.created")
+    frames = [f for f in frames if f.workspace_id == workspace.id]
+    assert frames, "expected at least one notification.created frame"
+    # issue_id also routes to the reporter, so assert the contract on every
+    # frame: the §2.6 snapshot must be backfilled, never None.
+    for frame in frames:
+        data = frame.payload["data"]
+        assert data["issue"]["identifier"] == issue.identifier
+        assert data["issue"]["title"] == issue.title
+
+
+async def test_existing_snapshot_fields_are_never_overwritten_by_backfill(env):
+    """Backfill only fills what the producer omitted: producer-supplied text
+    wins over the live issue's current values."""
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    event = await _emit_fanout(
+        factory, workspace,
+        notification_type="comment_created",
+        issue_id=issue.id,
+        recipient_ids=[env["bob"].id],
+        group_key=f"issue:{issue.id}:comment_created",
+        title="Producer title", preview="hi",
+        extra={"issue_identifier": "PROD-9"},
+    )
+    await _run_fanout(factory, event)
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["issue_identifier"] == "PROD-9"
+    assert rows[0].payload["title"] == "Producer title"
+
+
 async def test_aggregation_outside_window_creates_new_row(env):
     factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
     group = f"issue:{issue.id}:comment_created"

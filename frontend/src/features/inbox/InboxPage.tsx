@@ -342,7 +342,9 @@ export function InboxPage(): React.JSX.Element {
               <header className="mesh-inbox__group-head">
                 <span className="mesh-inbox__group-title mesh-text-caption">
                   {group.issue !== null
-                    ? `${group.issue.identifier} · ${group.issue.title}`
+                    ? [group.issue.identifier, group.issue.title]
+                        .filter((part): part is string => part !== null && part !== '')
+                        .join(' · ') || group.issueId
                     : group.issueId}
                 </span>
                 {group.issueId !== 'none' ? (
@@ -461,8 +463,16 @@ interface InboxRowProps {
  * 徽标表达优先级;来源者在标题前显迷你头像。行操作 hover/focus 出现,≤720px 常驻。
  */
 function InboxRow(props: InboxRowProps): React.JSX.Element {
-  const { notification, workspaceId, isSelected, locale, onSelect, onMarkRead, onArchive, showArchive } =
-    props;
+  const {
+    notification,
+    workspaceId,
+    isSelected,
+    locale,
+    onSelect,
+    onMarkRead,
+    onArchive,
+    showArchive,
+  } = props;
   const t = useT();
   const unread = isUnread(notification);
   const rowClasses = [
@@ -511,7 +521,7 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
           ) : null}
         </span>
         <span className="mesh-inbox__row-body">
-          <span className={titleClasses} title={notification.title}>
+          <span className={titleClasses} title={notification.title ?? undefined}>
             {notification.title}
           </span>
           <span

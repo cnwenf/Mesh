@@ -139,6 +139,27 @@ describe('InboxPage', () => {
     expect(screen.getByTestId('inbox-unread-dot-n-1')).toBeTruthy();
   });
 
+  it('group header never stringifies null when the issue snapshot is partial', async () => {
+    // 旧行/缺快照生产者(如 assigned、review_requested)可能只带 title 或全缺:
+    // 组头退回可用片段,绝不渲染字面 "null"。
+    const partial = { ...NOTIF, issue: { id: 'iss-1', identifier: null, title: 'Login bug' } };
+    const bare = {
+      ...NOTIF,
+      id: 'n-2',
+      issue: { id: 'iss-2', identifier: null, title: null },
+      issue_id: 'iss-2',
+    };
+    queue({ data: [partial, bare], next_cursor: null });
+    renderInbox();
+    await screen.findByTestId('inbox-page');
+    const partialHead = await screen.findByTestId('inbox-group-iss-1');
+    expect(partialHead.textContent).toContain('Login bug');
+    expect(partialHead.textContent).not.toContain('null');
+    const bareHead = await screen.findByTestId('inbox-group-iss-2');
+    expect(bareHead.textContent).toContain('iss-2');
+    expect(bareHead.textContent).not.toContain('null');
+  });
+
   it('renders the two-column ConversationLayout with list and preview panes', async () => {
     queue();
     renderInbox();

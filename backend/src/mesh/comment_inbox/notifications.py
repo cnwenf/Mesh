@@ -571,6 +571,27 @@ class NotificationFanoutHandler:
         exclude = {uuid.UUID(raw) for raw in fanout.get("exclude_ids") or ()}
         group_key = fanout.get("group_key")
 
+        # Some producers carry ids but omit snapshot text (``assigned`` omits
+        # the identifier; ``review_requested`` omits both) — backfill the §2.6
+        # snapshot once per event so inbox headers/rows render real text and
+        # never a bare "null". Deleted issues simply keep the None fields.
+        if issue_id is not None and (
+            fanout.get("issue_identifier") is None or fanout.get("title") is None
+        ):
+            issue = await session.scalar(
+                select(Issue).where(
+                    Issue.id == issue_id,
+                    Issue.workspace_id == workspace_id,
+                    Issue.deleted_at.is_(None),
+                )
+            )
+            if issue is not None:
+                fanout = {**fanout}
+                if fanout.get("issue_identifier") is None:
+                    fanout["issue_identifier"] = issue.identifier
+                if fanout.get("title") is None:
+                    fanout["title"] = issue.title
+
         candidates, _muted = await _candidate_recipient_ids(
             session,
             workspace_id=workspace_id,
