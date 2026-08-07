@@ -1665,7 +1665,8 @@ describe('IssuesPage 分页 ↔ URL 同步(L92)', () => {
     renderPageWithProbe(makeFakeRealtime().value, '/w/team/issues?page=bogus');
     await screen.findByText('WS-1');
     expect(issueCalls(stub).length).toBe(1);
-    expect(latestSearch).toBe('');
+    // sanitize 是数据落定后的 effect,与同级用例一致用 waitFor 等 URL 收敛。
+    await waitFor(() => expect(latestSearch).toBe(''));
   });
 
   it('数据不足目标页数时清除陈旧 ?page=', async () => {
