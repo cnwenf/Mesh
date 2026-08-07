@@ -2846,6 +2846,8 @@
     "state.errorTitle": "Something went wrong",
     "state.loading": "Loading…",
     "state.offline": "You are offline. Changes will sync when the connection is restored.",
+    "state.offlineOpFailed": "{count} queued operation(s) failed to sync.",
+    "state.offlineQueued": "{count} operation(s) queued — they sync automatically when the connection returns.",
     "state.partialFailure": "Some changes could not be saved. Please retry.",
     "state.permissionContactAction": "View workspace members",
     "state.permissionDescription": "You do not have permission to view this page.",
@@ -2973,5 +2975,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "c8264745"
+  "version": "2a24fee9"
 }

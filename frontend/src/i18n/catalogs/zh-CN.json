@@ -2846,6 +2846,8 @@
     "state.errorTitle": "出错了",
     "state.loading": "加载中…",
     "state.offline": "网络已断开，恢复连接后操作将自动同步。",
+    "state.offlineOpFailed": "{count} 个排队操作同步失败。",
+    "state.offlineQueued": "已排队 {count} 个操作，恢复连接后自动同步。",
     "state.partialFailure": "部分更改未能保存，请重试。",
     "state.permissionContactAction": "查看工作区成员",
     "state.permissionDescription": "你没有查看此页面的权限。",
@@ -2973,5 +2975,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "96a310dc"
+  "version": "a640841d"
 }

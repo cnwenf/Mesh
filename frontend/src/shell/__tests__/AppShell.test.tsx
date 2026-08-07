@@ -18,6 +18,7 @@ import {
   fetchRestEvents,
   resolveResyncUrl,
   useOfflinePolling,
+  useOptimisticQueue,
 } from '../AppShell';
 import { useT } from '../../i18n';
 import { resetPaletteContextCache } from '../../shortcuts/usePaletteContext';
@@ -717,5 +718,106 @@ describe('AppShell agent.trigger_skipped 呈现(G17)', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open issue' })).toBeInTheDocument();
     expect(document.querySelector('.mesh-toast--warn')).toBeInTheDocument();
+  });
+});
+
+describe('AppShell L182 乐观队列接线(§6.12 offline 行:乐观操作排队/自动回放)', () => {
+  let attempt = 0;
+  let failMode: 'network' | 'conflict' | 'none' = 'none';
+
+  function QueueProbe(): React.JSX.Element {
+    const queue = useOptimisticQueue();
+    return (
+      <button
+        data-testid="queue-probe-submit"
+        onClick={() => {
+          void queue?.submit('标记已读', async () => {
+            attempt += 1;
+            if (failMode === 'network')
+              throw new MeshApiError({ status: 0, code: 'network', message: 'x' });
+            if (failMode === 'conflict')
+              throw new MeshApiError({ status: 409, code: 'conflict', message: 'x' });
+          });
+        }}
+      >
+        submit
+      </button>
+    );
+  }
+
+  function renderShellWithProbe(): ReturnType<typeof renderWithProviders> {
+    return renderWithProviders(
+      <Routes>
+        <Route path="/" element={<AppShell />}>
+          <Route index element={<QueueProbe />} />
+        </Route>
+      </Routes>,
+      { route: '/' },
+    );
+  }
+
+  function setNavigatorOnLine(value: boolean): void {
+    Object.defineProperty(navigator, 'onLine', { value, configurable: true });
+  }
+
+  beforeEach(() => {
+    attempt = 0;
+    failMode = 'none';
+    // 空 token(hasToken 仍为 true)→ connect() 内 getToken() falsy → state 'offline',
+    // 离线横幅渲染,从而可验证排队计数接线。
+    useAuthStore.getState().setToken('');
+  });
+
+  afterEach(() => {
+    setNavigatorOnLine(true);
+    useAuthStore.getState().clearToken();
+  });
+
+  it('无 token 时 state=offline:排队操作在离线横幅计数呈现', async () => {
+    failMode = 'network'; // submit 在线直执遇 network 错误 → 入队
+    renderShellWithProbe();
+    expect(screen.getByTestId('status-banner-offline')).toBeInTheDocument();
+    expect(screen.queryByTestId('status-banner-offline-queued')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('queue-probe-submit'));
+    expect(await screen.findByTestId('status-banner-offline-queued')).toBeInTheDocument();
+    expect(screen.getByTestId('status-banner-offline-queued').textContent).toContain('1');
+  });
+
+  it('online 事件触发回放:成功项出队,横幅计数归零', async () => {
+    failMode = 'network';
+    renderShellWithProbe();
+    fireEvent.click(screen.getByTestId('queue-probe-submit'));
+    await screen.findByTestId('status-banner-offline-queued');
+
+    failMode = 'none'; // 回放时成功
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId('status-banner-offline-queued')).not.toBeInTheDocument(),
+    );
+    expect(attempt).toBe(2); // submit 直执 1 次 + 回放 1 次
+  });
+
+  it('回放失败(非 network)→ 失败 toast 呈现,逐项标记不再回放', async () => {
+    // 离线提交:直接入队不执行
+    setNavigatorOnLine(false);
+    failMode = 'conflict';
+    renderShellWithProbe();
+    fireEvent.click(screen.getByTestId('queue-probe-submit'));
+    await screen.findByTestId('status-banner-offline-queued');
+    setNavigatorOnLine(true);
+
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(await screen.findByText('1 queued operation(s) failed to sync.')).toBeInTheDocument();
+    expect(document.querySelector('.mesh-toast--danger')).toBeInTheDocument();
+    // failed 项不计入待回放:排队提示消失
+    await waitFor(() =>
+      expect(screen.queryByTestId('status-banner-offline-queued')).not.toBeInTheDocument(),
+    );
+    expect(attempt).toBe(1); // 仅回放执行 1 次(submit 时离线未执行)
   });
 });

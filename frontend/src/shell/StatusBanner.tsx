@@ -14,17 +14,24 @@ import type { ConnectionState } from '../realtime';
 
 export interface StatusBannerProps {
   state: ConnectionState;
+  /** L182:乐观队列待回放计数(queued+running);>0 时离线横幅附排队提示 */
+  queuedCount?: number;
   /** 接口预留:离线恢复为自动重连,本组件当前不渲染手动重试控件 */
   onRetry?: () => void;
 }
 
 export function StatusBanner(props: StatusBannerProps): React.JSX.Element | null {
   const t = useT();
-  const { state } = props;
+  const { state, queuedCount = 0 } = props;
   if (state === 'offline') {
     return (
       <Banner tone="warn" politeness="assertive">
         <span data-testid="status-banner-offline">{t('state.offline')}</span>
+        {queuedCount > 0 ? (
+          <span data-testid="status-banner-offline-queued">
+            {t('state.offlineQueued', { count: queuedCount })}
+          </span>
+        ) : null}
       </Banner>
     );
   }
