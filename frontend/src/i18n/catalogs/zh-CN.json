@@ -1822,6 +1822,7 @@
     "issues.move.success": "工作项已迁移",
     "issues.move.targetProject": "目标项目：{name}",
     "issues.move.title": "迁移到其他项目",
+    "issues.noRuntimeWarning": "无匹配 runtime：当前没有在线 runtime，被分派的 agent 可能无法开始执行，请到 Runtimes 页面检查。",
     "issues.noWorkspace": "尚无活跃工作区 —— 创建或加入一个以管理工作项。",
     "issues.openProperties": "属性",
     "issues.pageTitle": "工作项",
@@ -2243,6 +2244,7 @@
     "runtimes.detail.noInflight": "暂无正在执行的任务。",
     "runtimes.empty": "还没有 runtime，注册一台以运行 agent 任务。",
     "runtimes.execution.agent": "执行者",
+    "runtimes.execution.approvalExpiredNote": "审批在决定前已过期，本次执行已被取消。可在关联任务中重新发起。",
     "runtimes.execution.artifactBranch": "工作分支：{branch}",
     "runtimes.execution.audit.actualCost": "实际费用",
     "runtimes.execution.audit.approvalsTitle": "审批记录",
@@ -2975,5 +2977,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "a640841d"
+  "version": "7f976924"
 }

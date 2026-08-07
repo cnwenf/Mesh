@@ -213,6 +213,45 @@ describe('ExecutionDetailPage 头部与元信息', () => {
     );
   });
 
+  it('approval_expired 终态:横幅含原因 + 「已过期」提示 + 重新发起深链(L186 §6.12)', async () => {
+    setup({
+      ...EXECUTION,
+      status: 'cancelled',
+      failure_reason: 'approval_expired',
+      finished_at: '2026-07-27T12:00:00Z',
+    });
+    renderPage();
+    expect(await screen.findByTestId('execution-terminal-banner')).toHaveTextContent(
+      'approval_expired',
+    );
+    // 审批过期专项提示(本地化,不复述原始 reason)
+    expect(screen.getByTestId('execution-approval-expired')).toHaveTextContent(/approval expired/i);
+    // 「重新发起」深链关联任务(执行无 POST 重建端点,经任务重新触发)
+    const relaunch = await screen.findByTestId('execution-approval-expired-relaunch');
+    expect(relaunch).toHaveTextContent('Relaunch');
+    expect(relaunch).toHaveAttribute('href', '/w/t/issues/i-42');
+  });
+
+  it('approval_expired 但无关联 issue:提示仍在、不渲染重新发起链接(L186)', async () => {
+    setup({
+      ...EXECUTION,
+      status: 'cancelled',
+      failure_reason: 'approval_expired',
+      issue_id: null,
+      finished_at: '2026-07-27T12:00:00Z',
+    });
+    renderPage();
+    expect(await screen.findByTestId('execution-approval-expired')).toBeInTheDocument();
+    expect(screen.queryByTestId('execution-approval-expired-relaunch')).toBeNull();
+  });
+
+  it('其它失败原因不渲染审批过期提示(仅 approval_expired 专属)', async () => {
+    setup({ ...EXECUTION, status: 'failed', failure_reason: 'nonzero_exit' });
+    renderPage();
+    await screen.findByTestId('execution-terminal-banner');
+    expect(screen.queryByTestId('execution-approval-expired')).toBeNull();
+  });
+
   it('按 attempt 呈现 provider、冻结预算、usage、时间线与安全审批审计', async () => {
     const user = userEvent.setup();
     const frozenBudget = {

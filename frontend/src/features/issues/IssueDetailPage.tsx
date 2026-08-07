@@ -50,8 +50,10 @@ import type { MentionCandidate } from '../comments/mentions';
 import { useFavorites } from '../favorites/useFavorites';
 import { fetchMe, listMembers } from '../members/api';
 import type { HumanProfile, MemberSummary } from '../members/types';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
 import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
+import { workspaceHasOnlineRuntime } from '../runtimes/dispatchHint';
 import {
   addDependency,
   deleteIssue,
@@ -443,6 +445,29 @@ export function IssueDetailPage(): React.JSX.Element {
     };
   }, [realtime, issueKey]);
 
+  // L186 无可用 runtime 专项恢复入口(README §6.12 / onboarding.md §4 次级 CTA):
+  // agent 执行需有 runtime 认领(§6.4)。分派给 agent 成员保存成功后轻探测工作区
+  // 在线 runtime;确定没有 → warn 提示「无匹配 runtime」并深链 Runtimes 页。
+  // 仅提示不阻断分派;探测失败按可用处理(不误报)。
+  const warnIfNoOnlineRuntime = useCallback(
+    async (assigneeId: string) => {
+      if (issue === null || workspaceSlug === null) return;
+      const assignee = members.find((member) => member.id === assigneeId);
+      if (assignee === undefined || assignee.member_type !== 'agent') return;
+      const available = await workspaceHasOnlineRuntime(client, issue.workspace_id);
+      if (available) return;
+      toast.addToast(t('issues.noRuntimeWarning'), {
+        tone: 'warn',
+        closeLabel: t('common.close'),
+        actionLabel: t('runtimes.title'),
+        onAction: () => {
+          navigate(workspaceRoute(workspaceSlug, '/automations/runtimes'));
+        },
+      });
+    },
+    [client, issue, members, workspaceSlug, navigate, toast, t],
+  );
+
   const patchAndToast = useCallback(
     async (changes: Partial<IssueDetail>) => {
       if (issue === null) return;
@@ -462,6 +487,9 @@ export function IssueDetailPage(): React.JSX.Element {
           closeLabel: t('common.close'),
         });
         if (!conflicted && changes.assignee_id !== undefined) {
+          // L186:分派给 agent 且无在线 runtime → 保存成功后提示「无匹配 runtime」
+          // 并深链 Runtimes 页(§6.12);fire-and-forget,不阻塞就地收敛。
+          if (changes.assignee_id !== null) void warnIfNoOnlineRuntime(changes.assignee_id);
           // 负责人 PATCH 已返回完整 issue 快照(详情专有的 children_progress 除外)。
           // 就地收敛可保留窄容器中的属性抽屉与 agent 提示，避免成功保存后抽屉
           // 因整页 loading 重挂载而关闭；activity 单独刷新，不打断当前交互。
@@ -506,7 +534,7 @@ export function IssueDetailPage(): React.JSX.Element {
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       }
     },
-    [client, issue, mutation, toast, t, indicator],
+    [client, issue, mutation, toast, t, indicator, warnIfNoOnlineRuntime],
   );
 
   const saveTitle = useCallback(async () => {

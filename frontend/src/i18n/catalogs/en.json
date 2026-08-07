@@ -1822,6 +1822,7 @@
     "issues.move.success": "Issue moved",
     "issues.move.targetProject": "Target project: {name}",
     "issues.move.title": "Move to another project",
+    "issues.noRuntimeWarning": "No matching runtime: no runtime is online, so the assigned agent may not start. Check the Runtimes page.",
     "issues.noWorkspace": "No active workspace — create or join one to manage issues.",
     "issues.openProperties": "Properties",
     "issues.pageTitle": "Issues",
@@ -2243,6 +2244,7 @@
     "runtimes.detail.noInflight": "No inflight executions.",
     "runtimes.empty": "No runtimes yet. Register one to run agent tasks.",
     "runtimes.execution.agent": "Agent",
+    "runtimes.execution.approvalExpiredNote": "The approval expired before a decision and this execution was cancelled. Relaunch it from the linked issue.",
     "runtimes.execution.artifactBranch": "Working branch: {branch}",
     "runtimes.execution.audit.actualCost": "Actual cost",
     "runtimes.execution.audit.approvalsTitle": "Approvals",
@@ -2975,5 +2977,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "2a24fee9"
+  "version": "1723f03e"
 }

@@ -767,6 +767,26 @@
   gap: var(--space-2);
 }
 
+/* L186 审批过期专项恢复入口(§6.12):终态横幅内的「已过期」说明 + 重新发起深链 */
+.mesh-executions__approval-expired {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.mesh-executions__approval-expired a {
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: underline;
+}
+
+.mesh-executions__approval-expired a:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
 .mesh-executions__audit-summary,
 .mesh-executions__audit-attempts,
 .mesh-executions__approval-audits {

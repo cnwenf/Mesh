@@ -91,6 +91,10 @@ function renderDetail(entry = '/w/ws/issues/iss-1'): void {
             <Routes>
               <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
               <Route path="/w/:workspaceSlug/issues" element={<div data-testid="issue-list" />} />
+              <Route
+                path="/w/:workspaceSlug/automations/runtimes"
+                element={<div data-testid="runtimes-page" />}
+              />
             </Routes>
           </ToastLayer>
         </I18nProvider>
@@ -366,6 +370,19 @@ function favoritesResponse(init: RequestInit | undefined): ReturnType<typeof fak
 }
 
 /**
+ * L186 agent 分派成功后的在线 runtime 探测(§6.12 专项恢复入口):仅分派目标
+ * 为 agent 时发起 —— URL 感知恒定回「有在线 runtime」、不消耗队列,默认不
+ * 触发提示;「无 runtime」用例在测试内包装 fetch 拦截该 URL 回空页。
+ */
+function isRuntimeListCall(url: string, init?: RequestInit): boolean {
+  return (init?.method ?? 'GET') === 'GET' && url.includes('/workspaces/ws-1/runtimes');
+}
+
+function runtimeListOnline(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: [{ id: 'rt-1', status: 'online' }], next_cursor: null } });
+}
+
+/**
  * URL 感知的顺序桩:附件列表 / 小队分派查询恒定回固定响应、**不消耗队列**
  * (消除与并行详情请求的到达顺序竞争 —— 盲队列在这些 fetch 插队时会整体错位,
  * CI 上间歇红);其余请求按顺序消耗响应,超出后复用最后一个(与 stubFetch 语义一致)。
@@ -381,6 +398,7 @@ function detailStub(...responses: Response[]): FetchStub {
     if (isVcsPanelCall(url, init)) return vcsPanelEmpty();
     if (isIssueExecutionsCall(url, init)) return issueExecutionsEmpty();
     if (isFavoritesCall(url)) return favoritesResponse(init);
+    if (isRuntimeListCall(url, init)) return runtimeListOnline();
     const response = responses[Math.min(index, responses.length - 1)];
     index += 1;
     return response;
@@ -406,7 +424,8 @@ function queueCallCount(stub: FetchStub): number {
       !isAssignmentCall(call.url, call.init) &&
       !isVcsPanelCall(call.url, call.init) &&
       !isIssueExecutionsCall(call.url, call.init) &&
-      !isFavoritesCall(call.url),
+      !isFavoritesCall(call.url) &&
+      !isRuntimeListCall(call.url, call.init),
   ).length;
 }
 
@@ -1496,6 +1515,145 @@ describe('IssueDetailPage', () => {
           String(call.url).endsWith('/api/v1/issues/iss-1'),
       ),
     ).toHaveLength(1);
+  });
+
+  it('分派 agent 且无在线 runtime:warn toast「无匹配 runtime」+ Runtimes 深链(L186 §6.12)', async () => {
+    const agent = {
+      id: 'mem-agent',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    };
+    const initialResponses = detailResponses();
+    initialResponses[5] = fakeResponse({
+      body: { data: [...MEMBERS_PAGE.data, agent], next_cursor: null },
+    });
+    const base = detailStub(...initialResponses);
+    const updated = {
+      ...DETAIL,
+      assignee_id: agent.id,
+      assignee: { id: agent.id, name: agent.display_name, member_type: 'agent' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const runtimeCalls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/workspaces/ws-1/runtimes')) {
+        runtimeCalls.push(url);
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url, init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Builder (agent)' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: agent.id },
+    });
+
+    // 提示不阻断分派:PATCH 照常发出且成功
+    await waitFor(
+      () => expect(base.calls.filter((c) => c.init?.method === 'PATCH')).toHaveLength(1),
+      { timeout: 5000 },
+    );
+    // 确定无在线 runtime → warn toast + Runtimes 深链入口(§6.12 / onboarding §4)
+    expect(await screen.findByText(/No matching runtime/)).toBeInTheDocument();
+    expect(runtimeCalls).toHaveLength(1);
+    expect(runtimeCalls[0]).toContain('status=online');
+    expect(runtimeCalls[0]).toContain('limit=1');
+    fireEvent.click(screen.getByRole('button', { name: 'Runtimes' }));
+    expect(await screen.findByTestId('runtimes-page')).toBeInTheDocument();
+  });
+
+  it('分派 agent 且存在在线 runtime:不发「无匹配 runtime」提示(L186 仅确定时提示)', async () => {
+    const agent = {
+      id: 'mem-agent',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    };
+    const initialResponses = detailResponses();
+    initialResponses[5] = fakeResponse({
+      body: { data: [...MEMBERS_PAGE.data, agent], next_cursor: null },
+    });
+    // detailStub 的 URL 感知旁路恒定回「有在线 runtime」
+    const base = detailStub(...initialResponses);
+    const updated = {
+      ...DETAIL,
+      assignee_id: agent.id,
+      assignee: { id: agent.id, name: agent.display_name, member_type: 'agent' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url: String(input), init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Builder (agent)' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: agent.id },
+    });
+
+    await screen.findByText('v4');
+    await waitFor(
+      () => expect(base.calls.some((c) => c.url.includes('/workspaces/ws-1/runtimes'))).toBe(true),
+      { timeout: 5000 },
+    );
+    // 探测返回在线 runtime → 无提示(微任务落定后仍无 toast)
+    await act(async () => undefined);
+    await act(async () => undefined);
+    expect(screen.queryByText(/No matching runtime/)).toBeNull();
+  });
+
+  it('分派人类成员不触发 runtime 探测(L186 仅 agent 分派检查)', async () => {
+    const base = detailStub(...detailResponses());
+    const updated = {
+      ...DETAIL,
+      assignee_id: 'mem-1',
+      assignee: { id: 'mem-1', name: 'Owner', member_type: 'human' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url: String(input), init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Owner' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: 'mem-1' },
+    });
+
+    await screen.findByText('v4');
+    await act(async () => undefined);
+    expect(base.calls.some((c) => c.url.includes('/workspaces/ws-1/runtimes'))).toBe(false);
+    expect(screen.queryByText(/No matching runtime/)).toBeNull();
   });
 
   it('patches due date and estimate unit from the sidebar (§4.2)', async () => {
