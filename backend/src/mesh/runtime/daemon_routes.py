@@ -236,6 +236,10 @@ async def append_logs(
         start_offset=body.start_offset,
         lines=body.lines,
         signing_secret=settings.jwt_secret,
+        # MES-191: chat generations mirror their stdout onto the session
+        # owner's SSE frame buffer (chat-session.md §4.4); issue executions
+        # are untouched by this wiring.
+        redis=request.app.state.redis,
     )
     return {"data": data}
 

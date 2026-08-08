@@ -46,11 +46,40 @@ logger = logging.getLogger(__name__)
 STREAM_KEY_TEMPLATE = "chat:gen:{generation_id}:events"
 PUBSUB_KEY_TEMPLATE = "chat:gen:{generation_id}:pubsub"
 STOP_KEY_TEMPLATE = "chat:gen:{generation_id}:stop"
+SEQ_KEY_TEMPLATE = "chat:gen:{generation_id}:seq"
 
 MAX_BUFFER_FRAMES = 2000
+DEFAULT_BUFFER_TTL_SECONDS = 3600
 HISTORY_LIMIT = 16
 CONTEXT_COMMENT_LIMIT = 5
 AUTO_TITLE_MAX_CHARS = 40
+
+
+async def append_chat_frame(
+    redis,
+    *,
+    generation_id: uuid.UUID,
+    event: str,
+    data: dict,
+    buffer_ttl_seconds: int = DEFAULT_BUFFER_TTL_SECONDS,
+) -> int:
+    """Atomically append one SSE frame to a generation buffer and fan it out.
+
+    The seq is assigned by Redis ``INCR`` (single writer authority), so
+    independent appenders — the runtime log mirror and the terminal
+    write-back — never collide or gap. Frames carry monotonically increasing
+    ``seq`` values (the SSE ``Last-Event-ID`` resume cursor).
+    """
+    stream_key = STREAM_KEY_TEMPLATE.format(generation_id=generation_id)
+    pubsub_key = PUBSUB_KEY_TEMPLATE.format(generation_id=generation_id)
+    seq_key = SEQ_KEY_TEMPLATE.format(generation_id=generation_id)
+    seq = int(await redis.incr(seq_key))
+    frame = json.dumps({"seq": seq, "event": event, "data": data})
+    await redis.xadd(stream_key, {"frame": frame}, id=f"{seq}-0", maxlen=MAX_BUFFER_FRAMES)
+    await redis.expire(stream_key, buffer_ttl_seconds)
+    await redis.expire(seq_key, buffer_ttl_seconds)
+    await redis.publish(pubsub_key, "frame")
+    return seq
 
 # §6.15 structural isolation for injected issue context: untrusted data is
 # fenced with a PER-SNAPSHOT random token (L1: a static delimiter could be

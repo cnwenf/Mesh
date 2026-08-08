@@ -13,6 +13,7 @@ never sees plaintext secrets).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
 from sqlalchemy import func, select
@@ -32,6 +33,8 @@ from mesh.outbox.service import emit_realtime
 from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt
 from mesh.runtime.credentials import load_redaction_blacklist, redact_text
 
+logger = logging.getLogger(__name__)
+
 # One pushed realtime event per appended batch; payloads carry the line list
 # and the client expands to per-line frames (offset protocol unchanged).
 MAX_PUSH_LINES = 500
@@ -40,6 +43,70 @@ MAX_PUSH_LINES = 500
 def _line_bytes(line: str) -> int:
     """Each line occupies its UTF-8 bytes plus the trailing newline."""
     return len(line.encode("utf-8")) + 1
+
+
+def _chat_mirror_target(
+    execution: TaskExecution, *, stream: str, lines: list[str]
+) -> dict | None:
+    """Chat generations stream their stdout into the session owner's SSE buffer.
+
+    Only ``trigger='chat'`` rows carrying a ``chat_generation`` task_spec are
+    mirrored; stderr stays an operator channel and issue executions keep the
+    ``execution:{id}:logs`` channel only (chat-session.md §4.4).
+    """
+    if stream != "stdout" or execution.trigger != "chat":
+        return None
+    spec = execution.task_spec or {}
+    generation_raw = spec.get("generation_id")
+    message_raw = spec.get("message_id")
+    if not generation_raw or not message_raw:
+        return None
+    try:
+        generation_id = uuid.UUID(str(generation_raw))
+    except ValueError:
+        return None
+    return {
+        "generation_id": generation_id,
+        "message_id": str(message_raw),
+        "lines": list(lines),
+    }
+
+
+async def _mirror_chat_lines(redis, target: dict) -> None:
+    """Live-mirror redacted stdout lines onto the generation's SSE frame buffer.
+
+    ``message.created`` is emitted exactly once per generation (SETNX guard);
+    each stdout line becomes one ``message.delta`` frame (the daemon uploads
+    each provider TextDelta chunk as one line, so the chat reply is the
+    lossless concatenation of the mirrored deltas). Best-effort by design:
+    the database message content stays authoritative — a missed frame
+    degrades to the REST fallback, never corrupts the stored reply.
+    """
+    # Local import: mesh.chat.engine depends on mesh.runtime.enqueue — a
+    # module-level import here would create a cycle via daemon_routes.
+    from mesh.chat.engine import DEFAULT_BUFFER_TTL_SECONDS, append_chat_frame
+
+    generation_id = target["generation_id"]
+    message_id = target["message_id"]
+    created_key = f"chat:gen:{generation_id}:created"
+    if await redis.set(created_key, "1", nx=True, ex=DEFAULT_BUFFER_TTL_SECONDS):
+        await append_chat_frame(
+            redis,
+            generation_id=generation_id,
+            event="message.created",
+            data={
+                "message_id": message_id,
+                "role": "agent",
+                "generation_status": "streaming",
+            },
+        )
+    for line in target["lines"]:
+        await append_chat_frame(
+            redis,
+            generation_id=generation_id,
+            event="message.delta",
+            data={"message_id": message_id, "delta": line},
+        )
 
 
 async def _expected_offset(session: AsyncSession, attempt_id: uuid.UUID) -> int:
@@ -65,17 +132,24 @@ async def append_log_lines(
     start_offset: int,
     lines: list[str],
     signing_secret: str,
+    redis=None,
 ) -> dict:
     """Daemon: append redacted lines at the exact expected offset.
 
     Continuity is enforced: ``start_offset`` must equal the attempt's current
     end offset (409 otherwise — the daemon refetches its position and
     retries). Empty payloads are accepted as no-op heartbeats.
+
+    When ``redis`` is provided and the attempt belongs to a chat generation,
+    the redacted stdout lines are additionally mirrored onto the generation's
+    private SSE frame buffer AFTER the commit (chat-session.md §4.4).
     """
     workspace_id = runtime.workspace_id
     if len(lines) > MAX_PUSH_LINES * 4:
         lines = lines[: MAX_PUSH_LINES * 4]
 
+    mirror_target: dict | None = None
+    result: dict = {}
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
         attempt = await _load_daemon_attempt(session, attempt_id=attempt_id, runtime=runtime)
@@ -162,7 +236,25 @@ async def append_log_lines(
                 },
                 idempotency_key=f"log:{attempt.id}:{record['o']}",
             )
-        return {"accepted_end_offset": end_offset, "redacted_hits": total_hits}
+        if redis is not None:
+            mirror_target = _chat_mirror_target(
+                execution, stream=stream, lines=redacted_lines
+            )
+        result = {"accepted_end_offset": end_offset, "redacted_hits": total_hits}
+
+    # Post-commit: mirror chat stdout onto the SSE buffer. Never fails the
+    # daemon's append — the persisted logs and the DB message content remain
+    # authoritative regardless of buffer availability.
+    if mirror_target is not None:
+        try:
+            await _mirror_chat_lines(redis, mirror_target)
+        except Exception:  # noqa: BLE001 — live mirror is best-effort
+            logger.warning(
+                "chat SSE mirror failed for generation %s",
+                mirror_target["generation_id"],
+                exc_info=True,
+            )
+    return result
 
 
 async def read_execution_logs(
