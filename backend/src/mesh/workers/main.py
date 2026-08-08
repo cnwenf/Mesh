@@ -29,6 +29,7 @@ from mesh.auth.mailer import build_mailer
 from mesh.autopilot.executor import autopilot_executor_loop
 from mesh.autopilot.matcher import match_domain_event
 from mesh.autopilot.scheduler import autopilot_scheduler_loop
+from mesh.chat.finalize import finalize_chat_from_finished_event
 from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
 from mesh.config import ConfigError, Settings, load_settings, validate_infra_settings
 from mesh.data_jobs.reaper import data_job_reaper_loop
@@ -135,7 +136,7 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
     return _handle
 
 
-def _compose_execution_finished(squad_handler, comment_service):
+def _compose_execution_finished(squad_handler, comment_service, redis_client=None):
     """§3.7 S-09: compose squad handler + result sink + integration queue
     write-back for execution.finished.
 
@@ -144,6 +145,10 @@ def _compose_execution_finished(squad_handler, comment_service):
     integration message-queue terminal write-back (integrations.md §3.9 —
     the ONLY driver of queue-item terminal states) must all observe
     execution.finished. The result sink internally skips squad executions.
+
+    MES-191 (chat-session.md §4.4): chat generations additionally finalize
+    here — the §3.6 safety net covering terminal paths WITHOUT a daemon
+    PATCH (reaper reclaim, supersede cancel of a queued run, freeze…).
     """
 
     async def _handle(session, event):
@@ -157,6 +162,11 @@ def _compose_execution_finished(squad_handler, comment_service):
             await execution_finished_result_sink(session, event, comment_service=comment_service)
         except Exception:  # noqa: BLE001
             logger.exception("result sink failed for event %s", event.id)
+        # Chat generation terminal write-back (owner-private message row +
+        # SSE terminal frame). Correctness path — failures propagate so the
+        # relay retries the event; idempotent under redelivery (conditional
+        # UPDATE + SETNX). No-op for every non-chat execution.
+        await finalize_chat_from_finished_event(session, event, redis_client)
         # Integration queue terminal write-back (done/failed/cancelled +
         # dispatch wake + cancelling-item terminal feedback). Correctness
         # path — failures propagate so the relay retries the event (the
@@ -199,6 +209,7 @@ def build_relay(
     storage: ObjectStorage,
     mailer=None,
     data_job_worker=None,
+    redis_client=None,
 ) -> OutboxRelay:
     """Assemble the relay with the current handler set.
 
@@ -288,6 +299,7 @@ def build_relay(
         "execution.finished": _compose_execution_finished(
             make_squad_execution_finished_handler(squad_comment_service),
             squad_comment_service,
+            redis_client,
         ),
         # integrations.md §3.4: outbound developer webhook fan-out — creates
         # per-subscription deliveries (UNIQUE(subscription_id, event_ref)
@@ -379,6 +391,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         storage,
         mailer=mailer,
         data_job_worker=data_job_worker,
+        redis_client=redis_client,
     )
     stop = stop or asyncio.Event()
 

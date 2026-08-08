@@ -183,7 +183,14 @@ async def _emit_terminal_notification(
 ) -> None:
     """§6.13 matrix: failed/timeout = critical inbox event; success/cancel are
     NOT fanned out here (success stays on the run page unless subscribed;
-    the cancel initiator is never notified)."""
+    the cancel initiator is never notified).
+
+    Chat executions are the exception to the failure fan-out: a failed chat
+    run surfaces inside the session owner's conversation (error frame /
+    message state), never as a workspace-wide notification.
+    """
+    if execution.trigger == "chat":
+        return
     if execution.status not in _TERMINAL_NOTIFICATION_KINDS:
         return
     log_summary = await _terminal_log_summary(
@@ -269,7 +276,15 @@ async def _sync_execution_status(
 
     The approvals module owns the ``awaiting_approval`` branch; here a
     cancelled attempt carrying that reason leaves execution status to it.
+
+    Chat executions keep the state mirror but skip the per-execution
+    realtime frames entirely: the ``execution:{id}`` channel would leak the
+    result payload (the chat reply) to any member able to subscribe, and
+    chat runs are private to the session owner — their frames live on the
+    ``chat_session:{id}`` / ``chat_list:{owner}`` channels (chat-session.md
+    §4.4).
     """
+    emit_frames = execution.trigger != "chat"
     if execution.status in EXECUTION_TERMINAL_STATUSES:
         return execution.status  # already settled (superseded, frozen…)
 
@@ -278,49 +293,52 @@ async def _sync_execution_status(
     if attempt_status == "running":
         if execution.status == "claimed":
             new_status = "running"
-            await emit_workspace_execution_event(
-                session,
-                workspace_id=execution.workspace_id,
-                issue_id=execution.issue_id,
-                event="execution.started",
-                data={
-                    "execution_id": str(execution.id),
-                    "attempt_id": str(attempt_id),
-                    "runtime_id": _opt(runtime_id),
-                    "runtime_name": runtime_name,
-                    "agent_id": _opt(execution.agent_id),
-                    "issue_id": _opt(execution.issue_id),
-                },
-                idempotency_key=f"execution:{execution.id}:started",
-            )
+            if emit_frames:
+                await emit_workspace_execution_event(
+                    session,
+                    workspace_id=execution.workspace_id,
+                    issue_id=execution.issue_id,
+                    event="execution.started",
+                    data={
+                        "execution_id": str(execution.id),
+                        "attempt_id": str(attempt_id),
+                        "runtime_id": _opt(runtime_id),
+                        "runtime_name": runtime_name,
+                        "agent_id": _opt(execution.agent_id),
+                        "issue_id": _opt(execution.issue_id),
+                    },
+                    idempotency_key=f"execution:{execution.id}:started",
+                )
     elif attempt_status == "completed":
         new_status = "completed"
         execution.result = result
         execution.finished_at = now
-        await emit_realtime(
-            session,
-            workspace_id=execution.workspace_id,
-            channel=f"execution:{execution.id}",
-            event="execution.completed",
-            data={"execution_id": str(execution.id), "result": result or {}},
-            idempotency_key=f"execution:{execution.id}:completed",
-        )
+        if emit_frames:
+            await emit_realtime(
+                session,
+                workspace_id=execution.workspace_id,
+                channel=f"execution:{execution.id}",
+                event="execution.completed",
+                data={"execution_id": str(execution.id), "result": result or {}},
+                idempotency_key=f"execution:{execution.id}:completed",
+            )
     elif attempt_status in ("failed", "timeout"):
         new_status = attempt_status
         execution.failure_reason = failure_reason or attempt_status
         execution.finished_at = now
-        event = "execution.failed" if attempt_status == "failed" else "execution.timeout"
-        await emit_realtime(
-            session,
-            workspace_id=execution.workspace_id,
-            channel=f"execution:{execution.id}",
-            event=event,
-            data={
-                "execution_id": str(execution.id),
-                "failure_reason": execution.failure_reason,
-            },
-            idempotency_key=f"execution:{execution.id}:{attempt_status}",
-        )
+        if emit_frames:
+            event = "execution.failed" if attempt_status == "failed" else "execution.timeout"
+            await emit_realtime(
+                session,
+                workspace_id=execution.workspace_id,
+                channel=f"execution:{execution.id}",
+                event=event,
+                data={
+                    "execution_id": str(execution.id),
+                    "failure_reason": execution.failure_reason,
+                },
+                idempotency_key=f"execution:{execution.id}:{attempt_status}",
+            )
     elif attempt_status == "cancelled":
         if failure_reason == "awaiting_approval":
             # approvals.py drives execution → awaiting_approval in its own txn.
@@ -330,17 +348,18 @@ async def _sync_execution_status(
         # acknowledges the stop and must not erase agent_paused/superseded.
         execution.failure_reason = execution.failure_reason or failure_reason
         execution.finished_at = now
-        await emit_realtime(
-            session,
-            workspace_id=execution.workspace_id,
-            channel=f"execution:{execution.id}",
-            event="execution.cancelled",
-            data={
-                "execution_id": str(execution.id),
-                "failure_reason": execution.failure_reason,
-            },
-            idempotency_key=f"execution:{execution.id}:cancelled",
-        )
+        if emit_frames:
+            await emit_realtime(
+                session,
+                workspace_id=execution.workspace_id,
+                channel=f"execution:{execution.id}",
+                event="execution.cancelled",
+                data={
+                    "execution_id": str(execution.id),
+                    "failure_reason": execution.failure_reason,
+                },
+                idempotency_key=f"execution:{execution.id}:cancelled",
+            )
 
     transitioned = new_status != execution.status
     if transitioned:
@@ -442,11 +461,16 @@ async def transition_attempt(
     failure_reason: str | None = None,
     signing_secret: str = "",
     storage: object | None = None,
+    redis=None,
 ) -> dict:
     """PATCH /daemon/attempts/{id} — fenced status transition.
 
     Idempotent on terminal re-report (same status → no-op, no double release);
     conflicting terminal re-report → 409; illegal edge → 422.
+
+    Chat generations finalize in the SAME transaction that settles the
+    execution (chat-session.md §4.4); the SSE terminal frame is appended
+    post-commit (SETNX-guarded against the §3.6 safety net).
     """
     # ``awaiting_approval`` is reserved for the approvals module's internal
     # path (it moves the execution to awaiting_approval in ONE transaction).
@@ -549,6 +573,7 @@ async def transition_attempt(
 
         # Execution row already locked above (unified lock order).
         execution_status = None
+        chat_finalization = None
         if execution is not None:
             execution_status = await _sync_execution_status(
                 session,
@@ -561,8 +586,31 @@ async def transition_attempt(
                 runtime_name=runtime.name,
                 storage=storage,
             )
+            if (
+                execution.trigger == "chat"
+                and execution.status in EXECUTION_TERMINAL_STATUSES
+            ):
+                # Local import: mesh.chat.engine imports mesh.runtime.enqueue —
+                # a module-level import here would create a cycle.
+                from mesh.chat.finalize import finalize_chat_generation
+
+                chat_finalization = await finalize_chat_generation(
+                    session,
+                    workspace_id=workspace_id,
+                    execution=execution,
+                    redis=redis,
+                )
         await session.flush()
-        return _attempt_response(attempt, execution_status=execution_status)
+        response = _attempt_response(attempt, execution_status=execution_status)
+
+    # Post-commit: exactly one SSE terminal frame per chat generation.
+    # Best-effort — a Redis failure degrades to the REST/late-subscriber
+    # path; the stored message content is already committed above.
+    if chat_finalization is not None:
+        from mesh.chat.finalize import append_terminal_frame
+
+        await append_terminal_frame(redis, chat_finalization)
+    return response
 
 
 def _attempt_response(attempt: ExecutionAttempt, *, execution_status: str | None) -> dict:
@@ -752,14 +800,18 @@ async def request_execution_cancel_tx(
         execution.status = "cancelled"
         execution.failure_reason = failure_reason
         execution.finished_at = now
-        await emit_realtime(
-            session,
-            workspace_id=workspace_id,
-            channel=f"execution:{execution.id}",
-            event="execution.cancelled",
-            data={"execution_id": str(execution.id), "failure_reason": failure_reason},
-            idempotency_key=f"execution:{execution.id}:cancelled",
-        )
+        # Chat runs are owner-private: no per-execution channel frame. The
+        # finished event below still fires — it drives the §3.6 chat
+        # finalization safety net (payload carries no content).
+        if execution.trigger != "chat":
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=f"execution:{execution.id}",
+                event="execution.cancelled",
+                data={"execution_id": str(execution.id), "failure_reason": failure_reason},
+                idempotency_key=f"execution:{execution.id}:cancelled",
+            )
         await emit_execution_finished(session, execution=execution)
     elif execution.status == "awaiting_approval":
         from mesh.runtime.approvals import cancel_pending_approvals
@@ -770,14 +822,18 @@ async def request_execution_cancel_tx(
         execution.status = "cancelled"
         execution.failure_reason = failure_reason
         execution.finished_at = now
-        await emit_realtime(
-            session,
-            workspace_id=workspace_id,
-            channel=f"execution:{execution.id}",
-            event="execution.cancelled",
-            data={"execution_id": str(execution.id), "failure_reason": failure_reason},
-            idempotency_key=f"execution:{execution.id}:cancelled",
-        )
+        # Chat runs are owner-private: no per-execution channel frame. The
+        # finished event below still fires — it drives the §3.6 chat
+        # finalization safety net (payload carries no content).
+        if execution.trigger != "chat":
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=f"execution:{execution.id}",
+                event="execution.cancelled",
+                data={"execution_id": str(execution.id), "failure_reason": failure_reason},
+                idempotency_key=f"execution:{execution.id}:cancelled",
+            )
         await emit_execution_finished(session, execution=execution)
     else:  # claimed / running: two-phase via daemon downlink
         execution.status = "cancelling"
@@ -912,14 +968,16 @@ async def cancel_in_flight_for_agent(
             execution.failure_reason = failure_reason
             execution.finished_at = now
             execution.updated_at = now
-            await emit_realtime(
-                session,
-                workspace_id=workspace_id,
-                channel=f"execution:{execution.id}",
-                event="execution.cancelled",
-                data={"execution_id": str(execution.id), "failure_reason": failure_reason},
-                idempotency_key=f"execution:{execution.id}:cancelled",
-            )
+            # Chat runs are owner-private: no per-execution channel frame.
+            if execution.trigger != "chat":
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=f"execution:{execution.id}",
+                    event="execution.cancelled",
+                    data={"execution_id": str(execution.id), "failure_reason": failure_reason},
+                    idempotency_key=f"execution:{execution.id}:cancelled",
+                )
             # §3.6 single terminal fan-out — a superseded queued execution must
             # notify orchestration (squad relay / result sink) same-transaction.
             await emit_execution_finished(session, execution=execution)

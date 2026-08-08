@@ -192,6 +192,9 @@ async def patch_attempt(
         failure_reason=body.failure_reason,
         signing_secret=settings.jwt_secret,
         storage=request.app.state.storage,
+        # MES-191: chat generations finalize + append their SSE terminal
+        # frame here (chat-session.md §4.4); issue executions unaffected.
+        redis=request.app.state.redis,
     )
     return {"data": data}
 
