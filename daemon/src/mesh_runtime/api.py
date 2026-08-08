@@ -12,12 +12,15 @@ authenticates every call except ``activate`` (which carries the one-time code).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 import httpx
 
 from mesh_runtime import __version__
 from mesh_runtime.errors import FatalAuthError, ProtocolError, ServerError, classify_response
+
+logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 30.0
 
@@ -146,10 +149,17 @@ class RuntimeApiClient:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._token = token
-        self._http = httpx.AsyncClient(
+        self._timeout = timeout
+        # A caller-injected transport (tests) is reused across self-heal
+        # resets; production builds a fresh connection pool each time.
+        self._injected_transport = transport
+        self._http = self._build_client()
+
+    def _build_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
             base_url=self._base_url,
-            transport=transport,
-            timeout=timeout,
+            transport=self._injected_transport,
+            timeout=self._timeout,
             headers={"User-Agent": f"mesh-runtime/{__version__}"},
         )
 
@@ -161,6 +171,22 @@ class RuntimeApiClient:
 
     async def close(self) -> None:
         await self._http.aclose()
+
+    async def reset_transport(self) -> None:
+        """TD-D connection self-heal: drop the pooled keep-alive sockets and
+        build a fresh client.
+
+        A server-side disconnect can leave pooled connections unusable
+        (CLOSE-WAIT on the client side); every subsequent request then hangs
+        or fails on the dead socket. Rebuilding the pool forces the next
+        request to establish a fresh connection. Never raises — a failed
+        close must not block the healing path.
+        """
+        try:
+            await self._http.aclose()
+        except Exception as exc:  # noqa: BLE001 — healing must be best-effort
+            logger.warning("reset_transport: close failed (%s): continuing", type(exc).__name__)
+        self._http = self._build_client()
 
     # -- core ---------------------------------------------------------------
 

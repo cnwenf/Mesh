@@ -197,6 +197,7 @@ class TestDoctorCommand:
 class StubApp:
     def __init__(self, *args, **kwargs):
         self.runtime_id = None
+        self.self_heal_exit = False
 
     def set_runtime_id(self, rid):
         self.runtime_id = rid

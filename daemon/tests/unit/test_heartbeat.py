@@ -174,3 +174,126 @@ class TestRunLoop:
         hb = make_heartbeat(fake_server)
         await hb.run(asyncio.Event())
         assert hb.fatal is not None
+
+
+from mesh_runtime.api import HeartbeatResponse
+from mesh_runtime.errors import ServerError
+
+
+class StubHealApi:
+    """Scriptable heartbeat endpoint for TD-D self-heal tests."""
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.resets = 0
+        self.bodies = []
+
+    async def reset_transport(self):
+        self.resets += 1
+
+    async def heartbeat(self, runtime_id, **kwargs):
+        self.bodies.append(kwargs)
+        if self._outcomes:
+            outcome = self._outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+        return HeartbeatResponse(server_time=None, commands=[])
+
+
+def make_heal_loop(api, *, reset=5, exit_=10, on_self_heal=None, rand=None):
+    return HeartbeatLoop(
+        api,
+        RUNTIME_ID,
+        interval_seconds=15.0,
+        clock=FakeClock(),
+        rand=rand or (lambda: 0.0),
+        self_heal_reset_threshold=reset,
+        self_heal_exit_threshold=exit_,
+        on_self_heal=on_self_heal,
+    )
+
+
+class TestTdSelfHeal:
+    """TD-D: the heartbeat loop must never die silently, must count failures,
+    and must escalate (transport reset → whole-process exit) deterministically."""
+
+    async def test_unexpected_exception_never_kills_loop(self):
+        api = StubHealApi([RuntimeError("boom")])
+        hb = make_heal_loop(api)
+        outcome, delay = await hb.beat_once()
+        assert outcome == "client_error"
+        assert hb.consecutive_failures == 1
+        assert hb.fatal is None
+
+    async def test_protocol_error_rejection_survives(self, fake_server):
+        # A 400 the daemon did not enumerate is fail-closed ProtocolError in
+        # the API layer — the loop must absorb it and keep beating.
+        fake_server.enqueue(HB_KEY, 400, {"error": {"code": "bad_request"}})
+        hb = make_heartbeat(fake_server)
+        outcome, delay = await hb.beat_once()
+        assert outcome == "client_error"
+        assert hb.consecutive_failures == 1
+        assert hb.fatal is None
+
+    async def test_transport_reset_escalation_in_run(self):
+        api = StubHealApi([ServerError("x")] * 5)
+        events = []
+        hb = make_heal_loop(api, reset=5, exit_=10, on_self_heal=events.append)
+
+        def stop_after_reset(reason):
+            events.append(reason)
+            if reason == "heartbeat_transport_reset":
+                hb.request_stop()
+
+        hb._on_self_heal = stop_after_reset
+        await hb.run(asyncio.Event())
+
+        assert events == ["heartbeat_transport_reset"]
+        assert api.resets == 1  # run() rebuilt the connection pool
+        assert hb.consecutive_failures == 5
+
+    async def test_process_exit_escalation_fires_once(self):
+        api = StubHealApi([ServerError("x")] * 12)
+        events = []
+        hb = make_heal_loop(api, reset=2, exit_=4, on_self_heal=events.append)
+
+        def stop_on_exit(reason):
+            events.append(reason)
+            if reason == "heartbeat_process_exit":
+                hb.request_stop()
+
+        hb._on_self_heal = stop_on_exit
+        await hb.run(asyncio.Event())
+        # Further failures keep counting but never re-signal the exit.
+        for _ in range(3):
+            await hb.beat_once()
+
+        assert events == ["heartbeat_transport_reset", "heartbeat_process_exit"]
+        assert hb.consecutive_failures == 7
+
+    async def test_success_resets_failure_count(self):
+        api = StubHealApi([ServerError("x"), ServerError("x")])
+        hb = make_heal_loop(api)
+        await hb.beat_once()
+        await hb.beat_once()
+        assert hb.consecutive_failures == 2
+        outcome, _ = await hb.beat_once()  # stub exhausted → success
+        assert outcome == "ok"
+        assert hb.consecutive_failures == 0
+
+    async def test_failure_count_degrades_reported_health(self):
+        api = StubHealApi([ServerError("x")])
+        hb = make_heal_loop(api)
+        await hb.beat_once()  # failure
+        await hb.beat_once()  # next beat reports while failures > 0
+        assert api.bodies[-1]["health"] == "degraded"
+        await hb.beat_once()  # success resets
+        await hb.beat_once()
+        assert api.bodies[-1]["health"] == "healthy"
+
+    async def test_rejects_misconfigured_thresholds(self):
+        api = StubHealApi([])
+        with pytest.raises(ValueError):
+            make_heal_loop(api, reset=0, exit_=1)
+        with pytest.raises(ValueError):
+            make_heal_loop(api, reset=5, exit_=4)

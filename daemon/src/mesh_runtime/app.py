@@ -185,6 +185,11 @@ class RuntimeApp:
         self._attempt_tasks: dict[str, asyncio.Task] = {}
         self._shutdown = asyncio.Event()
         self._runtime_id: str | None = None
+        # TD-D: set when the heartbeat loop exhausts its self-heal budget and
+        # asks for a whole-process restart. cmd_run maps this to exit code 3
+        # so the process manager (docker restart policy / systemd) restarts
+        # the daemon instead of leaving it alive-but-unheard.
+        self._self_heal_exit = False
         self._operational = OperationalGuard(
             config.state_dir / "operational-state.json",
             self._inventory,
@@ -252,6 +257,7 @@ class RuntimeApp:
             inventory=self._inventory,
             operational_guard=self._operational,
             on_operational_incident=self._operational.isolate,
+            on_self_heal=self._handle_heartbeat_self_heal,
             clock=self._clock,
             inflight_source=lambda: list(self._supervisors.keys()),
             on_cancel=self._handle_cancel,
@@ -286,6 +292,28 @@ class RuntimeApp:
 
     def request_shutdown(self) -> None:
         self._shutdown.set()
+
+    # -- TD-D heartbeat self-heal -------------------------------------------
+
+    @property
+    def self_heal_exit(self) -> bool:
+        """True when the run ended because the heartbeat loop asked for a
+        whole-process restart (connection could not be healed in-process)."""
+        return self._self_heal_exit
+
+    def _handle_heartbeat_self_heal(self, reason: str) -> None:
+        """Escalation sink for HeartbeatLoop TD-D self-healing.
+
+        ``heartbeat_transport_reset`` is informational — the loop rebuilds
+        the connection pool itself. ``heartbeat_process_exit`` ends the run
+        gracefully; cmd_run translates it into a non-zero exit so the process
+        manager restarts the daemon (the container/systemd path), replacing
+        the host-side watchdog used as the interim mitigation.
+        """
+        logger.warning("heartbeat self-heal event: %s", reason)
+        if reason == "heartbeat_process_exit":
+            self._self_heal_exit = True
+            self._shutdown.set()
 
     # -- attempt spawning ---------------------------------------------------
 
