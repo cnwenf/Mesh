@@ -1,7 +1,7 @@
 # 与 Agent 对话(Chat Session)功能 Spec
 
 > **所属层**:智能体编排层(实时聊天会话 + issue 评论区异步协作,统一在「对话」抽象之下)。
-> **依赖 Spec**:`workspace`(隔离边界与复合 FK)、`member`(统一 `members.id`,README §6.1)、`agent`(对话的 agent 一方)、`issue` / `project`(会话上下文关联)、`runtime`(形态 B @提及触发的执行 `task_executions`,README §6.4)、`attachment`(统一附件 `attachments`/`attachment_links`)、`comment-inbox`(形态 B 的评论/提及/通知**唯一权威**)、`auth`(鉴权/限流/审计)。
+> **依赖 Spec**:`workspace`(隔离边界与复合 FK)、`member`(统一 `members.id`,README §6.1)、`agent`(对话的 agent 一方)、`issue` / `project`(会话上下文关联)、`runtime`(**形态 A 聊天生成与形态 B @提及执行共同的真源执行链** `task_executions`,README §6.4)、`attachment`(统一附件 `attachments`/`attachment_links`)、`comment-inbox`(形态 B 的评论/提及/通知**唯一权威**)、`auth`(鉴权/限流/审计)。
 > **被依赖**:`comment-inbox`(「从聊天沉淀为评论」调用其发表端点)。
 > **技术栈基准**:FastAPI + SQLAlchemy 2.x + PostgreSQL 16 + WebSocket / SSE。
 > **文档性质**:可直接指导开发的实现规格。所有命名、约束、端点、事件均以此为准则;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
@@ -327,7 +327,7 @@ Idempotency-Key: <可选,README §6.14 幂等写>
     "generation_id": "gen-42",
     "stream_url": "/api/v1/workspaces/{ws}/chat-sessions/ses-b7e4.../generations/gen-42/stream" } }
 ```
-> 该 POST 同步完成:user 消息落库、agent 消息以 `generation_status='streaming'` 预创建(单会话单并发守卫,见 §3.5)、上游推理开始;返回的 `stream_url` 供第二步消费。
+> 该 POST 同步完成:user 消息落库、agent 消息以 `generation_status='streaming'` 预创建(单会话单并发守卫,见 §3.5)、经 outbox 入队一条 `trigger='chat'` 的**真实执行**(与 issue 执行同一条 runtime 链,见 §4.4);返回的 `stream_url` 供第二步消费。
 
 #### 第二步:GET stream_url 消费流(SSE)
 
@@ -501,11 +501,17 @@ done ──► [*]
 - `interrupted` 与 `failed` 均保留已产生内容与状态,二者都可重新生成。
 - regenerate 不修改旧消息,而是新建候选并切换 `selected_candidate`,历史候选全部可回看回选。
 
-**与长任务执行状态机的衔接**:形态 B 中,agent 被 @ 提及后由 comment-inbox.md 的提及管线经 transactional outbox(README §6.6)入队 `task_executions`(`trigger='mention'`,经 `comment_mentions.triggered_execution_id` 关联),其生命周期遵循 **README §6.4 长任务状态机**(`queued → claimed → running → completed / failed / timeout`,含 `requeued` / `cancelling` / `cancelled` / `awaiting_approval`);执行 `completed` 后 agent 把产出作为 `comments` 回评(`author_id → members.id`,`member_type='agent'` 为快照)。形态 A 的 agent 回复**同样经 `execution.enqueue` 入队**(`trigger='chat'`,§6.5 幂等键 `sha256(agent_id | issue_id | trigger_event_id)`,`issue_id` 取会话上下文 issue、无上下文时以稳定 `nil` 占位),使触发可审计、与触发矩阵一致;但**生成物本身是会话内的平台驱动实时推理(generation)**——由 API 侧生成引擎流式产出(上游推理细节非本模块目标,§1.3),**不经 runtime claim / attempt 物理层**:生成终态在同进程写回消息后,经 outbox 内部事件 `chat.generation_finished`(payload 携带 §6.5 幂等键与终态)由 relay 把对应 `task_executions` 行直接置于终态(`done→completed` / `interrupted→cancelled` / `failed→failed`);若入队尚未被 relay 物化,该事件按 outbox 重试语义补投直至落库。两条路径在 UI 上以统一的 AI 徽章与消息状态呈现。
+**与长任务执行状态机的衔接**:形态 B 中,agent 被 @ 提及后由 comment-inbox.md 的提及管线经 transactional outbox(README §6.6)入队 `task_executions`(`trigger='mention'`,经 `comment_mentions.triggered_execution_id` 关联),其生命周期遵循 **README §6.4 长任务状态机**(`queued → claimed → running → completed / failed / timeout`,含 `requeued` / `cancelling` / `cancelled` / `awaiting_approval`);执行 `completed` 后 agent 把产出作为 `comments` 回评(`author_id → members.id`,`member_type='agent'` 为快照)。形态 A 的 agent 回复**走与 issue/mention 执行完全相同的真实 runtime 执行链,不存在任何 API 侧快捷路径或模板占位引擎**:
 
-> **补投上限(实现注记)**:上述「补投直至落库」受 README §6.6 `outbox_max_attempts`(默认 5)上限约束;超过上限事件置 `failed` 并告警(非静默丢失),运维可据此重投。
-> **claim 排除 chat(H1)**:`runtime` 的 claim 查询显式 `trigger != 'chat'`,故在线 runtime 不会抢走 chat 执行——否则平台快速路径的终态回写(`UPDATE … WHERE status='queued'`)将命中 0 行而永久丢失,执行随后被 reaper 误判 failed/timeout。该不变量由 `tests/e2e/test_chat_review_e2e.py` 的「在线 runtime 不 claim chat 执行且终态仍 completed」用例守护。
-> **streaming 卡死回收**:`streaming` 消息 `started_at` 超过 `chat_streaming_stale_seconds`(默认 600s)视为引擎失联,下一次发送/重生成时由单并发守卫就地回收(置 `failed` 并经 `chat.generation_finished` 终结对应执行),避免 409 永久阻塞。
+1. **入队**:发送/regenerate 在同一事务内落库 user 消息、预创建 `streaming` agent 消息、组装提示词快照(会话上下文 + issue/project 上下文围栏,README §6.15 不可信数据隔离),并经 outbox 发 `execution.enqueue`(`trigger='chat'`,§6.5 幂等键 `sha256(agent_id | issue_id | trigger_event_id)`,`issue_id` 取会话上下文 issue、无上下文时以稳定 `nil` 占位;携带 agent 配置快照与 USD 预算快照,满足 daemon `BudgetLimits.from_snapshot(require_usd=True)` 门禁)。
+2. **物化与认领**:relay 把 outbox 事件物化为 `task_executions`(README §6.4 生命周期);**claim 不排除 `trigger='chat'`**——在线 daemon 像认领其他执行一样认领 chat 执行并运行 agent 运行时(provider 上游推理细节非本模块目标,§1.3)。
+3. **流式镜像**:执行的 stdout 行(daemon 将 provider 每个 TextDelta 块上传为一行)由 `runtime/logs.py` 在提交后镜像为该 generation 的 Redis SSE 帧缓冲中的 `message.delta` 帧(仅 `trigger='chat'` 且 `task_spec` 携带 `chat_generation` 的执行参与镜像;issue 执行仍只走 `execution:{id}:logs` 通道)。镜像为尽力而为——失败不影响执行与终态写回,客户端可降级 REST 拉最终内容(§3.3)。GET `stream_url` 消费该缓冲,EventSource 重连 / `Last-Event-ID` 续订语义不变。
+4. **终态同事务写回**:daemon 终态 PATCH 在 `runtime/attempts.py` 的 `transition_attempt` **同一事务**内调用 `chat/finalize.py` 写回 agent 消息正文与终态;其余终态路径(reaper 回收、queued 运行被替代取消、冻结等)由 relay 的 `execution.finished` 单扇出统一兜底写回。消息正文以镜像 delta 的无损拼接为真源(无任何 delta 时回退执行结果摘要)。两路径共享条件 UPDATE(`WHERE generation_status='streaming'`,先写者赢,重投/重复观测幂等去重);Redis SETNX 保证终态 SSE 帧(`message.done` / `message.interrupted` / `error`)恰至一次。
+5. **终态映射**:`completed→done`、`cancelled→interrupted`、`failed/timeout→failed`。
+
+> **claim 不排除 chat(H1 已移除)**:旧实现曾有 claim 查询显式 `trigger != 'chat'` 以保护 API 侧快速终态回写路径;chat 生成迁到真实 runtime 链后,API 侧不再有任何终态回写,该排除**已删除**——chat 执行与 issue/mention 执行同一认领语义,终态一律经上述同事务路径写回。该不变量由 `tests/e2e/test_chat_e2e.py`(全链路:入队→认领→流式→终态写回)与 `tests/e2e/test_chat_review_e2e.py`(在线 daemon 认领 chat 执行且终态 completed)用例守护。
+> **streaming 卡死回收**:`streaming` 消息 `started_at` 超过 `chat_streaming_stale_seconds`(默认 600s)视为执行失联,下一次发送/重生成时由单并发守卫就地回收(置 `failed`,并经执行取消通道取消仍存活(`queued/claimed/running/awaiting_approval/cancelling`)的对应执行;其后续终态写回因行已非 `streaming` 而幂等 no-op),避免 409 永久阻塞。
+
 > **不可信围栏随机化(L1)**:§6.15 围栏分隔符携带每快照随机 token,正文内对该 token 的出现做剔除,防止恶意 issue 内容伪造闭合分隔符逃逸围栏。
 
 ### 4.5 实时性与通知
@@ -528,6 +534,7 @@ done ──► [*]
 ### 5.1 功能性
 
 - [ ] 两种形态统一在「对话」抽象:`chat_messages` 与 comment-inbox.md 的 `comments` 语义对齐(身份引用 `members.id`、`content`、统一附件),共享消息状态机与 AI 徽章身份体系;**评论/提及/通知引用 comment-inbox.md 权威表与端点,不重复建表(本 Spec 无任何评论/提及/通知表定义)**。
+- [ ] **任意聊天消息触发真实执行(§4.4)**:形态 A 生成经 outbox 入队 → relay 物化 → 在线 daemon 认领 → 执行 → stdout 镜像 SSE → 同事务终态写回,与 issue/mention 执行**同一条真实 runtime 链**;代码库中**不存在任何模板/占位生成引擎**,每次生成的回复内容随输入与执行过程变化;由 `tests/e2e/test_chat_e2e.py` 全链路守护。
 - [ ] **附件走统一 `attachments` / `attachment_links`(attachment.md 权威)**:聊天附件经 `attachment_links`(`linked_type='chat_message'`)关联消息,**不存在独立的聊天附件表**;扫描完成前不可下载。
 - [ ] 会话可关联 issue/项目上下文(复合 FK),服务端把上下文快照注入为 system 消息;聊天结论可一键沉淀为 issue 评论。
 - [ ] 多轮历史持久化,游标倒序分页(README §6.14);`message_count`/`last_message_at`/`last_message_preview` 与列表一致。
