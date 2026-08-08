@@ -38,6 +38,11 @@ class OperationalGuard:
         self._path = Path(state_path)
         self._inventory = inventory
         self._reason_codes = self._load()
+        # In-memory tally of non-isolating degraded operational events
+        # (§3.5, e.g. ``usage_terminal_regressed``). Deliberately NOT
+        # persisted and NOT part of the claim gate: these record accounting
+        # discrepancies the run handling already compensated for.
+        self._degraded_events: dict[str, int] = {}
         if self._inventory.security_isolation_failed():
             self.isolate("provider_isolation_failed")
 
@@ -56,6 +61,19 @@ class OperationalGuard:
 
     def claim_allowed(self) -> bool:
         return not self._reason_codes and self._inventory.healthy()
+
+    def record_degraded_event(self, reason_code: str) -> None:
+        """Tally a degraded operational event without latching isolation.
+
+        Contrast :meth:`isolate`: a degraded event never blocks claiming,
+        never persists, and never fails an attempt — it is the observability
+        channel for compensated discrepancies (fixed reason codes only).
+        """
+        self._degraded_events[reason_code] = self._degraded_events.get(reason_code, 0) + 1
+
+    @property
+    def degraded_events(self) -> dict[str, int]:
+        return dict(self._degraded_events)
 
     @property
     def isolated(self) -> bool:

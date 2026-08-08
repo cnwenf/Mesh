@@ -8,6 +8,7 @@ bounds and jitter, never relaxations.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,10 +37,21 @@ _KNOWN_KEYS = frozenset(
         "sandbox_pids_max",
         "sandbox_tmp_bytes",
         "runtime_kind",
+        "egress_gateway_mode",
     }
 )
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+#: S-04 egress gateway mode (§3.4). TD-E: the gateway is DEFAULT-ON; the only
+#: values accepted are ``strict`` (fail-closed enforcement) and ``off`` (the
+#: explicit self-hosted opt-out that reports ``egress_enforced=false`` so the
+#: server dispatches no network-requiring executions). Anything else is
+#: rejected at load time — a typo must never silently select a weaker mode.
+EGRESS_MODE_STRICT = "strict"
+EGRESS_MODE_OFF = "off"
+_EGRESS_MODES = frozenset({EGRESS_MODE_STRICT, EGRESS_MODE_OFF})
+_EGRESS_MODE_ENV_VAR = "MESH_EGRESS_GATEWAY_MODE"
 
 
 class ConfigError(DaemonError):
@@ -73,6 +85,14 @@ class DaemonConfig:
     sandbox_pids_max: int = 256
     sandbox_tmp_bytes: int = 256 * 1024 * 1024
     runtime_kind: str = "self_hosted"  # self_hosted | platform_managed
+    # S-04 / TD-E: egress gateway mode. DEFAULT is ``strict`` — the gateway is
+    # on and fully enforced (trusted resolve → full IP filter → pinned connect,
+    # sandbox has no default route). ``off`` is the EXPLICIT self-hosted
+    # opt-out for hosts that cannot prove enforced routing: the per-attempt
+    # gateway still starts (nothing is weakened), but the daemon reports
+    # ``egress_enforced=false`` so the server dispatches no network-requiring
+    # executions (§3.4 final paragraph). An unknown value is a load error.
+    egress_gateway_mode: str = EGRESS_MODE_STRICT
     labels: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -169,6 +189,7 @@ class DaemonConfig:
         runtime_kind = str(raw.get("runtime_kind", "self_hosted"))
         if runtime_kind not in ("self_hosted", "platform_managed"):
             raise ConfigError("runtime_kind must be 'self_hosted' or 'platform_managed'")
+        egress_gateway_mode = _resolve_egress_mode(raw)
         sandbox_uid = int(raw.get("sandbox_uid", 65534))
         sandbox_gid = int(raw.get("sandbox_gid", 65534))
         if sandbox_uid <= 0:
@@ -194,6 +215,7 @@ class DaemonConfig:
             sandbox_pids_max=sandbox_pids_max,
             sandbox_tmp_bytes=sandbox_tmp_bytes,
             runtime_kind=runtime_kind,
+            egress_gateway_mode=egress_gateway_mode,
         )
 
 
@@ -202,6 +224,32 @@ def _require_str(raw: dict, key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{key} is required and must be a non-empty string")
     return value
+
+
+def _resolve_egress_mode(raw: dict) -> str:
+    """TD-E (§3.4): resolve the egress gateway mode, fail-closed.
+
+    The ``MESH_EGRESS_GATEWAY_MODE`` environment variable wins over the TOML
+    key (container deployments set environment, not files); both sources go
+    through the SAME strong validation. The default is ``strict`` — the
+    gateway is on and enforced. ``off`` is only ever reached by an explicit,
+    correctly-spelled opt-in; any other value (typo, legacy name, empty
+    string) is a load error so a misconfiguration can never silently select a
+    weaker mode.
+    """
+    env_value = os.environ.get(_EGRESS_MODE_ENV_VAR)
+    if env_value is not None and env_value.strip() != "":
+        value, source = env_value, _EGRESS_MODE_ENV_VAR
+    else:
+        value, source = raw.get("egress_gateway_mode", EGRESS_MODE_STRICT), "egress_gateway_mode"
+    normalized = str(value).strip().lower()
+    if normalized not in _EGRESS_MODES:
+        raise ConfigError(
+            f"{source} must be one of {sorted(_EGRESS_MODES)!r} (got {str(value)!r}): "
+            "the egress gateway is default-on ('strict'); 'off' is the explicit "
+            "self-hosted opt-out that reports egress_enforced=false (§3.4)"
+        )
+    return normalized
 
 
 def _require_path(raw: dict, key: str) -> Path:

@@ -180,7 +180,7 @@ docker compose up --build -d
 >
 > - 对外端口(8000 / 8081 / 3001)默认绑定 `127.0.0.1`,**仅本机可达**,不暴露到网络;`.env` 只能改端口号,无法改绑定地址——如需对外暴露必须刻意修改 `docker-compose.yml`。
 > - **数据存储不发布任何宿主端口**:PostgreSQL / Redis 仅经内部 compose 网络可达,`docker-compose.yml` 中无 `ports:` 映射(MES-83)。**严禁**为任何数据存储添加宿主端口映射——公网可达的数据存储正是本次事故的根因。MinIO 因三阶段直传需浏览器直达,仅保留 `127.0.0.1` 回环发布,生产必须置于内网 / TLS 反代之后且不得公网暴露。
-> - **凭据无默认值、生产强制强口令**:所有口令为 compose 必填项(缺失即启动报错);`MESH_AUTH_MODE=production` 时后端在启动期**拒绝**空值 / 已知默认 / 过短的 Redis/PostgreSQL/MinIO 凭据(`validate_infra_settings`),配置不全直接 fail-fast。
+> - **凭据无默认值、生产强制强口令**:所有口令为 compose 必填项(缺失即启动报错);`MESH_AUTH_MODE=production` 时后端在启动期**拒绝**空值 / 已知默认 / 过短的 Redis/PostgreSQL/MinIO 凭据(`validate_infra_settings`),配置不全直接 fail-fast。compose 还以同样的必填风格(`${VAR:?...}`,无默认值)向 api / gateway / worker 下发三个生产签名密钥——`MESH_JWT_SECRET`、`MESH_DEVICE_CODE_PEPPER`(api/gateway/worker 共用同一 HMAC 胡椒)与 `MESH_SEARCH_CURSOR_SECRET`(api);`MESH_AUTH_MODE=production` 时 `validate_auth_settings` / `validate_search_settings` 在工厂启动期缺失或仍是公开 dev 密钥即 fail-closed,不再静默落回开发默认密钥。`scripts/gen-dev-secrets.sh` 会为本地 `.env` 生成强随机值;生产必须提供真实、唯一的密钥。
 > - `MESH_AUTH_MODE` 默认 `dev`(任意 `mesh-dev:<workspace-id>` 即获该工作区完全访问),这**仅在端口只绑回环时安全**。任何**非本机/生产**使用必须显式设置 `MESH_AUTH_MODE=production`,并提供真实的数据库/Redis 凭据。
 > - API 与 realtime 网关以**受限非 owner 角色 `mesh_app`** 连接数据库,使 PostgreSQL RLS 租户兜底在应用连接路径真实生效(§6.2 第 5 条);worker 保留 owner 角色做跨租户 relay/projector/retention。
 

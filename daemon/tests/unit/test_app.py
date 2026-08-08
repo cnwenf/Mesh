@@ -518,3 +518,43 @@ class TestClaudeWiring:
 
         assert ("failed", "executor_unavailable") in calls
         assert finished == [True]
+
+
+class TestHeartbeatMetadataEgressMode:
+    """TD-E (§3.4): ``egress_enforced`` is claimed ONLY when the sandbox
+    proves the forced route AND the gateway mode is the default ``strict``."""
+
+    def _config(self, tmp_path, *, backend, mode):
+        return DaemonConfig.from_dict(
+            {
+                "server_url": "https://mesh.example.com",
+                "state_dir": tmp_path / "state",
+                "work_dir": tmp_path / "work",
+                "sandbox_backend": backend,
+                "egress_gateway_mode": mode,
+            }
+        )
+
+    async def _metadata(self, tmp_path, *, backend, mode):
+        from mesh_runtime.app import heartbeat_metadata
+
+        inventory = await Inventory.probe([FakeProvider(events=[])])
+        return heartbeat_metadata(self._config(tmp_path, backend=backend, mode=mode), inventory)
+
+    async def test_strict_sandboxed_claims_enforced(self, tmp_path):
+        meta = await self._metadata(tmp_path, backend="linux_ns", mode="strict")
+        assert meta["egress_gateway_mode"] == "strict"
+        assert meta["egress_enforced"] is True
+
+    async def test_explicit_off_never_claims_enforced(self, tmp_path):
+        meta = await self._metadata(tmp_path, backend="linux_ns", mode="off")
+        assert meta["egress_gateway_mode"] == "off"
+        assert meta["egress_enforced"] is False
+
+    async def test_strict_on_sandboxless_backend_does_not_claim(self, tmp_path):
+        meta = await self._metadata(tmp_path, backend="none", mode="strict")
+        assert meta["egress_enforced"] is False
+
+    async def test_off_on_sandboxless_backend_does_not_claim(self, tmp_path):
+        meta = await self._metadata(tmp_path, backend="none", mode="off")
+        assert meta["egress_enforced"] is False

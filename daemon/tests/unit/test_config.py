@@ -138,3 +138,68 @@ class TestProviderManifestConfig:
         raw = {**self.BASE, "sandbox_memory_bytes": 0}
         with pytest.raises(ConfigError, match="sandbox_memory_bytes"):
             DaemonConfig.from_dict(raw)
+
+
+class TestEgressGatewayMode:
+    """TD-E (§3.4): the egress gateway is DEFAULT-ON (``strict``). Only an
+    explicit, correctly-spelled opt-in reaches ``off``; every other value is a
+    load error so a misconfiguration can never silently weaken enforcement."""
+
+    BASE = {
+        "server_url": "https://mesh.example.com",
+        "state_dir": "/var/lib/mesh",
+        "work_dir": "/var/work/mesh",
+    }
+    ENV_VAR = "MESH_EGRESS_GATEWAY_MODE"
+
+    def test_default_is_strict(self, monkeypatch):
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        config = DaemonConfig.from_dict(self.BASE)
+        assert config.egress_gateway_mode == "strict"
+
+    def test_explicit_strict_and_off_accepted(self, monkeypatch):
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        for mode in ("strict", "off"):
+            config = DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": mode})
+            assert config.egress_gateway_mode == mode
+
+    def test_value_is_normalized_case_and_whitespace(self, monkeypatch):
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        config = DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": " OFF "})
+        assert config.egress_gateway_mode == "off"
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["permissive", "disabled", "yes", "no", "0", "1", "", "of", "strictt"],
+    )
+    def test_unknown_values_rejected(self, monkeypatch, bad):
+        # Near-misses ("of", "strictt") guard the normalization boundaries:
+        # strip+lower must not accept anything but the exact frozen values.
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        with pytest.raises(ConfigError, match="egress_gateway_mode"):
+            DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": bad})
+
+    def test_non_string_value_rejected(self, monkeypatch):
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        with pytest.raises(ConfigError, match="egress_gateway_mode"):
+            DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": True})
+
+    def test_env_var_overrides_toml(self, monkeypatch):
+        monkeypatch.setenv(self.ENV_VAR, "off")
+        config = DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": "strict"})
+        assert config.egress_gateway_mode == "off"
+
+    def test_env_var_invalid_rejected_even_with_valid_toml(self, monkeypatch):
+        monkeypatch.setenv(self.ENV_VAR, "permissive")
+        with pytest.raises(ConfigError, match="MESH_EGRESS_GATEWAY_MODE"):
+            DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": "strict"})
+
+    def test_env_var_empty_falls_back_to_toml(self, monkeypatch):
+        monkeypatch.setenv(self.ENV_VAR, "   ")
+        config = DaemonConfig.from_dict({**self.BASE, "egress_gateway_mode": "off"})
+        assert config.egress_gateway_mode == "off"
+
+    def test_env_var_empty_falls_back_to_strict_default(self, monkeypatch):
+        monkeypatch.setenv(self.ENV_VAR, "")
+        config = DaemonConfig.from_dict(self.BASE)
+        assert config.egress_gateway_mode == "strict"

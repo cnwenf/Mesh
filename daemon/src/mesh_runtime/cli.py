@@ -182,6 +182,17 @@ async def cmd_run(config: DaemonConfig) -> int:
             except NotImplementedError:  # pragma: no cover — non-UNIX
                 pass
         await app.run()
+        # TD-D: the heartbeat loop exhausted its in-process self-heal budget
+        # and asked for a whole-process restart. Exit NON-ZERO so the process
+        # manager (docker restart policy / systemd) brings the daemon back —
+        # a clean 0 here would look like a normal stop and leave the runtime
+        # alive-but-unheard (the MES-190 CLOSE-WAIT incident).
+        if app.self_heal_exit:
+            print(
+                "heartbeat connection could not be healed — exiting for process-manager restart",
+                file=sys.stderr,
+            )
+            return 3
         return 0
     finally:
         if sandbox_manager is not None:

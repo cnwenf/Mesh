@@ -119,10 +119,16 @@ services:
       # loopback, so dev defaults off; production leaves it unset and the
       # secure default (true) applies — non-TLS /api/v1/daemon/ → 403.
       MESH_DAEMON_TLS_REQUIRED: ${MESH_DAEMON_TLS_REQUIRED:-false}
-      # Device-code HMAC pepper (auth.md §2.4.2): dev default for the
-      # loopback stack only — production MUST set a real secret
-      # (auth_mode=production fails closed when unset).
-      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:-mesh-dev-device-code-pepper-only}
+      # Production-startup signing secrets (TD-C / MES-83 style, auth.md §5.5):
+      # REQUIRED with no defaults — validate_auth_settings /
+      # validate_search_settings fail the api factory closed in production when
+      # any is missing or still a public dev key. gen-dev-secrets.sh fills
+      # strong local values; production sets real, unique ones.
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required (scripts/gen-dev-secrets.sh for local dev)}
+      MESH_SEARCH_CURSOR_SECRET: ${MESH_SEARCH_CURSOR_SECRET:?MESH_SEARCH_CURSOR_SECRET is required (scripts/gen-dev-secrets.sh for local dev)}
+      # Device-code HMAC pepper (auth.md §2.4.2): REQUIRED with no default —
+      # the low-entropy user_code space must never be keyed by a public value.
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required (scripts/gen-dev-secrets.sh for local dev)}
       # Web session cookie Secure attribute: the loopback dev stack serves
       # plaintext http, so the Secure flag is relaxed locally (production
       # leaves it unset -> secure default true; auth.md R4-H1).
@@ -180,6 +186,11 @@ services:
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+      # The worker's device-authorization sweep shares the api's HMAC pepper —
+      # hashes computed with a different key would never match (TD-C, same
+      # MES-83 required-secret style; auth.md §2.4.2).
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required (scripts/gen-dev-secrets.sh for local dev)}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required (scripts/gen-dev-secrets.sh for local dev)}
       # The worker emits DingTalk approval cards, so it needs the same public
       # browser origin as the API callback lifecycle writer.
       MESH_APP_BASE_URL: ${MESH_APP_BASE_URL:?MESH_APP_BASE_URL is required (scripts/gen-dev-secrets.sh for local dev)}
@@ -215,6 +226,12 @@ services:
       MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:?MESH_APP_DB_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+      # The realtime gateway is an independently deployable unit that signs /
+      # verifies the SAME tokens as the api (README §2.2), so it needs the same
+      # required signing secrets — validate_auth_settings runs in its own
+      # factory and fails closed without them in production (TD-C).
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required (scripts/gen-dev-secrets.sh for local dev)}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required (scripts/gen-dev-secrets.sh for local dev)}
     ports:
       - "127.0.0.1:${MESH_WS_PORT:-8081}:8081"
     depends_on:

@@ -44,6 +44,8 @@ APP_DB_PASSWORD="$(gen_secret)"
 STORAGE_ACCESS_KEY="$(gen_secret)"
 STORAGE_SECRET_KEY="$(gen_secret)"
 JWT_SECRET="$(gen_secret)"
+SEARCH_CURSOR_SECRET="$(gen_secret)"
+DEVICE_CODE_PEPPER="$(gen_secret)"
 
 # umask so the file is created owner-read/write only — it holds live secrets.
 umask 077
@@ -70,6 +72,14 @@ MESH_STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY}
 
 # JWT signing secret (also derives the at-rest MFA encryption key).
 MESH_JWT_SECRET=${JWT_SECRET}
+
+# Search cursor HMAC key (search-command-palette.md §3.2): the api factory
+# refuses the public dev key at startup in production mode.
+MESH_SEARCH_CURSOR_SECRET=${SEARCH_CURSOR_SECRET}
+
+# Device-code HMAC pepper (auth.md §2.4.2): the low-entropy user_code space
+# must never be keyed by a public value; production fails closed without it.
+MESH_DEVICE_CODE_PEPPER=${DEVICE_CODE_PEPPER}
 
 # Local development auth mode (safe ONLY while ports stay loopback-bound).
 MESH_AUTH_MODE=dev

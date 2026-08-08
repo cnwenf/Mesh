@@ -83,6 +83,39 @@ def _check_server_url(url: str) -> Check:
     )
 
 
+def _check_egress_mode(config: DaemonConfig) -> Check:
+    """TD-E (§3.4): the egress gateway is default-on (``strict``). doctor
+    fail-closes the combination that CANNOT honour it — strict mode on a
+    backend with no forced route — instead of letting it claim enforcement."""
+    from mesh_runtime.config import EGRESS_MODE_OFF
+
+    mode = config.egress_gateway_mode
+    if mode == EGRESS_MODE_OFF:
+        return Check(
+            "egress_gateway",
+            True,
+            "mode off — egress_enforced=false is reported; the server will not "
+            "dispatch network-requiring executions to this runtime (§3.4)",
+        )
+    if config.sandbox_backend == "linux_ns":
+        return Check(
+            "egress_gateway",
+            True,
+            "mode strict — per-attempt gateway enforced (no default route out "
+            "of the sandbox netns)",
+        )
+    return Check(
+        "egress_gateway",
+        False,
+        f"mode {mode} requires sandbox_backend=linux_ns, but the backend is "
+        f"{config.sandbox_backend!r} — a sandboxless daemon cannot prove the "
+        "forced egress route, so strict mode cannot hold",
+        "run with sandbox_backend=linux_ns (root + cgroup v2 delegation), or "
+        'explicitly set egress_gateway_mode="off" and accept that this runtime '
+        "receives no network-requiring executions",
+    )
+
+
 async def _check_token_file(config: DaemonConfig) -> Check:
     if not config.token_path.exists():
         return Check("token_file", True, "no token stored yet (not activated)")
@@ -192,6 +225,7 @@ async def _check_git_toolchain() -> Check:
 async def run_checks(config: DaemonConfig, inventory: Inventory) -> CheckReport:
     checks = [
         _check_server_url(config.server_url),
+        _check_egress_mode(config),
         _check_dir("state_dir", config.state_dir),
         _check_dir("work_dir", config.work_dir),
         await _check_token_file(config),

@@ -322,6 +322,8 @@ claim 与执行时序：
 
 自托管 runtime 也必须提供同等 gateway，无法证明强制路由时报告 `egress_enforced=false`，server 不向其派发要求网络能力的执行。
 
+**gateway 模式（TD-E，默认开启/强校验）**：daemon 配置项 `egress_gateway_mode`（环境变量 `MESH_EGRESS_GATEWAY_MODE` 优先于 TOML）只接受两个值：**`strict`（默认）**——gateway 随每个 attempt 启动并全程强制（本条 1–8 全部生效，沙箱无默认路由），仅当沙箱 backend 能证明强制路由（`linux_ns`）时上报 `egress_enforced=true`；**`off`（显式退出）**——per-attempt gateway 照常启动（不弱化任何执法），但恒报 `egress_enforced=false`，server 据此不派发要求网络能力的执行。其他任何取值（含拼写错误、历史别名、空串）在配置加载时直接报错，绝不静默落入更弱模式；`strict` 搭配无法证明强制路由的 backend 时 doctor 判 FAIL（fail-closed）。
+
 ### 3.5 S-07：三层预算
 
 预算在入队时冻结，三层同时执行：
@@ -332,7 +334,9 @@ claim 与执行时序：
 
 provider usage 用于实时截断和服务端核账。最终上报的 usage 是审计材料，不是唯一执法点；daemon 对 token/turn/金额执行本地非负整数与 decimal-string 不变量校验，异常偏差立即锁存 runtime `isolated`、停止本地 claim 并上报固定脱敏原因码；server 核账发现的偏差同样隔离并告警。
 
-**usage 单调性闸门与口径折算（HIGH-4 / MES-190）。** 单调性闸门只对 provider 的**终态累计帧**（`result` 记录）生效：多轮流中的 per-message usage 帧不保证累计单调，只执行上述非负/decimal-string 不变量，不做跨帧比较。终态帧与上一帧比较前，先把两帧的输入侧**折算为同一口径**——总上下文 token = `input_tokens + cache_creation_tokens + cache_read_tokens`——再比较该折算总量与 `output_tokens`、`turns`、金额；任一严格下降即判为回退并锁存 `usage_invariant_failed`（fail-closed）。折算的必要性：不同 provider/代理对 cache token 相对 `input_tokens` 的聚合口径不一致（例如 Anthropic 兼容代理会把 cache-creation token 折叠进 message 级 `input_tokens`，而终态帧按 `input_tokens` + `cache_creation_input_tokens` 拆开记），逐字段跨帧比较会把纯口径差异误判为回退、把每次真实执行误隔离；只有折算后仍下降才是真回退。输入侧各分量不再单独参与跨帧单调判定（同口径折算总量才是跨 provider 不变的单调量），但非负整数与 decimal-string 不变量对每个分量照旧生效；server 侧交叉核账（§3.9）仍是独立的第二道偏差执法点。
+**usage 单调性闸门与口径折算（HIGH-4 / MES-190）。** 单调性闸门只对 provider 的**终态累计帧**（`result` 记录）生效：多轮流中的 per-message usage 帧不保证累计单调，只执行上述非负/decimal-string 不变量，不做跨帧比较。终态帧与上一帧比较前，先把两帧的输入侧**折算为同一口径**——总上下文 token = `input_tokens + cache_creation_tokens + cache_read_tokens`——再比较该折算总量与 `output_tokens`、`turns`、金额。折算的必要性：不同 provider/代理对 cache token 相对 `input_tokens` 的聚合口径不一致（例如 Anthropic 兼容代理会把 cache-creation token 折叠进 message 级 `input_tokens`，而终态帧按 `input_tokens` + `cache_creation_input_tokens` 拆开记），逐字段跨帧比较会把纯口径差异误判为回退、把每次真实执行误隔离；只有折算后仍下降才进入回退处理。输入侧各分量不再单独参与跨帧单调判定（同口径折算总量才是跨 provider 不变的单调量），但非负整数与 decimal-string 不变量对每个分量照旧生效。
+
+**终态回退的处理（降级为运维事件，不再 fail attempt）。** 第三方代理实测可能在终态帧报出**低于**流中帧的折算总量（聚合口径差异，属记账偏差而非篡改证据），因此折算后仍下降时不再锁存隔离、不再判 attempt 失败，而是：① 逐字段取 MAX 合并（记录的计数器不低于任何已观测帧）；② 金额取较大值；③ 记录降级运维事件 `usage_terminal_regressed`（固定码、内存计数、不持久化、不影响 claim 闸门，与隔离锁存通道分离），attempt 正常终结。fail-closed 执法点保留两处：帧级非负/decimal-string 不变量违反仍锁存 `usage_invariant_failed` 并隔离；server 侧交叉核账（§3.9）仍是独立的第二道偏差执法点，核账发现偏差同样隔离并告警。
 
 ### 3.6 S-08：清理清单
 
@@ -466,6 +470,7 @@ daemon 与 server 共用固定诊断原因码。隔离类至少包括 `cleanup_f
 | max concurrent | server runtime 配置 | daemon 可因本机资源下调，不能上调 |
 | provider path/version | 签名发布配置 | 绝对路径 + manifest + SHA-256 |
 | sandbox backend | 安装配置 | 仅登记并通过 doctor 的 backend |
+| egress gateway mode | 管理员配置（TOML `egress_gateway_mode` 或环境 `MESH_EGRESS_GATEWAY_MODE`，环境优先） | 默认 `strict`（默认开启、全程强制）；唯一可选替代是显式 `off`（报 `egress_enforced=false`，server 不派发要求网络能力的执行）；其他取值一律启动报错（fail-closed，TD-E） |
 | egress resolver/policy | 管理员/平台策略 | daemon 与任务只读；任务不能自定义 resolver |
 | heartbeat/lease/poll | server 响应 | 本地仅应用边界和 jitter，不放宽 |
 | log/spool limits | 冻结 AttemptSpec 与 daemon 上限 | 取二者更严格值 |
