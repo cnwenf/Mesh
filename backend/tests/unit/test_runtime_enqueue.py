@@ -91,6 +91,54 @@ async def test_enqueue_inserts_execution_with_frozen_snapshot(session_factory):
     assert depth == 1
 
 
+async def test_enqueue_chat_trigger_suppresses_workspace_execution_event(session_factory):
+    """MES-191: chat generations are private to the session owner — the
+    execution row is materialized (claimable by any online runtime), but NO
+    workspace-wide executions-channel frame is emitted (chat-session.md §4.4).
+    ``issue_id=None`` alone would NOT suppress the frame; the skip is on the
+    trigger."""
+    world = await seed_world(session_factory)
+    key = "chat-privacy-key-1"
+    event = await _emit(
+        world,
+        {
+            "intent": "enqueue",
+            "agent_id": str(world["agent_id"]),
+            "issue_id": None,
+            "trigger": "chat",
+            "idempotency_key": key,
+            "config_snapshot": {"agent_config_version_id": None},
+            "required_capabilities": [],
+            "label_requirements": {},
+            "task_spec": {"kind": "chat_generation", "session_id": uuid.uuid4().hex},
+        },
+        key=key,
+    )
+    async with session_factory() as session, session.begin():
+        session.add(event)
+        await session.flush()
+        await enqueue_execution_handler(session, event)
+
+    async with session_factory() as session:
+        execution = (await session.execute(select(TaskExecution))).scalar_one()
+        queued_frames = list(
+            (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "realtime.publish",
+                        OutboxEvent.payload["event"].astext == "execution.queued",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert execution.trigger == "chat"
+    assert execution.status == "queued"
+    assert execution.issue_id is None
+    assert queued_frames == []  # never a workspace-wide executions frame
+
+
 async def test_enqueue_duplicate_idempotency_key_is_noop(session_factory):
     world = await seed_world(session_factory)
     existing = await make_execution(

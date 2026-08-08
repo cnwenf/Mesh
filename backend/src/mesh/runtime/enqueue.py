@@ -256,23 +256,26 @@ async def enqueue_execution_handler(
     )
     # §3.6: every enqueue is observable on the workspace executions channel
     # (F10 — agent triggers additionally emit on issue:{id}:runs; integration
-    # / manual / issue-less triggers are covered here).
-    await emit_workspace_execution_event(
-        session,
-        workspace_id=event.workspace_id,
-        issue_id=execution.issue_id,
-        event="execution.queued",
-        data={
-            "execution_id": str(execution.id),
-            "agent_id": str(execution.agent_id) if execution.agent_id else None,
-            "agent_member_id": str(agent_member_id) if agent_member_id else None,
-            "agent_name": agent_name,
-            "issue_id": str(execution.issue_id) if execution.issue_id else None,
-            "trigger": execution.trigger,
-            "comment_id": str(comment_id) if comment_id else None,
-        },
-        idempotency_key=f"enqueue:{execution.id}:execution-queued",
-    )
+    # / manual / issue-less triggers are covered here). Chat runs are the
+    # exception: private to the session owner, never a workspace-wide frame
+    # (issue_id=None alone would NOT suppress it — skip explicitly).
+    if trigger != "chat":
+        await emit_workspace_execution_event(
+            session,
+            workspace_id=event.workspace_id,
+            issue_id=execution.issue_id,
+            event="execution.queued",
+            data={
+                "execution_id": str(execution.id),
+                "agent_id": str(execution.agent_id) if execution.agent_id else None,
+                "agent_member_id": str(agent_member_id) if agent_member_id else None,
+                "agent_name": agent_name,
+                "issue_id": str(execution.issue_id) if execution.issue_id else None,
+                "trigger": execution.trigger,
+                "comment_id": str(comment_id) if comment_id else None,
+            },
+            idempotency_key=f"enqueue:{execution.id}:execution-queued",
+        )
     await record_issue_execution_phase(
         session,
         workspace_id=event.workspace_id,

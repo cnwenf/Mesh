@@ -148,12 +148,10 @@ async def claim_execution(
                     .where(
                         TaskExecution.status == "queued",
                         TaskExecution.workspace_id == workspace_id,
-                        # H1: chat generations are platform-driven (chat-session.md
-                        # §4.4) and finalized via the outbox; a runtime must never
-                        # claim them (their empty label/cap requirements would
-                        # otherwise match any online runtime and lose the
-                        # terminal write-back).
-                        TaskExecution.trigger != "chat",
+                        # Chat generations (trigger='chat') ride this SAME claim
+                        # path as issue executions (chat-session.md §4.4): their
+                        # empty label/cap requirements match any online runtime;
+                        # the terminal write-back lands via the attempt PATCH.
                         TaskExecution.label_requirements.op("<@")(
                             bindparam("p_labels", type_=JSONB)
                         ),
@@ -312,24 +310,28 @@ async def claim_execution(
                 squad_role=squad_role_of_task_spec(execution.task_spec),
             )
 
-            # Observability: claim + queue depth (§3.6 channels).
+            # Observability: claim + queue depth (§3.6 channels). Chat runs
+            # are private to the session owner — never a workspace-wide
+            # executions-channel frame (issue_id=None alone would NOT suppress
+            # it; the skip is explicit on the trigger).
             attempt_id = attempt_row["id"]
-            await emit_workspace_execution_event(
-                session,
-                workspace_id=workspace_id,
-                issue_id=execution.issue_id,
-                event="execution.claimed",
-                data={
-                    "execution_id": str(picked_id),
-                    "attempt_id": str(attempt_id),
-                    "attempt_number": attempt_row["attempt_number"],
-                    "runtime_id": str(runtime_id),
-                    "runtime_name": runtime.name,
-                    "agent_id": str(execution.agent_id) if execution.agent_id else None,
-                    "issue_id": str(execution.issue_id) if execution.issue_id else None,
-                },
-                idempotency_key=f"claim:{attempt_id}:execution-claimed",
-            )
+            if execution.trigger != "chat":
+                await emit_workspace_execution_event(
+                    session,
+                    workspace_id=workspace_id,
+                    issue_id=execution.issue_id,
+                    event="execution.claimed",
+                    data={
+                        "execution_id": str(picked_id),
+                        "attempt_id": str(attempt_id),
+                        "attempt_number": attempt_row["attempt_number"],
+                        "runtime_id": str(runtime_id),
+                        "runtime_name": runtime.name,
+                        "agent_id": str(execution.agent_id) if execution.agent_id else None,
+                        "issue_id": str(execution.issue_id) if execution.issue_id else None,
+                    },
+                    idempotency_key=f"claim:{attempt_id}:execution-claimed",
+                )
             await record_issue_execution_phase(
                 session,
                 workspace_id=workspace_id,

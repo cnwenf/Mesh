@@ -372,3 +372,47 @@ async def test_claim_active_agent_execution_still_dispatched(session_factory):
     assert result is not None
     assert result.execution["id"] == str(execution.id)
     assert result.execution["status"] == "claimed"
+
+
+async def test_claim_dispatches_chat_trigger_execution(session_factory):
+    """MES-191: chat generations ride the SAME real runtime chain as issue
+    executions — a trigger='chat' row with empty label/cap requirements
+    matches any online runtime and is claimed (no in-process placeholder)."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(
+        session_factory,
+        world["ws_id"],
+        world["agent_id"],
+        trigger="chat",
+        issue_id=None,
+        task_spec={"kind": "chat_generation", "untrusted_context": "你好"},
+    )
+
+    result = await _claim(session_factory, runtime)
+
+    assert result is not None
+    assert result.execution["id"] == str(execution.id)
+    assert result.execution["status"] == "claimed"
+    # The frozen prompt travels in the claim payload (task_spec passthrough).
+    assert result.execution["task_spec"]["kind"] == "chat_generation"
+    assert result.execution["task_spec"]["untrusted_context"] == "你好"
+    async with session_factory() as session:
+        stored = (
+            await session.execute(select(TaskExecution).where(TaskExecution.id == execution.id))
+        ).scalar_one()
+        # Privacy: a chat claim never emits a workspace-wide executions frame
+        # (no execution.claimed realtime row) — the run is visible only on the
+        # session owner's private SSE channel.
+        from mesh.db.models.outbox import OutboxEvent
+
+        claimed_frames = (
+            await session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == "realtime.publish",
+                    OutboxEvent.payload["event"].astext == "execution.claimed",
+                )
+            )
+        ).scalars().all()
+    assert stored.status == "claimed"
+    assert claimed_frames == []
