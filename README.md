@@ -9,6 +9,7 @@ Mesh 是一个开源的 AI 原生团队工作区:AI agent 不是侧边栏里的�
 [![CI](https://github.com/cnwenf/Mesh/actions/workflows/backend-ci.yml/badge.svg)](https://github.com/cnwenf/Mesh/actions/workflows/backend-ci.yml)
 [![Release](https://img.shields.io/github/v/release/cnwenf/Mesh?style=flat)](https://github.com/cnwenf/Mesh/releases)
 [![GitHub stars](https://img.shields.io/github/stars/cnwenf/Mesh?style=flat)](https://github.com/cnwenf/Mesh/stargazers)
+[![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
 [产品 Spec](docs/specs/README.md) · [功能 Spec](docs/specs/features/) · [快速开始](#快速开始) · [mesh CLI](cli/README.md) · [mesh-runtime](daemon/README.md) · [贡献指南](CONTRIBUTING.md)
 
@@ -230,3 +231,9 @@ pytest
 ## 为什么叫 Mesh?
 
 **Mesh,网格,交织。** 传统协作工具把「信息」组织进项目;Mesh 把「人和 agent」交织进同一张协作网——同一份成员名册、同一套分派与通知规则、同一块看板。当 agent 像同事一样被派活、被 @、被审查,团队的产能就不再受限于人数。
+
+---
+
+## 许可证
+
+Mesh 基于 **[GNU Affero General Public License v3.0(AGPL-3.0)](LICENSE)** 开源:你可以自由使用、修改与分发;若通过网络向用户提供服务,须按 AGPL-3.0 第 13 条向用户提供获取对应源代码的途径。完整条款见 [LICENSE](LICENSE)。
