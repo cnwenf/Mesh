@@ -316,25 +316,36 @@ class ClaudeCodeAdapter:
                 "XDG_CACHE_HOME": os.path.join(empty_home, "cache"),
             }
             env.update(self._probe_env_extra)
+            # Some provider builds truncate --help when stdout is a pipe under
+            # this minimal probe env (Claude Code 2.1.x native binary writes
+            # only ~8 KiB to a FIFO) while a regular file receives the full
+            # text. Redirect to a temp file so the flag-membership check sees
+            # the complete help output.
+            help_out = Path(empty_home) / "help.txt"
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    str(path), "--help",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env=env,
-                )
+                with help_out.open("wb") as out_sink:
+                    proc = await asyncio.create_subprocess_exec(
+                        str(path), "--help",
+                        stdout=out_sink,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        env=env,
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            proc.communicate(), timeout=_HELP_TIMEOUT_SECONDS
+                        )
+                    except TimeoutError:
+                        proc.kill()  # don't leak a hung --help child (cf. probe_binary)
+                        await proc.wait()
+                        return None
             except OSError:
                 return None
-            try:
-                stdout, _ = await asyncio.wait_for(
-                    proc.communicate(), timeout=_HELP_TIMEOUT_SECONDS
-                )
-            except TimeoutError:
-                proc.kill()  # don't leak a hung --help child (cf. probe_binary)
-                await proc.wait()
+            if proc.returncode != 0:
                 return None
-        if proc.returncode != 0:
-            return None
+            try:
+                stdout = help_out.read_bytes()
+            except OSError:
+                return None
         return stdout[:_HELP_OUTPUT_MAX].decode("utf-8", errors="replace")
 
     def _unavailable(self, reason: str) -> ProbeResult:

@@ -340,22 +340,30 @@ class AttemptSupervisor:
                         # gating them produced false isolations; spec §3.5
                         # requires non-negative / decimal-string (checked above),
                         # not cross-frame monotonicity, for mid-stream frames.
-                        self._signal_operational_incident("usage_invariant_failed")
-                        self._provider_done = True
-                        await self._finalize(
-                            ctx,
-                            AttemptOutcome(
-                                ctx.attempt_id,
-                                "failed",
-                                "executor_unavailable",
-                            ),
-                            session_id,
-                            usage,
-                            "",
-                            1,
-                            hit_count,
+                        #
+                        # Third-party proxy providers can also use DIFFERENT
+                        # accounting between message-level frames and the
+                        # terminal aggregate (observed via claude-code behind a
+                        # proxy: aggregate input < message usage), which tripped
+                        # this gate on legitimate runs. Merge per-field MAX so
+                        # counters never under-report any observed frame, keep
+                        # the larger cost, and record a degraded incident
+                        # instead of failing the attempt.
+                        self._signal_operational_incident("usage_terminal_regressed")
+                        merged_cost = observed.cost_usd
+                        try:
+                            if Decimal(usage.cost_usd) > Decimal(observed.cost_usd):
+                                merged_cost = usage.cost_usd
+                        except InvalidOperation:
+                            pass
+                        observed = Usage(
+                            max(usage.input_tokens, observed.input_tokens),
+                            max(usage.cache_creation_tokens, observed.cache_creation_tokens),
+                            max(usage.cache_read_tokens, observed.cache_read_tokens),
+                            max(usage.output_tokens, observed.output_tokens),
+                            max(usage.turns, observed.turns),
+                            merged_cost,
                         )
-                        return
                     usage = observed
                 elif isinstance(event, FinalResult):
                     summary = event.summary
