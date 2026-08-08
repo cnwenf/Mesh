@@ -239,7 +239,7 @@ hosts:
 
 - `--output json` 时 stdout **仅**输出单一合法 JSON 文档:成功 = REST 包络原样(`{"data":...}` / `{"data":[...],"next_cursor":...}`);失败 = REST 错误信封 `{"error":{"code","message","details"}}`;
 - 进度/spinner/`--verbose` 日志/更新提示/错误说明**一律 stderr**;
-- 同一 CLI 大版本内,`--output json` schema 与退出码语义保持稳定;CLI 破坏性变更走大版本 + CHANGELOG。
+- 同一 CLI 大版本内,`--output json` schema 与退出码语义保持稳定;CLI 破坏性变更走大版本 + Release Notes。
 
 ---
 
