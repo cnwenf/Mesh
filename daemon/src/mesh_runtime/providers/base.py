@@ -72,9 +72,10 @@ class UsageObserved:
 
     ``terminal`` marks the FINAL cumulative frame for the attempt (the result
     record). Per-message frames on a multi-turn stream are NOT guaranteed to be
-    cumulative-monotonic, so the supervisor's regression gate (HIGH-4) applies
-    to the terminal frame only; every frame still satisfies the §3.5
-    non-negative / decimal-string invariants.
+    cumulative-monotonic, so the supervisor's regression gate (HIGH-4/MES-190)
+    applies to the terminal frame only, compared on a folded, basis-invariant
+    context-token total (see ``attempt._context_tokens``); every frame still
+    satisfies the §3.5 non-negative / decimal-string invariants.
     """
 
     input_tokens: int

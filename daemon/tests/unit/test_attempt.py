@@ -3,12 +3,13 @@ import asyncio
 import pytest
 
 from mesh_runtime.api import LeaseInfo, LogAck
-from mesh_runtime.attempt import AttemptContext, AttemptSupervisor
+from mesh_runtime.attempt import AttemptContext, AttemptSupervisor, _usage_regressed
 from mesh_runtime.errors import DaemonError, LeaseConflictError, ServerError
 from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
 from mesh_runtime.providers.base import FinalResult, RunRequest, SessionStarted, TextDelta, UsageObserved
 from mesh_runtime.redaction import RedactionPipeline
+from mesh_runtime.result import Usage
 from mesh_runtime.timeutil import FakeClock
 
 
@@ -638,6 +639,108 @@ class TestUnexpectedProviderError:
         assert incidents == []
         assert reported["usage"]["turns"] == 2
 
+    async def test_folded_cache_usage_terminal_does_not_isolate(self, journal, ctx):
+        """MES-190 RT-01 CRITICAL regression (dashscope-style folded usage).
+
+        Anthropic-compatible proxies fold cache-creation tokens into the
+        message-level ``input_tokens`` of mid-stream assistant frames but
+        report the terminal frame split (``input_tokens`` +
+        ``cache_creation_input_tokens``). The recorded real frames — mid
+        ``input_tokens=48662`` vs terminal ``input_tokens=18381 +
+        cache_creation=33489`` — must NOT isolate: on the folded basis the
+        total context tokens did not regress (51870 >= 48662).
+        """
+        reported = {}
+        incidents = []
+
+        class CapturingApi(RenewOkApi):
+            async def transition(self, attempt_id, *, lease_seq, status, result=None,
+                                 failure_reason=None):
+                if result is not None:
+                    reported.update(result)
+                return await super().transition(
+                    attempt_id, lease_seq=lease_seq, status=status,
+                    result=result, failure_reason=failure_reason,
+                )
+
+        class FoldedCacheProvider:
+            name = "folded-cache-usage"
+
+            async def run(self, request):
+                yield SessionStarted(session_id="sess-fc", model="frozen-model")
+                # Mid-stream frames: proxy folds cache-creation into input.
+                yield UsageObserved(input_tokens=48662, output_tokens=0)
+                yield UsageObserved(input_tokens=48662, output_tokens=0)
+                # Terminal cumulative frame: split aggregation basis.
+                yield UsageObserved(
+                    input_tokens=18381,
+                    cache_creation_tokens=33489,
+                    cache_read_tokens=0,
+                    output_tokens=45,
+                    turns=1,
+                    cost_usd="0.302336",
+                    terminal=True,
+                )
+                yield FinalResult(summary="HELLO-REPRO", exit_code=0)
+
+        sup = make_supervisor(
+            CapturingApi(),
+            journal,
+            FakeClock(),
+            on_operational_incident=incidents.append,
+        )
+
+        outcome = await sup.supervise(ctx, FoldedCacheProvider(), run_request())
+
+        assert outcome.status == "completed"
+        assert incidents == []
+        assert reported["usage"]["input_tokens"] == 18381
+        assert reported["usage"]["cache_creation_tokens"] == 33489
+        assert reported["usage"]["total_tokens"] == 18381 + 33489 + 45
+
+    async def test_genuine_terminal_regression_with_cache_still_isolates(self, journal, ctx):
+        """MES-190: folding the comparison basis must NOT mask a genuine
+        regression — when the terminal frame's folded context total is truly
+        below the previous frame, the gate still isolates (fail-closed)."""
+        api = RenewOkApi()
+        incidents = []
+
+        class RegressingCacheProvider:
+            name = "regressing-cache-usage"
+
+            async def run(self, request):
+                # Folded context total: 50000 + 0 + 20000 = 70000.
+                yield UsageObserved(
+                    input_tokens=50000,
+                    cache_read_tokens=20000,
+                    output_tokens=9,
+                    cost_usd="0.400000",
+                )
+                # Folded context total: 10000 + 5000 + 0 = 15000 < 70000 —
+                # a genuine cumulative regression despite cache fields.
+                yield UsageObserved(
+                    input_tokens=10000,
+                    cache_creation_tokens=5000,
+                    output_tokens=9,
+                    turns=1,
+                    cost_usd="0.400000",
+                    terminal=True,
+                )
+                yield FinalResult(summary="must not complete", exit_code=0)
+
+        sup = make_supervisor(
+            api,
+            journal,
+            FakeClock(),
+            on_operational_incident=incidents.append,
+        )
+
+        outcome = await sup.supervise(ctx, RegressingCacheProvider(), run_request())
+
+        assert outcome.status == "failed"
+        assert outcome.failure_reason == "executor_unavailable"
+        assert incidents == ["usage_invariant_failed"]
+
     async def test_cleanup_failure_isolates_runtime(self, journal, ctx):
         from mesh_runtime.cleanup import CleanupReport
 
@@ -699,3 +802,60 @@ class TestUnexpectedProviderError:
         assert outcome.failure_reason == "ValueError"
         statuses = [t["status"] for t in api.transitions]
         assert statuses[-1] == "failed"
+
+
+class TestUsageRegressedFoldedBasis:
+    """MES-190: the terminal monotonicity gate compares usage frames on a
+    FOLDED input basis (input + cache_creation + cache_read). Providers
+    disagree on how cache tokens aggregate against ``input_tokens`` —
+    Anthropic-compatible proxies fold cache-creation into message-level
+    ``input_tokens`` — so only the folded total is monotonic across
+    aggregation bases. Genuine regressions must still be caught (fail-closed).
+    """
+
+    def _usage(self, *, input_tokens=0, cache_creation=0, cache_read=0,
+               output=0, turns=0, cost="0.000000"):
+        return Usage(input_tokens, cache_creation, cache_read, output, turns, cost)
+
+    def test_folded_cache_split_is_not_a_regression(self):
+        # Recorded MES-190 RT-01 frames: mid input=48662 (cache folded in);
+        # terminal input=18381 + cache_creation=33489 (split). Folded totals:
+        # 48662 -> 51870, non-decreasing -> NOT a regression.
+        previous = self._usage(input_tokens=48662)
+        current = self._usage(input_tokens=18381, cache_creation=33489,
+                              output=45, turns=1, cost="0.302336")
+        assert _usage_regressed(previous, current) is False
+
+    def test_cache_read_to_creation_shift_is_not_a_regression(self):
+        previous = self._usage(input_tokens=10, cache_read=50, output=4)
+        current = self._usage(input_tokens=10, cache_creation=50, output=4,
+                              turns=1, cost="0.002000")
+        assert _usage_regressed(previous, current) is False
+
+    def test_folded_total_decrease_is_a_regression(self):
+        # Folded totals: 70000 -> 15000 — a genuine regression that folding
+        # must NOT mask.
+        previous = self._usage(input_tokens=50000, cache_read=20000, output=9)
+        current = self._usage(input_tokens=10000, cache_creation=5000,
+                              output=9, turns=1, cost="0.400000")
+        assert _usage_regressed(previous, current) is True
+
+    def test_plain_input_decrease_is_a_regression(self):
+        previous = self._usage(input_tokens=10, output=4, turns=2, cost="0.002000")
+        current = self._usage(input_tokens=8, output=4, turns=2, cost="0.002000")
+        assert _usage_regressed(previous, current) is True
+
+    def test_output_decrease_is_a_regression(self):
+        previous = self._usage(input_tokens=10, output=4, cost="0.002000")
+        current = self._usage(input_tokens=10, output=3, cost="0.002000")
+        assert _usage_regressed(previous, current) is True
+
+    def test_cost_decrease_is_a_regression(self):
+        previous = self._usage(input_tokens=10, output=4, cost="0.002000")
+        current = self._usage(input_tokens=10, output=4, cost="0.001000")
+        assert _usage_regressed(previous, current) is True
+
+    def test_unparseable_cost_fails_closed(self):
+        previous = self._usage(cost="0.002000")
+        current = self._usage(cost="not-a-decimal")
+        assert _usage_regressed(previous, current) is True

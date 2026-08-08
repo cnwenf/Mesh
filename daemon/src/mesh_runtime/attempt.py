@@ -334,12 +334,16 @@ class AttemptSupervisor:
                         )
                         return
                     if event.terminal and _usage_regressed(usage, observed):
-                        # HIGH-4: the monotonicity gate applies to the TERMINAL
-                        # cumulative frame only. Per-message usage frames on a
-                        # multi-turn stream are not cumulative-monotonic, so
-                        # gating them produced false isolations; spec §3.5
-                        # requires non-negative / decimal-string (checked above),
-                        # not cross-frame monotonicity, for mid-stream frames.
+                        # HIGH-4 / MES-190: the monotonicity gate applies to the
+                        # TERMINAL cumulative frame only, and the comparison is
+                        # folded to basis-invariant context tokens (see
+                        # _context_tokens) — providers aggregate cache tokens
+                        # against input_tokens differently across frames, so a
+                        # per-field comparison false-isolated every real
+                        # execution on folded-basis providers. Spec §3.5 keeps
+                        # non-negative / decimal-string invariants (checked
+                        # above) for mid-stream frames, which are not
+                        # cumulative-monotonic.
                         self._signal_operational_incident("usage_invariant_failed")
                         self._provider_done = True
                         await self._finalize(
@@ -559,16 +563,33 @@ def _short_reason(exc: Exception) -> str:
     return type(exc).__name__[:64]
 
 
+def _context_tokens(usage: Usage) -> int:
+    """Fold the input side of a usage frame to basis-invariant context tokens.
+
+    Providers disagree on how cache tokens aggregate against ``input_tokens``:
+    first-party Anthropic reports them separately, while Anthropic-compatible
+    proxies (e.g. dashscope) fold cache-creation tokens into message-level
+    ``input_tokens`` and only split them out on the terminal frame. The only
+    input-side quantity monotonic across frames on EVERY aggregation basis is
+    the folded total, so the regression gate compares it instead of the
+    individual input-side fields — per-field comparison false-isolated every
+    real execution on folded-basis providers (MES-190 RT-01).
+    """
+    return usage.input_tokens + usage.cache_creation_tokens + usage.cache_read_tokens
+
+
 def _usage_regressed(previous: Usage, current: Usage) -> bool:
-    """Provider usage frames are cumulative; counters may never decrease."""
-    count_fields = (
-        "input_tokens",
-        "cache_creation_tokens",
-        "cache_read_tokens",
-        "output_tokens",
-        "turns",
-    )
-    if any(getattr(current, field) < getattr(previous, field) for field in count_fields):
+    """Cumulative usage counters may never decrease between frames.
+
+    The input side is compared on the folded basis (``_context_tokens``);
+    output tokens, turns and cost are aggregation-independent and compared
+    directly. An unparseable cost fails closed as a regression.
+    """
+    if _context_tokens(current) < _context_tokens(previous):
+        return True
+    if current.output_tokens < previous.output_tokens:
+        return True
+    if current.turns < previous.turns:
         return True
     try:
         return Decimal(current.cost_usd) < Decimal(previous.cost_usd)

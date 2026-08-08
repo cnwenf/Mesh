@@ -332,6 +332,8 @@ claim 与执行时序：
 
 provider usage 用于实时截断和服务端核账。最终上报的 usage 是审计材料，不是唯一执法点；daemon 对 token/turn/金额执行本地非负整数与 decimal-string 不变量校验，异常偏差立即锁存 runtime `isolated`、停止本地 claim 并上报固定脱敏原因码；server 核账发现的偏差同样隔离并告警。
 
+**usage 单调性闸门与口径折算（HIGH-4 / MES-190）。** 单调性闸门只对 provider 的**终态累计帧**（`result` 记录）生效：多轮流中的 per-message usage 帧不保证累计单调，只执行上述非负/decimal-string 不变量，不做跨帧比较。终态帧与上一帧比较前，先把两帧的输入侧**折算为同一口径**——总上下文 token = `input_tokens + cache_creation_tokens + cache_read_tokens`——再比较该折算总量与 `output_tokens`、`turns`、金额；任一严格下降即判为回退并锁存 `usage_invariant_failed`（fail-closed）。折算的必要性：不同 provider/代理对 cache token 相对 `input_tokens` 的聚合口径不一致（例如 Anthropic 兼容代理会把 cache-creation token 折叠进 message 级 `input_tokens`，而终态帧按 `input_tokens` + `cache_creation_input_tokens` 拆开记），逐字段跨帧比较会把纯口径差异误判为回退、把每次真实执行误隔离；只有折算后仍下降才是真回退。输入侧各分量不再单独参与跨帧单调判定（同口径折算总量才是跨 provider 不变的单调量），但非负整数与 decimal-string 不变量对每个分量照旧生效；server 侧交叉核账（§3.9）仍是独立的第二道偏差执法点。
+
 ### 3.6 S-08：清理清单
 
 每个终态、取消、reclaim、daemon 重启对账都执行幂等 cleanup：
