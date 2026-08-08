@@ -70,6 +70,7 @@
 | 作用域 | `visibility='private'`(仅 owner)/`'shared'`(工作区或项目成员可见) | 团队共享"冲刺看板" |
 | 列表/切换 | 侧栏列出可用视图,一键切换 | 在"我的任务""冲刺看板"间切换 |
 | 默认视图 | `is_default` 设某视图为工作区/项目默认 | 项目首页默认打开"看板" |
+| 默认视图播种 | 打开看板页时若工作区尚无任何保存视图,前端自动创建一个共享默认看板视图(`layout='board'`、`group_by='state_category'`、`visibility='shared'`、`is_default=true`)并选中;打开即呈现全部状态类别分列,不落入引导空态;每工作区只播种一次 | 新工作区第一次进看板即见 Todo / In Progress / In Review / Done 分列 |
 | 编辑/复制/删除/排序 | 视图 CRUD 与 `position` 排序 | 删除废弃视图 |
 | 临时(未保存)视图 | 改了配置但未保存,提示"是否保存/另存/丢弃" | 临时筛一下,不污染共享视图 |
 
@@ -649,7 +650,7 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
    └── 视图操作(右键/…):重命名、复制、设默认、删除、调序
 
 主区(看板布局 layout=board)
-   ├── 顶部工具条:视图名 | 筛选 | 分组 | 排序 | 显示字段 | [保存/另存]
+   ├── 顶部工具条:视图名 | 视图模式切换(看板/泳道/列表) | 筛选 | 分组 | 排序 | 显示字段 | [保存/另存]
    ├── 主列头(columns,横向,sticky top):状态色 + 名称 + 跨泳道计数 + WIP
    └── 泳道列表(lanes,sub_group_by 非空时;纵向)
         每条泳道:泳道头(sticky left,label + 泳道总数)
@@ -663,6 +664,7 @@ WIP 永远以主列为维度:`board_wip_limits` 仍以 `(view_id, group_key)` �
 ### 4.2 关键组件
 
 - **视图切换器**:侧栏视图列表;当前视图高亮;切换时 URL 同步 `/views/{id}`(可分享/收藏);未保存改动时切换弹"保存/另存/丢弃"。
+- **视图模式切换器(看板/泳道/列表)**:工具条三态分段按钮,当前模式高亮(`aria-pressed`);模式是视图配置的派生呈现——`layout='list'` 为列表,`layout='board'` 且 `sub_group_by` 非空为泳道,`layout='board'` 且 `sub_group_by` 为空为看板。切换即对当前视图 `PATCH /views/{id}`(携 `If-Match` 乐观并发)只改写 `layout` 与 `sub_group_by` 两个字段:切泳道时 `sub_group_by` 取既有值或默认 `priority` 轴;切看板时清空 `sub_group_by`;切列表时 `layout='list'`(保留 `sub_group_by`,列表不渲染泳道,见 §1.3)。`filters`/`sort`/`group_by` 不受影响,因此三视图直切时筛选等状态保留,且配置真实落库、刷新后模式持久;`can_write=false` 的视图整体禁用切换器。
 - **看板列**:列头由顶层 `columns` 渲染,含状态色、名称、跨泳道计数(及 WIP `4/5`;超限 warn 变黄、block 变红);支持折叠(`collapsed_columns`)。一维视图继续从 `groups` 渲染同样的列头。
 - **泳道与双轴滚动**:泳道为外层行,泳道头显示 `label` + `count`,其 `groups` 与主列对齐组成单元格;空值 `__none__` 泳道在最后。本期无泳道折叠、无泳道拖拽调序。桌面主列头 sticky top、泳道头 sticky left,左上角交点拥有最高 z-index;两者与单元格共享同一个横纵滚动坐标和列宽/行高测量,虚拟化不得造成头格错位。
 - **单元格加载态**:`count=0,data=[]` 才渲染真实空态与快速创建;`count>0,data=[]` 渲染保持尺寸的“待加载”占位并继续取顶层 `next_cursor`,不可显示“暂无卡片”。后续页只向命中单元格渐进 append + 去重,不清空已渲染格、不阻塞首屏交互。

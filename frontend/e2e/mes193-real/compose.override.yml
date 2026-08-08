@@ -1,0 +1,23 @@
+# MES-193 isolated real-stack overlay.
+#
+# The browser reaches only the loopback-bound frontend. API, realtime gateway,
+# PostgreSQL, Redis and MinIO stay on the Compose network; the frontend
+# reverse proxy is the single ingress for /api and /ws.
+services:
+  minio:
+    ports: !reset []
+  api:
+    ports: !reset []
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}
+      MESH_SEARCH_CURSOR_SECRET: ${MESH_SEARCH_CURSOR_SECRET:?MESH_SEARCH_CURSOR_SECRET is required}
+  gateway:
+    ports: !reset []
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}
+  worker:
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required}

@@ -186,6 +186,21 @@
   padding: var(--space-1) var(--space-2);
 }
 
+/* 视图模式切换器:看板 / 泳道 / 列表 分段控件(kanban.md §4.2 三视图直切)。 */
+.mesh-view-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.mesh-view-mode__btn {
+  white-space: nowrap;
+}
+
 /* 协作感知:同看板观众头像簇 + 计数(L251,kanban.md §3.5 view.presence)。 */
 .mesh-board__view-presence {
   display: inline-flex;

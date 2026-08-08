@@ -486,9 +486,12 @@ describe('BoardPage', () => {
     fireEvent.click(screen.getByTestId('view-create-submit'));
 
     await waitFor(() => {
-      const post = calls.find(
-        (c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/views'),
-      );
+      // 空态会先自动播种默认视图(共享),故需按名称定位手动新建的 POST。
+      const post = calls.find((c) => {
+        if ((c.init?.method ?? 'GET') !== 'POST' || !c.url.endsWith('/views')) return false;
+        const body = JSON.parse(String(c.init?.body ?? '{}')) as Record<string, unknown>;
+        return body.name === 'My Board';
+      });
       expect(post).toBeDefined();
       expect(JSON.parse(String(post?.init?.body))).toMatchObject({
         name: 'My Board',
@@ -496,6 +499,81 @@ describe('BoardPage', () => {
         visibility: 'private',
       });
     });
+  });
+
+  it('空工作区自动播种默认多状态共享看板视图,且每个工作区只播种一次', async () => {
+    const calls = stubFetchByRoute({ views: [] });
+    renderWithProviders(<BoardPage />, { route: '/board' });
+
+    await waitFor(() => {
+      const seed = calls.find(
+        (c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/views'),
+      );
+      expect(seed).toBeDefined();
+      expect(JSON.parse(String(seed?.init?.body))).toMatchObject({
+        layout: 'board',
+        group_by: 'state_category',
+        is_default: true,
+        visibility: 'shared',
+      });
+    });
+    // 桩不落库,播种后仍为空态;但不应重复播种
+    await screen.findByText('The board is empty');
+    const seedPosts = calls.filter(
+      (c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/views'),
+    );
+    expect(seedPosts).toHaveLength(1);
+  });
+
+  it('三视图直切:切泳道 PATCH layout+sub_group_by 且携带 If-Match,只改这两个字段(状态保留)', async () => {
+    const calls = stubFetchByRoute();
+    renderWithProviders(<BoardPage />, { route: '/board' });
+    await screen.findByTestId('board-columns');
+
+    expect(screen.getByTestId('view-mode-switcher')).toBeInTheDocument();
+    expect(screen.getByTestId('view-mode-board')).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByTestId('view-mode-swimlane'));
+    await waitFor(() => {
+      const patch = calls.find(
+        (c) => (c.init?.method ?? 'GET') === 'PATCH' && c.url.includes('/api/v1/views/view-1'),
+      );
+      expect(patch).toBeDefined();
+      const headers = patch?.init?.headers as Record<string, string>;
+      expect(headers['If-Match']).toBe('2026-07-26T00:00:00Z');
+      const body = JSON.parse(String(patch?.init?.body)) as Record<string, unknown>;
+      expect(body).toEqual({ layout: 'board', sub_group_by: 'priority' });
+    });
+  });
+
+  it('三视图直切:切列表 PATCH layout=list,切回看板清空 sub_group_by', async () => {
+    const calls = stubFetchByRoute({
+      views: [makeView({ layout: 'list', sub_group_by: 'priority' })],
+    });
+    renderWithProviders(<BoardPage />, { route: '/board' });
+    await screen.findByTestId('view-mode-list');
+    expect(screen.getByTestId('view-mode-list')).toHaveAttribute('aria-pressed', 'true');
+
+    // 列表 → 看板:layout 回到 board,sub_group_by 清空
+    fireEvent.click(screen.getByTestId('view-mode-board'));
+    await waitFor(() => {
+      const patch = calls.find(
+        (c) => (c.init?.method ?? 'GET') === 'PATCH' && c.url.includes('/api/v1/views/view-1'),
+      );
+      expect(patch).toBeDefined();
+      const body = JSON.parse(String(patch?.init?.body)) as Record<string, unknown>;
+      expect(body).toEqual({ layout: 'board', sub_group_by: null });
+    });
+  });
+
+  it('无写权限时视图模式切换器整体禁用', async () => {
+    stubFetchByRoute({ views: [makeView({ can_write: false })] });
+    renderWithProviders(<BoardPage />, { route: '/board' });
+    await screen.findByTestId('board-columns');
+
+    expect(screen.getByTestId('view-mode-board')).toBeDisabled();
+    expect(screen.getByTestId('view-mode-swimlane')).toBeDisabled();
+    expect(screen.getByTestId('view-mode-list')).toBeDisabled();
   });
 
   it('列表加载失败呈现错误态并可重试(§6.12 retry)', async () => {

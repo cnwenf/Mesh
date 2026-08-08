@@ -95,6 +95,8 @@ import type {
 import { SortConfigPanel } from './SortConfigPanel';
 import { ViewSaveBar } from './ViewSaveBar';
 import { ViewSwitcher } from './ViewSwitcher';
+import { deriveViewMode, ViewModeSwitcher } from './ViewModeSwitcher';
+import type { ViewMode } from './ViewModeSwitcher';
 import { WipConfigPanel } from './WipConfigPanel';
 import type { BoardSettings, Filters, GroupByField, SortRule, View, WipEnforcement } from './types';
 import './board.css';
@@ -181,6 +183,9 @@ const GROUP_BY_OPTIONS: readonly GroupByField[] = [
   'project',
   'label',
 ];
+
+/** 切到泳道模式且尚无二级分组轴时的默认轴(对齐参考的泳道默认呈现)。 */
+const DEFAULT_SWIMLANE_AXIS: GroupByField = 'priority';
 
 /** 新建卡片插入高亮保持时长(§9.3.4)。 */
 const HIGHLIGHT_MS = 1200;
@@ -305,6 +310,7 @@ export function BoardPage(): React.JSX.Element {
   const viewFavorites = useFavorites(membership?.workspace_id ?? null, 'view');
   const [views, setViews] = useState<readonly View[]>([]);
   const [viewsStatus, setViewsStatus] = useState<LoadStatus>('loading');
+  const [seedingDefault, setSeedingDefault] = useState(false);
   const [customGroupFields, setCustomGroupFields] = useState<readonly CustomFieldDef[]>([]);
   const customGroupFieldsRef = useRef(customGroupFields);
   customGroupFieldsRef.current = customGroupFields;
@@ -616,6 +622,34 @@ export function BoardPage(): React.JSX.Element {
       void loadExecutionPresence(currentWorkspaceId);
     }
   }, [currentWorkspaceId, loadExecutionPresence, loadViews]);
+
+  // 无保存视图时自动建一个默认看板视图(对齐参考:打开即多状态分列),
+  // 保证拖拽/投影有真实视图可用;失败(无写权限等)回落引导空态。
+  // 每个工作区仅尝试一次(seededForRef),避免桩/异常环境下重复创建。
+  const seededForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (viewsStatus !== 'empty' || currentWorkspaceId === null) return;
+    if (seededForRef.current === currentWorkspaceId) return;
+    seededForRef.current = currentWorkspaceId;
+    setSeedingDefault(true);
+    const seed = async (): Promise<void> => {
+      try {
+        await createView(client, currentWorkspaceId, {
+          name: t('board.layout.board'),
+          layout: 'board',
+          visibility: 'shared',
+          group_by: 'state_category',
+          is_default: true,
+        });
+        await loadViews(currentWorkspaceId);
+      } catch (error) {
+        toastError(error);
+      } finally {
+        setSeedingDefault(false);
+      }
+    };
+    void seed();
+  }, [viewsStatus, currentWorkspaceId, client, loadViews, toastError, t]);
 
   const scopedViews = useMemo(
     () =>
@@ -1165,6 +1199,14 @@ export function BoardPage(): React.JSX.Element {
   };
 
   if (viewsStatus === 'empty' || selectedView === null || draft === null) {
+    // 正在自动创建默认看板视图:展示加载骨架而非引导空态,避免闪现 onboarding。
+    if (seedingDefault) {
+      return (
+        <div className="mesh-board" data-testid="board-page">
+          <Skeleton loadingLabel={t('common.loading')} className="mesh-board__skeleton" />
+        </div>
+      );
+    }
     return (
       <div className="mesh-board" data-testid="board-page">
         <ViewSwitcher
@@ -1215,6 +1257,35 @@ export function BoardPage(): React.JSX.Element {
 
   const dirty = draftDiffers(selectedView, draft);
   const canWrite = selectedView.can_write === true;
+
+  // 三视图直切:把目标模式翻译为 layout + sub_group_by 的持久化更新,
+  // 筛选/排序/一级分组不动,故互切时状态保留(验收:三视图切换状态保留)。
+  const handleModeChange = async (mode: ViewMode): Promise<void> => {
+    if (!canWrite || mode === deriveViewMode(selectedView)) return;
+    const nextSubGroup: GroupByField | null =
+      mode === 'swimlane'
+        ? (selectedView.sub_group_by ?? DEFAULT_SWIMLANE_AXIS)
+        : mode === 'board'
+          ? null
+          : selectedView.sub_group_by;
+    const nextLayout: View['layout'] = mode === 'list' ? 'list' : 'board';
+    try {
+      setBusy(true);
+      await updateView(
+        client,
+        selectedView.id,
+        { layout: nextLayout, sub_group_by: nextSubGroup },
+        { ifMatch: selectedView.updated_at },
+      );
+      setDraft({ ...draft, sub_group_by: nextSubGroup });
+      await loadViews(workspaceId);
+    } catch (error) {
+      toastError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const previewView: View = {
     ...selectedView,
     group_by: draft.group_by,
@@ -1680,9 +1751,17 @@ export function BoardPage(): React.JSX.Element {
           <h1 className="mesh-board__title" data-testid="board-title">
             {selectedView.name}
           </h1>
-          <span className="mesh-board__layout-chip">
-            {t('board.layout.' + selectedView.layout)}
-          </span>
+          {isRenderableLayout(selectedView.layout) ? (
+            <ViewModeSwitcher
+              value={deriveViewMode(selectedView)}
+              disabled={!canWrite}
+              onChange={(mode) => void handleModeChange(mode)}
+            />
+          ) : (
+            <span className="mesh-board__layout-chip">
+              {t('board.layout.' + selectedView.layout)}
+            </span>
+          )}
           {viewPresence !== null && viewPresence.online > 0 ? (
             <span
               className="mesh-board__view-presence"

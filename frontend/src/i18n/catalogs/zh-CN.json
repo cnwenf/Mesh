@@ -767,6 +767,10 @@
     "board.unsavedChanges": "配置有未保存的改动",
     "board.viewActions": "视图 {name} 的操作",
     "board.viewLayoutLabel": "布局",
+    "board.viewMode.board": "看板",
+    "board.viewMode.list": "列表",
+    "board.viewMode.swimlane": "泳道",
+    "board.viewModeLabel": "视图模式",
     "board.viewNameLabel": "名称",
     "board.viewPresence": "{count} 人正在查看",
     "board.viewSwitcherLabel": "视图切换器",
@@ -3004,5 +3008,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "87460d2c"
+  "version": "5dbef089"
 }

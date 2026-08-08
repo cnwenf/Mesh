@@ -370,6 +370,7 @@
 - [x] **拖拽视觉反馈**：目标列 dragover 高亮、落点占位条、卡片 ghost（依据: kanban.md §4.3）— 现状 ✅（§4 G7 已核销；原基线 ❌（零视觉反馈））
 - [x] **列底「+新增」快速建卡**：继承该列分组值，回车即现新卡片（依据: kanban.md §4.5）— 现状 ✅（§4 G7 已核销；原基线 ❌（按钮禁用，文案「arrives with the issue projection increment」））
 - [x] 视图体系：切换/保存/另存/重命名/复制/删除/设默认 + URL 同步 `/views/{id}` + 未保存改动「保存/另存/丢弃」（依据: kanban.md §4.2/§5.1）— 现状 ✅
+- [x] **默认多状态分列 + 看板/泳道/列表三视图直切**：空工作区打开看板自动播种共享默认视图（`layout='board'`、`group_by='state_category'`、`is_default=true`），打开即见全部状态类别分列而非引导空态；工具条三态切换器以 `layout + sub_group_by` 派生模式，切换经 `PATCH /views/{id}`（`If-Match`）只回写两字段，筛选/排序/一级分组保留、配置落库、刷新持久（依据: kanban.md §1.2/§4.2）— 现状 ✅（MES-193；`ViewModeSwitcher.test.tsx` / `BoardPage.test.tsx` 播种与直切断言 + `e2e/real-mes193.spec.ts` 真栈四组合走查，证据 `docs/evidence/mes-193/`）
 - [x] 卡片字段受 card_fields 控制（标签点/估点/子任务进度/assignee 头像）；列可折叠（依据: kanban.md §4.2）— MES-187 复核 🟡（当前投影已覆盖描述、项目、估算、截止日、负责人姓名、更新时间与标签；子任务进度及 assignee 人/agent 类型头像仍未进入卡片投影，虚拟卡按性能契约隐藏扩展元数据）
 - [x] 实时增量合并：收 issue.* 本地重判归属单卡增删移，**禁止整板刷新**；丢弃旧于本地的事件无回退闪烁（依据: kanban.md §3.5/§5.2）— 现状 ✅（`labels_changed` / `custom_field_changed` 按 placement 集合差更新且不整板 refetch；`BoardPage.realtime.test.tsx` / `boardRealtime.test.ts`）
 - [x] **List 布局**：可配置列/列头排序/行内编辑/多选批量条（依据: kanban.md §1.2）— 现状 ✅（§4 G7 已核销；原基线 ❌（空态占位 `board.listPlaceholderTitle`））

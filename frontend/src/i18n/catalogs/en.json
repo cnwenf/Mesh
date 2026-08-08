@@ -767,6 +767,10 @@
     "board.unsavedChanges": "Unsaved configuration changes",
     "board.viewActions": "Actions for view {name}",
     "board.viewLayoutLabel": "Layout",
+    "board.viewMode.board": "Board",
+    "board.viewMode.list": "List",
+    "board.viewMode.swimlane": "Swimlane",
+    "board.viewModeLabel": "View mode",
     "board.viewNameLabel": "Name",
     "board.viewPresence": "{count} viewing",
     "board.viewSwitcherLabel": "View switcher",
@@ -3004,5 +3008,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "cad297c1"
+  "version": "15a9365f"
 }
