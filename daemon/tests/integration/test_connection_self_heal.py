@@ -95,7 +95,7 @@ class HeartbeatServer:
                 b"\r\n" + body
             )
             await writer.drain()
-        except (asyncio.TimeoutError, ConnectionError, asyncio.IncompleteReadError):
+        except (TimeoutError, ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
             self._open_writers.discard(writer)

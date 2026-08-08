@@ -2,8 +2,9 @@ import asyncio
 
 import pytest
 
-from mesh_runtime.api import RuntimeApiClient
+from mesh_runtime.api import HeartbeatResponse, RuntimeApiClient
 from mesh_runtime.backoff import KEEPALIVE
+from mesh_runtime.errors import ServerError
 from mesh_runtime.heartbeat import HeartbeatLoop
 from mesh_runtime.inventory import Inventory
 from mesh_runtime.providers.base import ProbeResult
@@ -174,10 +175,6 @@ class TestRunLoop:
         hb = make_heartbeat(fake_server)
         await hb.run(asyncio.Event())
         assert hb.fatal is not None
-
-
-from mesh_runtime.api import HeartbeatResponse
-from mesh_runtime.errors import ServerError
 
 
 class StubHealApi:
