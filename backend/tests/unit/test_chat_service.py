@@ -846,6 +846,145 @@ def test_idempotency_key_nil_issue_stable():
 
 
 # ---------------------------------------------------------------------------
+# real-runtime enqueue payload (MES-191)
+# ---------------------------------------------------------------------------
+
+
+async def _last_enqueue_event(service) -> dict:
+    from mesh.db.models.outbox import OutboxEvent
+
+    async with service._session_factory() as session:
+        event = (
+            await session.execute(
+                select(OutboxEvent)
+                .where(OutboxEvent.event_type == "execution.enqueue")
+                .order_by(OutboxEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+    return event.payload
+
+
+async def test_send_message_enqueues_real_runtime_execution(service, world):
+    row = await _mk_session(service, world)
+    sid = uuid.UUID(row["id"])
+    sent = await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid,
+        content="帮我分析这个问题",
+    )
+    payload = await _last_enqueue_event(service)
+    # Chat executions are issue-less by design (privacy + no issue side effects).
+    assert payload["trigger"] == "chat"
+    assert payload["issue_id"] is None
+    assert payload["agent_id"] == str(world["agent"].id)
+    # Single-attempt, bounded run (duplicate deltas are unrecoverable).
+    assert payload["max_attempts"] == 1
+    assert payload["timeout_seconds"] == 900
+    # The frozen snapshot must satisfy the daemon's require_usd budget gate.
+    snapshot = payload["config_snapshot"]
+    assert snapshot["budget"]["max_cost_usd"] == "1.00"
+    assert snapshot["trigger_event_id"] == str(sent["message_id"])
+    # The assembled prompt travels as untrusted context in the task_spec.
+    task_spec = payload["task_spec"]
+    assert task_spec["kind"] == "chat_generation"
+    assert task_spec["session_id"] == str(sid)
+    assert task_spec["message_id"] == str(sent["message_id"])
+    assert task_spec["generation_id"] == str(sent["generation_id"])
+    assert "帮我分析这个问题" in task_spec["untrusted_context"]
+
+
+async def test_send_message_issue_id_none_even_with_context_issue(
+    service, world, session_factory,
+):
+    issue = await _mk_issue(session_factory, world["ws"])
+    row = await _mk_session(service, world, context_issue_id=issue.id)
+    sid = uuid.UUID(row["id"])
+    await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid,
+        content="带上下文的消息",
+    )
+    payload = await _last_enqueue_event(service)
+    assert payload["issue_id"] is None
+    # The issue context is folded into the prompt instead of the execution row.
+    assert "带上下文的消息" in payload["task_spec"]["untrusted_context"]
+
+
+async def test_send_message_snapshot_uses_agent_config(service, world, session_factory):
+    from sqlalchemy import update as sa_update
+
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            sa_update(Agent)
+            .where(Agent.id == world["agent"].id)
+            .values(
+                system_instructions="你是聊天助手",
+                model_config={
+                    "provider": "claude_code",
+                    "model": "claude-sonnet-4-5",
+                    "reasoning_effort": "high",
+                    "budget": {"max_cost_usd": "2.50", "max_turns": 8},
+                },
+            )
+        )
+    row = await _mk_session(service, world)
+    sid = uuid.UUID(row["id"])
+    await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid, content="配置检查"
+    )
+    payload = await _last_enqueue_event(service)
+    snapshot = payload["config_snapshot"]
+    assert snapshot["provider"] == "claude_code"
+    assert snapshot["model"] == "claude-sonnet-4-5"
+    assert snapshot["effort"] == "high"
+    assert snapshot["system_instructions"] == "你是聊天助手"
+    # Agent-config budget wins over the chat default …
+    assert snapshot["budget"]["max_cost_usd"] == "2.50"
+    assert snapshot["budget"]["max_turns"] == 8
+    # … but chat wall/idle caps always backstop the run.
+    assert snapshot["budget"]["max_wall_time_seconds"] == 900
+    assert snapshot["budget"]["max_idle_time_seconds"] == 300
+
+
+async def test_send_message_budget_default_backstops_malformed_agent_budget(
+    service, world, session_factory,
+):
+    from sqlalchemy import update as sa_update
+
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            sa_update(Agent)
+            .where(Agent.id == world["agent"].id)
+            .values(model_config={"budget": {"max_cost_usd": None}})
+        )
+    row = await _mk_session(service, world)
+    sid = uuid.UUID(row["id"])
+    await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid, content="预算兜底"
+    )
+    payload = await _last_enqueue_event(service)
+    # A snapshot without a hard USD budget is rejected by the daemon's
+    # BudgetLimits gate (require_usd=True) — the chat default must backstop.
+    assert payload["config_snapshot"]["budget"]["max_cost_usd"] == "1.00"
+
+
+async def test_regenerate_enqueues_fresh_execution(service, world):
+    row = await _mk_session(service, world)
+    sid = uuid.UUID(row["id"])
+    sent = await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid, content="原始问题"
+    )
+    await _mark_all_done(service, sid)
+    regenerated = await service.regenerate(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid,
+        message_id=uuid.UUID(sent["message_id"]),
+    )
+    payload = await _last_enqueue_event(service)
+    assert payload["task_spec"]["generation_id"] == str(regenerated["generation_id"])
+    assert payload["task_spec"]["message_id"] == str(regenerated["message_id"])
+    assert payload["config_snapshot"]["budget"]["max_cost_usd"] == "1.00"
+
+
+# ---------------------------------------------------------------------------
 # channel checker
 # ---------------------------------------------------------------------------
 

@@ -19,12 +19,14 @@ from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
+from mesh.agent.snapshot import build_config_snapshot
 from mesh.auth.rbac import assert_guest_project_visible, role_satisfies
 from mesh.chat.engine import (
     chat_execution_idempotency_key,
     chat_list_channel,
     chat_session_channel,
 )
+from mesh.chat.prompt import prepare_generation_prompt
 from mesh.db.constraints import violates
 from mesh.db.models.agent import Agent
 from mesh.db.models.chat import ChatMessage, ChatSession, Favorite
@@ -64,6 +66,20 @@ DEFAULT_SESSION_LIMIT = 20
 MAX_SESSION_LIMIT = 100
 DEFAULT_MESSAGE_LIMIT = 30
 MAX_MESSAGE_LIMIT = 100
+
+# Chat-generation execution envelope (chat-session.md §4.4). Chat runs ride
+# the same real runtime chain as issue executions, so the frozen snapshot
+# must satisfy the daemon's ``BudgetLimits.from_snapshot(require_usd=True)``
+# gate — a snapshot without a hard USD budget is refused. The agent's own
+# model_config budget wins field-by-field; these defaults backstop whatever
+# it leaves unset so a chat generation can never be rejected for a missing
+# budget. Single attempt: duplicated log/delta replay is unrecoverable for
+# a streaming reply, and the user can always regenerate explicitly.
+CHAT_GENERATION_MAX_COST_USD = "1.00"
+CHAT_GENERATION_MAX_WALL_TIME_SECONDS = 900
+CHAT_GENERATION_MAX_IDLE_TIME_SECONDS = 300
+CHAT_GENERATION_TIMEOUT_SECONDS = 900
+CHAT_GENERATION_MAX_ATTEMPTS = 1
 
 
 class _Unset:
@@ -624,20 +640,76 @@ class ChatService:
 
     # -- generation lifecycle ------------------------------------------------------
 
+    def _chat_budget(self, agent: Agent | None) -> dict:
+        """Frozen budget for a chat run: agent overrides on chat defaults.
+
+        Guarantees ``max_cost_usd`` is a non-empty decimal string — the
+        daemon refuses real-provider runs without one (require_usd gate).
+        """
+        budget = {
+            "max_cost_usd": CHAT_GENERATION_MAX_COST_USD,
+            "max_wall_time_seconds": CHAT_GENERATION_MAX_WALL_TIME_SECONDS,
+            "max_idle_time_seconds": CHAT_GENERATION_MAX_IDLE_TIME_SECONDS,
+        }
+        model_config = (
+            agent.model_config if agent is not None and isinstance(agent.model_config, dict)
+            else {}
+        )
+        agent_budget = model_config.get("budget")
+        if isinstance(agent_budget, dict):
+            budget.update(agent_budget)
+        if not budget.get("max_cost_usd"):
+            budget["max_cost_usd"] = CHAT_GENERATION_MAX_COST_USD
+        return budget
+
     async def _enqueue_execution(self, session, *, workspace_id: uuid.UUID,
                                  chat_session: ChatSession, agent_message: ChatMessage,
                                  trigger_event_id: uuid.UUID) -> str:
-        """Register the agent reply execution (README §6.9 chat trigger, §6.5 key)."""
+        """Enqueue the agent reply onto the REAL runtime chain (README §6.9
+        chat trigger, §6.5 key; chat-session.md §4.4).
+
+        The execution row is issue-less by design: chat runs must not flip
+        issue phases, emit issue notifications, or appear on workspace
+        execution channels — and the session's linked issue travels inside
+        the prompt (§6.15 fence) instead of the execution binding.
+        """
         agent_member = await session.scalar(
             select(Member).where(
                 Member.workspace_id == workspace_id,
                 Member.agent_id == chat_session.agent_id,
             )
         )
+        agent = await session.scalar(
+            select(Agent).where(
+                Agent.workspace_id == workspace_id,
+                Agent.id == chat_session.agent_id,
+            )
+        )
         idem_key = chat_execution_idempotency_key(
             agent_id=chat_session.agent_id,
             issue_id=chat_session.context_issue_id,
             trigger_event_id=trigger_event_id,
+        )
+        untrusted_context = await prepare_generation_prompt(
+            session, workspace_id=workspace_id,
+            chat_session=chat_session, agent_message=agent_message,
+        )
+        model_config = (
+            agent.model_config if agent is not None and isinstance(agent.model_config, dict)
+            else {}
+        )
+        snapshot_parts = build_config_snapshot(
+            agent_config_version_id=(
+                agent.active_config_version_id if agent is not None else None
+            ),
+            trigger_event_id=agent_message.id,
+            provider=model_config.get("provider"),
+            model=model_config.get("model"),
+            effort=model_config.get("reasoning_effort"),
+            system_instructions=(
+                agent.system_instructions if agent is not None else None
+            ),
+            budget=self._chat_budget(agent),
         )
         await emit_event(
             session,
@@ -647,20 +719,24 @@ class ChatService:
                 "intent": "enqueue",
                 "agent_id": str(chat_session.agent_id),
                 "agent_member_id": str(agent_member.id) if agent_member is not None else None,
-                "issue_id": str(chat_session.context_issue_id)
-                if chat_session.context_issue_id
-                else None,
+                # Chat executions bind to NO issue (see docstring): the
+                # session's context issue is prompt data, not an execution
+                # binding.
+                "issue_id": None,
                 "trigger": "chat",
                 "trigger_event_id": str(trigger_event_id),
                 "idempotency_key": idem_key,
+                "max_attempts": CHAT_GENERATION_MAX_ATTEMPTS,
+                "timeout_seconds": CHAT_GENERATION_TIMEOUT_SECONDS,
                 "task_spec": {
                     "kind": "chat_generation",
                     "session_id": str(chat_session.id),
                     "message_id": str(agent_message.id),
                     "generation_id": str(agent_message.generation_id),
+                    "untrusted_context": untrusted_context,
                 },
-                "config_snapshot": {},
-                "required_capabilities": [],
+                "config_snapshot": snapshot_parts["config_snapshot"],
+                "required_capabilities": snapshot_parts["required_capabilities"],
                 "label_requirements": {},
             },
             idempotency_key=idem_key,
