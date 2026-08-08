@@ -33,7 +33,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mesh.agent.snapshot import build_config_snapshot
+from mesh.agent.snapshot import snapshot_from_agent
 from mesh.db.constraints import violates as _violates_constraint
 from mesh.db.models.agent import Agent
 from mesh.db.models.integration import Integration, IntegrationBinding, IntegrationEvent
@@ -539,12 +539,11 @@ async def _enqueue_vcs_execution(
         external_event_id=external_event_id,
     )
     try:
-        snapshot_parts = build_config_snapshot(
-            agent_config_version_id=agent.active_config_version_id,
-            trigger_event_id=event_row.id,
-            declared_capabilities=[],
-            repo=None,
-        )
+        # §3.7 S-09 shared snapshot builder. F-BUDGET-SNAPSHOT: this call
+        # site previously froze only the version id / trigger ref — provider,
+        # model, effort, budget and network policy were absent, so every
+        # integration-triggered execution failed fail-closed on the daemon.
+        snapshot_parts = snapshot_from_agent(agent, trigger_event_id=event_row.id)
     except Exception:  # noqa: BLE001 — never lose the trigger on a bad snapshot
         logger.exception("integration enqueue snapshot failed; empty grants")
         snapshot_parts = {"config_snapshot": {}, "required_capabilities": []}

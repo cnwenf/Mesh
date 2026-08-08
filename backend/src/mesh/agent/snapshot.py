@@ -30,9 +30,12 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mesh.agent.capabilities import normalize_capability_declarations
+
+if TYPE_CHECKING:
+    from mesh.db.models.agent import Agent
 
 # §2.1: snapshot schema version — bump when the AttemptSpec shape changes.
 SNAPSHOT_SCHEMA_VERSION = 1
@@ -133,4 +136,70 @@ def compute_snapshot_digest(snapshot: dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-__all__ = ["SNAPSHOT_SCHEMA_VERSION", "build_config_snapshot", "compute_snapshot_digest"]
+def agent_model_config(agent: Agent) -> dict[str, Any]:
+    """The agent's ``model_config`` JSONB, guarded to a dict.
+
+    A corrupted / non-dict persisted value degrades to an empty config
+    instead of raising — trigger paths must never crash on bad stored data
+    (the §6.11 defaults inside :func:`build_config_snapshot` then apply and
+    the daemon fail-closes on the missing provider for real providers).
+    """
+    model_config = agent.model_config
+    return model_config if isinstance(model_config, dict) else {}
+
+
+def snapshot_from_agent(
+    agent: Agent,
+    *,
+    trigger_event_id: uuid.UUID,
+    skill_versions: dict[str, str] | None = None,
+    declared_capabilities: list[Any] | None = None,
+    repo: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """The SINGLE §6.11 snapshot builder for every trigger path.
+
+    runtime-executor.md §3.7 S-09: assign, mention, chat, autopilot,
+    integration and squad must share one snapshot builder — this helper is
+    that builder. It resolves the full AttemptSpec field set (provider /
+    model / effort / system instructions / budget / network policy / active
+    config version) from the agent row and delegates to
+    :func:`build_config_snapshot`, so no trigger path can drift to a partial
+    snapshot again (F-BUDGET-SNAPSHOT: mention / autopilot / integration
+    paths used to assemble these arguments by hand and dropped budget and
+    network policy — and sometimes provider/model too — which made the
+    daemon fail-closed on every real-provider execution from those paths).
+
+    ``budget`` / ``network_policy`` are read with an ``isinstance(dict)``
+    guard (a malformed stored value degrades to the §2.1 DEFAULT_* baseline,
+    matching the assign path's long-standing semantics). Callers keep their
+    own degrade-don't-drop exception policy around this call.
+    """
+    model_config = agent_model_config(agent)
+    return build_config_snapshot(
+        agent_config_version_id=agent.active_config_version_id,
+        trigger_event_id=trigger_event_id,
+        skill_versions=skill_versions,
+        declared_capabilities=declared_capabilities,
+        repo=repo,
+        provider=model_config.get("provider"),
+        model=model_config.get("model"),
+        effort=model_config.get("reasoning_effort"),
+        system_instructions=agent.system_instructions,
+        budget=(
+            model_config.get("budget")
+            if isinstance(model_config.get("budget"), dict) else None
+        ),
+        network_policy=(
+            model_config.get("network_policy")
+            if isinstance(model_config.get("network_policy"), dict) else None
+        ),
+    )
+
+
+__all__ = [
+    "SNAPSHOT_SCHEMA_VERSION",
+    "agent_model_config",
+    "build_config_snapshot",
+    "compute_snapshot_digest",
+    "snapshot_from_agent",
+]
