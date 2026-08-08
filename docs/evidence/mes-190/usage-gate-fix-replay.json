@@ -1,0 +1,34 @@
+{
+  "case": "MES-190 RT-01 usage-gate fix replay (recorded real frames)",
+  "recorded_frames": {
+    "mid_assistant": {
+      "input_tokens": 48662,
+      "cache_creation": 0,
+      "cache_read": 0,
+      "output": 0
+    },
+    "terminal_result": {
+      "input_tokens": 18381,
+      "cache_creation": 33489,
+      "cache_read": 0,
+      "output": 45,
+      "turns": 1,
+      "cost_usd": "0.302336"
+    },
+    "folded_totals": {
+      "mid": 48662,
+      "terminal": 51870
+    }
+  },
+  "dashscope_folded_frames": {
+    "old_per_field_gate": "ISOLATE (false positive)",
+    "new_folded_gate": "pass"
+  },
+  "genuine_regression_frames": {
+    "previous_folded_total": 70000,
+    "terminal_folded_total": 15000,
+    "old_per_field_gate": "ISOLATE",
+    "new_folded_gate": "ISOLATE"
+  },
+  "verdict": "PASS"
+}

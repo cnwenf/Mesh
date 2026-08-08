@@ -1,0 +1,58 @@
+{
+  "server_url": "http://127.0.0.1:8300",
+  "marker": "MESH-A3-OK-3163362f",
+  "steps": [
+    "auth: register+login ok",
+    "workspace 46420d47-5fce-400a-a23b-d2f0df9d1140 created",
+    "agent 1701b991-c20d-48e5-9173-c64f18796293 created (member 7d7f2bd6-f9fc-4456-90d9-191714146851)",
+    "runtime 7a88de27-470f-44c0-b902-a06bf997493a pending; activation code issued",
+    "provider probed healthy: ['claude-code']",
+    "daemon activated; runtime_id=7a88de27-470f-44c0-b902-a06bf997493a",
+    "runtime status after activate+heartbeat: online",
+    "issue e43a567a-4e58-4430-aac7-6ae9cbd2de97 assigned → enqueue path triggered",
+    "execution terminal: completed (reason=None)",
+    "result v1 ok: MARKER in output; model=qwen3.8-max; total_tokens=2328 turns=1 cost=0.016192 session_recorded=true",
+    "logs reflowed; provider credential redacted",
+    "daemon graceful shutdown; sandbox resources released"
+  ],
+  "execution": {
+    "id": "a5049eda-806d-488f-9799-06fd9468adf0",
+    "status": "completed",
+    "failure_reason": null
+  },
+  "result": {
+    "schema_version": 1,
+    "provider": {
+      "name": "claude-code",
+      "version": "2.1.218",
+      "model": "qwen3.8-max",
+      "session_recorded": true
+    },
+    "usage": {
+      "input_tokens": 6,
+      "cache_creation_tokens": 2234,
+      "cache_read_tokens": 0,
+      "output_tokens": 88,
+      "total_tokens": 2328,
+      "turns": 1,
+      "cost_usd": "0.016192"
+    },
+    "outcome": {
+      "exit_code": 0,
+      "termination": "completed",
+      "summary": "MESH-A3-OK-3163362f"
+    },
+    "artifacts": {
+      "checkout_id": null,
+      "diff_ref": null
+    },
+    "redaction": {
+      "rule_version": "redaction-v1",
+      "hit_count": 0
+    }
+  },
+  "log_excerpt": "{\"data\": {\"execution_id\": \"a5049eda-806d-488f-9799-06fd9468adf0\", \"attempt_id\": \"ffe0f561-35eb-464f-9b1c-080282499dda\", \"execution_status\": \"completed\", \"lines\": [{\"stream\": \"stdout\", \"offset\": 0, \"line\": \"MESH-A3-OK-3163362f\"}], \"next_offset\": 20}}",
+  "marker_found": true,
+  "model": "qwen3.8-max",
+  "verdict": "PASS"
+}
