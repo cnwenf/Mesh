@@ -66,9 +66,7 @@ from mesh.outbox.relay import OutboxRelay, isolated_optional_step
 from mesh.realtime.pubsub import RedisFanOut
 from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
 from mesh.runtime.enqueue import (
-    CHAT_GENERATION_FINISHED_EVENT,
     ENQUEUE_EVENT_TYPE,
-    chat_generation_finished_handler,
     enqueue_execution_handler,
 )
 from mesh.runtime.reaper import runtime_reaper_loop
@@ -278,9 +276,6 @@ def build_relay(
         # materializes task_executions (README §6.4 logical layer,
         # idempotent by §6.5 key) — replaces the stopgap bridge.
         ENQUEUE_EVENT_TYPE: enqueue_execution_handler,
-        # chat-session.md §4.4 衔接: platform-driven chat generations
-        # finalize their trigger='chat' execution through the outbox.
-        CHAT_GENERATION_FINISHED_EVENT: chat_generation_finished_handler,
         FANOUT_EVENT_TYPE: _fanout_with_im_derivation(
             NotificationFanoutHandler(
                 aggregation_window_seconds=settings.notification_aggregation_window,

@@ -47,7 +47,6 @@ from mesh.autopilot.channels import register_autopilot_checkers
 from mesh.autopilot.routes import router as autopilot_router
 from mesh.autopilot.service import AutopilotService
 from mesh.chat.channels import register_chat_checkers
-from mesh.chat.engine import ChatGenerationEngine, ScriptedGenerationProvider
 from mesh.chat.routes import router as chat_router
 from mesh.chat.service import ChatService
 from mesh.comment_inbox.channels import register_inbox_checkers
@@ -286,15 +285,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.comment_service = comment_service
     app.state.inbox_service = InboxService(session_factory)
     # Chat module (chat-session.md): sessions / candidate messages / §6.8
-    # streaming. The generation engine runs in-process (asyncio tasks) and
-    # buffers deltas in Redis; chat-triggered executions are enqueued via the
-    # transactional outbox with trigger='chat' (README §6.9 / §6.5).
-    app.state.chat_engine = ChatGenerationEngine(
-        app.state.redis,
-        session_factory,
-        provider=ScriptedGenerationProvider(chunk_delay_seconds=settings.chat_generation_chunk_delay_seconds),
-        buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
-    )
+    # streaming. Generations execute on the REAL runtime chain — chat-triggered
+    # executions are enqueued via the transactional outbox with trigger='chat'
+    # (README §6.9 / §6.5), a registered daemon claims them, and the log
+    # mirror + terminal write-back buffer SSE frames in Redis.
     app.state.favorites_service = FavoritesService(session_factory)
     app.state.onboarding_service = OnboardingService(session_factory)
     app.state.chat_service = ChatService(
@@ -304,7 +298,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         favorites_service=app.state.favorites_service,
         streaming_stale_seconds=settings.chat_streaming_stale_seconds,
     )
-    app.state.chat_service.engine = app.state.chat_engine
     app.state.agent_service = AgentService(session_factory)
     # skill.md: four-layer skill module. Script/reference bodies live in the
     # shared object bucket via content_ref; the import service is SSRF-guarded

@@ -290,3 +290,53 @@ async def issue_runtime_token(session_factory, runtime: Runtime) -> tuple[str, N
         )
     runtime.runtime_token_hash = token_hash
     return plaintext, None
+
+
+async def seed_chat_world(session_factory, world: dict) -> dict:
+    """ChatSession + first user message + a streaming agent reply row.
+
+    Returns session_id / message_id / generation_id plus the chat_generation
+    task_spec the real runtime chain carries (chat-session.md §4.4).
+    """
+    from mesh.db.models.chat import ChatMessage, ChatSession
+
+    async with session_factory() as session, session.begin():
+        chat_session = ChatSession(
+            workspace_id=world["ws_id"],
+            owner_id=world["member_id"],
+            agent_id=world["agent_id"],
+        )
+        session.add(chat_session)
+        await session.flush()
+        user_message = ChatMessage(
+            workspace_id=world["ws_id"],
+            session_id=chat_session.id,
+            role="user",
+            content="帮我看下这个报错",
+            generation_status="done",
+        )
+        session.add(user_message)
+        await session.flush()
+        generation_id = uuid.uuid4()
+        agent_message = ChatMessage(
+            workspace_id=world["ws_id"],
+            session_id=chat_session.id,
+            role="agent",
+            content="",
+            generation_id=generation_id,
+            generation_status="streaming",
+            parent_id=user_message.id,
+            selected_candidate=True,
+        )
+        session.add(agent_message)
+    return {
+        "session_id": chat_session.id,
+        "message_id": agent_message.id,
+        "generation_id": generation_id,
+        "task_spec": {
+            "kind": "chat_generation",
+            "session_id": str(chat_session.id),
+            "message_id": str(agent_message.id),
+            "generation_id": str(generation_id),
+        },
+    }

@@ -2,9 +2,11 @@
 
 Stateless orchestrator over the session factory (house pattern). Ownership
 is owner-only: every non-list lookup 404s for non-owners without leaking
-existence (§5.3). Generation lifecycle (enqueue + engine scheduling) is
-wired through ``send_message`` / ``regenerate``; the streaming wire itself
-lives in ``engine.py`` / ``stream.py``.
+existence (§5.3). Generation lifecycle is wired through ``send_message`` /
+``regenerate``: each sends an ``execution.enqueue`` outbox event that the
+relay materializes as a trigger='chat' task_execution on the REAL runtime
+chain (README §6.9); the streaming wire lives in ``engine.py`` /
+``stream.py``.
 """
 
 from __future__ import annotations
@@ -26,6 +28,11 @@ from mesh.chat.engine import (
     chat_list_channel,
     chat_session_channel,
 )
+from mesh.chat.finalize import (
+    ChatFinalization,
+    append_terminal_frame,
+    buffered_content_from_redis,
+)
 from mesh.chat.prompt import prepare_generation_prompt
 from mesh.db.constraints import violates
 from mesh.db.models.agent import Agent
@@ -33,6 +40,7 @@ from mesh.db.models.chat import ChatMessage, ChatSession, Favorite
 from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member
 from mesh.db.models.project import Project
+from mesh.db.models.runtime import TaskExecution
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
     BusinessRuleError,
@@ -42,13 +50,19 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.outbox.service import emit_event, emit_realtime
-from mesh.runtime.enqueue import CHAT_GENERATION_FINISHED_EVENT
+from mesh.runtime.attempts import request_execution_cancel_tx
 
 _SESSION_NOT_FOUND = "chat session not found"
 _MESSAGE_NOT_FOUND = "message not found"
 _AGENT_NOT_FOUND = "agent not found"
 _CONTEXT_NOT_ALLOWED = "context_not_allowed"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+# Execution statuses a stop request can still influence (anything terminal is
+# already settled — the stop then degrades to the stale-row flip).
+_LIVE_EXECUTION_STATUSES = frozenset(
+    {"queued", "claimed", "running", "awaiting_approval", "cancelling"}
+)
 # Deterministic ordering between a user message and its pre-created agent
 # reply (same transaction timestamp; ids are random UUIDs).
 _REPLY_ORDER_EPSILON = timedelta(milliseconds=1)
@@ -158,7 +172,6 @@ class ChatService:
         self.attachment_service = attachment_service
         self.favorites_service = favorites_service
         self._streaming_stale_seconds = streaming_stale_seconds
-        self.engine = None  # attached by create_app after the engine exists
 
     # -- rendering -----------------------------------------------------------
 
@@ -336,9 +349,10 @@ class ChatService:
                 details={"field": "context_issue_id"},
             )
         # M3: a guest may only attach issues from projects explicitly shared
-        # with them; otherwise the engine would inject private-project content
-        # into the guest-readable session. Denial surfaces as a uniform 404
-        # (assert_guest_project_visible) so project existence never leaks.
+        # with them; otherwise generation prompt injection would carry
+        # private-project content into the guest-readable session. Denial
+        # surfaces as a uniform 404 (assert_guest_project_visible) so project
+        # existence never leaks.
         if issue.project_id is not None:
             await assert_guest_project_visible(
                 session, member=actor, project_id=issue.project_id
@@ -752,9 +766,9 @@ class ChatService:
         The UNIQUE partial streaming index is the authoritative guard; this
         probe gives a clean 409 on the happy path. A streaming row whose
         ``started_at`` exceeds the stale threshold is a stuck generation
-        (engine crash / lost task) and is reclaimed here — flipped to
-        ``failed`` with its execution finalized via the outbox — so the slot
-        frees instead of returning 409 forever.
+        (lost execution) and is reclaimed here — conditionally flipped to
+        ``failed`` and its live execution cancelled — so the slot frees
+        instead of returning 409 forever.
         """
         busy = await session.execute(
             select(ChatMessage.id, ChatMessage.generation_id, ChatMessage.started_at).where(
@@ -775,8 +789,12 @@ class ChatService:
                 "a generation is already in progress for this session",
                 code="generation_in_progress",
             )
-        # Reclaim the stuck generation so the new one may proceed.
-        await session.execute(
+        # Reclaim the stuck generation so the new one may proceed. The
+        # conditional UPDATE frees the single-streaming slot; any live
+        # execution for this generation is cancelled through the runtime
+        # chain (its later finalization no-ops — the row is no longer
+        # streaming). Owner-only realtime frames surface the failure.
+        reclaimed = await session.execute(
             update(ChatMessage)
             .where(ChatMessage.id == busy_id, ChatMessage.generation_status == "streaming")
             .values(
@@ -786,21 +804,50 @@ class ChatService:
                 updated_at=_utcnow(),
             )
         )
-        await emit_event(
+        if reclaimed.rowcount == 0 or busy_generation_id is None:
+            return
+        execution = await session.scalar(
+            select(TaskExecution).where(
+                TaskExecution.workspace_id == workspace_id,
+                TaskExecution.trigger == "chat",
+                TaskExecution.task_spec["generation_id"].astext == str(busy_generation_id),
+            )
+        )
+        if execution is not None and execution.status in _LIVE_EXECUTION_STATUSES:
+            await request_execution_cancel_tx(
+                session,
+                workspace_id=workspace_id,
+                execution_id=execution.id,
+            )
+        await emit_realtime(
             session,
             workspace_id=workspace_id,
-            event_type=CHAT_GENERATION_FINISHED_EVENT,
-            payload={
-                "idempotency_key": chat_execution_idempotency_key(
-                    agent_id=chat_session.agent_id,
-                    issue_id=chat_session.context_issue_id,
-                    trigger_event_id=busy_id,
-                ),
-                "status": "failed",
+            channel=chat_session_channel(session_id),
+            event="error",
+            data={
                 "message_id": str(busy_id),
-                "generation_id": str(busy_generation_id) if busy_generation_id else None,
+                "code": "generation_failed",
+                "message": "generation timed out",
             },
-            idempotency_key=f"chat-finish:{busy_generation_id}:reclaim",
+            idempotency_key=f"chat:{busy_generation_id}:error:session",
+        )
+        await emit_realtime(
+            session,
+            workspace_id=workspace_id,
+            channel=chat_list_channel(chat_session.owner_id),
+            event="error",
+            data={
+                "session_id": str(session_id),
+                "generation_status": "failed",
+                "last_message_preview": chat_session.last_message_preview,
+                "last_message_at": (
+                    chat_session.last_message_at.isoformat()
+                    if chat_session.last_message_at is not None
+                    else None
+                ),
+                "message_count": chat_session.message_count,
+            },
+            idempotency_key=f"chat:{busy_generation_id}:error:list",
         )
 
     async def send_message(self, *, actor: Member, workspace_id: uuid.UUID,
@@ -923,7 +970,7 @@ class ChatService:
             chat_session.last_message_at = now
             chat_session.last_message_preview = content[:120]
             chat_session.updated_at = now
-            execution_key = await self._enqueue_execution(
+            await self._enqueue_execution(
                 session, workspace_id=workspace_id, chat_session=chat_session,
                 agent_message=agent_message, trigger_event_id=agent_message.id,
             )
@@ -954,14 +1001,9 @@ class ChatService:
                 },
                 idempotency_key=f"chat:{generation_id}:created:list",
             )
-        if self.engine is not None:
-            self.engine.schedule(
-                workspace_id=workspace_id,
-                session_id=session_id,
-                message_id=agent_message.id,
-                generation_id=generation_id,
-                execution_idempotency_key=execution_key,
-            )
+        # MES-191: the reply now executes on the REAL runtime chain — the
+        # enqueue event above materializes a trigger='chat' task_execution
+        # that a registered daemon claims (no in-process placeholder engine).
         return {
             "message_id": str(agent_message.id),
             "generation_id": str(generation_id),
@@ -1098,7 +1140,7 @@ class ChatService:
             chat_session.message_count = (chat_session.message_count or 0) + 1
             chat_session.last_message_at = now
             chat_session.updated_at = now
-            execution_key = await self._enqueue_execution(
+            await self._enqueue_execution(
                 session, workspace_id=workspace_id, chat_session=chat_session,
                 agent_message=candidate, trigger_event_id=candidate.id,
             )
@@ -1114,14 +1156,9 @@ class ChatService:
                 },
                 idempotency_key=f"chat:{generation_id}:created",
             )
-        if self.engine is not None:
-            self.engine.schedule(
-                workspace_id=workspace_id,
-                session_id=session_id,
-                message_id=candidate.id,
-                generation_id=generation_id,
-                execution_idempotency_key=execution_key,
-            )
+        # MES-191: the candidate now executes on the REAL runtime chain — the
+        # enqueue event above materializes a trigger='chat' task_execution
+        # that a registered daemon claims (no in-process placeholder engine).
         return {
             "message_id": str(candidate.id),
             "generation_id": str(generation_id),
@@ -1129,8 +1166,18 @@ class ChatService:
         }
 
     async def stop_generation(self, *, actor: Member, workspace_id: uuid.UUID,
-                              session_id: uuid.UUID, generation_id: uuid.UUID) -> dict:
-        """Idempotent stop (§3.3): repeated stops are side-effect-free 202s."""
+                              session_id: uuid.UUID, generation_id: uuid.UUID,
+                              redis=None) -> dict:
+        """Idempotent stop (§3.3): repeated stops are side-effect-free 202s.
+
+        A LIVE execution is cancelled through the real runtime chain (§3.7):
+        queued runs cancel immediately (§3.6 finished event → safety-net
+        finalization), in-flight runs enter ``cancelling`` and the daemon's
+        graceful-stop ack finalizes the message with the streamed partial
+        content. A stale streaming row with no live execution is flipped
+        directly — 「流断了也能停」 — with the partial content read from the
+        generation's SSE buffer (L4: never shorten an already-persisted body).
+        """
         async with self._session_factory() as session:
             await set_tenant_context(session, workspace_id)
             chat_session = await self._load_owned(
@@ -1145,20 +1192,45 @@ class ChatService:
             )
             if message is None:
                 raise NotFoundError("generation not found")
-        # Signal the engine first so an in-flight stream terminates with its
-        # partial content; the conditional DB flip below covers an engine that
-        # never picks the flag up (crash / restart — "流断了也能停"). The flip
-        # persists the content reconstructed from the delta buffer so the
-        # partial reply survives whoever wins the race.
-        if self.engine is not None:
-            await self.engine.request_stop(generation_id)
-            partial = await self.engine.buffered_content(generation_id)
-        else:
-            partial = message.content or ""
-        # L4: never overwrite a longer already-persisted body with an empty or
-        # truncated buffer (buffer eviction / MAXLEN truncation / engine crash).
+
+        # 1) Live execution → persist the cancel intent same-transaction.
+        async with self._session_factory() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            execution = await session.scalar(
+                select(TaskExecution).where(
+                    TaskExecution.workspace_id == workspace_id,
+                    TaskExecution.trigger == "chat",
+                    TaskExecution.task_spec["generation_id"].astext == str(generation_id),
+                )
+            )
+            if execution is not None and execution.status in _LIVE_EXECUTION_STATUSES:
+                await request_execution_cancel_tx(
+                    session,
+                    workspace_id=workspace_id,
+                    execution_id=execution.id,
+                    member_id=actor.id,
+                )
+                current = await session.scalar(
+                    select(ChatMessage.generation_status).where(ChatMessage.id == message.id)
+                )
+                return {
+                    "generation_id": str(generation_id),
+                    "message_id": str(message.id),
+                    "generation_status": current,
+                }
+
+        # 2) Stale streaming row (execution absent/terminal): direct flip.
+        partial = ""
+        if redis is not None:
+            try:
+                partial = await buffered_content_from_redis(redis, generation_id)
+            except Exception:  # noqa: BLE001 — degrade to the persisted body
+                partial = ""
         existing_content = message.content or ""
+        # L4: never overwrite a longer already-persisted body with an empty or
+        # truncated buffer (buffer eviction / MAXLEN truncation / crash).
         final_content = partial if len(partial) >= len(existing_content) else existing_content
+        wrote = False
         async with self._session_factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             now = _utcnow()
@@ -1176,6 +1248,7 @@ class ChatService:
                 )
             )
             if result.rowcount > 0:
+                wrote = True
                 await session.execute(
                     update(ChatSession)
                     .where(ChatSession.id == session_id)
@@ -1185,9 +1258,6 @@ class ChatService:
                         updated_at=now,
                     )
                 )
-                # The engine skipped its finalization — emit the terminal
-                # realtime event and the execution completion through the
-                # outbox here instead (§4.4 衔接, relay finalizes the row).
                 await emit_realtime(
                     session,
                     workspace_id=workspace_id,
@@ -1216,24 +1286,24 @@ class ChatService:
                     },
                     idempotency_key=f"chat:{generation_id}:message.interrupted:list",
                 )
-                await emit_event(
-                    session,
-                    workspace_id=workspace_id,
-                    event_type=CHAT_GENERATION_FINISHED_EVENT,
-                    payload={
-                        "idempotency_key": chat_execution_idempotency_key(
-                            agent_id=chat_session.agent_id,
-                            issue_id=chat_session.context_issue_id,
-                            trigger_event_id=message.id,
-                        ),
-                        "status": "interrupted",
-                        "message_id": str(message.id),
-                        "generation_id": str(generation_id),
-                    },
-                    idempotency_key=f"chat-finish:{generation_id}",
-                )
             current = await session.scalar(
                 select(ChatMessage.generation_status).where(ChatMessage.id == message.id)
+            )
+        # Post-commit: exactly one SSE terminal frame (SETNX-guarded).
+        if wrote:
+            await append_terminal_frame(
+                redis,
+                ChatFinalization(
+                    wrote=True,
+                    generation_id=generation_id,
+                    message_id=message.id,
+                    session_id=session_id,
+                    generation_status="interrupted",
+                    content=final_content,
+                    completion_tokens=0,
+                    error_message=None,
+                    terminal_event="message.interrupted",
+                ),
             )
         return {
             "generation_id": str(generation_id),

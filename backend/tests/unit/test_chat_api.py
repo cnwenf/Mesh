@@ -1,9 +1,12 @@
-"""In-process coverage for the chat HTTP surface + generation engine.
+"""In-process coverage for the chat HTTP surface + real-runtime generation.
 
 Drives the REAL FastAPI app (create_app over the test services) through
-httpx ASGITransport so routes, service, engine and SSE handler execute
-inside the coverage-measured process. The red-line e2e runs the same flows
-through uninstrumented uvicorn subprocesses (tests/e2e/test_chat_e2e.py).
+httpx ASGITransport so routes, service and the SSE handler execute inside the
+coverage-measured process. Generations run on the real runtime chain: tests
+materialize the enqueued execution and drive claim → stdout log mirror →
+terminal attempt the way a registered daemon would (_drive_chat_generations).
+The red-line e2e runs the same flows through uninstrumented uvicorn
+subprocesses (tests/e2e/test_chat_e2e.py).
 """
 
 from __future__ import annotations
@@ -62,12 +65,6 @@ async def make_app(db_url, redis_url):
 
     yield _make
     for app in created:
-        # Drain in-flight generations before closing connections so no task
-        # parks on a closing redis/engine (flaky teardown otherwise).
-        try:
-            await app.state.chat_engine.drain()
-        except Exception:  # noqa: BLE001 — teardown best effort
-            pass
         await app.state.redis.aclose()
         await app.state.engine.dispose()
 
@@ -128,6 +125,83 @@ async def _send(client, token, ws_id, session_id, content="帮我分析这个 bu
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]
+
+
+# A daemon authenticates with a signed lease envelope; the direct claim /
+# log-append / transition calls below all sign & verify with this one secret.
+CHAT_DAEMON_SECRET = "chat-api-daemon-signing-secret-0000000000"
+# Mirrored stdout lines become the streamed deltas; the lossless concat is the
+# persisted reply. Keep the prefix "收到" so content assertions hold.
+CHAT_DAEMON_LINES = ("收到你的问题:这是分析结果。", "请确认复现路径。", "已给出修复建议。")
+
+
+async def _materialize_chat_executions(session_factory, *, ws_id) -> None:
+    """Run the relay handler over every pending enqueue event (idempotent by
+    the §6.5 key), turning them into queued trigger='chat' executions."""
+    from mesh.db.models.outbox import OutboxEvent
+    from mesh.runtime.enqueue import enqueue_execution_handler
+
+    async with session_factory() as dbs:
+        events = (
+            await dbs.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.workspace_id == uuid.UUID(ws_id),
+                    OutboxEvent.event_type == "execution.enqueue",
+                )
+            )
+        ).scalars().all()
+    for event in events:
+        async with session_factory() as dbs, dbs.begin():
+            await enqueue_execution_handler(dbs, event)
+
+
+async def _drive_chat_generations(
+    app, session_factory, object_storage, *, ws_id, lines=CHAT_DAEMON_LINES,
+) -> None:
+    """Drive every pending chat execution through the REAL runtime chain.
+
+    This is the MES-191 replacement for the removed in-process generation
+    engine: a generation now completes only when a registered daemon claims the
+    trigger='chat' execution, streams stdout (mirrored into the SSE buffer as
+    ``message.delta`` frames) and PATCHes the attempt to a terminal state
+    (whose write-back finalizes the message + appends the terminal frame).
+    """
+    from datetime import timedelta
+
+    from mesh.runtime.attempts import transition_attempt
+    from mesh.runtime.claim import claim_execution
+    from mesh.runtime.logs import append_log_lines
+    from tests.unit.runtime_support import make_runtime, valid_result_v1
+
+    await _materialize_chat_executions(session_factory, ws_id=ws_id)
+    runtime = await make_runtime(session_factory, uuid.UUID(ws_id))
+    redis = app.state.redis
+    while True:
+        claimed = await claim_execution(
+            session_factory, runtime=runtime, lease_seconds=120,
+            signing_secret=CHAT_DAEMON_SECRET, envelope_ttl=timedelta(hours=2),
+        )
+        if claimed is None:
+            break
+        attempt_id = uuid.UUID(claimed.attempt["id"])
+        lease_seq = claimed.attempt["lease_seq"]
+        await append_log_lines(
+            session_factory, object_storage, attempt_id=attempt_id,
+            runtime=runtime, lease_seq=lease_seq, stream="stdout",
+            start_offset=0, lines=list(lines), signing_secret=CHAT_DAEMON_SECRET,
+            redis=redis,
+        )
+        await transition_attempt(
+            session_factory, attempt_id=attempt_id, runtime=runtime,
+            lease_seq=lease_seq, new_status="running",
+            signing_secret=CHAT_DAEMON_SECRET, storage=object_storage, redis=redis,
+        )
+        await transition_attempt(
+            session_factory, attempt_id=attempt_id, runtime=runtime,
+            lease_seq=lease_seq, new_status="completed",
+            result=valid_result_v1(summary="done"),
+            signing_secret=CHAT_DAEMON_SECRET, storage=object_storage, redis=redis,
+        )
 
 
 async def _consume_stream(client, token, stream_url, *, stop_after: int | None = None):
@@ -373,16 +447,14 @@ async def test_session_owner_only_access(app_client):
 # ---------------------------------------------------------------------------
 
 
-async def test_send_and_stream_full_flow(app_client, session_factory):
+async def test_send_and_stream_full_flow(app_client, session_factory, object_storage):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "stream")
     session = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, session["id"], "为什么登录后跳转错误?")
     assert created["stream_url"].endswith(f"/generations/{created['generation_id']}/stream")
-    # Materialize the enqueued execution the way the relay would, so the
-    # engine's chat fast-path finalization has a row to complete.
+    # The send enqueued exactly one trigger='chat' execution via the outbox.
     from mesh.db.models.outbox import OutboxEvent
-    from mesh.runtime.enqueue import enqueue_execution_handler
 
     async with session_factory() as dbs:
         event = (
@@ -396,30 +468,18 @@ async def test_send_and_stream_full_flow(app_client, session_factory):
     assert len(event) == 1
     assert event[0].payload["trigger"] == "chat"
     assert event[0].idempotency_key  # §6.5 key carried at the event level
-    async with session_factory() as dbs, dbs.begin():
-        await enqueue_execution_handler(dbs, event[0])
+    # Drive the generation through the real runtime chain to completion, then
+    # consume the stream (replay path: deltas + terminal frame in the buffer).
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     frames = await _consume_stream(client, token, created["stream_url"])
-    await app.state.chat_engine.drain()
-    # The engine's terminal write-back travels through the outbox too; run
-    # the completion handler the way the relay would.
-    from mesh.runtime.enqueue import chat_generation_finished_handler
-
-    async with session_factory() as dbs:
-        finish_events = (
-            await dbs.execute(
-                select(OutboxEvent).where(
-                    OutboxEvent.workspace_id == uuid.UUID(ws_id),
-                    OutboxEvent.event_type == "chat.generation_finished",
-                )
-            )
-        ).scalars().all()
-    assert len(finish_events) == 1
-    async with session_factory() as dbs, dbs.begin():
-        await chat_generation_finished_handler(dbs, finish_events[0])
     events = [frame["event"] for frame in frames]
+    # The SSE buffer carries the mirrored stdout: one SETNX-guarded
+    # message.created frame, one message.delta per stdout line, then the
+    # terminal frame appended by the finalization write-back.
     assert events[0] == "message.created"
+    assert frames[0]["data"]["message_id"] == created["message_id"]
     assert events[-1] == "message.done"
-    assert events.count("message.delta") >= 1
+    assert events.count("message.delta") == len(CHAT_DAEMON_LINES)
     # Frame ids are monotonically increasing (Last-Event-ID contract).
     ids = [int(frame["id"]) for frame in frames if frame.get("id", "0") != "0"]
     assert ids == sorted(ids) and len(set(ids)) == len(ids)
@@ -455,7 +515,7 @@ async def test_send_and_stream_full_flow(app_client, session_factory):
 
 
 async def test_send_idempotency_key_returns_first_result(app_client):
-    client, app = app_client
+    client, _app = app_client
     token, ws_id, agent_id = await _world(client, "idem")
     session = await _create_session(client, token, ws_id, agent_id)
     headers = {**_auth(token), "Idempotency-Key": "chat-key-1"}
@@ -464,7 +524,6 @@ async def test_send_idempotency_key_returns_first_result(app_client):
         json={"content": "问题一"},
         headers=headers,
     )
-    await app.state.chat_engine.drain()
     resp2 = await client.post(
         f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}/messages",
         json={"content": "问题一"},
@@ -499,64 +558,78 @@ async def test_single_concurrency_guard_409(app_client, session_factory):
     assert resp.json()["error"]["code"] == "generation_in_progress"
 
 
-async def test_stop_idempotent_with_slow_provider(make_app, session_factory):
-    import asyncio as _asyncio
+async def test_stop_running_execution_cancels_and_is_idempotent(
+    app_client, session_factory, object_storage
+):
+    """Stop a running chat generation through the real runtime chain (§3.7).
 
-    class _BlockingProvider:
-        """Yields one chunk, then blocks until the test releases it — makes
-        the stop-mid-stream ordering fully deterministic."""
+    The stop persists a cancel intent (execution + attempt → ``cancelling``);
+    the message keeps streaming until the daemon acks the graceful stop, whose
+    terminal write-back finalizes it ``interrupted`` with the streamed partial
+    content. A repeated stop after finalization is a side-effect-free 202.
+    """
+    from datetime import timedelta
 
-        def __init__(self):
-            self.started = _asyncio.Event()
-            self.release = _asyncio.Event()
+    from mesh.runtime.attempts import transition_attempt
+    from mesh.runtime.claim import claim_execution
+    from mesh.runtime.logs import append_log_lines
+    from tests.unit.runtime_support import make_runtime
 
-        async def stream(self, prompt):
-            yield "第一块内容。"
-            self.started.set()
-            await self.release.wait()
-            yield "不会发出的第二块。"
-
-    app = make_app()
-    provider = _BlockingProvider()
-    app.state.chat_engine._provider = provider
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        token, ws_id, agent_id = await _world(client, "stop")
-        session = await _create_session(client, token, ws_id, agent_id)
-        created = await _send(client, token, ws_id, session["id"], "写一篇长文")
-        stop_url = (
-            f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}"
-            f"/generations/{created['generation_id']}/stop"
-        )
-        # ASGITransport buffers the whole response: run the stream consumer
-        # concurrently with the out-of-band stop (the real product does this
-        # from two connections; the contract under test is identical).
-        consume = _asyncio.create_task(
-            _consume_stream(client, token, created["stream_url"])
-        )
-        await _asyncio.wait_for(provider.started.wait(), timeout=5)
-        resp1 = await client.post(stop_url, headers=_auth(token))
-        assert resp1.status_code == 202
-        body1 = resp1.json()["data"]
-        assert body1["generation_status"] == "interrupted"
-        # Repeat stop: same payload, no side effects (idempotent).
-        resp2 = await client.post(stop_url, headers=_auth(token))
-        assert resp2.status_code == 202
-        assert resp2.json()["data"] == body1
-        # Release the provider; the engine must terminate as interrupted and
-        # the stream must close with the interrupted frame.
-        provider.release.set()
-        frames = await consume
-        await app.state.chat_engine.drain()
-        assert frames[-1]["event"] == "message.interrupted"
-        assert frames[-1]["data"]["partial_content"] == "第一块内容。"
-        async with session_factory() as dbs:
-            message = await dbs.get(ChatMessage, uuid.UUID(created["message_id"]))
-        assert message.generation_status == "interrupted"
-        assert message.content == "第一块内容。"  # partial content preserved
-        assert message.finished_at is not None
-    await app.state.redis.aclose()
-    await app.state.engine.dispose()
+    client, app = app_client
+    token, ws_id, agent_id = await _world(client, "stop")
+    session = await _create_session(client, token, ws_id, agent_id)
+    created = await _send(client, token, ws_id, session["id"], "写一篇长文")
+    gid = created["generation_id"]
+    stop_url = (
+        f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}"
+        f"/generations/{gid}/stop"
+    )
+    # Daemon claims the execution, streams partial content, and is RUNNING when
+    # the user hits stop.
+    await _materialize_chat_executions(session_factory, ws_id=ws_id)
+    runtime = await make_runtime(session_factory, uuid.UUID(ws_id))
+    claimed = await claim_execution(
+        session_factory, runtime=runtime, lease_seconds=120,
+        signing_secret=CHAT_DAEMON_SECRET, envelope_ttl=timedelta(hours=2),
+    )
+    attempt_id = uuid.UUID(claimed.attempt["id"])
+    lease_seq = claimed.attempt["lease_seq"]
+    await append_log_lines(
+        session_factory, object_storage, attempt_id=attempt_id, runtime=runtime,
+        lease_seq=lease_seq, stream="stdout", start_offset=0,
+        lines=["第一块内容。"], signing_secret=CHAT_DAEMON_SECRET,
+        redis=app.state.redis,
+    )
+    await transition_attempt(
+        session_factory, attempt_id=attempt_id, runtime=runtime, lease_seq=lease_seq,
+        new_status="running", signing_secret=CHAT_DAEMON_SECRET,
+        storage=object_storage, redis=app.state.redis,
+    )
+    # Stop persists the cancel intent; the live run moves to ``cancelling`` but
+    # the message stays ``streaming`` until the daemon acks.
+    resp1 = await client.post(stop_url, headers=_auth(token))
+    assert resp1.status_code == 202
+    body1 = resp1.json()["data"]
+    assert body1["generation_id"] == gid
+    assert body1["generation_status"] == "streaming"
+    # Daemon acks the graceful stop → terminal ``cancelled`` → the write-back
+    # finalizes the message with the streamed partial content.
+    await transition_attempt(
+        session_factory, attempt_id=attempt_id, runtime=runtime, lease_seq=lease_seq,
+        new_status="cancelled", signing_secret=CHAT_DAEMON_SECRET,
+        storage=object_storage, redis=app.state.redis,
+    )
+    async with session_factory() as dbs:
+        message = await dbs.get(ChatMessage, uuid.UUID(created["message_id"]))
+    assert message.generation_status == "interrupted"
+    assert message.content == "第一块内容。"  # streamed partial preserved
+    assert message.finished_at is not None
+    # Repeat stop after finalization: idempotent, side-effect-free 202.
+    resp2 = await client.post(stop_url, headers=_auth(token))
+    assert resp2.status_code == 202
+    body2 = resp2.json()["data"]
+    assert body2["generation_id"] == gid
+    assert body2["generation_status"] == "interrupted"
 
 
 async def test_stop_unknown_generation_404(app_client):
@@ -571,14 +644,14 @@ async def test_stop_unknown_generation_404(app_client):
     assert resp.status_code == 404
 
 
-async def test_regenerate_candidates_and_select(app_client):
+async def test_regenerate_candidates_and_select(app_client, session_factory, object_storage):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "regen")
     session = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, session["id"], "给我三个方案")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     frames = await _consume_stream(client, token, created["stream_url"])
     assert frames[-1]["event"] == "message.done"
-    await app.state.chat_engine.drain()
     # Timeline shows ONE agent reply, selected, with candidate_count=1.
     timeline = (
         await client.get(
@@ -599,8 +672,8 @@ async def test_regenerate_candidates_and_select(app_client):
             headers=_auth(token),
         )
     ).json()["data"]
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, regen["stream_url"])
-    await app.state.chat_engine.drain()
     candidates = (
         await client.get(
             f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}"
@@ -638,13 +711,15 @@ async def test_regenerate_candidates_and_select(app_client):
     assert agent_rows2[0]["candidate_count"] == 2
 
 
-async def test_regenerate_accepts_agent_message_and_rejects_unknown(app_client):
+async def test_regenerate_accepts_agent_message_and_rejects_unknown(
+    app_client, session_factory, object_storage
+):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "regenbad")
     session = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, session["id"], "问题")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, created["stream_url"])
-    await app.state.chat_engine.drain()
     # An agent message id resolves to the user message it answers (the UI
     # places the regenerate action on the agent bubble).
     resp = await client.post(
@@ -654,8 +729,8 @@ async def test_regenerate_accepts_agent_message_and_rejects_unknown(app_client):
     )
     assert resp.status_code == 201, resp.text
     via_agent = resp.json()["data"]
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, via_agent["stream_url"])
-    await app.state.chat_engine.drain()
     # Unknown message → 404.
     resp404 = await client.post(
         f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}"
@@ -665,13 +740,13 @@ async def test_regenerate_accepts_agent_message_and_rejects_unknown(app_client):
     assert resp404.status_code == 404
 
 
-async def test_select_rejects_foreign_candidate(app_client):
+async def test_select_rejects_foreign_candidate(app_client, session_factory, object_storage):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "selbad")
     session = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, session["id"], "问题")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, created["stream_url"])
-    await app.state.chat_engine.drain()
     timeline = (
         await client.get(
             f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}/messages",
@@ -688,20 +763,20 @@ async def test_select_rejects_foreign_candidate(app_client):
     assert resp.status_code == 400
 
 
-async def test_quote_message_same_session_only(app_client, session_factory):
+async def test_quote_message_same_session_only(app_client, session_factory, object_storage):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "quote")
     s1 = await _create_session(client, token, ws_id, agent_id)
     s2 = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, s1["id"], "第一问")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, created["stream_url"])
-    await app.state.chat_engine.drain()
     # Quote within the same session works.
     ok = await _send(
         client, token, ws_id, s1["id"], "继续追问", quote_message_id=created["message_id"]
     )
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, ok["stream_url"])
-    await app.state.chat_engine.drain()
     async with session_factory() as dbs:
         quoted = await dbs.get(ChatMessage, uuid.UUID(ok["message_id"]))
         user_msg = (
@@ -724,14 +799,14 @@ async def test_quote_message_same_session_only(app_client, session_factory):
     assert resp.status_code == 404
 
 
-async def test_message_pagination_descending(app_client):
+async def test_message_pagination_descending(app_client, session_factory, object_storage):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "paging")
     session = await _create_session(client, token, ws_id, agent_id)
     for index in range(3):
         created = await _send(client, token, ws_id, session["id"], f"问题 {index}")
+        await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
         await _consume_stream(client, token, created["stream_url"])
-        await app.state.chat_engine.drain()
     page1 = (
         await client.get(
             f"/api/v1/workspaces/{ws_id}/chat-sessions/{session['id']}/messages?limit=2",
@@ -759,7 +834,7 @@ async def test_message_pagination_descending(app_client):
 # ---------------------------------------------------------------------------
 
 
-async def test_last_event_id_replays_after_cursor(app_client):
+async def test_last_event_id_replays_after_cursor(app_client, session_factory, object_storage):
     """Reconnecting with Last-Event-ID replays only frames after the cursor.
 
     (Live mid-stream disconnect/reconnect is covered at the generator level
@@ -769,8 +844,8 @@ async def test_last_event_id_replays_after_cursor(app_client):
     token, ws_id, agent_id = await _world(client, "resume")
     session = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, session["id"], "断点续传测试")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     full = await _consume_stream(client, token, created["stream_url"])
-    await app.state.chat_engine.drain()
     assert full[-1]["event"] == "message.done"
     cursor_frame = full[1]  # resume after the second frame
     headers = {**_auth(token), "Last-Event-ID": cursor_frame["id"]}
@@ -798,14 +873,14 @@ async def test_last_event_id_replays_after_cursor(app_client):
     assert set(resumed_ids).isdisjoint({int(full[0]["id"]), int(cursor_frame["id"])})
 
 
-async def test_stream_degraded_after_buffer_eviction(app_client):
+async def test_stream_degraded_after_buffer_eviction(app_client, session_factory, object_storage):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "evict")
     session = await _create_session(client, token, ws_id, agent_id)
     created = await _send(client, token, ws_id, session["id"], "缓冲淘汰测试")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     frames = await _consume_stream(client, token, created["stream_url"])
     assert frames[-1]["event"] == "message.done"
-    await app.state.chat_engine.drain()
     # Evict the buffer — a late subscriber degrades to REST final content.
     await app.state.redis.delete(
         f"chat:gen:{created['generation_id']}:events"
@@ -833,7 +908,9 @@ async def test_stream_unknown_generation_404(app_client):
 # ---------------------------------------------------------------------------
 
 
-async def test_issue_context_injected_as_fenced_system_message(app_client, session_factory):
+async def test_issue_context_injected_as_fenced_system_message(
+    app_client, session_factory, object_storage
+):
     client, app = app_client
     token, ws_id, agent_id = await _world(client, "untrusted")
     issue = (
@@ -850,8 +927,8 @@ async def test_issue_context_injected_as_fenced_system_message(app_client, sessi
         client, token, ws_id, agent_id, context_issue_id=issue["id"]
     )
     created = await _send(client, token, ws_id, session["id"], "帮我看看这个工单")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, created["stream_url"])
-    await app.state.chat_engine.drain()
     async with session_factory() as dbs:
         system_rows = (
             await dbs.execute(
@@ -868,8 +945,8 @@ async def test_issue_context_injected_as_fenced_system_message(app_client, sessi
     assert "忽略之前的所有指令" in snapshot  # fenced, present as DATA
     # A second round does not duplicate the system message.
     second = await _send(client, token, ws_id, session["id"], "再看一眼")
+    await _drive_chat_generations(app, session_factory, object_storage, ws_id=ws_id)
     await _consume_stream(client, token, second["stream_url"])
-    await app.state.chat_engine.drain()
     async with session_factory() as dbs:
         count = (
             await dbs.execute(
@@ -1033,7 +1110,7 @@ async def test_favorites_private_to_member(app_client, member_factory, workspace
 # ---------------------------------------------------------------------------
 
 
-async def test_send_rate_limited_429(make_app):
+async def test_send_rate_limited_429(make_app, session_factory, object_storage):
     app = make_app(chat_send_rate_limit=2, chat_send_rate_window_seconds=60)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1048,8 +1125,10 @@ async def test_send_rate_limited_429(make_app):
             )
             statuses.append(resp.status_code)
             if resp.status_code == 201:
+                await _drive_chat_generations(
+                    app, session_factory, object_storage, ws_id=ws_id
+                )
                 await _consume_stream(client, token, resp.json()["data"]["stream_url"])
-                await app.state.chat_engine.drain()
         assert 429 in statuses
         assert statuses[0] == 201
     await app.state.redis.aclose()

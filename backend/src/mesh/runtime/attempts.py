@@ -19,6 +19,7 @@ from decimal import Decimal
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.chat.finalize import append_terminal_frame, finalize_chat_generation
 from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member
 from mesh.db.models.runtime import (
@@ -590,10 +591,6 @@ async def transition_attempt(
                 execution.trigger == "chat"
                 and execution.status in EXECUTION_TERMINAL_STATUSES
             ):
-                # Local import: mesh.chat.engine imports mesh.runtime.enqueue —
-                # a module-level import here would create a cycle.
-                from mesh.chat.finalize import finalize_chat_generation
-
                 chat_finalization = await finalize_chat_generation(
                     session,
                     workspace_id=workspace_id,
@@ -607,8 +604,6 @@ async def transition_attempt(
     # Best-effort — a Redis failure degrades to the REST/late-subscriber
     # path; the stored message content is already committed above.
     if chat_finalization is not None:
-        from mesh.chat.finalize import append_terminal_frame
-
         await append_terminal_frame(redis, chat_finalization)
     return response
 

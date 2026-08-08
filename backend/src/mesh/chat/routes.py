@@ -287,6 +287,9 @@ async def stop_chat_generation(
         workspace_id=context.workspace.id,
         session_id=_path_uuid(session_id),
         generation_id=_path_uuid(generation_id, message="generation not found"),
+        # MES-191: the stale-row flip reads the partial content from the
+        # generation's SSE buffer and appends the terminal frame.
+        redis=request.app.state.redis,
     )
     return {"data": result}
 

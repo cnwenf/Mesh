@@ -25,6 +25,7 @@ from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,
     make_runtime,
+    seed_chat_world,
     seed_world,
     valid_result_v1,
 )
@@ -33,47 +34,8 @@ pytestmark = pytest.mark.unit
 
 
 async def _chat_world(session_factory, world) -> dict:
-    """ChatSession + first user message + streaming agent reply row."""
-    async with session_factory() as session, session.begin():
-        chat_session = ChatSession(
-            workspace_id=world["ws_id"],
-            owner_id=world["member_id"],
-            agent_id=world["agent_id"],
-        )
-        session.add(chat_session)
-        await session.flush()
-        user_message = ChatMessage(
-            workspace_id=world["ws_id"],
-            session_id=chat_session.id,
-            role="user",
-            content="帮我看下这个报错",
-            generation_status="done",
-        )
-        session.add(user_message)
-        await session.flush()
-        generation_id = uuid.uuid4()
-        agent_message = ChatMessage(
-            workspace_id=world["ws_id"],
-            session_id=chat_session.id,
-            role="agent",
-            content="",
-            generation_id=generation_id,
-            generation_status="streaming",
-            parent_id=user_message.id,
-            selected_candidate=True,
-        )
-        session.add(agent_message)
-    return {
-        "session_id": chat_session.id,
-        "message_id": agent_message.id,
-        "generation_id": generation_id,
-        "task_spec": {
-            "kind": "chat_generation",
-            "session_id": str(chat_session.id),
-            "message_id": str(agent_message.id),
-            "generation_id": str(generation_id),
-        },
-    }
+    """Shared chat-session seeding lives in runtime_support."""
+    return await seed_chat_world(session_factory, world)
 
 
 async def _claim(session_factory, runtime) -> uuid.UUID:

@@ -3,7 +3,8 @@
 Covers, without a server: H4 (ping carries no id → cannot pollute the resume
 cursor), L4 (stop never overwrites a longer persisted body with an empty
 buffer), the streaming-stale reclaim path, and M5 (non-selected candidates are
-excluded from the model context history).
+excluded from the model context history — now enforced by
+``prepare_generation_prompt`` since generations run on the real runtime chain).
 """
 
 from __future__ import annotations
@@ -14,7 +15,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from mesh.chat.engine import ChatGenerationEngine, GenerationPrompt
+from mesh.chat.engine import append_chat_frame
+from mesh.chat.prompt import prepare_generation_prompt
 from mesh.chat.service import ChatService
 from mesh.chat.stream import format_sse_frame
 from mesh.db.models.agent import Agent
@@ -87,9 +89,10 @@ def test_data_frame_carries_id():
 async def test_stream_ping_in_buffer_round_trip(redis_client):
     """The generator must never store/emit an id-bearing ping that a client
     would treat as a resume cursor (H4)."""
-    engine = ChatGenerationEngine(redis_client, session_factory=None)
     gid = uuid.uuid4()
-    await engine.append_frame(gid, 4, "message.delta", {"delta": "x"})
+    await append_chat_frame(
+        redis_client, generation_id=gid, event="message.delta", data={"delta": "x"}
+    )
     # A real event frame carries an id; the heartbeat helper produces none.
     real = format_sse_frame(4, "message.delta", {"delta": "x"})
     ping = format_sse_frame(None, "ping", {"ts": 1})
@@ -103,7 +106,7 @@ async def test_stream_ping_in_buffer_round_trip(redis_client):
 
 
 @pytest.mark.asyncio
-async def test_stop_keeps_longer_content_when_buffer_empty(session_factory, redis_client):
+async def test_stop_keeps_longer_content_when_buffer_empty(session_factory):
     world = await _world(session_factory)
     chat = await _session_row(session_factory, world)
     async with session_factory() as session, session.begin():
@@ -114,7 +117,6 @@ async def test_stop_keeps_longer_content_when_buffer_empty(session_factory, redi
         )
         session.add(msg)
     service = ChatService(session_factory, streaming_stale_seconds=600)
-    service.engine = ChatGenerationEngine(redis_client, session_factory)
     gid = msg.generation_id
     await service.stop_generation(
         actor=world["owner"], workspace_id=world["ws"].id,
@@ -132,7 +134,7 @@ async def test_stop_keeps_longer_content_when_buffer_empty(session_factory, redi
 
 
 @pytest.mark.asyncio
-async def test_stale_streaming_is_reclaimed_on_send(session_factory, redis_client):
+async def test_stale_streaming_is_reclaimed_on_send(session_factory):
     world = await _world(session_factory)
     chat = await _session_row(session_factory, world)
     stale_started = datetime.now(UTC) - timedelta(seconds=700)
@@ -144,7 +146,6 @@ async def test_stale_streaming_is_reclaimed_on_send(session_factory, redis_clien
         )
         session.add(stuck)
     service = ChatService(session_factory, streaming_stale_seconds=600)
-    service.engine = ChatGenerationEngine(redis_client, session_factory)
     # A new send must NOT 409: the stuck row is reclaimed first.
     sent = await service.send_message(
         actor=world["owner"], workspace_id=world["ws"].id,
@@ -153,19 +154,28 @@ async def test_stale_streaming_is_reclaimed_on_send(session_factory, redis_clien
     assert sent["message_id"]
     async with session_factory() as session:
         stuck_row = await session.get(ChatMessage, stuck.id)
-        finished = (
+        published = (
             await session.execute(
                 select(OutboxEvent).where(
                     OutboxEvent.workspace_id == world["ws"].id,
-                    OutboxEvent.event_type == "chat.generation_finished",
+                    OutboxEvent.event_type == "realtime.publish",
                 )
             )
         ).scalars().all()
     assert stuck_row.generation_status == "failed"
     assert stuck_row.error_message == "generation timed out"
-    # The stuck generation's execution finalization event was emitted.
-    assert any("reclaim" in (ev.idempotency_key or "") for ev in finished)
-    await service.engine.drain()
+    # Owner-private error frames on the session AND list channels (never a
+    # workspace-wide broadcast; the legacy generation-finished event is gone).
+    errors = [ev for ev in published if (ev.payload or {}).get("event") == "error"]
+    channels = {(ev.payload or {}).get("channel") for ev in errors}
+    assert f"chat_session:{chat.id}" in channels
+    assert f"chat_list:{world['owner'].id}" in channels
+    session_error = next(
+        ev for ev in errors
+        if (ev.payload or {}).get("channel") == f"chat_session:{chat.id}"
+    )
+    assert session_error.payload["data"]["code"] == "generation_failed"
+    assert session_error.payload["data"]["message_id"] == str(stuck.id)
 
 
 # ---------------------------------------------------------------------------
@@ -173,40 +183,37 @@ async def test_stale_streaming_is_reclaimed_on_send(session_factory, redis_clien
 # ---------------------------------------------------------------------------
 
 
-class _CapturingProvider:
-    def __init__(self):
-        self.history = None
-
-    async def stream(self, prompt: GenerationPrompt):
-        self.history = prompt.history
-        yield "ok"
-        yield "."
-
-
 @pytest.mark.asyncio
-async def test_history_excludes_non_selected_candidate(session_factory, redis_client):
+async def test_history_excludes_non_selected_candidate(session_factory):
     world = await _world(session_factory)
     chat = await _session_row(session_factory, world)
+    # Earlier turn: one user message with two agent candidates — only the
+    # selected one may reach the model context. Separate transactions keep
+    # created_at ordering strict (history filters on it).
+    async with session_factory() as session, session.begin():
+        first_user = ChatMessage(
+            workspace_id=world["ws"].id, session_id=chat.id, role="user",
+            content="earlier turn", generation_status="done",
+        )
+        session.add(first_user)
+    async with session_factory() as session, session.begin():
+        wrong = ChatMessage(
+            workspace_id=world["ws"].id, session_id=chat.id, role="agent",
+            content="WRONG_UNSELECTED_CONTEXT", generation_status="done",
+            parent_id=first_user.id, selected_candidate=False,
+        )
+        right = ChatMessage(
+            workspace_id=world["ws"].id, session_id=chat.id, role="agent",
+            content="right selected context", generation_status="done",
+            parent_id=first_user.id, selected_candidate=True,
+        )
+        session.add_all([wrong, right])
     async with session_factory() as session, session.begin():
         user_msg = ChatMessage(
             workspace_id=world["ws"].id, session_id=chat.id, role="user",
             content="the question", generation_status="done",
         )
         session.add(user_msg)
-        await session.flush()
-        wrong = ChatMessage(
-            workspace_id=world["ws"].id, session_id=chat.id, role="agent",
-            content="WRONG_UNSELECTED_CONTEXT", generation_status="done",
-            parent_id=user_msg.id, selected_candidate=False,
-        )
-        right = ChatMessage(
-            workspace_id=world["ws"].id, session_id=chat.id, role="agent",
-            content="right selected context", generation_status="done",
-            parent_id=user_msg.id, selected_candidate=True,
-        )
-        session.add_all([wrong, right])
-    provider = _CapturingProvider()
-    engine = ChatGenerationEngine(redis_client, session_factory, provider=provider)
     async with session_factory() as session, session.begin():
         new_agent = ChatMessage(
             workspace_id=world["ws"].id, session_id=chat.id, role="agent",
@@ -214,14 +221,14 @@ async def test_history_excludes_non_selected_candidate(session_factory, redis_cl
             parent_id=user_msg.id, selected_candidate=True,
         )
         session.add(new_agent)
-    await engine.run(
-        workspace_id=world["ws"].id, session_id=chat.id,
-        message_id=new_agent.id, generation_id=new_agent.generation_id,
-    )
-    joined = " ".join(content for _role, content in (provider.history or ()))
-    assert "right selected context" in joined
-    assert "WRONG_UNSELECTED_CONTEXT" not in joined
-    await engine.drain()
+        await session.flush()
+        prompt = await prepare_generation_prompt(
+            session, workspace_id=world["ws"].id,
+            chat_session=chat, agent_message=new_agent,
+        )
+    assert "right selected context" in prompt
+    assert "WRONG_UNSELECTED_CONTEXT" not in prompt
+    assert "the question" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -335,53 +342,6 @@ async def test_chat_list_checker_owner_only(session_factory):
     assert await checker(_Princ("mesh-dev", ws_ids), f"chat_list:{other.id}")
     # Malformed key rejected.
     assert not await checker(_Princ(str(owner_user_id), ws_ids), "chat_list:not-a-uuid")
-
-
-# ---------------------------------------------------------------------------
-# chat_generation_finished handler (terminal write-back for trigger='chat')
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_chat_finish_handler_finalizes_and_idempotent(session_factory):
-    from mesh.db.models.outbox import OutboxEvent
-    from mesh.db.models.runtime import TaskExecution
-    from mesh.runtime.enqueue import chat_generation_finished_handler
-
-    world = await _world(session_factory)
-    ws = world["ws"].id
-    key = f"chat-finish-{uuid.uuid4().hex}"
-    # Materialize a queued chat execution (as the enqueue handler would).
-    async with session_factory() as session, session.begin():
-        session.add(
-            TaskExecution(workspace_id=ws, trigger="chat", idempotency_key=key)
-        )
-    event = OutboxEvent(
-        workspace_id=ws,
-        event_type="chat.generation_finished",
-        payload={"idempotency_key": key, "status": "done", "message_id": str(uuid.uuid4())},
-        idempotency_key=f"out-{uuid.uuid4().hex}",
-    )
-    async with session_factory() as session, session.begin():
-        await chat_generation_finished_handler(session, event)
-    async with session_factory() as session:
-        row = (
-            await session.execute(
-                select(TaskExecution).where(TaskExecution.idempotency_key == key)
-            )
-        ).scalar_one()
-    assert row.status == "completed"
-    assert isinstance(row.result, dict) and "chat_message_id" in row.result
-    # Idempotent re-delivery on an already-finalized row → no-op (no raise).
-    async with session_factory() as session, session.begin():
-        await chat_generation_finished_handler(session, event)
-    # Malformed event (missing key) → no-op, no raise.
-    bad = OutboxEvent(
-        workspace_id=ws, event_type="chat.generation_finished",
-        payload={"status": "done"}, idempotency_key=f"out2-{uuid.uuid4().hex}",
-    )
-    async with session_factory() as session, session.begin():
-        assert await chat_generation_finished_handler(session, bad) is None
 
 
 # ---------------------------------------------------------------------------

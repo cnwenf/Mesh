@@ -82,8 +82,8 @@ async def _mirror_chat_lines(redis, target: dict) -> None:
     the database message content stays authoritative — a missed frame
     degrades to the REST fallback, never corrupts the stored reply.
     """
-    # Local import: mesh.chat.engine depends on mesh.runtime.enqueue — a
-    # module-level import here would create a cycle via daemon_routes.
+    # The chat module imports nothing from the runtime package at module
+    # scope, so this is a plain import (no cycle).
     from mesh.chat.engine import DEFAULT_BUFFER_TTL_SECONDS, append_chat_frame
 
     generation_id = target["generation_id"]

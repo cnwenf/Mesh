@@ -1,9 +1,10 @@
 """MES-67 round-2 acceptance e2e — the negative / interface-layer cases the
 reviewer re-tests (real uvicorn api + gateway + worker-relay + PG + Redis).
 
-- H1: an ONLINE runtime never claims a trigger='chat' execution, yet the chat
-  generation's terminal write-back still finalizes it to ``completed``; a
-  non-chat execution on the same runtime IS claimed (selectivity proof).
+- H1: (MES-191 rewrite) a chat generation rides the SAME real runtime chain
+  as issue executions — the relay materializes a queued trigger='chat' row,
+  a registered daemon claims it, streams stdout (mirrored as SSE deltas) and
+  its terminal PATCH finalizes the message and completes the execution.
 - H2: a non-owner member's WS subscribe to ``chat_session:{other}`` and
   ``chat_list:{other_member}`` is rejected (forbidden); their own
   ``chat_list:{self}`` is accepted.
@@ -23,19 +24,14 @@ import pytest
 from sqlalchemy import select
 
 from mesh.chat.engine import chat_execution_idempotency_key
+from mesh.db.models.chat import ChatMessage
 from mesh.db.models.member import Member
-from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import ExecutionAttempt, TaskExecution
 from mesh.db.models.user import User
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
-from mesh.runtime.enqueue import (
-    CHAT_GENERATION_FINISHED_EVENT,
-    ENQUEUE_EVENT_TYPE,
-    chat_generation_finished_handler,
-    enqueue_execution_handler,
-)
+from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler
 from tests.e2e.test_agent_e2e import _invite_accept
 from tests.e2e.test_realtime_gateway_e2e import _recv_frame, _ws_connect
 from tests.e2e.test_runtime_e2e import (
@@ -43,10 +39,9 @@ from tests.e2e.test_runtime_e2e import (
     _auth,
     _claim,
     _daemon,
-    _enqueue,
     _setup_world,
-    _wait_queued,
 )
+from tests.unit.runtime_support import valid_result_v1
 
 pytestmark = pytest.mark.e2e
 
@@ -63,7 +58,6 @@ def _build_relay(session_factory, redis_client):
         session_factory,
         handlers={
             ENQUEUE_EVENT_TYPE: enqueue_execution_handler,
-            CHAT_GENERATION_FINISHED_EVENT: chat_generation_finished_handler,
             "realtime.publish": project_realtime_event,
         },
         fanout=RedisFanOut(redis_client),
@@ -114,42 +108,21 @@ async def _consume_to_done(client, token, stream_url, timeout=20.0):
 
 
 # ---------------------------------------------------------------------------
-# H1 — online runtime does not claim chat executions; terminal still completes
+# H1 — chat generation rides the same real runtime chain as issue executions
 # ---------------------------------------------------------------------------
 
 
-async def test_h1_runtime_skips_chat_execution_but_terminal_completes(
+async def test_h1_chat_generation_rides_real_runtime_chain(
     api_client, session_factory, redis_client
 ):
+    """MES-191: send → outbox enqueue → relay materializes a queued
+    trigger='chat' row → a registered daemon claims it over HTTP → streams
+    stdout (mirrored as SSE deltas) → its terminal PATCH finalizes the
+    message and completes the execution. No in-process placeholder path.
+    """
     token, ws_id, agent_id = await _setup_world(api_client, "h1")
     relay = _build_relay(session_factory, redis_client)
 
-    # (a) Filter proof: with a chat AND a non-chat execution both queued, an
-    # online runtime's claim must skip the chat one (``trigger != 'chat'``).
-    chat_key = await _enqueue_trigger(session_factory, ws_id, agent_id, "chat")
-    manual_key = await _enqueue(session_factory, ws_id, agent_id=agent_id)
-    await _drain(relay)
-    chat_syn = await _wait_queued(session_factory, ws_id, chat_key)
-    manual_exec = await _wait_queued(session_factory, ws_id, manual_key)
-    created, daemon_token = await _activated_runtime(
-        api_client, token, ws_id, name="h1-rt", capabilities=["python"]
-    )
-    hb = await api_client.post(
-        f"/api/v1/daemon/runtimes/{created['id']}:heartbeat",
-        json={},
-        headers=_daemon(daemon_token),
-    )
-    assert hb.status_code == 200, hb.text
-    claim = await _claim(api_client, created["id"], daemon_token)
-    assert claim.status_code == 200, claim.text
-    assert uuid.UUID(claim.json()["data"]["execution"]["id"]) == manual_exec.id
-    async with session_factory() as s:
-        assert (await s.get(TaskExecution, chat_syn.id)).status == "queued"
-
-    # (b) Terminal write-back: a real chat generation finalizes its execution to
-    # ``completed`` via the outbox, and the runtime never claimed it (zero
-    # attempt rows) — the platform fast-path's write-back works without the
-    # runtime touching the chat execution.
     session = (
         await api_client.post(
             f"/api/v1/workspaces/{ws_id}/chat-sessions",
@@ -164,81 +137,85 @@ async def test_h1_runtime_skips_chat_execution_but_terminal_completes(
             headers=_auth(token),
         )
     ).json()["data"]
-    events = await _consume_to_done(api_client, token, sent["stream_url"])
-    assert events[-1]["event"] == "message.done"
+
+    # (a) The relay materializes the enqueue into a queued trigger='chat'
+    # execution identified by its §6.5 idempotency key.
     await _drain(relay)
-    # The real chat execution is identified by its §6.5 idempotency key
-    # (the synthetic row from (a) shares trigger='chat' but a different key).
     real_key = chat_execution_idempotency_key(
         agent_id=uuid.UUID(agent_id), issue_id=None,
         trigger_event_id=uuid.UUID(sent["message_id"]),
     )
-    real_chat = await _wait_by_idem(session_factory, ws_id, real_key, "completed")
+    chat_exec = await _wait_by_idem(session_factory, ws_id, real_key, "queued")
+    assert chat_exec.trigger == "chat"
+    assert chat_exec.issue_id is None
+
+    # (b) A registered daemon claims it through the SAME claim endpoint issue
+    # executions use, then drives logs + terminal transitions over HTTP.
+    created, daemon_token = await _activated_runtime(
+        api_client, token, ws_id, name="h1-rt", capabilities=["python"]
+    )
+    claimed = await _claim(api_client, created["id"], daemon_token)
+    assert claimed.status_code == 200, claimed.text
+    attempt = claimed.json()["data"]["attempt"]
+    assert uuid.UUID(claimed.json()["data"]["execution"]["id"]) == chat_exec.id
+
+    lines = ["H1 真实执行:第一块。", "H1 真实执行:第二块。"]
+    logs = await api_client.post(
+        f"/api/v1/daemon/attempts/{attempt['id']}/logs",
+        json={
+            "lease_seq": attempt["lease_seq"], "stream": "stdout",
+            "start_offset": 0, "lines": lines,
+        },
+        headers=_daemon(daemon_token),
+    )
+    assert logs.status_code == 200, logs.text
+    running = await api_client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": attempt["lease_seq"], "status": "running"},
+        headers=_daemon(daemon_token),
+    )
+    assert running.status_code == 200, running.text
+    done = await api_client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={
+            "lease_seq": attempt["lease_seq"], "status": "completed",
+            "result": valid_result_v1(),
+        },
+        headers=_daemon(daemon_token),
+    )
+    assert done.status_code == 200, done.text
+    assert done.json()["data"]["execution_status"] == "completed"
+
+    # (c) The SSE stream terminates and the deltas are the mirrored stdout.
+    events = await _consume_to_done(api_client, token, sent["stream_url"])
+    assert events[-1]["event"] == "message.done"
+    deltas = "".join(
+        e["data"].get("delta", "") for e in events if e["event"] == "message.delta"
+    )
+    assert "H1 真实执行" in deltas
+
+    # (d) Terminal write-back finalized BOTH the message and the execution.
+    final = await _wait_by_idem(session_factory, ws_id, real_key, "completed")
+    assert isinstance(final.result, dict)
+    assert final.result.get("chat_message_id") == sent["message_id"]
     async with session_factory() as s:
+        msg = (
+            await s.execute(
+                select(ChatMessage).where(
+                    ChatMessage.generation_id == uuid.UUID(sent["generation_id"])
+                )
+            )
+        ).scalar_one()
         attempts = (
             await s.execute(
                 select(ExecutionAttempt).where(
-                    ExecutionAttempt.execution_id == real_chat.id
+                    ExecutionAttempt.execution_id == chat_exec.id
                 )
             )
         ).scalars().all()
-    assert attempts == []
-
-
-async def _wait_queued_for_trigger(session_factory, ws_id, trigger, timeout=15.0):
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        async with session_factory() as session:
-            row = (
-                await session.execute(
-                    select(TaskExecution).where(
-                        TaskExecution.workspace_id == uuid.UUID(ws_id),
-                        TaskExecution.trigger == trigger,
-                    )
-                )
-            ).scalar_one_or_none()
-        if row is not None:
-            return row
-        await asyncio.sleep(0.2)
-    raise AssertionError(f"no {trigger} execution materialized")
-
-
-async def _enqueue_trigger(session_factory, ws_id, agent_id, trigger):
-    """Insert an execution.enqueue outbox event with an explicit trigger."""
-    key = f"e2e-{trigger}-{uuid.uuid4().hex}"
-    async with session_factory() as session, session.begin():
-        session.add(
-            OutboxEvent(
-                workspace_id=uuid.UUID(ws_id),
-                event_type="execution.enqueue",
-                payload={
-                    "intent": "enqueue",
-                    "agent_id": agent_id,
-                    "issue_id": None,
-                    "trigger": trigger,
-                    "trigger_event_id": str(uuid.uuid4()),
-                    "idempotency_key": key,
-                    "config_snapshot": {},
-                    "required_capabilities": [],
-                    "label_requirements": {},
-                    "task_spec": {},
-                },
-                idempotency_key=key,
-                status="pending",
-            )
-        )
-    return key
-
-
-async def _wait_status(session_factory, execution_id, status, timeout=15.0):
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        async with session_factory() as session:
-            row = await session.get(TaskExecution, execution_id)
-        if row is not None and row.status == status:
-            return row
-        await asyncio.sleep(0.2)
-    raise AssertionError(f"execution {execution_id} never reached {status}")
+    assert msg.generation_status == "done"
+    assert "H1 真实执行" in (msg.content or "")
+    assert len(attempts) == 1 and attempts[0].status == "completed"
 
 
 async def _wait_by_idem(session_factory, ws_id, idem, status, timeout=15.0):

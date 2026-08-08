@@ -324,21 +324,17 @@ class Settings(BaseSettings):
     invitation_sweep_interval: float = Field(default=300.0, gt=0)
 
     # Chat module tunables (chat-session.md §3.3 / §3.5, README §6.8).
-    # ``chat_generation_chunk_delay_seconds`` paces the built-in generation
-    # provider (0 = as fast as possible; raise for a visible typewriter effect
-    # in demos). The SSE stream heartbeats every ``chat_stream_ping_seconds``
-    # (§5.2 — 15 s keeps intermediaries from dropping idle connections) and
-    # caps a single connection at ``chat_stream_max_seconds``. Delta buffers
-    # expire after ``chat_generation_buffer_ttl_seconds``; late subscribers
-    # then degrade to the REST final-content path (chat-session.md §3.3).
-    chat_generation_chunk_delay_seconds: float = Field(default=0.0, ge=0)
+    # The SSE stream heartbeats every ``chat_stream_ping_seconds`` (§5.2 —
+    # 15 s keeps intermediaries from dropping idle connections) and caps a
+    # single connection at ``chat_stream_max_seconds``. Delta buffers expire
+    # after the engine module's TTL; late subscribers then degrade to the
+    # REST final-content path (chat-session.md §3.3).
     chat_stream_ping_seconds: float = Field(default=15.0, gt=0)
     chat_stream_max_seconds: float = Field(default=600.0, gt=0)
-    chat_generation_buffer_ttl_seconds: int = Field(default=3600, gt=0)
     chat_send_rate_limit: int = Field(default=30, ge=1)
     chat_send_rate_window_seconds: int = Field(default=60, ge=1)
-    # A streaming message older than this (started_at) is considered stuck (engine
-    # crash / lost task) and is reclaimed so the single-concurrency guard frees
+    # A streaming message older than this (started_at) is considered stuck
+    # (lost execution) and is reclaimed so the single-concurrency guard frees
     # up; a new send then proceeds instead of returning 409 forever.
     chat_streaming_stale_seconds: int = Field(default=600, ge=1)
 
