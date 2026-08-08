@@ -322,6 +322,8 @@ claim 与执行时序：
 
 自托管 runtime 也必须提供同等 gateway，无法证明强制路由时报告 `egress_enforced=false`，server 不向其派发要求网络能力的执行。
 
+**gateway 模式（TD-E，默认开启/强校验）**：daemon 配置项 `egress_gateway_mode`（环境变量 `MESH_EGRESS_GATEWAY_MODE` 优先于 TOML）只接受两个值：**`strict`（默认）**——gateway 随每个 attempt 启动并全程强制（本条 1–8 全部生效，沙箱无默认路由），仅当沙箱 backend 能证明强制路由（`linux_ns`）时上报 `egress_enforced=true`；**`off`（显式退出）**——per-attempt gateway 照常启动（不弱化任何执法），但恒报 `egress_enforced=false`，server 据此不派发要求网络能力的执行。其他任何取值（含拼写错误、历史别名、空串）在配置加载时直接报错，绝不静默落入更弱模式；`strict` 搭配无法证明强制路由的 backend 时 doctor 判 FAIL（fail-closed）。
+
 ### 3.5 S-07：三层预算
 
 预算在入队时冻结，三层同时执行：
@@ -468,6 +470,7 @@ daemon 与 server 共用固定诊断原因码。隔离类至少包括 `cleanup_f
 | max concurrent | server runtime 配置 | daemon 可因本机资源下调，不能上调 |
 | provider path/version | 签名发布配置 | 绝对路径 + manifest + SHA-256 |
 | sandbox backend | 安装配置 | 仅登记并通过 doctor 的 backend |
+| egress gateway mode | 管理员配置（TOML `egress_gateway_mode` 或环境 `MESH_EGRESS_GATEWAY_MODE`，环境优先） | 默认 `strict`（默认开启、全程强制）；唯一可选替代是显式 `off`（报 `egress_enforced=false`，server 不派发要求网络能力的执行）；其他取值一律启动报错（fail-closed，TD-E） |
 | egress resolver/policy | 管理员/平台策略 | daemon 与任务只读；任务不能自定义 resolver |
 | heartbeat/lease/poll | server 响应 | 本地仅应用边界和 jitter，不放宽 |
 | log/spool limits | 冻结 AttemptSpec 与 daemon 上限 | 取二者更严格值 |

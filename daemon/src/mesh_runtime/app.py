@@ -15,7 +15,7 @@ from mesh_runtime import PROTOCOL_VERSION, __version__
 from mesh_runtime.api import ClaimResponse, RuntimeApiClient
 from mesh_runtime.attempt import AttemptContext, AttemptSupervisor
 from mesh_runtime.budget import DaemonCaps
-from mesh_runtime.config import DaemonConfig
+from mesh_runtime.config import EGRESS_MODE_STRICT, DaemonConfig
 from mesh_runtime.errors import DaemonError, LeaseConflictError
 from mesh_runtime.heartbeat import HeartbeatLoop
 from mesh_runtime.inventory import Inventory
@@ -632,6 +632,11 @@ def heartbeat_metadata(config: DaemonConfig, inventory: Inventory) -> dict:
     import platform
 
     sandboxed = config.sandbox_backend == "linux_ns"
+    # TD-E (§3.4): enforcement is claimed ONLY when the sandbox proves the
+    # forced route AND the gateway mode is the default ``strict``. An explicit
+    # ``off`` reports egress_enforced=false even on a sandboxed host, so the
+    # server never dispatches network-requiring executions to it.
+    egress_enforced = sandboxed and config.egress_gateway_mode == EGRESS_MODE_STRICT
     return {
         "daemon_version": __version__,
         "protocol_version": PROTOCOL_VERSION,
@@ -643,7 +648,8 @@ def heartbeat_metadata(config: DaemonConfig, inventory: Inventory) -> dict:
         "max_concurrent": config.max_concurrent,
         # A2 security capabilities (§4.3): server dispatches accordingly.
         "sandbox": config.sandbox_backend,
-        "egress_enforced": sandboxed,
+        "egress_gateway_mode": config.egress_gateway_mode,
+        "egress_enforced": egress_enforced,
         "broker": "unix" if sandboxed else "none",
         "runtime_kind": config.runtime_kind,
         # §3.2/§1.3: the public-address + resolved-IP SSRF gate on checkout

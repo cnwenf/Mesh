@@ -206,6 +206,13 @@ server_url = "https://mesh.example.com"   # https origin only (http loopback + a
 state_dir  = "/var/lib/mesh-runtime"       # absolute, 0700 — token, journal, spool
 work_dir   = "/var/lib/mesh-runtime/work"  # absolute, 0700 — attempt worktrees
 max_concurrent = 1                          # daemon ceiling; server still adjudicates
+# S-04 egress gateway mode (TD-E): "strict" is the DEFAULT — the per-attempt
+# gateway is on and fully enforced. "off" is the explicit self-hosted opt-out:
+# the gateway still starts, but the daemon reports egress_enforced=false so the
+# server dispatches no network-requiring executions. Any other value is a
+# load error. The environment variable MESH_EGRESS_GATEWAY_MODE overrides
+# this key (container deployments).
+# egress_gateway_mode = "strict"
 # A3 real provider (omit all three to stay on the A1/A2 fake provider):
 # provider_path        = "/opt/mesh/providers/claude/<version>/claude"  # pinned binary (absolute)
 # provider_manifest    = "/etc/mesh-runtime/claude-manifest.toml"       # §1.4 capability manifest
@@ -213,6 +220,36 @@ max_concurrent = 1                          # daemon ceiling; server still adjud
 # sandbox_memory_bytes = 2147483648   # per-attempt cgroup ceilings (daemon local;
 # sandbox_pids_max     = 256          # the frozen snapshot may be stricter, never looser)
 ```
+
+### Linux sandbox prerequisites (`sandbox_backend = "linux_ns"`, the default)
+
+The real isolation backend needs host setup that `mesh-runtime doctor` checks:
+
+- **root**: the daemon starts each sandbox via `unshare`/`nsenter` and drops to
+  the unprivileged `sandbox_uid` inside — the daemon process itself must run as
+  root (a non-root daemon reports `sandbox: unavailable` and doctor fails).
+- **cgroup v2 delegation**: the daemon's cgroup subtree must have controllers
+  `cpu memory pids io` delegated. Because of the cgroup *no-internal-process*
+  rule, migrate every existing process OUT of the subtree (e.g. into a sibling
+  `leaf` cgroup) BEFORE writing `+cpu +memory +pids +io` to
+  `cgroup.subtree_control` — enabling controllers fails while internal
+  processes remain. Container example:
+
+  ```yaml
+  # docker-compose / systemd: delegate the controllers the sandbox needs
+  cgroupns_mode: private
+  volumes:
+    - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  cap_add: [SYS_ADMIN]   # or privileged: true for the deployment trial
+  ```
+
+- **toolchain in the image/host**: `iproute2` (`ip`) and `util-linux`
+  (`nsenter`) must be on PATH — the per-attempt network namespace link and
+  sandbox entry use them. `git` >= 2.31 and `curl` (libcurl >= 8 preferred)
+  are checked by doctor for the checkout redirect guard.
+
+Fail-closed: if any prerequisite is missing the daemon degrades to
+`sandbox: unavailable` diagnostics instead of running attempts bare.
 
 The provider credential file is `KEY=VALUE` lines (e.g. `ANTHROPIC_API_KEY=…`);
 every name is re-validated against the §3.8 reserved set and every value joins

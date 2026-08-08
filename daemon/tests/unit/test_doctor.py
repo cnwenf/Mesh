@@ -158,3 +158,36 @@ class TestGitToolchain:
         cfg = make_config(tmp_path)
         report = await run_checks(cfg, await healthy_inventory())
         assert "git_toolchain" in {c.name for c in report.checks}
+
+
+class TestEgressGatewayModeCheck:
+    """TD-E (§3.4): doctor fail-closes strict mode on a backend that cannot
+    prove the forced egress route, and documents the explicit ``off`` opt-out."""
+
+    async def test_strict_with_linux_ns_is_green(self, tmp_path):
+        cfg = make_config(tmp_path, sandbox_backend="linux_ns")
+        report = await run_checks(cfg, await healthy_inventory())
+        check = next(c for c in report.checks if c.name == "egress_gateway")
+        assert check.ok
+        assert "strict" in check.detail
+
+    async def test_strict_with_sandboxless_backend_fails_closed(self, tmp_path):
+        cfg = make_config(tmp_path, sandbox_backend="none")
+        report = await run_checks(cfg, await healthy_inventory())
+        check = next(c for c in report.checks if c.name == "egress_gateway")
+        assert not check.ok
+        assert "linux_ns" in check.detail
+        assert check.hint  # actionable: fix backend or explicitly opt out
+        assert not report.all_ok()
+
+    async def test_explicit_off_is_green_but_reports_not_enforced(self, tmp_path):
+        cfg = make_config(tmp_path, sandbox_backend="none", egress_gateway_mode="off")
+        report = await run_checks(cfg, await healthy_inventory())
+        check = next(c for c in report.checks if c.name == "egress_gateway")
+        assert check.ok
+        assert "egress_enforced=false" in check.detail
+
+    async def test_default_mode_appears_in_run_checks(self, tmp_path):
+        cfg = make_config(tmp_path)
+        report = await run_checks(cfg, await healthy_inventory())
+        assert "egress_gateway" in {c.name for c in report.checks}
