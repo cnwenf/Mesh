@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from mesh_runtime.errors import DaemonError
+from mesh_runtime.logging_config import DEFAULT_LOG_LEVEL, LOG_LEVELS
 
 _KNOWN_KEYS = frozenset(
     {
@@ -38,6 +39,7 @@ _KNOWN_KEYS = frozenset(
         "sandbox_tmp_bytes",
         "runtime_kind",
         "egress_gateway_mode",
+        "log_level",
     }
 )
 
@@ -93,6 +95,11 @@ class DaemonConfig:
     # ``egress_enforced=false`` so the server dispatches no network-requiring
     # executions (§3.4 final paragraph). An unknown value is a load error.
     egress_gateway_mode: str = EGRESS_MODE_STRICT
+    # §4.3: daemon-local logging verbosity. One of DEBUG/INFO/WARNING/ERROR/
+    # CRITICAL (case-insensitive in TOML, stored upper-case); an unknown
+    # value is a load error. Structured single-line output is installed by
+    # mesh_runtime.logging_config.configure_logging before any command runs.
+    log_level: str = DEFAULT_LOG_LEVEL
     labels: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -190,6 +197,11 @@ class DaemonConfig:
         if runtime_kind not in ("self_hosted", "platform_managed"):
             raise ConfigError("runtime_kind must be 'self_hosted' or 'platform_managed'")
         egress_gateway_mode = _resolve_egress_mode(raw)
+        log_level = str(raw.get("log_level", DEFAULT_LOG_LEVEL)).strip().upper()
+        if log_level not in LOG_LEVELS:
+            raise ConfigError(
+                f"log_level must be one of {sorted(LOG_LEVELS)} (got {raw.get('log_level')!r})"
+            )
         sandbox_uid = int(raw.get("sandbox_uid", 65534))
         sandbox_gid = int(raw.get("sandbox_gid", 65534))
         if sandbox_uid <= 0:
@@ -216,6 +228,7 @@ class DaemonConfig:
             sandbox_tmp_bytes=sandbox_tmp_bytes,
             runtime_kind=runtime_kind,
             egress_gateway_mode=egress_gateway_mode,
+            log_level=log_level,
         )
 
 

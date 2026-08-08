@@ -473,6 +473,7 @@ daemon 与 server 共用固定诊断原因码。隔离类至少包括 `cleanup_f
 | egress gateway mode | 管理员配置（TOML `egress_gateway_mode` 或环境 `MESH_EGRESS_GATEWAY_MODE`，环境优先） | 默认 `strict`（默认开启、全程强制）；唯一可选替代是显式 `off`（报 `egress_enforced=false`，server 不派发要求网络能力的执行）；其他取值一律启动报错（fail-closed，TD-E） |
 | egress resolver/policy | 管理员/平台策略 | daemon 与任务只读；任务不能自定义 resolver |
 | heartbeat/lease/poll | server 响应 | 本地仅应用边界和 jitter，不放宽 |
+| 日志级别 | 管理员配置（TOML `log_level`） | DEBUG/INFO/WARNING/ERROR/CRITICAL，默认 INFO；结构化单行输出（stderr）；未知取值启动报错 |
 | log/spool limits | 冻结 AttemptSpec 与 daemon 上限 | 取二者更严格值 |
 
 ### 4.4 分阶段实现建议

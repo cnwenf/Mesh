@@ -28,6 +28,7 @@ from mesh_runtime.doctor import run_checks
 from mesh_runtime.errors import DaemonError
 from mesh_runtime.inventory import Inventory, probe_binary
 from mesh_runtime.journal import Journal
+from mesh_runtime.logging_config import configure_logging
 from mesh_runtime.providers.base import ExecutorAdapter
 from mesh_runtime.providers.fake import FakeProvider
 from mesh_runtime.token_store import FileTokenStore
@@ -244,6 +245,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown manifest command {args.manifest_command}")  # pragma: no cover
 
     config = DaemonConfig.load(Path(args.config))
+
+    # §4.3 log_level: install structured logging BEFORE any command runs so
+    # doctor/activate/run failures are visible; the default root configuration
+    # would swallow everything below WARNING (the daemon ran effectively
+    # silent — heartbeat failures and self-heal escalations produced no output).
+    configure_logging(config.log_level)
 
     if args.command == "doctor":
         return asyncio.run(cmd_doctor(config))
