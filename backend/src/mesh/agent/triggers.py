@@ -45,7 +45,7 @@ from mesh.agent.guardrails import (
     evaluate_assign_trigger,
 )
 from mesh.agent.service import WORKSPACE_AGENTS_CHANNEL
-from mesh.agent.snapshot import build_config_snapshot, compute_snapshot_digest
+from mesh.agent.snapshot import compute_snapshot_digest, snapshot_from_agent
 from mesh.db.models.agent import Agent
 from mesh.db.models.issue import Issue
 from mesh.db.models.label import IssueLabel, Label
@@ -349,59 +349,28 @@ async def assign_orchestration_handler(
             )
         except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
             logger.exception("skill context resolution failed; enqueuing without skills")
-    # HIGH-2: build_config_snapshot normalizes the declared capabilities (R3).
+    # HIGH-2: the snapshot builder normalizes the declared capabilities (R3).
     # A persisted malformed declaration must NEVER crash the handler (that
     # would poison the outbox event and stall the agent's dispatch until
     # max_attempts) — degrade to empty grants instead.
-    # §2.1 P0: resolve the agent's actual config to freeze provider/model/
-    # effort/system_instructions into the AttemptSpec (not just version id).
-    model_config = agent.model_config if isinstance(agent.model_config, dict) else {}
+    # §2.1 P0 / §3.7 S-09: the SHARED snapshot builder resolves the agent's
+    # full AttemptSpec (provider/model/effort/system_instructions/budget/
+    # network_policy plus the active version id) — every trigger path freezes
+    # the same field set through snapshot_from_agent (F-BUDGET-SNAPSHOT).
     try:
-        snapshot_parts = build_config_snapshot(
-            agent_config_version_id=agent.active_config_version_id,
+        snapshot_parts = snapshot_from_agent(
+            agent,
             trigger_event_id=trigger_event_id,
             skill_versions=skill_context.get("skill_versions"),
             declared_capabilities=skill_context.get("declared_capabilities"),
-            repo=None,
-            provider=model_config.get("provider"),
-            model=model_config.get("model"),
-            effort=model_config.get("reasoning_effort"),
-            system_instructions=agent.system_instructions,
-            # §2.1: workspace-admin budget/network overrides frozen from the
-            # agent config (snapshot.py DEFAULT_* otherwise). The daemon
-            # fail-closes on these for real providers (runtime-executor §3.5).
-            budget=(
-                model_config.get("budget")
-                if isinstance(model_config.get("budget"), dict) else None
-            ),
-            network_policy=(
-                model_config.get("network_policy")
-                if isinstance(model_config.get("network_policy"), dict) else None
-            ),
         )
     except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
         logger.exception("capability normalization failed; enqueuing with empty grants")
-        snapshot_parts = build_config_snapshot(
-            agent_config_version_id=agent.active_config_version_id,
+        snapshot_parts = snapshot_from_agent(
+            agent,
             trigger_event_id=trigger_event_id,
             skill_versions=skill_context.get("skill_versions"),
             declared_capabilities=[],
-            repo=None,
-            provider=model_config.get("provider"),
-            model=model_config.get("model"),
-            effort=model_config.get("reasoning_effort"),
-            system_instructions=agent.system_instructions,
-            # §2.1: workspace-admin budget/network overrides frozen from the
-            # agent config (snapshot.py DEFAULT_* otherwise). The daemon
-            # fail-closes on these for real providers (runtime-executor §3.5).
-            budget=(
-                model_config.get("budget")
-                if isinstance(model_config.get("budget"), dict) else None
-            ),
-            network_policy=(
-                model_config.get("network_policy")
-                if isinstance(model_config.get("network_policy"), dict) else None
-            ),
         )
 
     issue_context = await _issue_context(session, workspace_id=workspace_id, issue_id=issue_id)

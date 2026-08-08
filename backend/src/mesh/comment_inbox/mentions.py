@@ -43,7 +43,7 @@ from mesh.agent.guardrails import (
     evaluate_assign_trigger,
 )
 from mesh.agent.service import WORKSPACE_AGENTS_CHANNEL
-from mesh.agent.snapshot import build_config_snapshot
+from mesh.agent.snapshot import snapshot_from_agent
 from mesh.auth.audit import write_audit
 from mesh.db.models.agent import Agent
 from mesh.db.models.comment import Comment
@@ -234,17 +234,13 @@ async def enqueue_agent_executions(
         # unreachable).
         assert agent_row is not None and agent.agent_id is not None  # gate invariant
         agent_key = agent.agent_id
-        # §3.7 S-09: mention path must use the same snapshot builder as
-        # assign/autopilot/squad — never enqueue with empty config.
-        mc = agent_row.model_config if isinstance(agent_row.model_config, dict) else {}
-        snapshot_parts = build_config_snapshot(
-            agent_config_version_id=agent_row.active_config_version_id,
-            trigger_event_id=trigger_event_id,
-            provider=mc.get("provider"),
-            model=mc.get("model"),
-            effort=mc.get("reasoning_effort"),
-            system_instructions=agent_row.system_instructions,
-        )
+        # §3.7 S-09: the mention path uses the SAME shared snapshot builder
+        # as assign/autopilot/integration/squad — never enqueue with a
+        # partial config. F-BUDGET-SNAPSHOT: this call site previously
+        # hand-assembled the builder arguments and dropped budget /
+        # network_policy, which made the daemon fail-closed on every
+        # mention-triggered real-provider execution.
+        snapshot_parts = snapshot_from_agent(agent_row, trigger_event_id=trigger_event_id)
         config_snapshot = snapshot_parts["config_snapshot"]
         required_capabilities = snapshot_parts["required_capabilities"]
         enqueue_event: OutboxEvent = await emit_event(

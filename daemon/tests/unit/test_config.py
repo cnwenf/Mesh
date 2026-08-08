@@ -92,6 +92,35 @@ class TestDaemonConfigValidation:
         with pytest.raises(ConfigError, match="origin"):
             DaemonConfig.load(write_toml(tmp_path, text))
 
+    def test_log_level_defaults_to_info(self, tmp_path):
+        path = write_toml(
+            tmp_path, VALID.format(state=tmp_path / "s", work=tmp_path / "w")
+        )
+        assert DaemonConfig.load(path).log_level == "INFO"
+
+    def test_log_level_case_insensitive_and_stripped(self, tmp_path):
+        text = (
+            VALID.format(state=tmp_path / "s", work=tmp_path / "w")
+            + '\nlog_level = "  debug "\n'
+        )
+        assert DaemonConfig.load(write_toml(tmp_path, text)).log_level == "DEBUG"
+
+    def test_unknown_log_level_rejected(self, tmp_path):
+        text = (
+            VALID.format(state=tmp_path / "s", work=tmp_path / "w")
+            + '\nlog_level = "verbose"\n'
+        )
+        with pytest.raises(ConfigError, match="log_level"):
+            DaemonConfig.load(write_toml(tmp_path, text))
+
+    def test_non_string_log_level_rejected(self, tmp_path):
+        text = (
+            VALID.format(state=tmp_path / "s", work=tmp_path / "w")
+            + "\nlog_level = 20\n"
+        )
+        with pytest.raises(ConfigError, match="log_level"):
+            DaemonConfig.load(write_toml(tmp_path, text))
+
 
 class TestProviderManifestConfig:
     BASE = {

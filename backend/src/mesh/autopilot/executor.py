@@ -45,7 +45,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.agent.guardrails import ENQUEUE_EVENT_TYPE
-from mesh.agent.snapshot import build_config_snapshot
+from mesh.agent.snapshot import snapshot_from_agent
 from mesh.autopilot import approvals as approvals_mod
 from mesh.autopilot import runs as runs_mod
 from mesh.autopilot.template import UNTRUSTED_NOTICE, render_template
@@ -172,13 +172,11 @@ async def _enqueue_agent_execution(
     idempotency_key = _enqueue_idempotency_key(
         agent_id=agent.id, issue_id=issue_id, run=run, attempt_number=attempt_number
     )
-    snapshot_parts = build_config_snapshot(
-        agent_config_version_id=agent.active_config_version_id,
-        trigger_event_id=outbox_event_id,
-        skill_versions={},
-        declared_capabilities=[],
-        repo=None,
-    )
+    # §3.7 S-09 shared snapshot builder. F-BUDGET-SNAPSHOT: this call site
+    # previously passed only the version id / trigger ref — provider, model,
+    # effort, system instructions, budget and network policy were all absent,
+    # so every autopilot-triggered execution failed fail-closed on the daemon.
+    snapshot_parts = snapshot_from_agent(agent, trigger_event_id=outbox_event_id)
     await emit_event(
         session,
         workspace_id=run.workspace_id,

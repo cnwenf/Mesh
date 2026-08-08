@@ -1,3 +1,4 @@
+import logging
 import os
 
 import pytest
@@ -159,6 +160,33 @@ class TestDoctorCommand:
         rc = main(["doctor", "--config", str(cfg_file)])
         assert rc == 0
         assert "server_url" in capsys.readouterr().out
+
+    def test_doctor_installs_log_level_from_toml(self, tmp_path):
+        """§4.3: main() configures structured logging before the command runs,
+        so doctor/activate/run failures are actually visible (the default root
+        configuration swallowed everything below WARNING)."""
+        root = logging.getLogger()
+        saved_handlers = list(root.handlers)
+        saved_level = root.level
+        try:
+            cfg_file = write_config_file(
+                tmp_path,
+                config_text=(
+                    f'server_url = "https://mesh.example.com"\n'
+                    f'state_dir = "{tmp_path / "state"}"\n'
+                    f'work_dir = "{tmp_path / "work"}"\n'
+                    'log_level = "debug"\n'
+                ),
+            )
+            rc = main(["doctor", "--config", str(cfg_file)])
+            assert rc == 0
+            assert root.level == logging.DEBUG
+            assert len(root.handlers) == 1
+        finally:
+            root.handlers.clear()
+            for handler in saved_handlers:
+                root.addHandler(handler)
+            root.setLevel(saved_level)
 
     def test_doctor_with_provider_binary_ok(self, tmp_path, capsys):
         prov = tmp_path / "claude"

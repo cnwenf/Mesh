@@ -165,7 +165,18 @@ class HeartbeatLoop:
             return "client_error", KEEPALIVE.delay(self.consecutive_failures - 1, self._rand)
         self.beats += 1
         self.consecutive_failures = 0
-        await self._dispatch(resp.cancel_commands())
+        # TD-D MEDIUM: the downlink dispatch MUST stay inside the never-raise
+        # contract. An exception escaping ``beat_once`` propagates into the
+        # task group that owns the loop and kills the WHOLE daemon — but the
+        # beat itself succeeded server-side, so it must not be counted as a
+        # failure either. Cancels are idempotent and redelivered on every
+        # following heartbeat, so logging and moving on is safe (§3.1).
+        try:
+            await self._dispatch(resp.cancel_commands())
+        except Exception:  # noqa: BLE001 — the loop must never die silently
+            logger.exception(
+                "cancel dispatch failed; commands redeliver on the next beat"
+            )
         return "ok", self.jittered_interval()
 
     def _count_failure(self, kind: str) -> None:

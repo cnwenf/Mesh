@@ -75,6 +75,42 @@ class TestBeatOnce:
         await hb.beat_once()
         assert calls == ["a1"]
 
+    async def test_cancel_callback_failure_keeps_beat_ok(self, fake_server):
+        """TD-D MEDIUM: the beat was accepted server-side, so a raising cancel
+        handler must not fail the beat — and MUST NOT escape ``beat_once``
+        (an escape kills the whole daemon via the loop's task group)."""
+        fake_server.enqueue(
+            HB_KEY, 200,
+            {"data": {"commands": [
+                {"type": "cancel_execution", "attempt_id": "a1", "grace_seconds": 5},
+            ]}},
+        )
+
+        async def on_cancel(attempt_id, grace):
+            raise RuntimeError("cancel handler exploded")
+
+        hb = make_heartbeat(fake_server, on_cancel=on_cancel)
+        outcome, delay = await hb.beat_once()  # must not raise
+        assert outcome == "ok"
+        assert delay > 0
+        assert hb.beats == 1
+        assert hb.consecutive_failures == 0
+
+    async def test_malformed_cancel_payload_keeps_beat_ok(self, fake_server):
+        """A corrupt ``grace_seconds`` raises inside ``cancel_commands()`` —
+        the same never-raise contract applies (commands redeliver next beat)."""
+        fake_server.enqueue(
+            HB_KEY, 200,
+            {"data": {"commands": [
+                {"type": "cancel_execution", "attempt_id": "a1", "grace_seconds": "not-a-number"},
+            ]}},
+        )
+        hb = make_heartbeat(fake_server)
+        outcome, delay = await hb.beat_once()  # must not raise
+        assert outcome == "ok"
+        assert delay > 0
+        assert hb.consecutive_failures == 0
+
     async def test_fatal_on_401(self, fake_server):
         fake_server.enqueue(HB_KEY, 401, {"error": {"code": "invalid_token"}})
         incidents = []

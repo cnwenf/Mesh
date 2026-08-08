@@ -206,6 +206,8 @@ server_url = "https://mesh.example.com"   # https origin only (http loopback + a
 state_dir  = "/var/lib/mesh-runtime"       # absolute, 0700 — token, journal, spool
 work_dir   = "/var/lib/mesh-runtime/work"  # absolute, 0700 — attempt worktrees
 max_concurrent = 1                          # daemon ceiling; server still adjudicates
+# log_level = "INFO"                        # DEBUG|INFO|WARNING|ERROR|CRITICAL (case-insensitive);
+#                                           # structured single-line records on stderr (§4.3)
 # S-04 egress gateway mode (TD-E): "strict" is the DEFAULT — the per-attempt
 # gateway is on and fully enforced. "off" is the explicit self-hosted opt-out:
 # the gateway still starts, but the daemon reports egress_enforced=false so the
