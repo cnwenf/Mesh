@@ -319,7 +319,7 @@ $ mesh issue list                      # 立即可用
 
 - **API 版本**:URI 版本化 `/api/v1`(README §11.2);破坏性变更升 `/api/v2` 并与 v1 **并存 ≥3 个月**,经 `Deprecation`/`Sunset` 响应头公告;非破坏新增(新字段/新端点)在 v1 内演进,**旧客户端忽略未知字段**(故 CLI 解析 JSON 须容忍未知字段,前向兼容)。
 - **CLI 版本**:独立语义化版本(SemVer)。CLI 与 API 版本**解耦但协商**:`mesh version --verbose` 报告 CLI 版本 + 其目标的 API 版本(v1)。CLI 应在响应头/`/api/v1` 探测到 `Deprecation`/`Sunset` 时,于 stderr 提示「当前 API 版本将于 X 弃用,请升级 CLI」。
-- **兼容承诺**:同一 CLI 大版本内,面向脚本的 `--output json` schema 与退出码语义保持稳定;CLI 自身的破坏性变更(改 flag/改 json 字段)走 CLI 大版本 + CHANGELOG。
+- **兼容承诺**:同一 CLI 大版本内,面向脚本的 `--output json` schema 与退出码语义保持稳定;CLI 自身的破坏性变更(改 flag/改 json 字段)走 CLI 大版本 + Release Notes。
 
 ### 8.2 OpenAPI 兼容性承诺(README §11.2 落地)
 
