@@ -304,6 +304,115 @@ class TestProbeGates:
         assert "sha256" in (result.reason or "")
 
 
+TRUNCATING_HELP_SCRIPT = """#!/usr/bin/env python3
+import os, stat, sys
+
+FLAGS = ["--print", "--output-format", "--input-format", "--verbose", "--bare",
+         "--disable-slash-commands", "--no-session-persistence",
+         "--setting-sources", "--strict-mcp-config", "--mcp-config",
+         "--settings", "--system-prompt-file", "--tools",
+         "--disallowed-tools", "--permission-mode", "--max-budget-usd"]
+
+if "--version" in sys.argv:
+    sys.stdout.write("9.9.9-fake (Claude Code)\\n")
+    sys.exit(0)
+if "--help" in sys.argv:
+    full = "Usage: fake\\n" + "".join(f"  {flag} <v>\\n" for flag in FLAGS)
+    mode = os.fstat(1).st_mode
+    if stat.S_ISFIFO(mode) or stat.S_ISCHR(mode):
+        # Emulate builds that truncate --help when stdout is a pipe/FIFO:
+        # a pipe consumer sees only the first ~64 bytes (flags lost), while
+        # a regular file receives the complete text.
+        sys.stdout.write(full[:64])
+    else:
+        sys.stdout.write(full)
+    sys.stdout.flush()
+    sys.exit(0)
+if "--hang" in sys.argv:
+    import time
+    time.sleep(30)
+    sys.exit(0)
+
+# run mode (isolation fixture probe): launch, emit an init record, ignore all
+# hostile fixtures, exit cleanly — same contract as FAKE_SCRIPT above.
+import json as _json
+sys.stdout.write(_json.dumps({"type": "system", "subtype": "init",
+                              "session_id": "sess-t", "model": "fake-model"}) + "\\n")
+sys.stdout.write(_json.dumps({"type": "result", "subtype": "success", "num_turns": 1,
+                              "total_cost_usd": 0.01, "result": "ok",
+                              "usage": {"input_tokens": 1, "output_tokens": 1}}) + "\\n")
+sys.stdout.flush()
+sys.exit(0)
+"""
+
+
+class TestHelpPipeTruncation:
+    """MES-190 TD: some provider builds truncate ``--help`` when stdout is a
+    pipe/FIFO (~8 KiB on the 2.1.x native ELF). The probe redirects help to a
+    regular file; these tests pin that behavior and its fail-closed edges."""
+
+    @pytest.fixture
+    def truncating_binary(self, tmp_path):
+        binary = tmp_path / "claude"
+        binary.write_text(TRUNCATING_HELP_SCRIPT, encoding="utf-8")
+        binary.chmod(0o755)
+        return binary
+
+    async def test_probe_recovers_full_help_when_pipe_output_truncated(
+        self, truncating_binary
+    ):
+        # Fixture sanity: reading help through a PIPE really is truncated —
+        # the required flag is missing, so a pipe-based probe would fail.
+        proc = await asyncio.create_subprocess_exec(
+            str(truncating_binary), "--help",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        piped, _ = await proc.communicate()
+        assert b"--max-budget-usd" not in piped
+
+        # The probe redirects to a regular file → full help → available.
+        adapter = ClaudeCodeAdapter(
+            manifest=manifest_for(truncating_binary),
+            binary_path=str(truncating_binary),
+        )
+        result = await adapter.probe()
+        assert result.available is True
+
+    async def test_help_nonzero_exit_fails_closed(self, tmp_path):
+        binary = tmp_path / "claude"
+        binary.write_text(
+            "#!/bin/sh\n"
+            'case " $* " in *" --version "*) echo "9.9.9-fake (Claude Code)"; exit 0;; esac\n'
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        binary.chmod(0o755)
+        adapter = ClaudeCodeAdapter(
+            manifest=manifest_for(binary), binary_path=str(binary)
+        )
+        result = await adapter.probe()
+        assert result.available is False
+
+    async def test_help_timeout_fails_closed(self, tmp_path, monkeypatch):
+        import mesh_runtime.providers.claude_code as cc
+
+        monkeypatch.setattr(cc, "_HELP_TIMEOUT_SECONDS", 0.3)
+        binary = tmp_path / "claude"
+        binary.write_text(
+            "#!/bin/sh\n"
+            'case " $* " in *" --version "*) echo "9.9.9-fake (Claude Code)"; exit 0;; esac\n'
+            "sleep 30\n",
+            encoding="utf-8",
+        )
+        binary.chmod(0o755)
+        adapter = ClaudeCodeAdapter(
+            manifest=manifest_for(binary), binary_path=str(binary)
+        )
+        result = await adapter.probe()
+        assert result.available is False
+
+
 class TestRunContract:
     async def test_happy_path_event_sequence(self, fake_binary, tmp_path):
         plan = plan_for(tmp_path, fake_binary)

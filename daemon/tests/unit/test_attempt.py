@@ -548,9 +548,27 @@ class TestUnexpectedProviderError:
         assert outcome.failure_reason == "executor_unavailable"
         assert incidents == ["usage_invariant_failed"]
 
-    async def test_cumulative_usage_regression_isolates_runtime(self, journal, ctx):
-        api = RenewOkApi()
+    async def test_terminal_usage_regression_merges_max_and_records_degraded_event(
+        self, journal, ctx
+    ):
+        """MES-190 TD: a terminal frame whose folded context total regresses
+        is an accounting discrepancy, not tampering — merge per-field MAX,
+        keep the larger cost, record ``usage_terminal_regressed`` as a
+        degraded operational event, and let the attempt complete. It must NOT
+        fail the attempt and must NOT latch runtime isolation."""
+        reported = {}
         incidents = []
+        degraded = []
+
+        class CapturingApi(RenewOkApi):
+            async def transition(self, attempt_id, *, lease_seq, status, result=None,
+                                 failure_reason=None):
+                if result is not None:
+                    reported.update(result)
+                return await super().transition(
+                    attempt_id, lease_seq=lease_seq, status=status,
+                    result=result, failure_reason=failure_reason,
+                )
 
         class RegressingUsageProvider:
             name = "regressing-usage"
@@ -562,8 +580,7 @@ class TestUnexpectedProviderError:
                     turns=2,
                     cost_usd="0.002000",
                 )
-                # HIGH-4: the monotonicity gate fires on the TERMINAL cumulative
-                # frame only — mark it terminal so the regression is enforced.
+                # Folded context total drops 10 -> 8 on the TERMINAL frame.
                 yield UsageObserved(
                     input_tokens=8,
                     output_tokens=4,
@@ -571,20 +588,26 @@ class TestUnexpectedProviderError:
                     cost_usd="0.001000",
                     terminal=True,
                 )
-                yield FinalResult(summary="must not complete", exit_code=0)
+                yield FinalResult(summary="done", exit_code=0)
 
         sup = make_supervisor(
-            api,
+            CapturingApi(),
             journal,
             FakeClock(),
             on_operational_incident=incidents.append,
+            on_degraded_event=degraded.append,
         )
 
         outcome = await sup.supervise(ctx, RegressingUsageProvider(), run_request())
 
-        assert outcome.status == "failed"
-        assert outcome.failure_reason == "executor_unavailable"
-        assert incidents == ["usage_invariant_failed"]
+        assert outcome.status == "completed"
+        assert incidents == []
+        assert degraded == ["usage_terminal_regressed"]
+        # Recorded counters never under-report any observed frame.
+        assert reported["usage"]["input_tokens"] == 10
+        assert reported["usage"]["output_tokens"] == 4
+        assert reported["usage"]["turns"] == 2
+        assert reported["usage"]["cost_usd"] == "0.002000"
 
     async def test_per_message_usage_regression_does_not_isolate(self, journal, ctx):
         """HIGH-4 multi-turn negative: per-message frames may legitimately
@@ -698,12 +721,26 @@ class TestUnexpectedProviderError:
         assert reported["usage"]["cache_creation_tokens"] == 33489
         assert reported["usage"]["total_tokens"] == 18381 + 33489 + 45
 
-    async def test_genuine_terminal_regression_with_cache_still_isolates(self, journal, ctx):
-        """MES-190: folding the comparison basis must NOT mask a genuine
-        regression — when the terminal frame's folded context total is truly
-        below the previous frame, the gate still isolates (fail-closed)."""
-        api = RenewOkApi()
+    async def test_terminal_folded_regression_with_cache_merges_per_field_max(
+        self, journal, ctx
+    ):
+        """MES-190 TD: even a genuine folded-total drop across cache fields
+        merges per-field MAX (never under-reporting any observed frame) and
+        keeps the LARGER cost — here the terminal frame carries the larger
+        cost, so the merged result takes it. No isolation, attempt completes."""
+        reported = {}
         incidents = []
+        degraded = []
+
+        class CapturingApi(RenewOkApi):
+            async def transition(self, attempt_id, *, lease_seq, status, result=None,
+                                 failure_reason=None):
+                if result is not None:
+                    reported.update(result)
+                return await super().transition(
+                    attempt_id, lease_seq=lease_seq, status=status,
+                    result=result, failure_reason=failure_reason,
+                )
 
         class RegressingCacheProvider:
             name = "regressing-cache-usage"
@@ -714,10 +751,11 @@ class TestUnexpectedProviderError:
                     input_tokens=50000,
                     cache_read_tokens=20000,
                     output_tokens=9,
-                    cost_usd="0.400000",
+                    cost_usd="0.100000",
                 )
                 # Folded context total: 10000 + 5000 + 0 = 15000 < 70000 —
-                # a genuine cumulative regression despite cache fields.
+                # a genuine cumulative drop despite cache fields; terminal
+                # frame carries the larger cost, which the merge keeps.
                 yield UsageObserved(
                     input_tokens=10000,
                     cache_creation_tokens=5000,
@@ -726,20 +764,28 @@ class TestUnexpectedProviderError:
                     cost_usd="0.400000",
                     terminal=True,
                 )
-                yield FinalResult(summary="must not complete", exit_code=0)
+                yield FinalResult(summary="done", exit_code=0)
 
         sup = make_supervisor(
-            api,
+            CapturingApi(),
             journal,
             FakeClock(),
             on_operational_incident=incidents.append,
+            on_degraded_event=degraded.append,
         )
 
         outcome = await sup.supervise(ctx, RegressingCacheProvider(), run_request())
 
-        assert outcome.status == "failed"
-        assert outcome.failure_reason == "executor_unavailable"
-        assert incidents == ["usage_invariant_failed"]
+        assert outcome.status == "completed"
+        assert incidents == []
+        assert degraded == ["usage_terminal_regressed"]
+        assert reported["usage"]["input_tokens"] == 50000
+        assert reported["usage"]["cache_creation_tokens"] == 5000
+        assert reported["usage"]["cache_read_tokens"] == 20000
+        assert reported["usage"]["output_tokens"] == 9
+        assert reported["usage"]["turns"] == 1
+        assert reported["usage"]["cost_usd"] == "0.400000"
+        assert reported["usage"]["total_tokens"] == 50000 + 5000 + 20000 + 9
 
     async def test_cleanup_failure_isolates_runtime(self, journal, ctx):
         from mesh_runtime.cleanup import CleanupReport
