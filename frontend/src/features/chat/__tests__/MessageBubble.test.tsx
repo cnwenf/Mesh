@@ -174,6 +174,28 @@ describe('MessageBubble(§4.2)', () => {
     expect(screen.queryByTestId('chat-regenerate-m-1')).toBeNull();
   });
 
+  it('流式且尚无内容:打字动画代替空正文', () => {
+    renderWithProviders(
+      <MessageBubble
+        message={makeMessage({ generation_status: 'streaming', content: '' })}
+        locale="en"
+      />,
+    );
+    expect(screen.getByTestId('chat-typing-m-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-body-m-1')).toBeNull();
+  });
+
+  it('流式态也不渲染引用操作(操作条整体隐藏,防引用占位消息)', () => {
+    renderWithProviders(
+      <MessageBubble
+        message={makeMessage({ generation_status: 'streaming' })}
+        locale="en"
+        onQuote={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('chat-quote-action-m-1')).toBeNull();
+  });
+
   it('user 消息即便提供 onRegenerate 也不渲染重生成', () => {
     renderWithProviders(
       <MessageBubble message={makeMessage({ role: 'user' })} locale="en" onRegenerate={vi.fn()} />,

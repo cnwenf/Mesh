@@ -9,7 +9,15 @@ import { useNavigate } from 'react-router';
 import type { MeshApiClient } from '../../api';
 import { getToken } from '../../api';
 import { uuidv4 } from '../../api/uuid';
-import { Button, ErrorState, Icon, IconButton, RunStateBadge, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  ErrorState,
+  Icon,
+  IconButton,
+  RunStateBadge,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { workspaceRoute } from '../members/useWorkspaceMembership';
@@ -28,9 +36,14 @@ import { buildDistillBody } from './distill';
 import { toErrorKey } from './errors';
 import { MessageList } from './MessageList';
 import { useChatStream } from './useChatStream';
+import { useElapsedSeconds } from './useElapsedSeconds';
 import type { ChatMessage, ChatSession } from './types';
 
 const PAGE_LIMIT = 50;
+/** 距底部该像素内视为「跟随滚尾」;超出则尊重用户回看,不强制拉回。 */
+const NEAR_BOTTOM_PX = 80;
+/** 流式已发起但 daemon 尚未产出内容时的占位气泡(打字动画载体)。 */
+const STREAMING_PLACEHOLDER_ID = 'local-streaming-placeholder';
 
 /** mod+↑「编辑上一条」委派事件(ChatPage 登记快捷键,本面板持有消息真源)。 */
 export const CHAT_EDIT_LAST_EVENT = 'mesh-chat-edit-last';
@@ -79,7 +92,10 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   // mod+↑ 编辑上一条自己消息:以草稿种子预填 composer 并聚焦(§4.3 S12)。
-  const [draftSeed, setDraftSeed] = useState<{ readonly nonce: number; readonly content: string } | null>(null);
+  const [draftSeed, setDraftSeed] = useState<{
+    readonly nonce: number;
+    readonly content: string;
+  } | null>(null);
   useEffect(() => {
     const handleEditLast = (): void => {
       const lastOwn = [...messagesRef.current].reverse().find((message) => message.role === 'user');
@@ -100,6 +116,8 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const stream = useChatStream({ getToken });
+  // 头部运行反馈:queued/running 徽标 + 已耗时(§9.8)。
+  const elapsed = useElapsedSeconds(stream.isStreaming);
 
   // 首屏拉取(时间倒序 → 反转为升序展示)。
   useEffect(() => {
@@ -177,14 +195,57 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
     toast.addToast(t(stream.streamError), { tone: 'danger', closeLabel: t('common.close') });
   }, [stream.streamError, toast, t]);
 
-  // 自动滚尾:消息或流式内容变化时滚到底。
+  // 自动滚尾:消息或流式内容变化时滚到底;用户上翻(离开底部附近)则不打扰回看。
+  const nearBottomRef = useRef(true);
+  /** 发送/重生成等主动操作强制滚底一次,即便用户当时在回看历史。 */
+  const forceScrollRef = useRef(false);
   const displayMessages = useMemo(() => {
     const live = stream.liveMessage;
-    if (live === null) return messages;
-    return messages.some((message) => message.id === live.id) ? messages : [...messages, live];
-  }, [messages, stream.liveMessage]);
+    if (live !== null) {
+      return messages.some((message) => message.id === live.id) ? messages : [...messages, live];
+    }
+    if (stream.isStreaming) {
+      // 发送/重生成已入队但尚无 message.created(daemon 未接管):先呈现打字占位气泡。
+      const placeholder: ChatMessage = {
+        id: STREAMING_PLACEHOLDER_ID,
+        session_id: session.id,
+        role: 'agent',
+        content: '',
+        generation_id: stream.activeGenerationId,
+        generation_status: 'streaming',
+        parent_id: null,
+        selected_candidate: true,
+        quote_message_id: null,
+        prompt_tokens: null,
+        completion_tokens: null,
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        created_at: new Date().toISOString(),
+        attachments: [],
+        candidate_count: null,
+        candidate_index: null,
+      };
+      return [...messages, placeholder];
+    }
+    return messages;
+  }, [messages, stream.liveMessage, stream.isStreaming, stream.activeGenerationId, session.id]);
+
+  // 滚尾守卫:仅当用户停留在底部附近(或刚主动发送)时跟随新内容。
+  useEffect(() => {
+    const node = listRef.current;
+    if (node === null) return;
+    const handleScroll = (): void => {
+      nearBottomRef.current =
+        node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM_PX;
+    };
+    node.addEventListener('scroll', handleScroll);
+    return () => node.removeEventListener('scroll', handleScroll);
+  }, [isLoading]);
 
   useEffect(() => {
+    if (!nearBottomRef.current && !forceScrollRef.current) return;
+    forceScrollRef.current = false;
     const node = listRef.current;
     if (node !== null) node.scrollTop = node.scrollHeight;
   }, [displayMessages.length, stream.liveMessage?.content]);
@@ -213,6 +274,7 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
       };
       setMessages((prev) => [...prev, optimistic]);
       setQuoteMessage(null);
+      forceScrollRef.current = true;
       try {
         const result = await sendMessage(client, workspaceId, session.id, {
           content,
@@ -256,6 +318,7 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
     async (message: ChatMessage) => {
       try {
         const result = await regenerateMessage(client, workspaceId, session.id, message.id);
+        forceScrollRef.current = true;
         stream.start({
           streamUrl: result.stream_url,
           generationId: result.generation_id,
@@ -302,19 +365,12 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
           {session.title}
         </h2>
         {stream.isStreaming ? (
-          <>
-            <span className="mesh-chat__run-state" data-testid="chat-run-state">
-              <RunStateBadge state={liveRunState} label={t(`runState.${liveRunState}`)} size="sm" />
+          <span className="mesh-chat__run-state" data-testid="chat-run-state">
+            <RunStateBadge state={liveRunState} label={t(`runState.${liveRunState}`)} size="sm" />
+            <span className="mesh-chat__run-elapsed" data-testid="chat-run-elapsed">
+              {t('chat.status.elapsed', { seconds: elapsed })}
             </span>
-            <Button
-              variant="danger"
-              size="sm"
-              data-testid="chat-stop"
-              onClick={() => void handleStop()}
-            >
-              {t('chat.action.stop')}
-            </Button>
-          </>
+          </span>
         ) : null}
         <Button
           variant="secondary"
@@ -367,6 +423,8 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
         quoteMessage={quoteMessage}
         onClearQuote={() => setQuoteMessage(null)}
         disabled={isArchived || stream.isStreaming}
+        isStreaming={stream.isStreaming}
+        onStop={() => void handleStop()}
         draftSeed={draftSeed}
         workspaceId={workspaceId}
       />

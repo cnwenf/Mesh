@@ -2,7 +2,8 @@
  * 聊天输入框(chat-session.md §4.2)。textarea + Cmd/Ctrl+Enter 发送;
  * 附件经 useAttachmentUploader **预上传**(不预关联,§2.4),发送时把就绪附件的
  * attachment_ids 随 sendMessage 一并发出,由后端在发送时关联(契约唯一关联时机);
- * 引用回复(quote_message_id)以顶部横幅呈现,可 × 取消;流式进行中由父级禁用。
+ * 引用回复(quote_message_id)以顶部横幅呈现,可 × 取消;流式进行中由父级禁用输入,
+ * foot 以 [■ 停止] 按钮替换发送按钮(spec §4.1 输入区)。
  * 数据获取/乐观在父级(onSend 返回 Promise);本组件只编排输入与上传态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -37,6 +38,10 @@ export interface ChatComposerProps {
   readonly onClearQuote: () => void;
   /** 会话非 active 或流式进行中时禁用发送。 */
   readonly disabled?: boolean;
+  /** 流式进行中(spec §4.1 输入区 [■ 停止]):foot 以停止按钮替换发送按钮。 */
+  readonly isStreaming?: boolean;
+  /** 停止当前生成(父级经独立幂等 stop 端点 + 本地拆流)。 */
+  readonly onStop?: () => void;
   /** mod+↑ 编辑上一条:nonce 变化即以 content 预填草稿并聚焦(§4.3 S12)。 */
   readonly draftSeed?: { readonly nonce: number; readonly content: string } | null;
   /**
@@ -66,7 +71,10 @@ export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
   const isUploading = uploader.uploads.some((upload) => PENDING_PHASES.has(upload.phase));
   // 就绪附件(scanning/ready 且已得 attachmentId):id 用于发送关联,ref 用于乐观展示。
   const readyUploads = useMemo(
-    () => uploader.uploads.filter((upload) => LINKABLE_PHASES.has(upload.phase) && upload.attachmentId !== null),
+    () =>
+      uploader.uploads.filter(
+        (upload) => LINKABLE_PHASES.has(upload.phase) && upload.attachmentId !== null,
+      ),
     [uploader.uploads],
   );
   const readyAttachmentIds = useMemo(
@@ -163,7 +171,11 @@ export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
       {uploader.uploads.length > 0 ? (
         <ul className="mesh-chat__composer-uploads" data-testid="chat-composer-uploads">
           {uploader.uploads.map((upload) => (
-            <li key={upload.localId} className="mesh-chat__composer-upload" data-phase={upload.phase}>
+            <li
+              key={upload.localId}
+              className="mesh-chat__composer-upload"
+              data-phase={upload.phase}
+            >
               <span className="mesh-chat__composer-upload-name">{upload.fileName}</span>
               <span className="mesh-chat__composer-upload-meta">
                 {upload.phase === 'error'
@@ -219,20 +231,35 @@ export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
         </Button>
 
         {sendError ? (
-          <span className="mesh-chat__composer-error" role="alert" data-testid="chat-composer-error">
+          <span
+            className="mesh-chat__composer-error"
+            role="alert"
+            data-testid="chat-composer-error"
+          >
             {t('chat.composer.sendFailed')}
           </span>
         ) : null}
 
-        <Button
-          size="sm"
-          data-testid="chat-composer-send"
-          disabled={!canSend}
-          isLoading={sending}
-          onClick={() => void submit()}
-        >
-          {t('chat.composer.send')}
-        </Button>
+        {props.isStreaming === true && props.onStop !== undefined ? (
+          <Button
+            variant="danger"
+            size="sm"
+            data-testid="chat-composer-stop"
+            onClick={props.onStop}
+          >
+            {t('chat.action.stop')}
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            data-testid="chat-composer-send"
+            disabled={!canSend}
+            isLoading={sending}
+            onClick={() => void submit()}
+          >
+            {t('chat.composer.send')}
+          </Button>
+        )}
       </div>
     </div>
   );

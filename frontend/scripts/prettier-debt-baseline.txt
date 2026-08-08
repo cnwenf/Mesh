@@ -62,7 +62,6 @@ src/design/__tests__/useFocusTrap.test.tsx
 src/design/components/DataTable.tsx
 src/design/components/ErrorState.tsx
 src/design/components/Field.tsx
-src/design/components/Icon.tsx
 src/design/components/Menu.tsx
 src/design/components/Popover.tsx
 src/design/components/StatusDot.tsx
@@ -122,12 +121,8 @@ src/features/board/api.ts
 src/features/board/dragGeometry.ts
 src/features/board/listCellEdit.ts
 src/features/board/useBoardKeyboardMove.ts
-src/features/chat/ChatComposer.tsx
-src/features/chat/ChatPage.tsx
 src/features/chat/ContextBar.tsx
-src/features/chat/ConversationPanel.tsx
 src/features/chat/DistillDialog.tsx
-src/features/chat/__tests__/ChatComposer.test.tsx
 src/features/chat/__tests__/ConversationPanel.runstate.test.tsx
 src/features/chat/__tests__/ConversationPanel.test.tsx
 src/features/chat/__tests__/DistillDialog.test.tsx

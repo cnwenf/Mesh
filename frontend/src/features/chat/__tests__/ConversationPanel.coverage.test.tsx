@@ -2,14 +2,14 @@
  * ConversationPanel 分支覆盖测试(chat-session.md §4.2):加载更旧、上下文条渲染/移除(成功/失败)、
  * 重生成(成功/失败)、流式中中断(stop)、沉淀入口(禁用/启用/打开)、引用、归档禁用、流内 error toast。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
-import { ConversationPanel } from '../ConversationPanel';
+import { CHAT_EDIT_LAST_EVENT, ConversationPanel } from '../ConversationPanel';
 import type { ChatMessage, ChatSession } from '../types';
 
 const encoder = new TextEncoder();
@@ -349,12 +349,49 @@ describe('ConversationPanel 分支覆盖(§4.2)', () => {
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.change(input, { target: { value: 'go' } });
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
-    const stopBtn = await screen.findByTestId('chat-stop');
+    const stopBtn = await screen.findByTestId('chat-composer-stop');
     fireEvent.click(stopBtn);
     await waitFor(() =>
       expect(recorder.calls.some((c) => c.url.includes('/generations/gen-9/stop'))).toBe(true),
     );
-    await waitFor(() => expect(screen.queryByTestId('chat-stop')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('chat-composer-stop')).toBeNull());
+  });
+
+  it('流式排队期:首帧未达呈现占位打字气泡 + 已耗时(§4.2/§9.8)', async () => {
+    const seed = makeMessage({ id: 'u-seed', role: 'user', content: 'seed' });
+    const client = routedClient((url, method) => {
+      if (url.includes('/messages') && method === 'GET')
+        return fakeResponse({ body: { data: [seed], next_cursor: null } });
+      if (url.includes('/messages') && method === 'POST')
+        return fakeResponse({
+          body: {
+            data: { message_id: 'u-new', generation_id: 'gen-q', stream_url: 'http://s/stream' },
+          },
+        });
+      return null;
+    });
+    // 保持流打开且无任何帧 → liveMessage 仍为 null,占位气泡承接排队窗口。
+    vi.stubGlobal('fetch', sseOpenFetch([]));
+    renderWithProviders(
+      <ConversationPanel
+        client={client}
+        workspaceId="ws-1"
+        session={makeSession()}
+        locale="en"
+        onSessionUpdated={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('chat-message-u-seed');
+    const input = screen.getByTestId('chat-composer-input');
+    fireEvent.change(input, { target: { value: 'go' } });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+    expect(
+      await screen.findByTestId('chat-typing-local-streaming-placeholder'),
+    ).toBeInTheDocument();
+    // 头部运行反馈:运行态徽标 + 已耗时秒数。
+    expect(screen.getByTestId('chat-run-elapsed')).toBeInTheDocument();
+    // 排队期 composer 以停止按钮替换发送按钮。
+    expect(screen.getByTestId('chat-composer-stop')).toBeInTheDocument();
   });
 
   it('沉淀入口:无上下文时禁用', async () => {
@@ -728,5 +765,54 @@ describe('ConversationPanel 分支覆盖(§4.2)', () => {
         recorder.calls.some((c) => c.method === 'POST' && c.url.includes('/messages/u-1/select')),
       ).toBe(true),
     );
+  });
+
+  it('mod+↑ 编辑上一条自己消息:草稿种子预填 composer(§4.3 S12)', async () => {
+    const userMsg = makeMessage({ id: 'u-1', role: 'user', content: 'edit me please' });
+    const agentMsg = makeMessage({ id: 'm-2', role: 'agent', content: 'ok' });
+    const client = routedClient((url, method) => {
+      if (url.includes('/messages') && method === 'GET')
+        return fakeResponse({ body: { data: [userMsg, agentMsg], next_cursor: null } });
+      return null;
+    });
+    renderWithProviders(
+      <ConversationPanel
+        client={client}
+        workspaceId="ws-1"
+        session={makeSession()}
+        locale="en"
+        onSessionUpdated={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('chat-message-m-2');
+    // 派发编辑上一条事件(与 chat.edit.last 快捷键同一事件通道)
+    act(() => {
+      window.dispatchEvent(new CustomEvent(CHAT_EDIT_LAST_EVENT));
+    });
+    expect((screen.getByTestId('chat-composer-input') as HTMLTextAreaElement).value).toBe(
+      'edit me please',
+    );
+  });
+
+  it('滚动守卫:scroll 事件更新 nearBottom 判定(不打扰回看)', async () => {
+    const msg = makeMessage({ id: 'm-1', content: 'hello' });
+    const client = routedClient((url, method) => {
+      if (url.includes('/messages') && method === 'GET')
+        return fakeResponse({ body: { data: [msg], next_cursor: null } });
+      return null;
+    });
+    renderWithProviders(
+      <ConversationPanel
+        client={client}
+        workspaceId="ws-1"
+        session={makeSession()}
+        locale="en"
+        onSessionUpdated={vi.fn()}
+      />,
+    );
+    const list = await screen.findByTestId('chat-messages');
+    // 模拟用户上翻后触发 scroll 监听(handleScroll 重算 nearBottom)
+    fireEvent.scroll(list);
+    expect(screen.getByTestId('chat-message-m-1')).toBeInTheDocument();
   });
 });

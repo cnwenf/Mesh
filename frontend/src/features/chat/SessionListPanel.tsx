@@ -1,11 +1,21 @@
 /**
- * 会话列表面板(chat-session.md §4.1)。置顶区在上(session.pinned 真源 favorites,§6.19),
- * 其余按 last_message_at 倒序(后端已排);agent 过滤 + 状态过滤 + 新建入口;
- * 行内预览 + 相对时间(formatRelativeTime);点击打开,行内 pin/unpin 切换。
- * 纯展示 + 回调;数据获取/置顶落库在父级(ChatPage)。
+ * 会话列表面板(chat-session.md §4.1):置顶区在上(session.pinned 真源 favorites,§6.19),
+ * 中间为最近活跃会话,归档区固定在底部(spec §4.1「置顶在上…归档区在底部」);
+ * agent 过滤 + 新建入口;行内预览 + 相对时间(formatRelativeTime);点击打开,
+ * 行内 pin/unpin、归档/取消归档、删除(对话框二次确认)。
+ * 纯展示 + 回调;数据获取/置顶/归档/删除落库在父级(ChatPage)。
  */
 import { useState } from 'react';
-import { Button, EmptyState, ErrorState, Icon, IconButton, Select, Skeleton } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Icon,
+  IconButton,
+  Select,
+  Skeleton,
+} from '../../design';
 import { formatRelativeTime, useT } from '../../i18n';
 import type { AgentSummary } from '../agents/types';
 import { EmptyChatBubbles } from '../onboarding/illustrations';
@@ -25,21 +35,21 @@ function matchesQuery(session: ChatSession, query: string): boolean {
   );
 }
 
-export type SessionStatusFilter = 'active' | 'archived';
-
 export interface SessionListPanelProps {
   readonly sessions: readonly ChatSession[];
   readonly selectedId: string | null;
   readonly locale: string;
   readonly agents: readonly AgentSummary[];
   readonly agentFilter: string;
-  readonly statusFilter: SessionStatusFilter;
   readonly isLoading: boolean;
   readonly error: string | null;
   readonly onAgentFilterChange: (agentId: string) => void;
-  readonly onStatusFilterChange: (status: SessionStatusFilter) => void;
   readonly onSelect: (session: ChatSession) => void;
   readonly onTogglePin: (session: ChatSession) => void;
+  /** 归档/取消归档(父级经 PATCH status + If-Match 落库,§6.14)。 */
+  readonly onToggleArchive: (session: ChatSession) => void;
+  /** 删除(父级经 DELETE 软删;本面板负责对话框确认)。 */
+  readonly onDelete: (session: ChatSession) => void;
   readonly onNewSession: () => void;
   readonly onRetry: () => void;
 }
@@ -50,13 +60,19 @@ interface SessionRowProps {
   readonly locale: string;
   readonly pinLabel: string;
   readonly unpinLabel: string;
+  readonly archiveLabel: string;
+  readonly unarchiveLabel: string;
+  readonly deleteLabel: string;
   readonly onSelect: (session: ChatSession) => void;
   readonly onTogglePin: (session: ChatSession) => void;
+  readonly onToggleArchive: (session: ChatSession) => void;
+  readonly onRequestDelete: (session: ChatSession) => void;
 }
 
 function SessionRow(props: SessionRowProps): React.JSX.Element {
   const t = useT();
   const { session } = props;
+  const isArchived = session.status === 'archived';
   return (
     <li
       className={
@@ -92,15 +108,39 @@ function SessionRow(props: SessionRowProps): React.JSX.Element {
           </span>
         </span>
       </button>
-      <IconButton
-        label={session.pinned ? props.unpinLabel : props.pinLabel}
-        className="mesh-chat__session-pin"
-        data-testid={`chat-session-pin-${session.id}`}
-        data-pinned={session.pinned}
-        onClick={() => props.onTogglePin(session)}
-      >
-        {session.pinned ? <Icon name="star" size={16} filled /> : <Icon name="star" size={16} />}
-      </IconButton>
+      <span className="mesh-chat__session-actions">
+        {isArchived ? null : (
+          <IconButton
+            label={session.pinned ? props.unpinLabel : props.pinLabel}
+            className="mesh-chat__session-pin"
+            data-testid={`chat-session-pin-${session.id}`}
+            data-pinned={session.pinned}
+            onClick={() => props.onTogglePin(session)}
+          >
+            {session.pinned ? (
+              <Icon name="star" size={16} filled />
+            ) : (
+              <Icon name="star" size={16} />
+            )}
+          </IconButton>
+        )}
+        <IconButton
+          label={isArchived ? props.unarchiveLabel : props.archiveLabel}
+          className="mesh-chat__session-archive"
+          data-testid={`chat-session-archive-${session.id}`}
+          onClick={() => props.onToggleArchive(session)}
+        >
+          <Icon name="archive" size={16} />
+        </IconButton>
+        <IconButton
+          label={props.deleteLabel}
+          className="mesh-chat__session-delete"
+          data-testid={`chat-session-delete-${session.id}`}
+          onClick={() => props.onRequestDelete(session)}
+        >
+          <Icon name="trash" size={16} />
+        </IconButton>
+      </span>
     </li>
   );
 }
@@ -109,11 +149,18 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
   const t = useT();
   // 搜索为纯客户端状态(§4.1):过滤已加载会话,不回传父级、不触发请求。
   const [query, setQuery] = useState('');
+  /** 删除二次确认目标;null = 对话框关闭。 */
+  const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
   const filtered = props.sessions.filter((session) => matchesQuery(session, query));
-  const pinned = filtered.filter((session) => session.pinned);
-  const others = filtered.filter((session) => !session.pinned);
+  // §4.1 布局:置顶在上 → 最近 → 归档区固定在底部。
+  const pinned = filtered.filter((session) => session.pinned && session.status === 'active');
+  const recent = filtered.filter((session) => !session.pinned && session.status === 'active');
+  const archived = filtered.filter((session) => session.status === 'archived');
   const pinLabel = t('chat.session.pin');
   const unpinLabel = t('chat.session.unpin');
+  const archiveLabel = t('chat.session.archive');
+  const unarchiveLabel = t('chat.session.unarchive');
+  const deleteLabel = t('chat.session.delete');
 
   const renderRow = (session: ChatSession): React.JSX.Element => (
     <SessionRow
@@ -123,8 +170,13 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
       locale={props.locale}
       pinLabel={pinLabel}
       unpinLabel={unpinLabel}
+      archiveLabel={archiveLabel}
+      unarchiveLabel={unarchiveLabel}
+      deleteLabel={deleteLabel}
       onSelect={props.onSelect}
       onTogglePin={props.onTogglePin}
+      onToggleArchive={props.onToggleArchive}
+      onRequestDelete={setDeleteTarget}
     />
   );
 
@@ -166,17 +218,6 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
             </option>
           ))}
         </Select>
-        <Select
-          label={t('chat.filter.statusLabel')}
-          value={props.statusFilter}
-          data-testid="chat-filter-status"
-          onChange={(event) =>
-            props.onStatusFilterChange(event.target.value as SessionStatusFilter)
-          }
-        >
-          <option value="active">{t('chat.filter.statusActive')}</option>
-          <option value="archived">{t('chat.filter.statusArchived')}</option>
-        </Select>
       </div>
 
       {props.error !== null ? (
@@ -212,14 +253,44 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
               <ul className="mesh-chat__session-list">{pinned.map(renderRow)}</ul>
             </>
           ) : null}
-          {others.length > 0 ? (
+          {recent.length > 0 ? (
             <>
               <h3 className="mesh-chat__sessions-group">{t('chat.session.recentGroup')}</h3>
-              <ul className="mesh-chat__session-list">{others.map(renderRow)}</ul>
+              <ul className="mesh-chat__session-list">{recent.map(renderRow)}</ul>
             </>
+          ) : null}
+          {archived.length > 0 ? (
+            <div className="mesh-chat__sessions-archived" data-testid="chat-sessions-archived">
+              <h3 className="mesh-chat__sessions-group">{t('chat.session.archivedGroup')}</h3>
+              <ul className="mesh-chat__session-list">{archived.map(renderRow)}</ul>
+            </div>
           ) : null}
         </div>
       )}
+
+      <Dialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title={t('chat.session.deleteDialogTitle')}
+        closeLabel={t('common.close')}
+      >
+        <p data-testid="chat-session-delete-confirm-text">{t('chat.session.deleteConfirmText')}</p>
+        <div className="mesh-chat__delete-confirm">
+          <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+            {t('common.cancel')}
+          </Button>
+          <Button
+            variant="danger"
+            data-testid="chat-session-delete-confirm"
+            onClick={() => {
+              if (deleteTarget !== null) props.onDelete(deleteTarget);
+              setDeleteTarget(null);
+            }}
+          >
+            {t('common.confirm')}
+          </Button>
+        </div>
+      </Dialog>
     </aside>
   );
 }

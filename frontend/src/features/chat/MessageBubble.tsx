@@ -122,21 +122,37 @@ export function MessageBubble(props: MessageBubbleProps): React.JSX.Element {
         </p>
       ) : null}
 
-      <div
-        className="mesh-chat__bubble-body"
-        data-testid={`chat-body-${message.id}`}
-        ref={ugcGuard}
-        // 聊天 content 为原始 Markdown:marked 解析后经 DOMPurify 白名单净化(markdown.ts)。
-        // UGC 内联色对比兜底(theme.md §4.3 T5③)经 ugcGuard 回调 ref 执行。
-        dangerouslySetInnerHTML={{ __html: bodyHtml }}
-      />
-      {isStreaming ? (
-        <span
-          className="mesh-chat__cursor"
+      {isStreaming && message.content === '' ? (
+        // 尚无内容的流式气泡:打字动画(三点)代替空正文,呈现「正在输入」反馈。
+        <div
+          className="mesh-chat__typing"
+          role="status"
           aria-label={t('chat.message.streaming')}
-          data-testid={`chat-cursor-${message.id}`}
-        />
-      ) : null}
+          data-testid={`chat-typing-${message.id}`}
+        >
+          <span className="mesh-chat__typing-dot" aria-hidden="true" />
+          <span className="mesh-chat__typing-dot" aria-hidden="true" />
+          <span className="mesh-chat__typing-dot" aria-hidden="true" />
+        </div>
+      ) : (
+        <>
+          <div
+            className="mesh-chat__bubble-body"
+            data-testid={`chat-body-${message.id}`}
+            ref={ugcGuard}
+            // 聊天 content 为原始 Markdown:marked 解析后经 DOMPurify 白名单净化(markdown.ts)。
+            // UGC 内联色对比兜底(theme.md §4.3 T5③)经 ugcGuard 回调 ref 执行。
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
+          {isStreaming ? (
+            <span
+              className="mesh-chat__cursor"
+              aria-label={t('chat.message.streaming')}
+              data-testid={`chat-cursor-${message.id}`}
+            />
+          ) : null}
+        </>
+      )}
 
       {message.attachments.length > 0 ? (
         <MessageAttachments
@@ -146,28 +162,30 @@ export function MessageBubble(props: MessageBubbleProps): React.JSX.Element {
         />
       ) : null}
 
-      <footer className="mesh-chat__bubble-actions">
-        {props.onQuote !== undefined ? (
-          <button
-            type="button"
-            className="mesh-chat__action"
-            data-testid={`chat-quote-action-${message.id}`}
-            onClick={() => props.onQuote?.(message)}
-          >
-            {t('chat.action.quote')}
-          </button>
-        ) : null}
-        {isAgent && props.onRegenerate !== undefined && !isStreaming ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid={`chat-regenerate-${message.id}`}
-            onClick={() => props.onRegenerate?.(message)}
-          >
-            {isFailed || isInterrupted ? t('chat.action.retry') : t('chat.action.regenerate')}
-          </Button>
-        ) : null}
-      </footer>
+      {isStreaming ? null : (
+        <footer className="mesh-chat__bubble-actions">
+          {props.onQuote !== undefined ? (
+            <button
+              type="button"
+              className="mesh-chat__action"
+              data-testid={`chat-quote-action-${message.id}`}
+              onClick={() => props.onQuote?.(message)}
+            >
+              {t('chat.action.quote')}
+            </button>
+          ) : null}
+          {isAgent && props.onRegenerate !== undefined ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`chat-regenerate-${message.id}`}
+              onClick={() => props.onRegenerate?.(message)}
+            >
+              {isFailed || isInterrupted ? t('chat.action.retry') : t('chat.action.regenerate')}
+            </Button>
+          ) : null}
+        </footer>
+      )}
     </div>
   );
 }

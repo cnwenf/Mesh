@@ -99,8 +99,11 @@ function baseRouter(sessions: unknown[] = [makeSession('sess-1'), makeSession('s
     if (url.includes('/favorites') && method === 'GET')
       return fakeResponse({ body: { data: [], next_cursor: null } });
     if (url.includes('/messages')) return fakeResponse({ body: { data: [], next_cursor: null } });
-    if (url.includes('/chat-sessions') && method === 'GET')
+    if (url.includes('/chat-sessions') && method === 'GET') {
+      if (url.includes('status=archived'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: sessions, next_cursor: null } });
+    }
     return null;
   };
 }
@@ -165,14 +168,19 @@ describe('ChatPage 路由化选中(§4.4)', () => {
     ).toHaveLength(1);
   });
 
-  it('深链 404 → 回退占位(不崩、无会话面板)', async () => {
-    stubApi(baseRouter());
+  it('深链 404 → 确证不存在后 replace 回 /chat(不崩、无会话面板)', async () => {
+    stubApi((url, method) => {
+      // 单会话引导拉取 404 → sessionNotFound → H6 replace 回列表路由。
+      if (url.includes('/chat-sessions/ghost') && !url.includes('/messages') && method === 'GET')
+        return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
+      return baseRouter()(url, method);
+    });
     renderChatPage('/chat/ghost');
     await screen.findByTestId('chat-session-sess-1');
-    // H6:引导 404 → 确证不存在后 replace 回 /chat,最终呈现列表占位(无会话面板)。
-    // 重定向经 effect 异步发生,故 waitFor 占位文案(中间可能短暂 Skeleton)。
     expect(screen.queryByTestId('chat-conversation')).toBeNull();
     await screen.findByText('Select a conversation');
+    // H6:replace 生效后 URL 回到 /chat(消除手机死胡同与桌面悬空 URL)
+    await waitFor(() => expect(screen.getByTestId('location-probe')).toHaveTextContent('/chat'));
   });
 
   it('返回列表(参数归无)→ 清空选中呈现占位', async () => {

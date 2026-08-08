@@ -27,10 +27,12 @@ import type { HumanProfile, MemberSummary } from '../members/types';
 import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   createChatSession,
+  deleteChatSession,
   deleteSessionFavorite,
   getChatSession,
   listChatSessions,
   listSessionFavorites,
+  patchChatSession,
   putSessionFavorite,
   chatListChannel,
 } from './api';
@@ -39,7 +41,6 @@ import { toErrorKey } from './errors';
 import { NewSessionDialog } from './NewSessionDialog';
 import { applySessionListFrame } from './realtime';
 import { SessionListPanel } from './SessionListPanel';
-import type { SessionStatusFilter } from './SessionListPanel';
 import type { ChatSession } from './types';
 import './chat.css';
 
@@ -82,7 +83,6 @@ export function ChatPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
 
   const [agentFilter, setAgentFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>('active');
   /** 深链引导/新建落地:尚未进入列表的选中会话快照(列表命中优先)。 */
   const [bootstrappedSession, setBootstrappedSession] = useState<ChatSession | null>(null);
   /** 深链引导去重:`${workspaceId}:${sessionId}` 仅拉一次(404 不循环重试)。 */
@@ -114,8 +114,20 @@ export function ChatPage(): React.JSX.Element {
       document.querySelector<HTMLElement>('[data-testid="chat-composer-input"]')?.focus();
     };
     return registry.registerShortcuts([
-      { id: 'chat.send', combo: 'enter', label: t('shortcuts.chatSend'), group: 'chat', run: focusComposer },
-      { id: 'chat.newline', combo: 'shift+enter', label: t('shortcuts.chatNewline'), group: 'chat', run: focusComposer },
+      {
+        id: 'chat.send',
+        combo: 'enter',
+        label: t('shortcuts.chatSend'),
+        group: 'chat',
+        run: focusComposer,
+      },
+      {
+        id: 'chat.newline',
+        combo: 'shift+enter',
+        label: t('shortcuts.chatNewline'),
+        group: 'chat',
+        run: focusComposer,
+      },
       {
         id: 'chat.edit.last',
         combo: 'mod+arrowup',
@@ -176,18 +188,22 @@ export function ChatPage(): React.JSX.Element {
     };
   }, [client, workspaceId]);
 
-  // 会话列表(过滤 + 分页首屏)。
+  // 会话列表(过滤 + 分页首屏)。§4.1 列表需同时呈现活跃区与底部归档区,
+  // 后端无「全部状态」参数,故 active/archived 并行拉取后合并。
   useEffect(() => {
     if (workspaceId === null) return;
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    listChatSessions(client, workspaceId, {
+    const params = {
       agent_id: agentFilter === '' ? undefined : agentFilter,
-      status: statusFilter,
       limit: SESSION_PAGE_LIMIT,
-    })
-      .then(async (page) => {
+    };
+    Promise.all([
+      listChatSessions(client, workspaceId, { ...params, status: 'active' }),
+      listChatSessions(client, workspaceId, { ...params, status: 'archived' }),
+    ])
+      .then(async ([activePage, archivedPage]) => {
         if (cancelled) return;
         // pinned 真源校正:以 favorites 列表覆写请求方快照(§6.19)。
         let favoriteIds: ReadonlySet<string> | null = null;
@@ -198,10 +214,11 @@ export function ChatPage(): React.JSX.Element {
           favoriteIds = null; // 收藏拉取失败不阻断列表;沿用服务端 pinned 快照。
         }
         if (cancelled) return;
+        const merged = [...activePage.data, ...archivedPage.data];
         const normalized =
           favoriteIds === null
-            ? page.data
-            : page.data.map((session) => ({ ...session, pinned: favoriteIds.has(session.id) }));
+            ? merged
+            : merged.map((session) => ({ ...session, pinned: favoriteIds.has(session.id) }));
         setSessions(normalized);
       })
       .catch((err) => {
@@ -213,7 +230,7 @@ export function ChatPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [client, workspaceId, agentFilter, statusFilter, reloadKey]);
+  }, [client, workspaceId, agentFilter, reloadKey]);
 
   // H1:列表级帧走 owner 私有频道 chat_list:{myMemberId};名册是真源,已有会话的
   // owner_id 仅在名册暂不可用时作兼容兜底,不会再令空列表失去订阅。
@@ -325,6 +342,53 @@ export function ChatPage(): React.JSX.Element {
     [client, toast, t],
   );
 
+  // 归档/取消归档(A7 会话列表管理):乐观切换 status,PATCH + If-Match 落库(§6.14)。
+  const handleToggleArchive = useCallback(
+    async (session: ChatSession) => {
+      if (workspaceId === null) return;
+      const nextStatus: ChatSession['status'] =
+        session.status === 'archived' ? 'active' : 'archived';
+      const optimistic = { ...session, status: nextStatus };
+      setSessions((prev) => prev.map((item) => (item.id === session.id ? optimistic : item)));
+      try {
+        const updated = await patchChatSession(
+          client,
+          workspaceId,
+          session.id,
+          { status: nextStatus },
+          session.updated_at,
+        );
+        setSessions((prev) => prev.map((item) => (item.id === session.id ? updated : item)));
+      } catch (err) {
+        // 回滚乐观归档态。
+        setSessions((prev) => prev.map((item) => (item.id === session.id ? session : item)));
+        toast.addToast(t(toErrorKey(err)), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
+      }
+    },
+    [client, workspaceId, toast, t],
+  );
+
+  // 删除会话(A7):软删后自列表移除;若为引导快照一并清除。
+  const handleDelete = useCallback(
+    async (session: ChatSession) => {
+      if (workspaceId === null) return;
+      try {
+        await deleteChatSession(client, workspaceId, session.id);
+        setSessions((prev) => prev.filter((item) => item.id !== session.id));
+        setBootstrappedSession((prev) => (prev !== null && prev.id === session.id ? null : prev));
+      } catch (err) {
+        toast.addToast(t(toErrorKey(err)), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
+      }
+    },
+    [client, workspaceId, toast, t],
+  );
+
   const handleCreate = useCallback(
     async (agentId: string, contextIssueId: string | null, contextProjectId: string | null) => {
       if (workspaceId === null) return;
@@ -375,13 +439,13 @@ export function ChatPage(): React.JSX.Element {
             locale={intl.locale}
             agents={agents}
             agentFilter={agentFilter}
-            statusFilter={statusFilter}
             isLoading={isLoading}
             error={error}
             onAgentFilterChange={setAgentFilter}
-            onStatusFilterChange={setStatusFilter}
             onSelect={handleSelect}
             onTogglePin={(session) => void handleTogglePin(session)}
+            onToggleArchive={(session) => void handleToggleArchive(session)}
+            onDelete={(session) => void handleDelete(session)}
             onNewSession={() => setNewOpen(true)}
             onRetry={() => setReloadKey((key) => key + 1)}
           />

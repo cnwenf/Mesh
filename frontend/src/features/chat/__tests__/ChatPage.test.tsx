@@ -70,8 +70,11 @@ function defaultRouter(overrides: { sessions?: unknown[]; favorites?: unknown[] 
       return fakeResponse({ body: { data: [agent], next_cursor: null } });
     if (url.includes('/chat-sessions') && url.includes('/messages'))
       return fakeResponse({ body: { data: [], next_cursor: null } });
-    if (url.includes('/chat-sessions') && method === 'GET')
+    if (url.includes('/chat-sessions') && method === 'GET') {
+      if (url.includes('status=archived'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: overrides.sessions ?? [session], next_cursor: null } });
+    }
     if (url.includes('/favorites') && method === 'GET')
       return fakeResponse({ body: { data: overrides.favorites ?? [], next_cursor: null } });
     return null;
@@ -144,6 +147,8 @@ describe('ChatPage(§4.1)', () => {
       if (url.includes('/favorites'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
       if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         sessionCalls += 1;
         return sessionCalls === 1
           ? fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } })

@@ -854,13 +854,20 @@
     "chat.newSession.title": "新建会话",
     "chat.role.agent": "智能体",
     "chat.role.user": "你",
+    "chat.session.archive": "归档",
+    "chat.session.archivedGroup": "已归档",
+    "chat.session.delete": "删除",
+    "chat.session.deleteConfirmText": "删除后该会话及其消息将无法恢复,确定删除吗?",
+    "chat.session.deleteDialogTitle": "删除会话",
     "chat.session.new": "新建聊天",
     "chat.session.noPreview": "还没有消息",
     "chat.session.pin": "置顶",
     "chat.session.pinnedGroup": "已置顶",
     "chat.session.recentGroup": "最近",
     "chat.session.searchPlaceholder": "搜索会话",
+    "chat.session.unarchive": "取消归档",
     "chat.session.unpin": "取消置顶",
+    "chat.status.elapsed": "{seconds} 秒",
     "chat.upload.cancel": "取消上传",
     "chat.upload.phase.completing": "收尾中…",
     "chat.upload.phase.error": "上传失败",
@@ -3004,5 +3011,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "87460d2c"
+  "version": "8458e8b1"
 }

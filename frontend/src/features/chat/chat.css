@@ -87,6 +87,8 @@
   overflow-y: auto;
   min-height: 0;
   padding: 0 var(--space-1) var(--space-2);
+  display: flex;
+  flex-direction: column;
 }
 
 .mesh-chat__sessions-group {
@@ -133,17 +135,28 @@
   margin-inline-start: var(--space-2);
 }
 
-.mesh-chat__session-pin {
+/* 行内操作簇(pin/archive/delete):hover/focus/selected 才显形,减少常态噪音。 */
+.mesh-chat__session-actions {
+  display: inline-flex;
   flex: none;
+  align-items: center;
   margin-inline-end: var(--space-1);
   opacity: 0;
   transition: opacity var(--motion-fast) ease;
 }
 
-.mesh-chat__session:hover .mesh-chat__session-pin,
-.mesh-chat__session:focus-within .mesh-chat__session-pin,
-.mesh-chat__session--selected .mesh-chat__session-pin {
+.mesh-chat__session:hover .mesh-chat__session-actions,
+.mesh-chat__session:focus-within .mesh-chat__session-actions,
+.mesh-chat__session--selected .mesh-chat__session-actions {
   opacity: 1;
+}
+
+/* 归档区固定在列表底部(§4.1「归档区在底部」):内容不足一屏时贴底,
+ * 超出则随滚动置于最近会话之后;顶部分隔线区隔活跃/归档。 */
+.mesh-chat__sessions-archived {
+  margin-top: auto;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-1);
 }
 
 .mesh-chat__session-main {
@@ -288,6 +301,14 @@
   align-items: center;
 }
 
+.mesh-chat__run-elapsed {
+  margin-inline-start: var(--space-1);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .mesh-chat__context-bar {
   display: flex;
   align-items: center;
@@ -412,6 +433,43 @@
 @keyframes mesh-chat-blink {
   50% {
     opacity: 0;
+  }
+}
+
+/* 打字动画(§4.2 流式打字):尚无内容的流式气泡以三点跳动呈现「正在输入」。 */
+.mesh-chat__typing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+}
+
+.mesh-chat__typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  animation: mesh-chat-typing 1.2s ease-in-out infinite;
+}
+
+.mesh-chat__typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.mesh-chat__typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes mesh-chat-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
   }
 }
 
@@ -545,6 +603,14 @@
 .mesh-chat__composer-error {
   color: var(--color-danger);
   font-size: var(--font-size-sm);
+}
+
+/* 删除会话确认对话框底部动作行(右对齐,与 autopilots 删除一致)。 */
+.mesh-chat__delete-confirm {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 /* ---- 新建会话 / 沉淀对话框 ---- */
@@ -691,7 +757,7 @@
     border-inline-end: 0;
   }
 
-  .mesh-chat__session-pin {
+  .mesh-chat__session-actions {
     opacity: 1;
   }
 

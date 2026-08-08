@@ -6,7 +6,7 @@ export { ChatPage } from './ChatPage';
 export { ConversationPanel } from './ConversationPanel';
 export type { ConversationPanelProps } from './ConversationPanel';
 export { SessionListPanel } from './SessionListPanel';
-export type { SessionListPanelProps, SessionStatusFilter } from './SessionListPanel';
+export type { SessionListPanelProps } from './SessionListPanel';
 export { NewSessionDialog } from './NewSessionDialog';
 export type { NewSessionDialogProps } from './NewSessionDialog';
 export { DistillDialog } from './DistillDialog';

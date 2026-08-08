@@ -1,8 +1,8 @@
 /**
- * SessionListPanel 测试(chat-session.md §4.1):置顶/最近分组、选中、pin 切换、
- * agent/状态过滤、新建入口、空/错误/加载态、预览与相对时间。
+ * SessionListPanel 测试(chat-session.md §4.1):置顶/最近/归档分组、选中、pin 切换、
+ * 归档/删除行内操作、agent 过滤、新建入口、空/错误/加载态、预览与相对时间。
  */
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../test-utils/render';
@@ -58,13 +58,13 @@ function renderPanel(props: Partial<React.ComponentProps<typeof SessionListPanel
       locale="en"
       agents={agents}
       agentFilter=""
-      statusFilter="active"
       isLoading={false}
       error={null}
       onAgentFilterChange={vi.fn()}
-      onStatusFilterChange={vi.fn()}
       onSelect={vi.fn()}
       onTogglePin={vi.fn()}
+      onToggleArchive={vi.fn()}
+      onDelete={vi.fn()}
       onNewSession={vi.fn()}
       onRetry={vi.fn()}
       {...props}
@@ -125,12 +125,58 @@ describe('SessionListPanel(§4.1)', () => {
     expect(onAgentFilterChange).toHaveBeenCalledWith('a-1');
   });
 
-  it('状态过滤变更回调', async () => {
+  it('归档会话进入底部归档区(§4.1「归档区在底部」)', () => {
+    renderPanel({
+      sessions: [
+        makeSession({ id: 's-act', title: 'Active one' }),
+        makeSession({ id: 's-arc', title: 'Archived one', status: 'archived' }),
+      ],
+    });
+    const archivedGroup = screen.getByTestId('chat-sessions-archived');
+    expect(archivedGroup).toBeInTheDocument();
+    expect(archivedGroup).toHaveTextContent('Archived');
+    expect(within(archivedGroup).getByTestId('chat-session-s-arc')).toBeInTheDocument();
+    // 活跃会话不在归档区内。
+    expect(within(archivedGroup).queryByTestId('chat-session-s-act')).toBeNull();
+  });
+
+  it('归档按钮触发 onToggleArchive;归档行显示取消归档且无 pin 按钮', async () => {
     const user = userEvent.setup();
-    const onStatusFilterChange = vi.fn();
-    renderPanel({ onStatusFilterChange });
-    await user.selectOptions(screen.getByTestId('chat-filter-status'), 'archived');
-    expect(onStatusFilterChange).toHaveBeenCalledWith('archived');
+    const onToggleArchive = vi.fn();
+    renderPanel({
+      sessions: [makeSession({ id: 's-act' }), makeSession({ id: 's-arc', status: 'archived' })],
+      onToggleArchive,
+    });
+    await user.click(screen.getByTestId('chat-session-archive-s-act'));
+    expect(onToggleArchive).toHaveBeenCalledTimes(1);
+    // 归档行:取消归档文案,且不提供 pin 操作。
+    expect(screen.getByTestId('chat-session-archive-s-arc')).toHaveAttribute(
+      'aria-label',
+      'Unarchive',
+    );
+    expect(screen.queryByTestId('chat-session-pin-s-arc')).toBeNull();
+  });
+
+  it('删除按钮打开确认对话框,确认后触发 onDelete 并关闭', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    const session = makeSession();
+    renderPanel({ sessions: [session], onDelete });
+    await user.click(screen.getByTestId('chat-session-delete-sess-1'));
+    expect(screen.getByTestId('chat-session-delete-confirm-text')).toBeInTheDocument();
+    await user.click(screen.getByTestId('chat-session-delete-confirm'));
+    expect(onDelete).toHaveBeenCalledWith(session);
+    expect(screen.queryByTestId('chat-session-delete-confirm-text')).toBeNull();
+  });
+
+  it('删除确认对话框取消时不触发 onDelete', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    renderPanel({ onDelete });
+    await user.click(screen.getByTestId('chat-session-delete-sess-1'));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('chat-session-delete-confirm-text')).toBeNull();
   });
 
   it('空列表呈现 onboarding 四要素空态 + 新建入口(onboarding.md §1.2.2)', async () => {

@@ -854,13 +854,20 @@
     "chat.newSession.title": "New conversation",
     "chat.role.agent": "Agent",
     "chat.role.user": "You",
+    "chat.session.archive": "Archive",
+    "chat.session.archivedGroup": "Archived",
+    "chat.session.delete": "Delete",
+    "chat.session.deleteConfirmText": "This conversation and its messages will be permanently removed. Are you sure?",
+    "chat.session.deleteDialogTitle": "Delete conversation",
     "chat.session.new": "New chat",
     "chat.session.noPreview": "No messages yet",
     "chat.session.pin": "Pin",
     "chat.session.pinnedGroup": "Pinned",
     "chat.session.recentGroup": "Recent",
     "chat.session.searchPlaceholder": "Search conversations",
+    "chat.session.unarchive": "Unarchive",
     "chat.session.unpin": "Unpin",
+    "chat.status.elapsed": "{seconds}s",
     "chat.upload.cancel": "Cancel upload",
     "chat.upload.phase.completing": "Finalizing…",
     "chat.upload.phase.error": "Upload failed",
@@ -3004,5 +3011,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "cad297c1"
+  "version": "6366e079"
 }

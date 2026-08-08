@@ -59,7 +59,9 @@ beforeEach(() => {
 describe('ChatComposer(§4.2)', () => {
   it('Cmd+Enter 发送并清空草稿', async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.change(input, { target: { value: 'hello' } });
     expect(screen.getByTestId('chat-composer-send')).toBeEnabled();
@@ -75,7 +77,9 @@ describe('ChatComposer(§4.2)', () => {
 
   it('Ctrl+Enter 也可发送', async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.change(input, { target: { value: 'hi' } });
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
@@ -83,7 +87,9 @@ describe('ChatComposer(§4.2)', () => {
   });
 
   it('空内容禁用发送', () => {
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     expect(screen.getByTestId('chat-composer-send')).toBeDisabled();
   });
 
@@ -112,7 +118,9 @@ describe('ChatComposer(§4.2)', () => {
 
   it('选择文件触发 addFiles', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const file = new File(['data'], 'a.png', { type: 'image/png' });
     await user.upload(screen.getByTestId('chat-composer-file'), file);
     expect(holder.addFiles).toHaveBeenCalledTimes(1);
@@ -121,9 +129,20 @@ describe('ChatComposer(§4.2)', () => {
   it('渲染上传卡片并可取消', async () => {
     const user = userEvent.setup();
     holder.uploads = [
-      { localId: 'u-1', fileName: 'r.pdf', fileSize: 2048, phase: 'ready', progress: 1, attachmentId: 'att-1', attachment: null, errorKey: null },
+      {
+        localId: 'u-1',
+        fileName: 'r.pdf',
+        fileSize: 2048,
+        phase: 'ready',
+        progress: 1,
+        attachmentId: 'att-1',
+        attachment: null,
+        errorKey: null,
+      },
     ];
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     expect(screen.getByTestId('chat-composer-uploads')).toHaveTextContent('r.pdf');
     await user.click(screen.getByTestId('chat-upload-cancel-u-1'));
     expect(holder.cancel).toHaveBeenCalledWith('u-1');
@@ -131,18 +150,40 @@ describe('ChatComposer(§4.2)', () => {
 
   it('error 阶段上传呈现错误文案', () => {
     holder.uploads = [
-      { localId: 'u-2', fileName: 'bad.exe', fileSize: 10, phase: 'error', progress: 0, attachmentId: null, attachment: null, errorKey: 'error.unsupported_media_type' },
+      {
+        localId: 'u-2',
+        fileName: 'bad.exe',
+        fileSize: 10,
+        phase: 'error',
+        progress: 0,
+        attachmentId: null,
+        attachment: null,
+        errorKey: 'error.unsupported_media_type',
+      },
     ];
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     expect(screen.getByTestId('chat-composer-uploads').textContent).not.toContain('bad.exe.exe');
     expect(screen.getByTestId('chat-composer-uploads')).toHaveTextContent('bad.exe');
   });
 
   it('传输中禁用发送', () => {
     holder.uploads = [
-      { localId: 'u-3', fileName: 'big.zip', fileSize: 100, phase: 'uploading', progress: 0.4, attachmentId: null, attachment: null, errorKey: null },
+      {
+        localId: 'u-3',
+        fileName: 'big.zip',
+        fileSize: 100,
+        phase: 'uploading',
+        progress: 0.4,
+        attachmentId: null,
+        attachment: null,
+        errorKey: null,
+      },
     ];
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.change(input, { target: { value: 'hello' } });
     expect(screen.getByTestId('chat-composer-send')).toBeDisabled();
@@ -162,7 +203,9 @@ describe('ChatComposer(§4.2)', () => {
       },
     ];
     const onSend = vi.fn().mockResolvedValue(undefined);
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.change(input, { target: { value: 'with file' } });
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
@@ -176,7 +219,9 @@ describe('ChatComposer(§4.2)', () => {
 
   it('发送失败保留草稿并呈现内联错误', async () => {
     const onSend = vi.fn().mockRejectedValue(new Error('nope'));
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.change(input, { target: { value: 'will fail' } });
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
@@ -185,7 +230,9 @@ describe('ChatComposer(§4.2)', () => {
   });
 
   it('disabled 时禁用输入与发送', () => {
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} disabled />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} disabled />,
+    );
     expect(screen.getByTestId('chat-composer-input')).toBeDisabled();
     expect(screen.getByTestId('chat-composer-send')).toBeDisabled();
     expect(screen.getByTestId('chat-composer-attach')).toBeDisabled();
@@ -193,33 +240,68 @@ describe('ChatComposer(§4.2)', () => {
 
   it('uploading 阶段呈现百分比进度', () => {
     holder.uploads = [
-      { localId: 'u-5', fileName: 'big.zip', fileSize: 1000, phase: 'uploading', progress: 0.42, attachmentId: null, attachment: null, errorKey: null },
+      {
+        localId: 'u-5',
+        fileName: 'big.zip',
+        fileSize: 1000,
+        phase: 'uploading',
+        progress: 0.42,
+        attachmentId: null,
+        attachment: null,
+        errorKey: null,
+      },
     ];
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     expect(screen.getByTestId('chat-composer-uploads')).toHaveTextContent('42%');
   });
 
   it('scanning/validating 阶段呈现本地化阶段文案', () => {
     holder.uploads = [
-      { localId: 'u-6', fileName: 'a.png', fileSize: 10, phase: 'scanning', progress: 1, attachmentId: 'att-1', attachment: null, errorKey: null },
+      {
+        localId: 'u-6',
+        fileName: 'a.png',
+        fileSize: 10,
+        phase: 'scanning',
+        progress: 1,
+        attachmentId: 'att-1',
+        attachment: null,
+        errorKey: null,
+      },
     ];
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     // scanning 阶段经 chat.upload.phase.scanning 渲染(非百分比)
     expect(screen.getByTestId('chat-composer-uploads').textContent).not.toContain('%');
   });
 
   it('error 阶段无 errorKey 时回退通用错误文案', () => {
     holder.uploads = [
-      { localId: 'u-7', fileName: 'x.bin', fileSize: 10, phase: 'error', progress: 0, attachmentId: null, attachment: null, errorKey: null },
+      {
+        localId: 'u-7',
+        fileName: 'x.bin',
+        fileSize: 10,
+        phase: 'error',
+        progress: 0,
+        attachmentId: null,
+        attachment: null,
+        errorKey: null,
+      },
     ];
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     // errorKey 为 null → 回退 common.unknownError(非空文案)
     expect(screen.getByTestId('chat-composer-uploads').textContent).toContain('x.bin');
   });
 
   it('点击附件按钮触发隐藏文件选择器', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-file');
     const clickSpy = vi.spyOn(input, 'click').mockImplementation(() => undefined);
     await user.click(screen.getByTestId('chat-composer-attach'));
@@ -230,8 +312,12 @@ describe('ChatComposer(§4.2)', () => {
   it('点击发送按钮提交(onClick 路径)', async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
-    fireEvent.change(screen.getByTestId('chat-composer-input'), { target: { value: 'via button' } });
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByTestId('chat-composer-input'), {
+      target: { value: 'via button' },
+    });
     await user.click(screen.getByTestId('chat-composer-send'));
     await vi.waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
     expect((onSend.mock.calls[0] as [string])[0]).toBe('via button');
@@ -239,7 +325,9 @@ describe('ChatComposer(§4.2)', () => {
 
   it('空内容时 Enter 提交被 canSend 守卫拦截', () => {
     const onSend = vi.fn();
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
     expect(onSend).not.toHaveBeenCalled();
@@ -258,7 +346,34 @@ describe('ChatComposer(§4.2)', () => {
     expect(holder.lastOptions).toEqual({ workspaceId: 'ws-1' });
     first.unmount();
     // 未传 workspaceId → options.workspaceId 为 undefined(兼容旧调用)。
-    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    renderWithProviders(
+      <ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />,
+    );
     expect(holder.lastOptions).toEqual({ workspaceId: undefined });
+  });
+
+  it('流式进行中:停止按钮替换发送按钮(spec §4.1 输入区 [■ 停止])', async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    renderWithProviders(
+      <ChatComposer
+        onSend={vi.fn()}
+        quoteMessage={null}
+        onClearQuote={vi.fn()}
+        isStreaming
+        onStop={onStop}
+      />,
+    );
+    expect(screen.queryByTestId('chat-composer-send')).toBeNull();
+    await user.click(screen.getByTestId('chat-composer-stop'));
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('isStreaming 但未提供 onStop 时保留发送按钮(防御分支)', () => {
+    renderWithProviders(
+      <ChatComposer onSend={vi.fn()} quoteMessage={null} onClearQuote={vi.fn()} isStreaming />,
+    );
+    expect(screen.getByTestId('chat-composer-send')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-composer-stop')).toBeNull();
   });
 });

@@ -3,12 +3,13 @@
  * 新建会话全流程(对话框 → 创建 → 选中)、agent 过滤重载。
  */
 import type { ReactElement } from 'react';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
+import { useShortcutRegistry } from '../../../shortcuts';
 import { renderWithProviders } from '../../../test-utils/render';
 import { ChatPage } from '../ChatPage';
 
@@ -22,12 +23,30 @@ function chatRoutes(): ReactElement {
   );
 }
 
-function renderChatPage() {
-  return renderWithProviders(chatRoutes(), { route: '/chat' });
+function renderChatPage(route = '/chat') {
+  return renderWithProviders(chatRoutes(), { route });
 }
 
 const me = { memberships: [{ workspace_id: 'ws-1' }] };
+/** 携带 user 的 /users/me:驱动「当前成员 id」解析 effect(名册匹配)。 */
+const meWithUser = {
+  user: { id: 'u-1', email: 'me@example.com' },
+  memberships: [{ workspace_id: 'ws-1' }],
+};
 const agent = { id: 'a-1', display_name: 'Builder', name: 'builder' };
+
+function makeMember(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'mem-1',
+    member_type: 'human',
+    role: 'member',
+    status: 'active',
+    display_name: 'Member',
+    joined_at: null,
+    profile: null,
+    ...overrides,
+  };
+}
 
 function makeSession(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -83,8 +102,11 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       if (url.includes('/favorites/chat_session/sess-1') && method === 'PUT')
         return fakeResponse({ status: 201, body: { data: {} } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     }, recorder);
     renderChatPage();
@@ -114,8 +136,11 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
           status: 500,
           body: { error: { code: 'internal_error', message: 'x' } },
         });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     }, recorder);
     renderChatPage();
@@ -139,8 +164,11 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ status: 201, body: { data: created } });
       if (url.includes('/chat-sessions/sess-2/messages'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     }, recorder);
     renderChatPage();
@@ -168,8 +196,11 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [agent], next_cursor: null } });
       if (url.includes('/favorites') && method === 'GET')
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     }, recorder);
     renderChatPage();
@@ -184,7 +215,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
     );
   });
 
-  it('状态过滤变更为 archived 触发重载', async () => {
+  it('会话列表并行拉取 active 与 archived 两页并合并渲染(§4.1)', async () => {
     const recorder: Recorder = { calls: [] };
     stubApi((url, method) => {
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
@@ -192,20 +223,131 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [agent], next_cursor: null } });
       if (url.includes('/favorites') && method === 'GET')
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
-        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({
+            body: { data: [makeSession('sess-arc', { status: 'archived' })], next_cursor: null },
+          });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     }, recorder);
     renderChatPage();
-    await screen.findByTestId('chat-session-panel');
-    fireEvent.change(screen.getByTestId('chat-filter-status'), { target: { value: 'archived' } });
+    await screen.findByTestId('chat-session-sess-1');
+    await screen.findByTestId('chat-session-sess-arc');
+    // 两个 status 分页均被请求。
+    expect(
+      recorder.calls.some(
+        (c) => c.url.includes('/chat-sessions') && c.url.includes('status=active'),
+      ),
+    ).toBe(true);
+    expect(
+      recorder.calls.some(
+        (c) => c.url.includes('/chat-sessions') && c.url.includes('status=archived'),
+      ),
+    ).toBe(true);
+    // 归档会话渲染在底部归档区。
+    expect(
+      within(screen.getByTestId('chat-sessions-archived')).getByTestId('chat-session-sess-arc'),
+    ).toBeInTheDocument();
+  });
+
+  it('归档切换:PATCH status + If-Match,会话移入归档区', async () => {
+    const recorder: Recorder = { calls: [] };
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions/sess-1') && method === 'PATCH')
+        return fakeResponse({
+          body: {
+            data: makeSession('sess-1', {
+              status: 'archived',
+              updated_at: '2026-07-02T00:00:00Z',
+            }),
+          },
+        });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    }, recorder);
+    renderChatPage();
+    await screen.findByTestId('chat-session-sess-1');
+    fireEvent.click(screen.getByTestId('chat-session-archive-sess-1'));
+    await waitFor(() =>
+      expect(
+        recorder.calls.some((c) => c.method === 'PATCH' && c.url.includes('/chat-sessions/sess-1')),
+      ).toBe(true),
+    );
+    expect(
+      await within(screen.getByTestId('chat-sessions-archived')).findByTestId(
+        'chat-session-sess-1',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('归档失败:回滚乐观态 + toast', async () => {
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions/sess-1') && method === 'PATCH')
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    });
+    renderChatPage();
+    await screen.findByTestId('chat-session-sess-1');
+    fireEvent.click(screen.getByTestId('chat-session-archive-sess-1'));
+    await waitFor(() => expect(document.querySelector('.mesh-toast')).not.toBeNull());
+    // 回滚:仍在活跃区,无归档分组。
+    expect(screen.queryByTestId('chat-sessions-archived')).toBeNull();
+    expect(screen.getByTestId('chat-session-sess-1')).toBeInTheDocument();
+  });
+
+  it('删除会话:确认后 DELETE 软删并自列表移除', async () => {
+    const recorder: Recorder = { calls: [] };
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions/sess-1') && method === 'DELETE')
+        return fakeResponse({ status: 204 });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    }, recorder);
+    renderChatPage();
+    await screen.findByTestId('chat-session-sess-1');
+    fireEvent.click(screen.getByTestId('chat-session-delete-sess-1'));
+    fireEvent.click(screen.getByTestId('chat-session-delete-confirm'));
     await waitFor(() =>
       expect(
         recorder.calls.some(
-          (c) => c.url.includes('/chat-sessions') && c.url.includes('status=archived'),
+          (c) => c.method === 'DELETE' && c.url.includes('/chat-sessions/sess-1'),
         ),
       ).toBe(true),
     );
+    await waitFor(() => expect(screen.queryByTestId('chat-session-sess-1')).toBeNull());
   });
 
   it('取消置顶:DELETE favorites(已置顶会话)', async () => {
@@ -220,10 +362,13 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         });
       if (url.includes('/favorites/chat_session/sess-1') && method === 'DELETE')
         return fakeResponse({ status: 204 });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({
           body: { data: [makeSession('sess-1', { pinned: true })], next_cursor: null },
         });
+      }
       return null;
     }, recorder);
     renderChatPage();
@@ -258,8 +403,11 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [agent], next_cursor: null } });
       if (url.includes('/favorites') && method === 'GET')
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     });
     const { unmount } = renderWithProviders(
@@ -313,13 +461,16 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [agent], next_cursor: null } });
       if (url.includes('/favorites') && method === 'GET')
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({
           body: {
             data: [makeSession('sess-1', { last_message_preview: 'orig' })],
             next_cursor: null,
           },
         });
+      }
       return null;
     });
     renderWithProviders(
@@ -346,8 +497,11 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [agent], next_cursor: null } });
       if (url.includes('/favorites') && method === 'GET')
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
       return null;
     });
     renderChatPage();
@@ -368,10 +522,13 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
           status: 500,
           body: { error: { code: 'internal_error', message: 'x' } },
         });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({
           body: { data: [makeSession('sess-1', { pinned: false })], next_cursor: null },
         });
+      }
       return null;
     });
     renderChatPage();
@@ -392,10 +549,13 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ status: 201, body: { data: {} } });
       if (url.includes('/chat-sessions/sess-1/messages'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({
           body: { data: [makeSession('sess-1'), makeSession('sess-2')], next_cursor: null },
         });
+      }
       return null;
     }, recorder);
     renderChatPage();
@@ -430,10 +590,13 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         });
       if (url.includes('/chat-sessions/sess-1/messages'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (url.includes('/chat-sessions') && method === 'GET')
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
         return fakeResponse({
           body: { data: [makeSession('sess-1'), makeSession('sess-2')], next_cursor: null },
         });
+      }
       return null;
     });
     renderChatPage();
@@ -445,5 +608,265 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
     // 回滚:未置顶,无 Pinned 分组
     expect(screen.getByTestId('chat-session-pin-sess-1').getAttribute('data-pinned')).toBe('false');
     expect(screen.queryByText('Pinned')).toBeNull();
+  });
+
+  it('当前成员解析:名册命中(email 匹配)→ 订阅本人私有列表频道', async () => {
+    const fakeRealtime = {
+      state: 'connected',
+      client: { subscribe: vi.fn(), unsubscribe: vi.fn(), onFrame: () => () => undefined },
+    } as unknown as RealtimeContextValue;
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: meWithUser } });
+      if (url.includes('/members') && method === 'GET')
+        return fakeResponse({
+          body: {
+            data: [
+              // agent 成员:member_type 分支跳过
+              makeMember({
+                id: 'mem-agent',
+                member_type: 'agent',
+                profile: { id: 'a-1', name: 'Bot', description: null, avatar_url: null },
+              }),
+              // 人类但 profile 为空:profile === null 分支跳过
+              makeMember({ id: 'mem-null' }),
+              // id 不匹配、email 匹配:命中并返回 member.id
+              makeMember({
+                id: 'mem-email',
+                profile: {
+                  id: 'u-9',
+                  full_name: 'Me',
+                  email: 'me@example.com',
+                  avatar_url: null,
+                },
+              }),
+            ],
+            next_cursor: null,
+          },
+        });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    });
+    renderWithProviders(
+      <RealtimeContext.Provider value={fakeRealtime}>{chatRoutes()}</RealtimeContext.Provider>,
+      { route: '/chat' },
+    );
+    await screen.findByTestId('chat-session-sess-1');
+    await waitFor(() =>
+      expect(fakeRealtime.client.subscribe).toHaveBeenCalledWith('chat_list:mem-email'),
+    );
+  });
+
+  it('名册无匹配人类:回退会话 owner_id 兜底订阅', async () => {
+    const fakeRealtime = {
+      state: 'connected',
+      client: { subscribe: vi.fn(), unsubscribe: vi.fn(), onFrame: () => () => undefined },
+    } as unknown as RealtimeContextValue;
+    stubApi((url, method) => {
+      if (url.includes('/users/me'))
+        return fakeResponse({
+          body: {
+            data: { user: { id: 'u-7', email: 'other@example.com' }, memberships: me.memberships },
+          },
+        });
+      if (url.includes('/members') && method === 'GET')
+        return fakeResponse({
+          body: {
+            data: [
+              makeMember({
+                id: 'mem-other',
+                profile: {
+                  id: 'u-2',
+                  full_name: 'Other',
+                  email: 'someone-else@example.com',
+                  avatar_url: null,
+                },
+              }),
+            ],
+            next_cursor: null,
+          },
+        });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    });
+    renderWithProviders(
+      <RealtimeContext.Provider value={fakeRealtime}>{chatRoutes()}</RealtimeContext.Provider>,
+      { route: '/chat' },
+    );
+    await screen.findByTestId('chat-session-sess-1');
+    // 名册未命中 → memberId 为 null → 沿用 sessions[0].owner_id 兜底
+    await waitFor(() =>
+      expect(fakeRealtime.client.subscribe).toHaveBeenCalledWith('chat_list:u-1'),
+    );
+  });
+
+  it('名册拉取失败且列表为空:memberId 置空、无订阅', async () => {
+    const recorder: Recorder = { calls: [] };
+    const fakeRealtime = {
+      state: 'connected',
+      client: { subscribe: vi.fn(), unsubscribe: vi.fn(), onFrame: () => () => undefined },
+    } as unknown as RealtimeContextValue;
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: meWithUser } });
+      if (url.includes('/members') && method === 'GET')
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return null;
+    }, recorder);
+    renderWithProviders(
+      <RealtimeContext.Provider value={fakeRealtime}>{chatRoutes()}</RealtimeContext.Provider>,
+      { route: '/chat' },
+    );
+    // 空列表态呈现 + 名册请求确实失败(500)
+    expect(await screen.findByText('No conversations yet')).toBeInTheDocument();
+    await waitFor(() => expect(recorder.calls.some((c) => c.url.includes('/members'))).toBe(true));
+    await waitFor(() => expect(fakeRealtime.client.subscribe).not.toHaveBeenCalled());
+  });
+
+  it('agents 名册拉取失败:过滤下拉降级为仅「全部」', async () => {
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    });
+    renderChatPage();
+    await screen.findByTestId('chat-session-sess-1');
+    // agents catch 置空 → 仅剩占位「All agents」一项
+    expect(within(screen.getByTestId('chat-filter-agent')).getAllByRole('option')).toHaveLength(1);
+  });
+
+  it('取消归档:PATCH status=active,会话移回活跃区(§6.14)', async () => {
+    const recorder: Recorder = { calls: [] };
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions/sess-arc') && method === 'PATCH')
+        return fakeResponse({
+          body: {
+            data: makeSession('sess-arc', {
+              status: 'active',
+              updated_at: '2026-07-02T00:00:00Z',
+            }),
+          },
+        });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({
+            body: { data: [makeSession('sess-arc', { status: 'archived' })], next_cursor: null },
+          });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    }, recorder);
+    renderChatPage();
+    await screen.findByTestId('chat-session-sess-arc');
+    fireEvent.click(screen.getByTestId('chat-session-archive-sess-arc'));
+    await waitFor(() =>
+      expect(
+        recorder.calls.some(
+          (c) => c.method === 'PATCH' && c.url.includes('/chat-sessions/sess-arc'),
+        ),
+      ).toBe(true),
+    );
+    // 会话移回活跃区:归档分组消失,行仍在列表
+    await waitFor(() => expect(screen.queryByTestId('chat-sessions-archived')).toBeNull());
+    expect(screen.getByTestId('chat-session-sess-arc')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-session-sess-1')).toBeInTheDocument();
+  });
+
+  it('删除失败:toast 提示且会话保留', async () => {
+    const recorder: Recorder = { calls: [] };
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions/sess-1') && method === 'DELETE')
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    }, recorder);
+    renderChatPage();
+    await screen.findByTestId('chat-session-sess-1');
+    fireEvent.click(screen.getByTestId('chat-session-delete-sess-1'));
+    fireEvent.click(screen.getByTestId('chat-session-delete-confirm'));
+    await waitFor(() => expect(document.querySelector('.mesh-toast')).not.toBeNull());
+    expect(screen.getByTestId('chat-session-sess-1')).toBeInTheDocument();
+  });
+
+  it('快捷键 chat.send 的 run 聚焦输入框(命令登记可执行)', async () => {
+    stubApi((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.includes('/agents'))
+        return fakeResponse({ body: { data: [agent], next_cursor: null } });
+      if (url.includes('/favorites') && method === 'GET')
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions/sess-1/messages'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/chat-sessions') && method === 'GET') {
+        if (url.includes('status=archived'))
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
+      }
+      return null;
+    });
+    renderChatPage('/chat/sess-1');
+    await screen.findByTestId('chat-conversation');
+    const sendShortcut = useShortcutRegistry
+      .getState()
+      .shortcuts.find((def) => def.id === 'chat.send');
+    expect(sendShortcut).toBeDefined();
+    act(() => {
+      sendShortcut?.run();
+    });
+    expect(document.activeElement).toBe(screen.getByTestId('chat-composer-input'));
   });
 });
