@@ -365,6 +365,7 @@ class RuntimeApp:
             security=security,
             redactor=redactor,
             on_operational_incident=self._operational.isolate,
+            on_degraded_event=self._operational.record_degraded_event,
         )
         self._supervisors[attempt_id] = supervisor
         self._contexts[attempt_id] = ctx

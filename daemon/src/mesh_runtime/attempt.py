@@ -86,6 +86,7 @@ class AttemptSupervisor:
         security=None,  # AttemptSecurity | None — A2 isolation stack
         redactor=None,  # RedactionPipeline for diff/summary redaction
         on_operational_incident: Callable[[str], None] | None = None,
+        on_degraded_event: Callable[[str], None] | None = None,
     ) -> None:
         self._api = api
         self._journal = journal
@@ -99,6 +100,7 @@ class AttemptSupervisor:
         self._security = security
         self._redactor = redactor
         self._on_operational_incident = on_operational_incident
+        self._on_degraded_event = on_degraded_event
 
         self._provider_done = False
         self._provider_task: asyncio.Task | None = None
@@ -214,6 +216,20 @@ class AttemptSupervisor:
     def _signal_operational_incident(self, reason_code: str) -> None:
         if self._on_operational_incident is not None:
             self._on_operational_incident(reason_code)
+
+    def _signal_degraded_event(self, reason_code: str) -> None:
+        """§3.5 degraded operational event — fixed-code observability signal.
+
+        Unlike ``_signal_operational_incident`` (which latches runtime
+        isolation), a degraded event MUST NOT fail the attempt or stop
+        claiming: it records a basis/accounting discrepancy the run handling
+        already compensated for (terminal usage merged per-field MAX). The
+        fixed code is safe to log verbatim; the fail-closed enforcement stays
+        with frame validation (§3.5) and server-side cross-audit (§3.9).
+        """
+        logger.warning("degraded operational event: %s", reason_code)
+        if self._on_degraded_event is not None:
+            self._on_degraded_event(reason_code)
 
     async def wait(self) -> AttemptOutcome:
         await self._done.wait()
@@ -340,26 +356,36 @@ class AttemptSupervisor:
                         # _context_tokens) — providers aggregate cache tokens
                         # against input_tokens differently across frames, so a
                         # per-field comparison false-isolated every real
-                        # execution on folded-basis providers. Spec §3.5 keeps
-                        # non-negative / decimal-string invariants (checked
-                        # above) for mid-stream frames, which are not
-                        # cumulative-monotonic.
-                        self._signal_operational_incident("usage_invariant_failed")
-                        self._provider_done = True
-                        await self._finalize(
-                            ctx,
-                            AttemptOutcome(
-                                ctx.attempt_id,
-                                "failed",
-                                "executor_unavailable",
-                            ),
-                            session_id,
-                            usage,
-                            "",
-                            1,
-                            hit_count,
+                        # execution on folded-basis providers.
+                        #
+                        # Even on the folded basis, third-party proxies can
+                        # report a terminal aggregate LOWER than mid-stream
+                        # frames (observed via claude-code behind a proxy:
+                        # aggregate input < message-level frames). Such a drop
+                        # is an accounting discrepancy, not evidence of
+                        # tampering: merge per-field MAX so the recorded
+                        # counters never under-report any observed frame, keep
+                        # the larger cost, and record a DEGRADED operational
+                        # event (fixed code) instead of failing the attempt or
+                        # isolating the runtime. §3.5 non-negative /
+                        # decimal-string invariants (checked above) and the
+                        # server-side cross-audit (§3.9) stay the fail-closed
+                        # enforcement points.
+                        self._signal_degraded_event("usage_terminal_regressed")
+                        merged_cost = observed.cost_usd
+                        try:
+                            if Decimal(usage.cost_usd) > Decimal(observed.cost_usd):
+                                merged_cost = usage.cost_usd
+                        except InvalidOperation:
+                            pass
+                        observed = Usage(
+                            max(usage.input_tokens, observed.input_tokens),
+                            max(usage.cache_creation_tokens, observed.cache_creation_tokens),
+                            max(usage.cache_read_tokens, observed.cache_read_tokens),
+                            max(usage.output_tokens, observed.output_tokens),
+                            max(usage.turns, observed.turns),
+                            merged_cost,
                         )
-                        return
                     usage = observed
                 elif isinstance(event, FinalResult):
                     summary = event.summary
