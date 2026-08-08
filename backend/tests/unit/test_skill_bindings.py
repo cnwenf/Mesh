@@ -124,6 +124,80 @@ class TestBind:
             )
 
 
+class TestBulkBind:
+    """L247 批量操作:one installed skill → many agents, per-item isolation."""
+
+    async def test_bulk_bind_many_agents(self, binding_service, session_factory) -> None:
+        world = await _installed_world(session_factory, InstallationService(session_factory))
+        extra_agents = [
+            await make_agent(session_factory, world["workspace"], world["admin"].user_id)
+            for _ in range(2)
+        ]
+        agent_ids = [world["agent"].id] + [a.id for a in extra_agents]
+
+        result = await binding_service.bulk_bind(
+            actor=world["admin"], workspace_id=world["workspace"].id,
+            agent_ids=agent_ids, skill_installation_id=world["installation_id"],
+        )
+
+        assert len(result["bound"]) == 3
+        assert result["errors"] == []
+        assert {b["agent_id"] for b in result["bound"]} == {str(a) for a in agent_ids}
+        assert all(b["skill_version_id"] == str(world["v2"].id) for b in result["bound"])
+
+    async def test_bulk_bind_partial_failure_isolates_conflict(
+        self, binding_service, session_factory
+    ) -> None:
+        world = await _installed_world(session_factory, InstallationService(session_factory))
+        other = await make_agent(session_factory, world["workspace"], world["admin"].user_id)
+        # Pre-bind the first agent so the bulk hit reports a conflict marker
+        # for it while the second agent still binds.
+        await binding_service.bind(
+            actor=world["admin"], workspace_id=world["workspace"].id,
+            agent_id=world["agent"].id, skill_installation_id=world["installation_id"],
+        )
+
+        result = await binding_service.bulk_bind(
+            actor=world["admin"], workspace_id=world["workspace"].id,
+            agent_ids=[world["agent"].id, other.id],
+            skill_installation_id=world["installation_id"],
+        )
+
+        assert [b["agent_id"] for b in result["bound"]] == [str(other.id)]
+        assert len(result["errors"]) == 1
+        marker = result["errors"][0]
+        assert marker["agent_id"] == str(world["agent"].id)
+        assert marker["code"] == "conflict"
+
+    async def test_bulk_bind_unknown_agent_reports_marker_not_500(
+        self, binding_service, session_factory
+    ) -> None:
+        world = await _installed_world(session_factory, InstallationService(session_factory))
+
+        result = await binding_service.bulk_bind(
+            actor=world["admin"], workspace_id=world["workspace"].id,
+            agent_ids=[uuid.uuid4(), world["agent"].id],
+            skill_installation_id=world["installation_id"],
+        )
+
+        assert [b["agent_id"] for b in result["bound"]] == [str(world["agent"].id)]
+        assert result["errors"][0]["code"] == "not_found"
+
+    async def test_bulk_bind_dedupes_repeated_agent_ids(
+        self, binding_service, session_factory
+    ) -> None:
+        world = await _installed_world(session_factory, InstallationService(session_factory))
+
+        result = await binding_service.bulk_bind(
+            actor=world["admin"], workspace_id=world["workspace"].id,
+            agent_ids=[world["agent"].id, world["agent"].id],
+            skill_installation_id=world["installation_id"],
+        )
+
+        assert len(result["bound"]) == 1
+        assert result["errors"] == []
+
+
 class TestUpdateUnbind:
     async def test_update_binding_flags(self, binding_service, session_factory) -> None:
         world = await _installed_world(session_factory, InstallationService(session_factory))

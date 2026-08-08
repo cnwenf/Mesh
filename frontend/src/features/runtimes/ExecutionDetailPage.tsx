@@ -9,7 +9,7 @@
  * 同一 offset 协议的 JSON 行帧,§3.3)。凭证 Tab 仅元信息,值恒为 `***`(§4.10 红线)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams, Link } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import {
   Banner,
@@ -25,7 +25,7 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { useWorkspaceMembership } from '../members/useWorkspaceMembership';
+import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import {
   cancelExecution,
   executionChannel,
@@ -45,6 +45,9 @@ import './runtimes.css';
 type TabKey = 'logs' | 'audit' | 'artifacts' | 'credentials';
 
 const TAB_KEYS: readonly TabKey[] = ['logs', 'audit', 'artifacts', 'credentials'];
+
+/** reaper 审批过期取消时写入的 failure_reason(与后端 reaper 对齐)。 */
+const APPROVAL_EXPIRED_REASON = 'approval_expired';
 
 function localText(t: TranslateFn, key: string, fallback: string): string {
   const translated = t(key);
@@ -478,6 +481,10 @@ export function ExecutionDetailPage(): React.JSX.Element {
     startIso !== null ? Math.max(0, Math.floor((nowMs - Date.parse(startIso)) / 1000)) : 0;
   const isTerminal = execution !== null && TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const isSuccess = execution !== null && SUCCESS_EXECUTION_STATUSES.has(execution.status);
+  // L186 审批过期专项恢复入口(§6.12):reaper 将过期审批的待决执行取消并置
+  // failure_reason=approval_expired —— 终态横幅给本地化「已过期」说明 + 重新发起。
+  const isApprovalExpired =
+    execution !== null && isTerminal && execution.failure_reason === APPROVAL_EXPIRED_REASON;
   const canCancel =
     canCancelExecution && execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const timeoutPct =
@@ -561,6 +568,25 @@ export function ExecutionDetailPage(): React.JSX.Element {
                   reason: execution.failure_reason ?? t('runtimes.execution.unknownReason'),
                 })}
           </span>
+          {isApprovalExpired ? (
+            <div
+              className="mesh-executions__approval-expired"
+              data-testid="execution-approval-expired"
+            >
+              <span>{t('runtimes.execution.approvalExpiredNote')}</span>
+              {workspace !== null && execution.issue_id !== null ? (
+                <Link
+                  data-testid="execution-approval-expired-relaunch"
+                  to={workspaceRoute(
+                    workspace.workspace_slug,
+                    `/issues/${encodeURIComponent(execution.issue_id)}`,
+                  )}
+                >
+                  {t('approvals.relaunch')}
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
         </Banner>
       ) : null}
 

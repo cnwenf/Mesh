@@ -98,6 +98,42 @@ const ME = {
   ],
 };
 
+// 真实名册行形态(member/service.py render_row):行 id 是 members 行主键,
+// agent 实体 id 在 profile.id。两类 id 故意取不同值 —— 回归守护
+// 「bulk-bind 误把成员行 id 当 agent_ids 提交」这一缺陷(后端按 Agent.id 解析)。
+const AGENT_MEMBERS = [
+  {
+    id: 'mem-agent-1',
+    member_type: 'agent',
+    role: 'member',
+    status: 'active',
+    display_name: 'Planner',
+    joined_at: null,
+    profile: {
+      id: 'agent-entity-1',
+      name: 'Planner',
+      description: null,
+      avatar_url: null,
+      is_active: true,
+    },
+  },
+  {
+    id: 'mem-agent-2',
+    member_type: 'agent',
+    role: 'member',
+    status: 'active',
+    display_name: 'Coder',
+    joined_at: null,
+    profile: {
+      id: 'agent-entity-2',
+      name: 'Coder',
+      description: null,
+      avatar_url: null,
+      is_active: true,
+    },
+  },
+];
+
 function setup(): { calls: { url: string; method: string }[] } {
   const calls: { url: string; method: string }[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -110,6 +146,8 @@ function setup(): { calls: { url: string; method: string }[] } {
       return fakeResponse({ body: { data: [VERSION], next_cursor: null } });
     if (url.includes('/skill-installations'))
       return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+    if (url.includes('/members'))
+      return fakeResponse({ body: { data: AGENT_MEMBERS, next_cursor: null } });
     if (url.includes('/skills/s-1')) return fakeResponse({ body: { data: SKILL } });
     return fakeResponse({ body: { data: SKILL } });
   }) as typeof fetch;
@@ -606,5 +644,97 @@ describe('SkillDetailPage', () => {
     );
     rendered.unmount();
     expect(realtimeClient.unsubscribe).toHaveBeenCalledWith('workspace:ws-1:skills');
+  });
+
+  it('bulk-bind 按钮打开对话框,确认后 POST skills/bulk-bind(L247)', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ url, method, body });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'POST' && url.includes('/bulk-bind'))
+        return fakeResponse({ body: { data: { bound: [{ binding_id: 'b-1' }], errors: [] } } });
+      if (url.includes('/versions/v-1')) return fakeResponse({ body: { data: VERSION } });
+      if (url.includes('/versions'))
+        return fakeResponse({ body: { data: [VERSION], next_cursor: null } });
+      if (url.includes('/skill-installations'))
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      if (url.includes('/members'))
+        return fakeResponse({ body: { data: AGENT_MEMBERS, next_cursor: null } });
+      return fakeResponse({ body: { data: SKILL } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await screen.findByTestId('skill-detail-name');
+
+    fireEvent.click(await screen.findByTestId('skill-bulk-bind-open'));
+    await screen.findByTestId('bulk-bind-body');
+    fireEvent.click(screen.getByTestId('bulk-bind-select-all'));
+    fireEvent.click(screen.getByTestId('bulk-bind-confirm'));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'POST' && c.url.includes('/skills/bulk-bind'))).toBe(
+        true,
+      ),
+    );
+    const post = calls.find((c) => c.method === 'POST' && c.url.includes('/skills/bulk-bind'));
+    // 提交体必须是 agents 实体 id(profile.id),绝非成员行 id(mem-agent-*)。
+    expect(post?.body).toEqual({
+      skill_installation_id: 'i-1',
+      agent_ids: ['agent-entity-1', 'agent-entity-2'],
+    });
+    expect(await screen.findByText('Bulk bind: 1 succeeded, 0 failed')).toBeTruthy();
+  });
+
+  it('bulk-bind 名册剔除无可绑定 agent profile 的行(L259 防御分支)', async () => {
+    const roster = [
+      ...AGENT_MEMBERS,
+      // 人类成员行:不可绑定。
+      {
+        id: 'mem-human-1',
+        member_type: 'human',
+        role: 'member',
+        status: 'active',
+        display_name: 'Alice',
+        joined_at: null,
+        profile: null,
+      },
+      // agent 行缺 profile 包络(后端降级形态):剔除而非崩溃。
+      {
+        id: 'mem-agent-3',
+        member_type: 'agent',
+        role: 'member',
+        status: 'active',
+        display_name: 'Orphan',
+        joined_at: null,
+        profile: null,
+      },
+    ];
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/versions/v-1')) return fakeResponse({ body: { data: VERSION } });
+      if (url.includes('/versions'))
+        return fakeResponse({ body: { data: [VERSION], next_cursor: null } });
+      if (url.includes('/skill-installations'))
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      if (url.includes('/members'))
+        return fakeResponse({ body: { data: roster, next_cursor: null } });
+      return fakeResponse({ body: { data: SKILL } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await screen.findByTestId('skill-detail-name');
+
+    fireEvent.click(await screen.findByTestId('skill-bulk-bind-open'));
+    await screen.findByTestId('bulk-bind-body');
+    // 有效行照常呈现……
+    expect(screen.getByTestId('bulk-bind-agent-agent-entity-1')).toBeTruthy();
+    expect(screen.getByTestId('bulk-bind-agent-agent-entity-2')).toBeTruthy();
+    // ……无 profile 的行绝不进入选项。
+    expect(screen.queryByTestId('bulk-bind-agent-mem-human-1')).toBeNull();
+    expect(screen.queryByTestId('bulk-bind-agent-mem-agent-3')).toBeNull();
   });
 });

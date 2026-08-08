@@ -3,14 +3,14 @@
  * fetch 桩驱动:列骨架渲染、视图切换、分组切换、配置草稿保存条、WIP 徽章、
  * 空态(无视图 → 主操作)。
  */
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { Route, Routes } from 'react-router';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import type { RecordedCall } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
-import { BoardPage } from '../BoardPage';
+import { BoardPage, parseViewDraft } from '../BoardPage';
 import type { View } from '../types';
 
 const workspaceContextState = vi.hoisted(() => ({
@@ -82,6 +82,28 @@ interface StubOptions {
   readonly failListOnce?: boolean;
 }
 
+/** L251 观众名册桩:subject(用户 id)→ 成员显示名映射来源。 */
+const VIEWER_ROSTER = [
+  {
+    id: 'mem-1',
+    member_type: 'human',
+    role: 'owner',
+    status: 'active',
+    display_name: 'Owner',
+    joined_at: null,
+    profile: { id: 'usr-owner', full_name: 'Owner', email: 'owner@acme.com', avatar_url: null },
+  },
+  {
+    id: 'mem-2',
+    member_type: 'human',
+    role: 'member',
+    status: 'active',
+    display_name: 'Alice',
+    joined_at: null,
+    profile: { id: 'usr-2', full_name: 'Alice', email: 'alice@acme.com', avatar_url: null },
+  },
+];
+
 function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
   const views = options.views ?? [makeView()];
   const calls: RecordedCall[] = [];
@@ -138,15 +160,26 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
     if (method === 'DELETE') {
       return fakeResponse({ status: 204 });
     }
+    if (method === 'GET' && url.includes('/members')) {
+      return fakeResponse({ body: { data: VIEWER_ROSTER, next_cursor: null } });
+    }
     return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
   }) as typeof fetch;
   vi.stubGlobal('fetch', impl);
   return calls;
 }
 
+/** L92 URL 断言探针:记录当前 search(含 ?draft=)。 */
+let latestSearch = '';
+function BoardSearchProbe(): null {
+  latestSearch = useLocation().search;
+  return null;
+}
+
 describe('BoardPage', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
+    latestSearch = '';
     workspaceContextState.workspace = {
       id: 'ws-1',
       name: 'Team',
@@ -485,5 +518,211 @@ describe('BoardPage', () => {
         calls.some((c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/duplicate')),
       ).toBe(true);
     });
+  });
+
+  it('L543:视图 ⋯「导出本视图」打开范围预选 view 的导出对话框(import-export.md §4.1)', async () => {
+    stubFetchByRoute();
+    renderWithProviders(<BoardPage />, { route: '/board' });
+    await screen.findByTestId('board-columns');
+
+    fireEvent.click(screen.getByTestId('view-menu-view-1'));
+    fireEvent.click(screen.getByTestId('view-export-view-1'));
+    const dialog = await screen.findByRole('dialog', { name: 'Export data' });
+    const scopeSelect = within(dialog).getByTestId('export-scope-select') as HTMLSelectElement;
+    expect(scopeSelect.value).toBe('view');
+  });
+
+  it('改动分组后草稿序列化进 ?draft=,丢弃后清除(L92)', async () => {
+    stubFetchByRoute();
+    renderWithProviders(
+      <>
+        <BoardSearchProbe />
+        <BoardPage />
+      </>,
+      { route: '/board' },
+    );
+    await screen.findByTestId('board-columns');
+
+    fireEvent.change(screen.getByTestId('group-by-select'), { target: { value: 'priority' } });
+    await waitFor(() => expect(screen.getByTestId('view-save-bar')).toBeInTheDocument());
+    await waitFor(() => {
+      const raw = new URLSearchParams(latestSearch).get('draft');
+      expect(raw).not.toBeNull();
+      expect((JSON.parse(raw as string) as { group_by: string }).group_by).toBe('priority');
+    });
+
+    fireEvent.click(screen.getByTestId('view-discard'));
+    await waitFor(() => expect(screen.queryByTestId('view-save-bar')).not.toBeInTheDocument());
+    await waitFor(() => expect(new URLSearchParams(latestSearch).get('draft')).toBeNull());
+  });
+
+  it('深链 ?draft= 恢复未保存草稿(脏态保存条 + 草稿列投影,L92)', async () => {
+    stubFetchByRoute();
+    const draftJson = JSON.stringify({
+      group_by: 'priority',
+      sub_group_by: null,
+      filters: {},
+      sort: [],
+      board_settings: {},
+    });
+    renderWithProviders(<BoardPage />, {
+      route: `/board?draft=${encodeURIComponent(draftJson)}`,
+    });
+    await screen.findByTestId('board-columns');
+
+    expect(screen.getByTestId('view-save-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('board-column-urgent')).toBeInTheDocument();
+  });
+
+  it('损坏的 ?draft= 回落视图原值(L92 容错)', async () => {
+    stubFetchByRoute();
+    renderWithProviders(<BoardPage />, { route: '/board?draft=%7Bnot-json' });
+    await screen.findByTestId('board-columns');
+
+    expect(screen.queryByTestId('view-save-bar')).not.toBeInTheDocument();
+    expect(screen.getByTestId('board-column-todo')).toBeInTheDocument();
+  });
+
+  it('view.presence 帧渲染同看板观众簇与计数,异视图帧忽略(L251)', async () => {
+    stubFetchByRoute();
+    const rt = makeEmittingRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/board' },
+    );
+    await screen.findByTestId('board-columns');
+    expect(screen.queryByTestId('board-view-presence')).toBeNull();
+
+    // 其他视图的 presence 帧不渲染本看板观众簇。
+    act(() => {
+      rt.emit({
+        channel: 'view:view-1',
+        event: 'view.presence',
+        payload: { view_id: 'view-other', online: 3, members: ['usr-2'] },
+      });
+    });
+    expect(screen.queryByTestId('board-view-presence')).toBeNull();
+
+    act(() => {
+      rt.emit({
+        channel: 'view:view-1',
+        event: 'view.presence',
+        payload: {
+          view_id: 'view-1',
+          online: 2,
+          subject: 'usr-2',
+          joined: true,
+          members: ['usr-owner', 'usr-2'],
+        },
+      });
+    });
+    const chip = await screen.findByTestId('board-view-presence');
+    expect(chip.textContent).toContain('2 viewing');
+    // 名册惰性加载完成后,subject(用户 id)映射为成员显示名。
+    await waitFor(() => expect(chip.getAttribute('title')).toBe('Owner, Alice'));
+  });
+
+  it('view.presence online=0 不渲染观众簇(L251)', async () => {
+    stubFetchByRoute();
+    const rt = makeEmittingRealtime();
+    renderWithProviders(
+      <RealtimeContext.Provider value={{ state: 'connected', client: rt.client as never }}>
+        <BoardPage />
+      </RealtimeContext.Provider>,
+      { route: '/board' },
+    );
+    await screen.findByTestId('board-columns');
+
+    act(() => {
+      rt.emit({
+        channel: 'view:view-1',
+        event: 'view.presence',
+        payload: { view_id: 'view-1', online: 0, subject: 'usr-2', joined: false, members: [] },
+      });
+    });
+    expect(screen.queryByTestId('board-view-presence')).toBeNull();
+  });
+});
+
+interface EmitFrame {
+  channel: string;
+  event?: string;
+  payload?: unknown;
+}
+
+/** 可主动发帧的 realtime 测试替身(BoardPage 需要 onFrame + onState)。 */
+function makeEmittingRealtime() {
+  const handlers: Array<(frame: EmitFrame) => void> = [];
+  const client = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    onFrame: vi.fn((handler: (frame: EmitFrame) => void) => {
+      handlers.push(handler);
+      return (): void => {
+        const index = handlers.indexOf(handler);
+        if (index >= 0) handlers.splice(index, 1);
+      };
+    }),
+    onState: vi.fn(() => () => undefined),
+  };
+  return {
+    client,
+    emit: (frame: EmitFrame): void => {
+      for (const handler of [...handlers]) handler(frame);
+    },
+  };
+}
+
+describe('parseViewDraft(L92 URL 草稿反序列化)', () => {
+  const validDraft = {
+    group_by: 'priority',
+    sub_group_by: null,
+    filters: {},
+    sort: [],
+    board_settings: {},
+  };
+
+  it('null 或空串返回 null', () => {
+    expect(parseViewDraft(null)).toBeNull();
+    expect(parseViewDraft('')).toBeNull();
+  });
+
+  it('非法 JSON 返回 null', () => {
+    expect(parseViewDraft('{not-json')).toBeNull();
+  });
+
+  it('非对象顶层值(数字/数组/null)返回 null', () => {
+    expect(parseViewDraft('5')).toBeNull();
+    expect(parseViewDraft('[1,2]')).toBeNull();
+    expect(parseViewDraft('null')).toBeNull();
+  });
+
+  it('group_by 非字符串且非 null 返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, group_by: 5 }))).toBeNull();
+  });
+
+  it('sub_group_by 非字符串且非 null 返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, sub_group_by: true }))).toBeNull();
+  });
+
+  it('filters 缺失/为 null/为数组均返回 null', () => {
+    const { filters: _omit, ...withoutFilters } = validDraft;
+    expect(parseViewDraft(JSON.stringify(withoutFilters))).toBeNull();
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, filters: null }))).toBeNull();
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, filters: [] }))).toBeNull();
+  });
+
+  it('sort 非数组返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, sort: 'created_at' }))).toBeNull();
+  });
+
+  it('board_settings 为数组返回 null', () => {
+    expect(parseViewDraft(JSON.stringify({ ...validDraft, board_settings: [] }))).toBeNull();
+  });
+
+  it('合法草稿原样返回', () => {
+    expect(parseViewDraft(JSON.stringify(validDraft))).toEqual(validDraft);
   });
 });

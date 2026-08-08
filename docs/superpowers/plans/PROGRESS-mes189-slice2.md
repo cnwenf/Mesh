@@ -1,0 +1,76 @@
+# MES-189 批次③ 第二切片 PROGRESS（接力清单）
+
+> 分支：`agent/mesh/mes189-slice2-frontend` · 计划：`docs/superpowers/plans/2026-08-07-mes189-batch3-slice2-frontend.md`
+> 更新：2026-08-08（阶段 D 收口，全部完成，进入交付）
+
+## 已完成（已提交）
+
+- [x] 阶段 A 全部：HIGH TD-3/DEBT-1 assign owner-only 护栏（`5cdd5b3e`）；TD-1/DEBT-2/TD-4（`f56b5122`）；TD-2 随 `5cdd5b3e` 同文件清偿
+- [x] B2 通知自动归档 worker（`3db6de95` checkpoint）✅ 定向测试已验证绿（2026-08-07 续接 run：test_notification_archive 12 例 + 邻域 59+71 例 exit 0）
+- [x] B4 小队导出 markdown（`3db6de95`）✅ 同上验证；**注意：squad.md §4.5 导出要求登记（Spec 锚点勘误）尚未确认是否已写入 spec —— 续接者先 grep 确认**
+- [x] B5 技能一绑多 agent bulk 端点（`3db6de95`）✅ 同上验证
+- [x] TD-5 覆盖率基线记账：随批说明已记录（agent/service.py 88% / comment_inbox/routes.py 89% 为既有基线）
+- [x] B4 Spec 补登记：squad.md §3.1 + §4.6 归档导出（含 L486 锚点勘误注记）✅ 已提交
+- [x] B3 邮件通道：收件人 locale 渲染（users.settings.locale → workspaces.settings.default_locale → en）+ HTML 转义 + 签名 JWT 一次性打开 token + `GET /inbox/{id}/open` 标已读 302（统一 404 anti-oracle）+ mailer 透传 ✅ 已提交（test_notification_email_channel.py 12 例 + mailer 透传 2 例全绿；邻域回归 test_inbox_service/test_comment_inbox_api/test_issue_notification_producers/test_comment_inbox_supplement 全绿）
+- [x] B6 Presence：`member/presence.py`（Redis hash 计数 + TTL，仅 0→1/1→0 边沿广播 member.presence）+ RealtimeSession 接线（首个订阅计在线 / 末订阅或断线离线）+ `GET /workspaces/{ws}/members/presence` 快照 ✅ 已提交（test_member_presence.py 7 例全绿；test_gateway_session/test_realtime_app/test_realtime_auth/test_view_presence/test_member_api/test_member_service/test_member_project_access 回归全绿）
+- [x] B1 后端：approval_id 已在 checkpoint `3db6de95` 完成（producer + consumer + UT）；剩前端内联按钮 → 并入阶段 C 第 6 条（L206）
+- [x] C-2 L93 标签页标题 + 未读 favicon 徽标（`14e15c64`）✅ 新增 UT 16 例 + useDocumentTitle 补 3 例全绿；邻域回归 150 例全绿；typecheck/lint 净
+- [x] C-15 L513 键盘入口可发现性（`22966a11`）✅ UT 8 新增 + 邻域回归全绿；i18n 目录 version 已重算（附重算脚本）
+- [x] C-12 L252 API 契约 UI（见未完成区第 12 条注记）✅ 已提交：client 拦截层 429/Deprecation/Sunset 检测 → 契约通知总线（api/notices.ts，429 去抖 + 弃用每会话一次）→ shell/ApiNoticeToasts 桥以 i18n toast 呈现；UT 21 新增，全套 4894 例回归绿，per-file 门禁过
+- [x] C-14 L486 小队导出前端入口（`0286840e`）✅ 已提交：squads/api.ts `exportSquadArchive` 独立 fetch（原始 markdown 非包络，Bearer 同构，非 2xx/网络失败归一 MeshApiError）+ 详情页头部 ⋯ Menu「导出归档」（Blob 下载 squad-{id}.md，读权限即可，导出中 disabled）+ 3 键×双语目录（version 重算）；UT 8 新增（含 403/非 API 失败/普通成员可见），全套 4902 例绿，per-file 门禁过
+- [x] C-13 L480 小队消息着色 + 关联任务 chip（`a027000b`）✅ 已提交：消息行按 kind 修饰类（指令蓝/汇报绿/闲聊灰/系统虚线/上下文蓝边，语义 token 双主题）+ 指令/汇报带 task_id 渲染「关联任务」chip 深链任务详情；i18n squads.relatedTask×2 目录（version 重算）；UT 3 新增，全套 4905 例绿，per-file 门禁过
+- [x] TD 顺手清偿：IssueExecutionsPanel 取消断言竞态修复（`d521b033`）——coverage 负载下偶发 flake，同步断言改 waitFor 等待行状态收敛
+- [x] C-6 L206 收件箱行内联审批（`f673b0ac`）✅ Notification 可选 approval_id + InboxApprovalActions（挂载即 GET 审批态，仅 pending 且未过 reaper 惰性窗口渲染批准/拒绝；决定后收敛状态徽标；服务端幂等兜底；approval.decided 帧跨会话收敛）+ InboxRow 行操作区接线 + inbox.css `> button` 子选择器；UT 11 新增（组件 9 + 页面接线 2），inbox 套件 136 例、全套 433 文件/4916 例绿，per-file 门禁过（新文件 stmts 99.2%/branch 91.5%）
+- [x] C-8 L222 收藏入口（`b7d89e8a`）✅ 新增 `useFavorites(workspaceId, targetType)`（features/favorites/）：挂载拉成员集合、乐观 toggle（PUT/DELETE 幂等）、失败回滚 + danger toast、workspaceId 缺失不发请求、列表失败降级空集合；五处入口：IssueDetailPage ⋯ 菜单星标条目 / 看板列表 RowActionsMenu（桌面行 + 移动卡）/ ViewSwitcher 视图 ⋯ 菜单条目（删除项前，回调缺省不渲染）/ ProjectDetailPage 头部星标 IconButton（aria-pressed + filled）/ BoardPage 提供 issue+view 双实例下传；favorites.* 4 键×2 目录（version 重算）。顺手清偿：IssueDetailPage 测试阈值等待改 `queueCallCount` 排除 URL 感知旁路（收藏 GET 记入 calls 不消耗盲队列，直数会提前一格放行致 estimate 用例间歇红），估算用例 6/6 复跑全绿；UT 17 新增（hook 6 + 列表 3 + 视图 3 + 项目 2 + 详情 3），全套 434 文件/4930 例绿，per-file 门禁过（27 文件 ≥90%）
+- [x] C-1 L92 URL 状态同步（`cd8019b2`）✅ 新增共享 hook `useUrlState(key)`（null/空串删参、replace 缺省、保留其它键、函数式更新）；四面落地：InboxPage 筛选组合 ↔ ?filter= / IssueDetailPage 讨论/活动 Tab ↔ ?tab=（缺省 comments 不占参数）/ IssuesPage 分页 ↔ ?page=（深链游标补齐上限 20 页、loadMore 写参、筛选变更清参、非法值规范化清除）/ BoardPage 视图草稿 ↔ ?draft=（脏草稿序列化、深链恢复、损坏 JSON 结构校验回落 parseViewDraft）；UT 41 新增（useUrlState 7 + Inbox 已随前段 + Detail 3 + Issues 5 + Board 3 + parseViewDraft 9 + ProjectDetail 探针回归），全套 435 文件/4951 例绿，typecheck/lint 净（0 错误、25 基线 warning），per-file 门禁过（28 文件 ≥90%，BoardPage branches 由 89.87% 经 parseViewDraft 直测补齐至达标）
+- [x] C-16 L182 离线乐观队列（`08b603f4`）✅ 新增 `api/optimisticQueue.ts`：离线入队/在线直执/在线执行遇 network 错误转队列，FIFO 回放 + 逐项状态机（queued/running/succeeded/failed）+ 重试上限（默认 3）+ 容量护栏（默认 64，超限丢最旧）+ subscribe/remove/clear/dispose；`initOptimisticQueueTriggers` 挂 window online 与可注入 extraTriggers（realtime state→connected）。AppShell 接线：OptimisticQueueContext + useOptimisticQueue、离线横幅待回放计数（StatusBanner `queuedCount` prop，state.offlineQueued）、回放失败 danger toast（去重 ref，state.offlineOpFailed）；i18n 2 键×双语目录（version 重算 en `2a24fee9` / zh `a640841d`）。UT 25 新增（队列 20 + 横幅 2 + shell 接线 3），全套 436 文件/4985 例绿，typecheck/lint 净，per-file 门禁过（30 文件 ≥90%；AppShell branches 91.56%→94.44%、optimisticQueue stmts 99.38%/branch 95.45%）
+- [x] C-17 L186 专项恢复入口五条（`6e01d8f3`）✅ 五条逐一核实：① 看板重连指示——已由全局 StatusBanner（offline/reconnecting/resyncing，Outlet 之上覆盖含看板全部页面）+ board-resync-banner 承载（BoardPage.realtime.test.tsx:849-864），不重复加指示；② 日志 offset 续传——已实现且有测（ExecutionDetailPage 日志三段合一：REST 历史 + WS resume_from + SSE 同 offset 续传，client offset 去重；channelCursors.ts）；③ 附件扫描占位——已实现且有测（scanNoticeOf + attachment-scanning-* testid，AttachmentPanel.coverage.test.tsx:239 / AttachmentComposer.coverage.test.tsx:177）；④ 无 runtime 分派提示——**新增** `runtimes/dispatchHint.ts` workspaceHasOnlineRuntime（status=online&limit=1 轻探测，失败/非 2xx 不误报），IssueDetailPage 分派 agent 成功且确定无在线 runtime 时 warn toast（issues.noRuntimeWarning）带 Runtimes 深链，绝不阻断分派；⑤ 审批过期重新发起——**新增** ExecutionDetailPage 终态横幅内 failure_reason=approval_expired 时展示 runtimes.execution.approvalExpiredNote + 关联任务「重新发起」深链（issue_id 为 null 不渲染链接；收件箱侧 ApprovalCard 前段已做）。i18n +2 键×双语目录（version 重算 en `1723f03e` / zh `7f976924`）。UT 10 新增（dispatchHint 4 + ExecutionDetail 3 + IssueDetail 3），全套 437 文件/4995 例绿，typecheck/lint 净（0 错误、25 基线 warning），per-file 门禁过（32 文件 ≥90%，dispatchHint 100/100/100/100）
+- [x] C-18 L202 收件箱已归档视图（后端 `8500d19d` + 前端 `620b7d3f`）✅ Spec §4.4「移出主视图,可回查」：后端 GET /inbox 增加 `archived=true` 附加参数（默认 false 不破坏既有契约；archived_only=IS NOT NULL 与既有 include_archived 混查区分），service `_apply_filters/_list_flat/_list_grouped` 贯通；归档后主列表不再出现、未读计数与聚合组均排除归档（既有行为）。前端：ListInboxParams.archived 透传、InboxPage 第 6 个客户端 tab「已归档」（API filter 五值不变，客户端视图态；深链 ?filter=archived；命令面板口径回落 all；归档视图跳过实时合并；隐藏全部已读/归档已读工具条与行内归档按钮 showArchive prop）、归档空态 inbox.archivedEmpty。i18n +3 键×双语目录（version 重算 en `46d3256e` / zh `cc590f66`）。UT：后端 2 单元（service archived_only + API 视图切换）+ 1 真实 e2e（bob 评论→relay→alice 归档→DB archived_at 落库→archived=true 回查）；前端 4（api archived 透传 1 + InboxPage.archived 3）。全套前端 438 文件/4999 例绿（typecheck/lint 净，0 错误 25 基线 warning），per-file 门禁过（34 文件 ≥90%；总覆盖率 98.66/94.22/97.89/98.66）
+- [x] C-19 L242 脏态离开保护扩展（`7a535aca`）✅ 三处落地 + 文案统一：① AutopilotEditorPage——与保存快照 JSON diff 判定脏态（load 成功重置快照，stateFromRule 与 DEFAULT_STATE 键序一致保证干净态不误报），脏态拦截站内导航、取消按钮走新增 `guard.requestLeave(path)`（先到的待确认目标优先，不覆盖）；② SkillsPage——CreateSkillDialog 上抬脏态（onDirtyChange：name/slug/summary/tags 任一非空即脏；创建成功/关闭重置），脏态拦截站内导航；③ 评论草稿——useCommentDraft 暴露 `persisted`（写穿 localStorage 成功为 true，setItem 抛错为 false，清空/换键重置），CommentComposer 仅在草稿非空且未持久化（隐私模式等存储不可用）时上报脏态，CommentsPanel 按 draftKey 聚合脏键（ref 缓存稳定 reporter 身份，避免 composer effect 依赖抖动导致无限重渲染）挂守卫；已写穿存储的草稿不打扰导航（§4.3 写穿即不丢）。hook 新增 requestLeave API；未保存确认文案 settings.unsaved* → common.unsaved*（Title/Description/Stay/Discard 4 键×双语，settings 页同步迁移），version 重算 en `16bdd70e` / zh `d5b1ebc6`。UT 19 新增（hook requestLeave 3 + AutopilotEditorPage.guard 4 + SkillsPage.guard 3 + CommentsPanel.guard 3 + useCommentDraft persisted 3 + composer/panel 脏态联动经 guard 套件覆盖）+ settings 键迁移回归。全套前端 441 文件/5015 例绿（typecheck/lint 净，0 错误 25 基线 warning），per-file 门禁过（41 文件 ≥90%）
+- [x] C-20 L247 批量操作 UI 三面（`7219baf1`）✅ ① Issue 批量转派——IssuesBulkBar 新增「指派给…」Menu：活跃成员逐项 + 置顶「取消指派」（后端 POST /issues/bulk 约定 `assignee_id: ''` → 清空分派），停用成员不入项；IssuesPage 以 roster 下传。② 技能一绑多 agent——skills/api.ts `bulkBindSkill`（POST /workspaces/{ws}/skills/bulk-bind，BulkBindRequest/逐 agent 错误项契约）+ BulkBindDialog（活跃 agent 名册多选 + 全选半选态 + 空态；确认汇总「成功 N,失败 M」toast，失败附前 5 条 agent_id:code marker——与 issues/bulk 错误 marker 同约定；网络失败 danger toast 不关弹层）+ SkillDetailPage 安装行「Bind to agents…」按钮（canManage + 已安装），名册 effect 非数组包络边界降级空名册。③ 成员名下任务批量转派——ReassignMemberDialog（行操作菜单「Reassign open issues…」仅活跃成员行出现；目标下拉排除源成员本人，未选确认禁用；成功 toast 回报 reassigned_issues 条数，失败就地呈现不关弹层）+ MembersPage 行菜单接线。i18n +17 键×双语目录（issues.bulk.*2 + members.reassign.*7 + skills.bulkBind.*8，version 重算 en `a5372c4e` / zh `3b6c8ecc`）。UT 12 新增（BulkBindDialog 5 + skills api bulkBind 1 + SkillDetailPage 接线 1 + MembersPage 接线 1 + ReassignMemberDialog 3 + IssuesPage 批量转派 2），全套前端 443 文件/5028 例绿（typecheck/lint 净，0 错误 25 基线 warning），per-file 门禁过（47 文件 ≥90%；ReassignMemberDialog 100/100/100/100——空目标早退守卫因确认按钮 disabled 恒不可达，按 KISS 移除）
+- [x] C-21 L251 Presence 前端两面（`29045be4`）✅ ① 成员在线——members/api.ts `getMemberPresence`（GET /workspaces/{ws}/members/presence → {online_member_ids,count} 快照，member.md §3.1 落地契约）+ MembersPage 首屏快照装载（best-effort：快照失败静默降级「无人在线」不阻塞名册）+ workspace 频道 `member.presence` 帧增量（online/offline 只改在线集不触发整册重载；畸形 payload/异频道帧拒绝）+ 身份簇头像右下角 success 语义在线点（testid member-online-/card-member-online-{id}，title/aria-label「Online」）。② 看板谁在查看——接通原被丢弃的 `view.presence` 帧（kanban.md §3.5）：按 view_id 守卫更新 {online, subjects}，工具栏 layout chip 旁渲染观众头像簇（subject 经惰性 listMembers 名册映射显示名，未映射回落 subject 首字符；≤5 槽位，超出「+N」）+ 「N viewing」计数；online=0 不渲染；切换视图即清空；名册加载失败降级不弹错。i18n +2 键×双语目录（members.presence.online / board.viewPresence，version 重算 en `9f96a64e` / zh `dd7f08ca`）。UT 5 新增（members api 快照契约 1 + MembersPage 快照点/帧增量 2 + BoardPage 观众簇渲染/异视图忽略/online=0 2），全套前端 443 文件/5033 例绿（typecheck/lint 净，0 错误 25 基线 warning；SquadDetailPage 与 IssueDetailPage 各 1 例限时高负载 flake 单跑均绿），per-file 门禁过（48 文件 ≥90%）
+- [x] C-22 L541–543 导入导出 UI 三件（`6ed6fe2a`）✅ ① 行级实时进度——DataManagementPage 订阅非终态任务的 per-job 频道 `data_job:{id}`（后端 runner 唯一实时路径），`applyDataJobFrame` 纯合并帧（MERGE_KEYS 白名单 + updated_at 字符串比较防回退 + 只合并已在列表中的任务，无变更返回原引用），频道拼接串作 effect 依赖 + ref 持频道清单避免帧合并引发重订阅抖动；无 realtime 时 5s 轮询兜底；running 且 total_rows>0 的行渲染「● succeeded/total」文本进度（tabular-nums，色/动效不作唯一信号，§4.4）。② 413 前置预警——ExportDialog 提交遇 MeshApiError code=export_too_large（413，details {estimate,max_rows}）时不弹 toast，改在范围选择阶段就地渲染 role=alert 可关闭预警条（tooLargeBody 双占位符 + tooLargeDismiss），收窄后重试不离开当前弹层；其余错误仍走 toast 路径。③ 情境 ⋯ 入口——项目详情头两个独立按钮改 design Menu（more-horizontal 触发、align=end）：导出本项目恒可见、导入到本项目仅 admin/owner 且 archived 时 disabled（§4.1 读/写权限分层）；ViewSwitcher 新增 onExportView 可选 prop，只读视图 ⋯ 菜单仅露「导出本视图」+ 收藏（写条目重命名/复制/设默认/删除按 canWrite 门控），BoardPage 接线按条件挂载 ExportDialog（defaultScope=view，视图属项目时传 project_id 扁平过滤——后端只收 _FLAT_FILTER_KEYS）。i18n +5 键×双语目录（board.exportView / dataJobs.export.tooLargeBody / tooLargeDismiss / dataJobs.page.liveProgress / projects.detail.moreActions，version 重算 en `cad297c1` / zh `87460d2c`；catalogs.test dummyValues 补 estimate/maxRows 占位）。UT 7 新增（DataManagementPage 行级进度渲染 + 频道订阅/帧合并/异频道与 null payload 拒绝 2 + ExportDialog 413 预警/关闭/非 413 仍 toast 2 + ViewSwitcher 只读导出入口/可写并存 2 + BoardPage 范围预选 view 1）+ ProjectDetailPage ⋯ 菜单开关改写，全套前端 443 文件/5040 例绿（typecheck/lint 净，0 错误 25 基线 warning），per-file 门禁过（50 文件 ≥90%）
+- [x] 阶段 D-① 审计文档记账（`bd434b5c`）✅ 审计清单 §4.2 18 行移入 §4.1（retained 18→0）+ parity 清单闭合改写 + L486 锚点勘误注记
+- [x] 阶段 D-② 真实栈证据（契约 e2e `08f66352` + 证据基线 `bd11dc5a` + 契约 json 刷新 `2d4947a3`）✅ 六断言契约 e2e（邮件打开端点租户上下文修复随附）；四组合（desktop/phone × light/dark）走查 28 张证据截图重拍并逐张目检通过（根因：AppShell main 为固定高度滚动容器，OnboardingChecklist 渲染于 outlet 之上，fullPage 截图无法滚动嵌套容器致新深链场景被清单遮满——按真实用户行为在 spec setup 中 dismiss 清单修复）；real-stack-contract.json 断言全 PASS 刷新
+- [x] 阶段 D-③ 收口修复三连（真实栈走查发现）✅ `865350d4` 技能 bulk-bind 提交 agents 实体 id 而非成员行 id（+ UT）；`70bede91` 收件箱组头不再渲染字面 null（后端快照回填 + 前端防御渲染）；`3fd854fe` IssuesPage URL-sanitize 断言竞态改 waitFor + SkillDetailPage L259 名册剔除防御分支补测（per-file 覆盖率 L259 补齐）
+- [x] 阶段 D-③ 门禁全绿 ✅ 前端：audit 净（0 高危）、format 门禁过（历史债 273→259 路径，触碰文件全清）、typecheck 净、lint 0 错误/25 基线 warning、build 过、vitest 全套 443 文件/5042 例绿（覆盖率 ≥90%，per-file 门禁 `node scripts/verify-perfile-coverage.mjs` 过）、8 项 spec-check 脚本全绿（responsive/a11y-contract/legacy-token-debt/evidence/contrast/appica/tokens/stylelint）；后端：单元 4200 例 + e2e 380 例全绿，合并覆盖率 91.23% ≥90%；OpenAPI 契约测试绿（docs/api/openapi.yaml 与 live app 一致，286 paths）
+- [x] 阶段 D-④ Spec 同步 ✅ squad.md 导出登记 + member.md presence 落地说明（前段）；`2d4947a3` docs/api/openapi.yaml 重生成（新增四端点：inbox/{id}/open、members/presence、squads/{id}/export、skills/bulk-bind）
+- [x] 阶段 D-③ 收尾清理（`713ab98a`）✅ 触碰文件 prettier 格式化并从历史债基线除名；成员在线点迁移 legacy `--color-success` 别名 → 语义 `--color-success-fg`
+
+## 未完成
+
+（无剩余 —— 阶段 A/B/C/D 全部完成，切片交付验收）
+
+### 阶段 B 后端
+- （无剩余 —— B1/B2/B3/B4/B5/B6 全部完成）
+
+### 阶段 C 前端（17 条）
+1. [x] L92 URL 状态同步（分页/收件箱筛选/详情 Tab/看板草稿态）✅ 已提交 `cd8019b2`（见已完成区 C-1）
+2. [x] L93 标签页标题（Issues/IssueDetail/Board/Inbox + 未读 favicon）✅ 已提交 `14e15c64`：InboxBell 权威计数镜像 `state/unreadStore.ts` → `useDocumentTitle` 全局 (N) 前缀 + `applyUnreadFavicon` SVG 徽标（>9 显 9+，卸载清零恢复）；新增 UT 16 例（unreadStore 4 + unreadFavicon 10 + globalChrome 2）+ useDocumentTitle 补 3 例；回归 InboxBell×2/InboxPage/shell-title/IssuesPage/IssueDetailPage/BoardPage 150 例全绿，typecheck/lint 净
+3. [x] L182 离线乐观队列（api/optimisticQueue.ts）✅ 已提交 `08b603f4`（见已完成区 C-16）
+4. [x] L186 专项恢复入口五条 ✅ 已提交 `6e01d8f3`（见已完成区 C-17）
+5. [x] L202 通知聚合前端（已归档视图）✅ 已提交 `8500d19d`（后端）+ `620b7d3f`（前端）（见已完成区 C-18）
+6. [x] L206 内联审批前端（依赖 B1）✅ 已提交 `f673b0ac`（见已完成区 C-6）
+7. [x] L207 邮件通道前端无直接 UI，后端 B3 承载 ✅ 无需前端交付（B3 已完成，见已完成区）
+8. [x] L222 收藏入口（useFavorite + ⋯ 菜单）✅ 已提交 `b7d89e8a`（见已完成区 C-8）
+9. [x] L242 脏状态保护扩展（autopilot 编辑器/技能编辑/评论草稿）✅ 已提交 `7a535aca`（见已完成区 C-19）
+10. [x] L247 批量操作 UI（issue 批量转派 + 技能 bulk UI + 成员批量转派复核）✅ 已提交（见已完成区 C-20）
+11. [x] L251 Presence 前端（成员在线 + 看板谁在查看，依赖 B6）✅ 已提交（见已完成区 C-21）
+12. [x] L252 API 契约 UI（429 退避提示 + Deprecation/Sunset 提示）✅ 已提交：notices 总线（429 秒数提示 + 2s 去抖；弃用头每会话一次）+ ApiNoticeToasts 桥（ToastProvider 内，App 层挂载）+ api.* 文案 3 键×2 目录（version 重算）；UT 21 例 + 全套 4894 例绿 + per-file 门禁过；e2e 走查归入阶段 D 四组合
+13. [x] L480 小队消息着色 + 关联任务 chip ✅ 已提交 `a027000b`：kind 修饰类五色（双主题语义 token）+ 指令/汇报 chip 深链；UT 3 例；e2e 走查归入阶段 D 四组合
+14. [x] L486 小队导出前端入口（后端已做）✅ 已提交 `0286840e`：exportSquadArchive（原始 markdown 独立 fetch + 错误归一）+ 头部 ⋯ Menu 条目（成功/失败 toast，读权限即可）+ i18n 3 键×2 目录；UT 8 例，全套 4902 例绿 + per-file 门禁过；e2e 走查归入阶段 D 四组合
+15. [x] L513 键盘入口一次性提示 + 顶栏占位符 ✅ 已提交 `22966a11`：KeyboardHintBanner（Banner onDismiss 通道）+ keyboardHint 本地记忆（localStorage，隐私模式降级不抛错）+ App 浮层 controls 已使用落记忆 + 顶栏占位「搜索或输入命令…（{combo}）」（formatCombo 平台感知）+ 目录 version 重算脚本；UT 8 新增 + TopBar/App/shell 回归 54+37 例全绿，i18n 125 例全绿
+16. [x] L541–543 导入导出 UI（行级进度/413 预警/情境 ⋯ 入口）✅ 已提交 `6ed6fe2a`（见已完成区 C-22）
+
+### 阶段 D
+- [x] 审计文档 §4.2 18 行移入 §4.1 + 计数；parity 清单闭合改写；L486 锚点勘误注记 ✅ `bd434b5c`
+- [x] 证据：docs/evidence/mes-189/ 四组合截图 + real-stack-contract.json 断言 ✅ `bd11dc5a`（28 张截图逐一目检通过）+ `2d4947a3`（契约 json 刷新，断言全 PASS）
+- [x] 门禁全绿（frontend quality 全套 + backend 全量 + spec-checks）✅ 见已完成区阶段 D-③
+- [x] Spec 同步（squad.md 导出登记 ✅、member.md presence 落地说明 ✅、openapi.yaml 重生成 `2d4947a3` ✅）
+- [x] push + `gh pr ready` + @Mesh Leader（merge_queue=1，勿自合）
+
+## 环境与基建备忘（续接者必读）
+
+- 测试栈容器仍在运行：`mes189s2-pg`（127.0.0.1:5444, db mesh_test）/ `mes189s2-redis`（127.0.0.1:6411）/ `mes189s2-minio`（127.0.0.1:9111）；凭据见 workdir 根 `testenv.sh`（勿提交/勿外发）
+- 定向跑法：`cd Mesh/backend && source <workdir>/testenv.sh && PYTHONPATH=$PWD/src /root/venvs/mesh/bin/python -m pytest <files> -q --no-header -p no:cacheprovider -p no:warnings`
+- 防 thrashing：大文件先 grep 定位再读区间；测试定向 filter；每完成一组立即 commit + push

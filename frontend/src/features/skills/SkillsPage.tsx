@@ -22,6 +22,10 @@ import type { IconName } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import {
+  DirtyNavigationGuardDialog,
+  useDirtyNavigationGuard,
+} from '../../workspace/useDirtyNavigationGuard';
 import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
 import { createSkill, listSkills, workspaceSkillsChannel } from './api';
 import { ImportWizard } from './ImportWizard';
@@ -51,6 +55,9 @@ export function SkillsPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // L242 脏态保护:新建技能对话框有输入即视为脏(技能编辑面唯一表单)。
+  const [createDirty, setCreateDirty] = useState(false);
+  const guard = useDirtyNavigationGuard(createOpen && createDirty);
 
   const workspaceId = membership?.workspace_id ?? null;
   const canManage = membership?.role === 'admin' || membership?.role === 'owner';
@@ -110,6 +117,7 @@ export function SkillsPage(): React.JSX.Element {
           tags: tags.length > 0 ? tags : undefined,
         });
         setCreateOpen(false);
+        setCreateDirty(false);
         setReloadKey((k) => k + 1);
         navigate(
           membership === null
@@ -271,7 +279,14 @@ export function SkillsPage(): React.JSX.Element {
       )}
 
       {createOpen && workspaceId !== null ? (
-        <CreateSkillDialog onClose={() => setCreateOpen(false)} onCreate={onCreate} />
+        <CreateSkillDialog
+          onClose={() => {
+            setCreateOpen(false);
+            setCreateDirty(false);
+          }}
+          onCreate={onCreate}
+          onDirtyChange={setCreateDirty}
+        />
       ) : null}
       {importOpen && workspaceId !== null ? (
         <ImportWizard
@@ -283,6 +298,16 @@ export function SkillsPage(): React.JSX.Element {
           }}
         />
       ) : null}
+      <DirtyNavigationGuardDialog
+        isConfirming={guard.isConfirming}
+        title={t('common.unsavedTitle')}
+        description={t('common.unsavedDescription')}
+        stayLabel={t('common.unsavedStay')}
+        discardLabel={t('common.unsavedDiscard')}
+        closeLabel={t('a11y.closeDialog')}
+        onStay={guard.stay}
+        onDiscard={guard.discard}
+      />
     </DataView>
   );
 }
@@ -290,9 +315,12 @@ export function SkillsPage(): React.JSX.Element {
 function CreateSkillDialog({
   onClose,
   onCreate,
+  onDirtyChange,
 }: {
   onClose: () => void;
   onCreate: (name: string, slug: string, summary: string, tags: string[]) => Promise<void>;
+  /** L242:任一字段非空即上报脏态,供页面级离开确认。 */
+  onDirtyChange?: (dirty: boolean) => void;
 }): React.JSX.Element {
   const t = useT();
   const [name, setName] = useState('');
@@ -301,6 +329,11 @@ function CreateSkillDialog({
   const [tags, setTags] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const dialogDirty = name !== '' || slug !== '' || summary !== '' || tags !== '';
+  useEffect(() => {
+    onDirtyChange?.(dialogDirty);
+  }, [dialogDirty, onDirtyChange]);
 
   const submit = async (): Promise<void> => {
     if (name.trim() === '' || summary.trim() === '') {

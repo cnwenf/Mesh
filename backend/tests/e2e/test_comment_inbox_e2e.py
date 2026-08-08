@@ -453,6 +453,61 @@ async def test_notification_fanout_and_delivery_ledger_e2e(env, relay, owner_fac
     assert unread.json()["data"]["count"] == 1
 
 
+async def test_inbox_archived_view_e2e(env, relay, owner_factory):
+    """L202 真实链路:fan-out → 归档 → 主视图排除 → archived=true 回查 + DB 落库。"""
+    client, bob_token, issue = env["client"], env["bob_token"], env["issue"]
+    resp = await client.post(
+        f"/api/v1/issues/{issue['id']}/comments",
+        json={"body_markdown": "archive me"},
+        headers=_auth(bob_token),
+    )
+    assert resp.status_code == 201
+    await _drain(relay)
+
+    listing = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": str(env["workspace_id"])},
+        headers=_auth(env["alice_token"]),
+    )
+    notification_id = listing.json()["data"][0]["id"]
+
+    # 归档(真实 API)
+    archived_post = await client.post(
+        f"/api/v1/inbox/{notification_id}/archive",
+        params={"workspace_id": str(env["workspace_id"])},
+        headers=_auth(env["alice_token"]),
+    )
+    assert archived_post.status_code == 200
+
+    # DB 落库:archived_at 非空
+    async with owner_factory() as session:
+        row = (
+            await session.execute(
+                select(Notification).where(Notification.id == uuid.UUID(notification_id))
+            )
+        ).scalar_one()
+    assert row.archived_at is not None
+
+    # 主视图缺省不含已归档行
+    main = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": str(env["workspace_id"])},
+        headers=_auth(env["alice_token"]),
+    )
+    assert main.json()["data"] == []
+
+    # archived=true 回查:只含已归档行
+    archived = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": str(env["workspace_id"]), "archived": "true"},
+        headers=_auth(env["alice_token"]),
+    )
+    assert archived.status_code == 200
+    items = archived.json()["data"]
+    assert [item["id"] for item in items] == [notification_id]
+    assert items[0]["archived_at"] is not None
+
+
 async def test_mention_notification_is_critical_e2e(env, relay, owner_factory):
     client, bob_token, issue = env["client"], env["bob_token"], env["issue"]
     await client.post(

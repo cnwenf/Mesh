@@ -38,15 +38,15 @@
 
 ## 4. 逐项检查表处置
 
-前端对齐核对表的审计全集仍为 **142 条断言**。MES-187 在 MES-185 基线的 retained 集合中关闭 10 条、MES-188 再关闭评论/agent/runtime 9 条后，当前处置为：
+前端对齐核对表的审计全集仍为 **142 条断言**。MES-187 在 MES-185 基线的 retained 集合中关闭 10 条、MES-188 再关闭评论/agent/runtime 9 条、MES-189 关闭剩余 18 行（17 条功能，`L541–L543` 合 1 条）后，当前处置为：
 
-- **92 条通过**：MES-185 的 73 条基线，加上 MES-187 关闭的 10 条业务深度断言，再加 MES-188 关闭的 9 条评论/agent/runtime 断言。
-- **18 条保留产品差异**：仍属于独立业务功能、服务端契约或跨模块交互，不把部分实现伪装成完整交付。
+- **110 条通过**：MES-185 的 73 条基线，加上 MES-187 关闭的 10 条业务深度断言、MES-188 关闭的 9 条评论/agent/runtime 断言与 MES-189 关闭的 18 条 URL 状态/离线/通知/收藏/批量/Presence/小队/引导/导入导出断言。
+- **0 条保留产品差异**：retained 集合已全部按对应功能 Spec 独立切片闭合（证据见 §4.1 MES-189 段）；`L373` 仍是明确的部分实现，不属 retained 集合，见 §4.2 注记。
 - **32 条环境边界或可选增强**：依赖目标操作系统读屏、真实软键盘、多客户端/外部平台、专门性能环境，或 Spec 明确标为可选。
 
 检查表中的 `[x]` 表示“已逐项审计并完成处置”，实际是否已实现以条目状态和本审计分类为准。以下编号指 MES-187 收口后的当前检查表行号，便于逐项反查；本次仅替换条目文本，没有在对应区段前插入行。
 
-### 4.1 已验证通过（92）
+### 4.1 已验证通过（110）
 
 `L90, L91, L103, L104, L106, L117, L119, L142, L167–L170, L172, L195, L204, L212, L214, L220, L240–L241, L274, L283–L285, L299, L306, L316–L317, L319, L321–L324, L333, L336, L350–L351, L353–L355, L357, L359, L366, L379, L387–L388, L391–L393, L402, L406, L407, L408, L410, L420–L421, L427–L428, L434, L438, L440–L443, L455, L456–L458, L466–L471, L483–L485, L487, L499, L501, L514, L526–L528, L530, L540, L552–L553, L581–L584`。
 
@@ -55,6 +55,8 @@ MES-185 直接闭合 `L142`（跨时区 tooltip）、`L240`（相对时间自动
 MES-187 从 retained 集合移入通过的恰为 `L316, L317, L336, L350, L354, L366, L379, L388, L391, L392`。`L355` 原已计入 MES-185 的 73 条，本次只把检查表状态和 409 收敛证据修正为真实现状，不重复计数。
 
 MES-188（PR #136）从 retained 集合移入通过的为 `L402, L407, L440–L443, L456–L458` 共 9 条评论线程状态机、agent 运行生命周期与 runtime/执行审计断言。证据锚点：`docs/evidence/mes-188/real-stack-contract.json`（乐观重试落库、幂等键、tombstone、四态 runtime、双 attempt 审批续跑、输出评审批准/打回各 1 次、agent 名册移除）与 `docs/evidence/mes-188/{desktop,phone}-{light,dark}-*.png`（comments-and-issue-executions / board-processing / runtime-degraded / attempt-audit / agent-capacity 四组合存证）；真栈旅程见 `frontend/e2e/real-mes188*` 与 `backend/tests/e2e/`。真 LLM provider 旅程（`mes188_real_llm_e2e`）因上游 token-plan 配额 429 暂缓，未计入本 9 条，配额恢复后补跑存证。
+
+MES-189（批次③切片 2）从 retained 集合移入通过的为 `L92, L93, L182, L186, L202, L206, L207, L222, L242, L247, L251, L252, L480, L486, L513, L541–L543` 共 18 行（17 条）：URL 状态同步与标签页标题/未读 favicon、离线乐观队列与专项恢复五入口、通知聚合归档视图与行内联审批、邮件通道（locale 渲染 + 一次性 token 标已读）、收藏入口、脏态保护扩展、issue/技能/成员批量操作、成员在线与看板谁在查看、429/Deprecation 契约提示、小队消息着色与导出、键盘入口可发现性、导入导出 UI（行级进度/413 前置预警/项目与视图 ⋯ 情境入口）。证据锚点：`docs/evidence/mes-189/real-stack-contract.json`（内联审批落库、通知自动归档、邮件 token 标已读、小队导出、技能 bulk 绑定、assign private-agent 护栏拦截）与 `docs/evidence/mes-189/{desktop,phone}-{light,dark}-*.png` 四组合存证；随批债务（TD-1/2/3/5、DEBT-2）与后端增量（B1–B6）见 `docs/superpowers/plans/PROGRESS-mes189-slice2.md` 已完成区。
 
 | MES-187 能力                             | 真实实现与测试证据                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -65,17 +67,11 @@ MES-188（PR #136）从 retained 集合移入通过的为 `L402, L407, L440–L4
 | 标签合并与色点溢出                       | `frontend/src/features/labels/LabelsPanel.tsx`、`frontend/src/features/labels/LabelDots.tsx`；`frontend/src/features/labels/__tests__/LabelsPanel.test.tsx` 与 `frontend/src/features/labels/__tests__/LabelDots.test.tsx::renders compact data-colour dots and a +N overflow counter`                                                                                                                                                                                                                                                                                                    |
 | 永久项目 key、成员抽屉与头像清空         | `backend/src/mesh/project/routes.py`、`backend/src/mesh/project/service.py`，`frontend/src/features/projects/CreateProjectDialog.tsx`、`frontend/src/features/members/MembersPage.tsx`、`frontend/src/shell/pages/settings/ProfileSettingsSection.tsx`；对应 `backend/tests/unit/test_project_api.py::test_project_key_availability_endpoint`、`backend/tests/unit/test_project_service.py::test_project_key_availability_uses_permanent_prefix_registry`、`frontend/src/features/members/__tests__/MembersPage.test.tsx`、`frontend/src/shell/__tests__/ProfileSettingsSection.test.tsx` |
 
-### 4.2 保留产品差异（18）
+### 4.2 保留产品差异（0）
 
-| 入口行                                           | 主题                                         | 保留原因                                               |
-| ------------------------------------------------ | -------------------------------------------- | ------------------------------------------------------ |
-| `L92, L93, L182, L186`                           | URL/标题/离线队列/专项恢复                   | 涉及多页面状态协议与离线命令队列，不是视觉层可独立闭合 |
-| `L202, L206, L207, L222, L242, L247, L251, L252` | 收件箱、邮件、收藏、批量、Presence、API 提示 | 需要通知聚合、邮件、收藏入口或服务端契约的独立功能切片 |
-| `L480, L486, L513, L541–L543`                    | 小队、引导、导入导出                         | 需要消息分类、导出协议、一次性引导状态或流式作业进度   |
+MES-189 按对应功能 Spec 独立切片闭合了全部 18 行保留差异（`L92, L93, L182, L186, L202, L206, L207, L222, L242, L247, L251, L252, L480, L486, L513, L541–L543`），逐项证据见 §4.1 MES-189 段与 `docs/evidence/mes-189/`；本表清空，retained 集合归零。
 
-这些差异不阻断本轮排版、布局、主题和既有路径可用性；若进入实现，应按对应功能 Spec 独立拆分，不在视觉 PR 中扩写服务端协议。
-
-`L373` 仍是明确的部分实现，不随上述 10 条转为完整通过：卡片投影已覆盖描述、项目、估算、截止日、负责人姓名、更新时间和标签；子任务进度与 assignee 人/Agent 类型头像仍未进入卡片投影，虚拟卡也按固定高度性能契约隐藏扩展元数据。动态分组列 `L379` 已由真实 skeleton 增量闭合，两项不得混用。
+`L373` 仍是明确的部分实现，不随上述 18 行转为完整通过（也不计入 retained 集合）：卡片投影已覆盖描述、项目、估算、截止日、负责人姓名、更新时间和标签；子任务进度与 assignee 人/Agent 类型头像仍未进入卡片投影，虚拟卡也按固定高度性能契约隐藏扩展元数据。动态分组列 `L379` 已由真实 skeleton 增量闭合，两项不得混用。
 
 ### 4.3 环境边界与可选增强（32）
 

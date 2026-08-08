@@ -39,6 +39,10 @@ from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 # Max member snapshots embedded in a squad rendering (list member_preview, §3.1).
 MEMBER_PREVIEW_LIMIT = 8
 
+# Export sections are capped so a pathological squad cannot produce an
+# unbounded archive document (far above realistic orchestration volume).
+EXPORT_SECTION_LIMIT = 5000
+
 # squad_activity.action vocabulary (squad.md §2.8).
 ACTIVITY_ACTIONS = frozenset(
     {
@@ -414,6 +418,129 @@ class SquadService:
             await set_tenant_context(session, workspace_id)
             squad = await self._load_squad(session, workspace_id=workspace_id, squad_id=squad_id)
             return await self.render_squad(session, squad)
+
+    async def export_markdown(self, *, workspace_id: uuid.UUID, squad_id: uuid.UUID) -> str:
+        """Archive export (squad.md §4.5 parity L486): tasks + messages +
+        timeline rendered as one markdown document.
+
+        Read-only; sections are chronologically ordered and capped so a
+        pathological squad cannot produce an unbounded document (the cap is
+        far above realistic orchestration volume).
+        """
+        from mesh.db.models.issue import Issue
+        from mesh.squad.export import render_squad_export
+
+        limit = EXPORT_SECTION_LIMIT
+        async with self._factory() as session:
+            await set_tenant_context(session, workspace_id)
+            squad = await self._load_squad(
+                session, workspace_id=workspace_id, squad_id=squad_id
+            )
+            rendered_squad = await self.render_squad(session, squad)
+
+            task_rows = list(
+                (
+                    await session.execute(
+                        select(SquadTask)
+                        .where(
+                            SquadTask.workspace_id == workspace_id,
+                            SquadTask.squad_id == squad_id,
+                        )
+                        .order_by(SquadTask.created_at.asc())
+                        .limit(limit)
+                    )
+                ).scalars()
+            )
+            identifiers = dict(
+                (
+                    await session.execute(
+                        select(Issue.id, Issue.identifier).where(
+                            Issue.workspace_id == workspace_id,
+                            Issue.id.in_([t.issue_id for t in task_rows] or [uuid.uuid4()]),
+                        )
+                    )
+                ).all()
+            ) if task_rows else {}
+            tasks = []
+            for task in task_rows:
+                assignee = (
+                    await load_member_snapshot(
+                        session, workspace_id=workspace_id, member_id=task.assignee_id
+                    )
+                    if task.assignee_id
+                    else None
+                )
+                tasks.append(
+                    {
+                        "title": task.title_snapshot,
+                        "status": task.status,
+                        "issue_id": str(task.issue_id),
+                        "issue_identifier": identifiers.get(task.issue_id),
+                        "assignee": assignee,
+                        "created_at": task.created_at.isoformat(),
+                        "started_at": task.started_at.isoformat() if task.started_at else None,
+                        "finished_at": task.finished_at.isoformat()
+                        if task.finished_at
+                        else None,
+                        "failure_reason": task.failure_reason,
+                        "result_summary": task.result_summary,
+                    }
+                )
+
+            message_rows = list(
+                (
+                    await session.execute(
+                        select(SquadMessage)
+                        .where(
+                            SquadMessage.workspace_id == workspace_id,
+                            SquadMessage.squad_id == squad_id,
+                        )
+                        .order_by(SquadMessage.created_at.asc())
+                        .limit(limit)
+                    )
+                ).scalars()
+            )
+            messages = [await self._render_message(session, m) for m in message_rows]
+
+            activity_rows = list(
+                (
+                    await session.execute(
+                        select(SquadActivity)
+                        .where(
+                            SquadActivity.workspace_id == workspace_id,
+                            SquadActivity.squad_id == squad_id,
+                        )
+                        .order_by(SquadActivity.created_at.asc())
+                        .limit(limit)
+                    )
+                ).scalars()
+            )
+            activity = []
+            for row in activity_rows:
+                actor = (
+                    await load_member_snapshot(
+                        session, workspace_id=workspace_id, member_id=row.actor_id
+                    )
+                    if row.actor_id
+                    else None
+                )
+                activity.append(
+                    {
+                        "created_at": row.created_at.isoformat(),
+                        "actor": actor,
+                        "action": row.action,
+                        "task_id": str(row.task_id) if row.task_id else None,
+                        "target_id": str(row.target_id) if row.target_id else None,
+                    }
+                )
+
+            return render_squad_export(
+                squad=rendered_squad,
+                tasks=tasks,
+                messages=messages,
+                activity=activity,
+                exported_at=_now(self._clock).isoformat(),
+            )
 
     async def get_issue_assignment(
         self, *, workspace_id: uuid.UUID, issue_id: uuid.UUID

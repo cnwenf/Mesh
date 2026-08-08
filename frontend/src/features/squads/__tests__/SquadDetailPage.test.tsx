@@ -672,3 +672,185 @@ describe('SquadDetailPage', () => {
     expect(String(posts[0].url)).toContain('/squads/sq-1/restore');
   });
 });
+
+describe('SquadDetailPage 归档导出入口(§4.6 / L486)', () => {
+  function stubObjectUrl(): {
+    createObjectURL: ReturnType<typeof vi.fn>;
+    revokeObjectURL: ReturnType<typeof vi.fn>;
+  } {
+    const createObjectURL = vi.fn(() => 'blob:squad-export');
+    const revokeObjectURL = vi.fn();
+    const NativeURL = URL;
+    class SquadTestURL extends NativeURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal('URL', SquadTestURL);
+    return { createObjectURL, revokeObjectURL };
+  }
+
+  it('⋯ 菜单导出归档:下载 markdown 并提示成功', async () => {
+    queueInitialLoad(fakeResponse({ rawText: '# Squad archive' }));
+    const { createObjectURL, revokeObjectURL } = stubObjectUrl();
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Squad actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export archive' }));
+
+    await screen.findByText('Archive exported.');
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe('text/markdown;charset=utf-8');
+    // jsdom Blob 无 text(),经 FileReader 读原文
+    const blobText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+    expect(blobText).toBe('# Squad archive');
+    expect(download).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:squad-export');
+  });
+
+  it('导出失败(403)→ danger toast,不触发下载', async () => {
+    queueInitialLoad(
+      fakeResponse({ status: 403, body: { error: { code: 'forbidden', message: 'no' } } }),
+    );
+    const { createObjectURL } = stubObjectUrl();
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Squad actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export archive' }));
+
+    await screen.findByText('You do not have permission to perform this action.');
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('导出过程意外失败(非 API 错误)→ 通用错误 toast,不触发下载', async () => {
+    queueInitialLoad(fakeResponse({ rawText: '# Squad archive' }));
+    const NativeURL = URL;
+    class ThrowingURL extends NativeURL {
+      static createObjectURL(): string {
+        throw new TypeError('object url denied');
+      }
+      static revokeObjectURL = vi.fn();
+    }
+    vi.stubGlobal('URL', ThrowingURL);
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Squad actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export archive' }));
+
+    await screen.findByText('We could not load this content. Please try again.');
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('普通成员(非 admin)也能看到 ⋯ 导出入口(读权限即可)', async () => {
+    const memberMe = {
+      ...ME,
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    const emptyPage = { data: [], next_cursor: null };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: memberMe } }),
+      fakeResponse({ body: { data: squadFixture() } }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+      fakeResponse({ body: emptyPage }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+
+    expect(screen.queryByTestId('squad-edit-toggle')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Squad actions' })).toBeInTheDocument();
+  });
+});
+
+describe('SquadDetailPage 消息着色与关联任务 chip(§4.2 / L480)', () => {
+  function messageFixture(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'msg-9',
+      squad_id: 'sq-1',
+      task_id: null,
+      sender: AGENT_SNAP,
+      recipient: null,
+      kind: 'chat',
+      body_markdown: 'hello',
+      body_html: null,
+      pinned: false,
+      attachment_ids: [],
+      created_at: '2026-07-02T02:00:00Z',
+      ...overrides,
+    };
+  }
+
+  async function renderWithMessages(rows: Array<Record<string, unknown>>) {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: squadFixture() } }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({ body: { data: rows, next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+  }
+
+  it('按 kind 渲染着色修饰类:指令/汇报/闲聊/系统/上下文', async () => {
+    await renderWithMessages([
+      messageFixture({ id: 'm-instr', kind: 'instruction' }),
+      messageFixture({ id: 'm-rep', kind: 'report' }),
+      messageFixture({ id: 'm-chat', kind: 'chat' }),
+      messageFixture({ id: 'm-sys', kind: 'system', sender: null }),
+      messageFixture({ id: 'm-ctx', kind: 'context' }),
+    ]);
+    expect(screen.getByTestId('squad-message-m-instr').className).toContain(
+      'mesh-squads__message--instruction',
+    );
+    expect(screen.getByTestId('squad-message-m-rep').className).toContain(
+      'mesh-squads__message--report',
+    );
+    expect(screen.getByTestId('squad-message-m-chat').className).toContain(
+      'mesh-squads__message--chat',
+    );
+    expect(screen.getByTestId('squad-message-m-sys').className).toContain(
+      'mesh-squads__message--system',
+    );
+    expect(screen.getByTestId('squad-message-m-ctx').className).toContain(
+      'mesh-squads__message--context',
+    );
+  });
+
+  it('指令/汇报携带 task_id → 关联任务 chip 深链任务详情', async () => {
+    await renderWithMessages([
+      messageFixture({ id: 'm-instr', kind: 'instruction', task_id: 'tk-9' }),
+      messageFixture({ id: 'm-rep', kind: 'report', task_id: 'tk-9' }),
+    ]);
+    const chips = screen.getAllByTestId(/^squad-message-task-/);
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveAttribute('href', '/w/team/squads/sq-1/tasks/tk-9');
+    expect(chips[1]).toHaveAttribute('href', '/w/team/squads/sq-1/tasks/tk-9');
+  });
+
+  it('闲聊/系统/上下文及无任务的指令/汇报不渲染 chip', async () => {
+    await renderWithMessages([
+      messageFixture({ id: 'm-chat', kind: 'chat', task_id: 'tk-9' }),
+      messageFixture({ id: 'm-instr', kind: 'instruction', task_id: null }),
+      messageFixture({ id: 'm-sys', kind: 'system', sender: null, task_id: 'tk-9' }),
+      messageFixture({ id: 'm-ctx', kind: 'context', task_id: 'tk-9' }),
+    ]);
+    expect(screen.queryAllByTestId(/^squad-message-task-/)).toHaveLength(0);
+  });
+});

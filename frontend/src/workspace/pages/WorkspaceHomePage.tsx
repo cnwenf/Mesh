@@ -347,7 +347,8 @@ function WorkspaceOverview(props: { readonly client: MeshApiClient }): React.JSX
             testId="ws-activity-inbox"
             renderItem={(notification) => ({
               to: `${workspacePath}/inbox/${notification.id}`,
-              primary: notification.title,
+              // 旧行/缺快照的 title 可能为 null,退回 preview 保证卡片有可读主文案。
+              primary: notification.title ?? notification.preview,
               secondary: notification.preview,
               badge: isUnread(notification) ? t('inbox.filter.unread') : undefined,
               badgeTone: 'info',

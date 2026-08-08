@@ -38,7 +38,6 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.agent.guardrails import (
-    SKIP_VISIBILITY_PRIVATE,
     TriggerGuardrailConfig,
     emit_trigger_skipped,
     evaluate_assign_trigger,
@@ -206,12 +205,10 @@ async def enqueue_agent_executions(
             trigger="mention",
             chain_depth=0,
             config=TriggerGuardrailConfig(),
+            # §3.5 owner-only rule for private agents lives in the shared gate
+            # (TD-3): the comment author's user identity is the trigger actor.
+            actor_user_id=author_member.user_id if author_member is not None else None,
         )
-        if reason is None and agent_row is not None and agent_row.visibility == "private":
-            # agent.md §3.5: a private agent is only triggerable by its owner.
-            author_user_id = author_member.user_id if author_member is not None else None
-            if author_user_id != agent_row.owner_user_id:
-                reason = SKIP_VISIBILITY_PRIVATE
         if reason is not None:
             await emit_trigger_skipped(
                 session,
@@ -231,23 +228,25 @@ async def enqueue_agent_executions(
             skipped.append(agent.id)
             continue
 
-        agent_key = agent.agent_id or agent.id
+        # Past the gate ``agent_row`` and ``agent.agent_id`` are guaranteed
+        # non-None: a missing row returns ``agent_not_found`` and the skip
+        # branch above continues (TD-2 — the former None-fallbacks here were
+        # unreachable).
+        assert agent_row is not None and agent.agent_id is not None  # gate invariant
+        agent_key = agent.agent_id
         # §3.7 S-09: mention path must use the same snapshot builder as
         # assign/autopilot/squad — never enqueue with empty config.
-        config_snapshot: dict = {}
-        required_capabilities: list = []
-        if agent_row is not None:
-            mc = agent_row.model_config if isinstance(agent_row.model_config, dict) else {}
-            snapshot_parts = build_config_snapshot(
-                agent_config_version_id=agent_row.active_config_version_id,
-                trigger_event_id=trigger_event_id,
-                provider=mc.get("provider"),
-                model=mc.get("model"),
-                effort=mc.get("reasoning_effort"),
-                system_instructions=agent_row.system_instructions,
-            )
-            config_snapshot = snapshot_parts["config_snapshot"]
-            required_capabilities = snapshot_parts["required_capabilities"]
+        mc = agent_row.model_config if isinstance(agent_row.model_config, dict) else {}
+        snapshot_parts = build_config_snapshot(
+            agent_config_version_id=agent_row.active_config_version_id,
+            trigger_event_id=trigger_event_id,
+            provider=mc.get("provider"),
+            model=mc.get("model"),
+            effort=mc.get("reasoning_effort"),
+            system_instructions=agent_row.system_instructions,
+        )
+        config_snapshot = snapshot_parts["config_snapshot"]
+        required_capabilities = snapshot_parts["required_capabilities"]
         enqueue_event: OutboxEvent = await emit_event(
             session,
             workspace_id=workspace_id,

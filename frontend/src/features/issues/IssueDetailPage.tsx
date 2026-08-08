@@ -35,6 +35,8 @@ import {
   useToast,
 } from '../../design';
 import { env } from '../../env';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useUrlState } from '../../hooks/useUrlState';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -45,10 +47,13 @@ import { useSettingsStore } from '../../state/settingsStore';
 import { CommentsPanel } from '../comments';
 import type { CommentMemberRef } from '../comments';
 import type { MentionCandidate } from '../comments/mentions';
+import { useFavorites } from '../favorites/useFavorites';
 import { fetchMe, listMembers } from '../members/api';
 import type { HumanProfile, MemberSummary } from '../members/types';
+import { workspaceRoute } from '../members/useWorkspaceMembership';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
 import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
+import { workspaceHasOnlineRuntime } from '../runtimes/dispatchHint';
 import {
   addDependency,
   deleteIssue,
@@ -287,6 +292,11 @@ export function IssueDetailPage(): React.JSX.Element {
   usePageContext('board', 'issue');
 
   const [issue, setIssue] = useState<IssueDetail | null>(null);
+  // L222 收藏入口:issue 目标类型成员集合 + 乐观切换(§6.19);
+  // 详情未解析完成时 workspaceId 为 null,hook 内部不发请求。
+  const favorites = useFavorites(issue?.workspace_id ?? null, 'issue');
+  // L93 标签页标题:实体标识 + 标题(未解析完成前仅产品名)。
+  useDocumentTitle(issue === null ? '' : `${issue.identifier} ${issue.title}`);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
   const [members, setMembers] = useState<MemberSummary[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -304,7 +314,13 @@ export function IssueDetailPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('comments');
+  // L92:讨论/活动 Tab 同步 URL(?tab=),刷新不丢、可分享;缺省 comments 不占参数。
+  const [tabParam, setTabParam] = useUrlState('tab');
+  const activeTab = tabParam === 'activity' ? 'activity' : 'comments';
+  const setActiveTab = useCallback(
+    (value: string) => setTabParam(value === 'comments' ? null : value),
+    [setTabParam],
+  );
   const [statusValidationError, setStatusValidationError] = useState<string | null>(null);
   const statusStrictMode = workspaceContext?.workspace?.settings.status_strict_mode === true;
 
@@ -429,6 +445,29 @@ export function IssueDetailPage(): React.JSX.Element {
     };
   }, [realtime, issueKey]);
 
+  // L186 无可用 runtime 专项恢复入口(README §6.12 / onboarding.md §4 次级 CTA):
+  // agent 执行需有 runtime 认领(§6.4)。分派给 agent 成员保存成功后轻探测工作区
+  // 在线 runtime;确定没有 → warn 提示「无匹配 runtime」并深链 Runtimes 页。
+  // 仅提示不阻断分派;探测失败按可用处理(不误报)。
+  const warnIfNoOnlineRuntime = useCallback(
+    async (assigneeId: string) => {
+      if (issue === null || workspaceSlug === null) return;
+      const assignee = members.find((member) => member.id === assigneeId);
+      if (assignee === undefined || assignee.member_type !== 'agent') return;
+      const available = await workspaceHasOnlineRuntime(client, issue.workspace_id);
+      if (available) return;
+      toast.addToast(t('issues.noRuntimeWarning'), {
+        tone: 'warn',
+        closeLabel: t('common.close'),
+        actionLabel: t('runtimes.title'),
+        onAction: () => {
+          navigate(workspaceRoute(workspaceSlug, '/automations/runtimes'));
+        },
+      });
+    },
+    [client, issue, members, workspaceSlug, navigate, toast, t],
+  );
+
   const patchAndToast = useCallback(
     async (changes: Partial<IssueDetail>) => {
       if (issue === null) return;
@@ -448,6 +487,9 @@ export function IssueDetailPage(): React.JSX.Element {
           closeLabel: t('common.close'),
         });
         if (!conflicted && changes.assignee_id !== undefined) {
+          // L186:分派给 agent 且无在线 runtime → 保存成功后提示「无匹配 runtime」
+          // 并深链 Runtimes 页(§6.12);fire-and-forget,不阻塞就地收敛。
+          if (changes.assignee_id !== null) void warnIfNoOnlineRuntime(changes.assignee_id);
           // 负责人 PATCH 已返回完整 issue 快照(详情专有的 children_progress 除外)。
           // 就地收敛可保留窄容器中的属性抽屉与 agent 提示，避免成功保存后抽屉
           // 因整页 loading 重挂载而关闭；activity 单独刷新，不打断当前交互。
@@ -492,7 +534,7 @@ export function IssueDetailPage(): React.JSX.Element {
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       }
     },
-    [client, issue, mutation, toast, t, indicator],
+    [client, issue, mutation, toast, t, indicator, warnIfNoOnlineRuntime],
   );
 
   const saveTitle = useCallback(async () => {
@@ -611,7 +653,7 @@ export function IssueDetailPage(): React.JSX.Element {
         closeLabel: t('common.close'),
       });
     },
-    [client, issue, t, toast],
+    [client, issue, setActiveTab, t, toast],
   );
 
   if (error !== null) {
@@ -670,6 +712,12 @@ export function IssueDetailPage(): React.JSX.Element {
         triggerLabel={t('issues.actions')}
         trigger={<Icon name="more-horizontal" size={16} />}
         entries={[
+          {
+            key: 'favorite',
+            label: favorites.favoriteIds.has(issue.id) ? t('favorites.remove') : t('favorites.add'),
+            icon: 'star',
+            onSelect: () => void favorites.toggle(issue.id),
+          },
           {
             key: 'delete',
             label: t('issues.detail.delete'),

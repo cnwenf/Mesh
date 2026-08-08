@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import logging
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -137,6 +138,13 @@ class RealtimeSession:
         # view:{id} channels this connection is present on → owner workspace
         # (kanban §3.5 view.presence); cleared on unsubscribe/disconnect.
         self._presence_channels: dict[str, Any] = {}
+        # Workspaces this connection is counted online in → member id used for
+        # member.presence (member.md §3.5). Keyed per workspace so a member
+        # with several channels in one workspace is counted once.
+        self._online_workspaces: dict[Any, Any] = {}
+        # Subscribed channel → owner workspace, so unsubscribe can tell when a
+        # workspace's LAST channel drops and member presence must clear.
+        self._subscription_owners: dict[str, Any] = {}
 
     async def _send(self, frame: dict[str, Any]) -> None:
         async with self._send_lock:
@@ -183,6 +191,73 @@ class RealtimeSession:
             joined=joined,
         )
 
+    async def _resolve_member_id(self, workspace_id: Any) -> Any:
+        """The connection's member id in ``workspace_id``, or None.
+
+        None covers dev principals (non-UUID subject) and users whose roster
+        entry is gone — both simply stay invisible in presence.
+        """
+        principal = self._state.principal
+        if principal is None:
+            return None
+        try:
+            user_id = uuid.UUID(str(principal.subject))
+        except ValueError:
+            return None
+        from mesh.db.models.member import Member
+
+        async with self._session_factory() as session:
+            await set_tenant_context(session, workspace_id)
+            return await session.scalar(
+                select(Member.id).where(
+                    Member.workspace_id == workspace_id,
+                    Member.user_id == user_id,
+                )
+            )
+
+    async def _note_member_presence(self, owner: Any, *, joined: bool) -> None:
+        """Maintain workspace member online state (member.md §3.5).
+
+        Join is noted once per workspace (first subscribed channel), leave
+        once the workspace's last channel is gone or the connection closes.
+        Best-effort and isolated, same contract as view presence: presence
+        must never break the session; sessions without Redis skip it.
+        """
+        if self._redis is None or owner is None:
+            return
+        from mesh.member.presence import note_member_presence
+
+        try:
+            if joined:
+                if owner in self._online_workspaces:
+                    return  # already counted online in this workspace
+                member_id = await self._resolve_member_id(owner)
+                self._online_workspaces[owner] = member_id
+                if member_id is None:
+                    return
+                await note_member_presence(
+                    self._session_factory,
+                    self._redis,
+                    workspace_id=owner,
+                    member_id=member_id,
+                    joined=True,
+                )
+            else:
+                if owner not in self._online_workspaces:
+                    return
+                member_id = self._online_workspaces.pop(owner)
+                if member_id is None:
+                    return
+                await note_member_presence(
+                    self._session_factory,
+                    self._redis,
+                    workspace_id=owner,
+                    member_id=member_id,
+                    joined=False,
+                )
+        except Exception:  # noqa: BLE001 — presence is best-effort by contract
+            logger.debug("member presence note failed", exc_info=True)
+
     async def run(self) -> None:
         """Run the connection until it closes."""
         if not await self._authenticate():
@@ -200,6 +275,10 @@ class RealtimeSession:
             for channel in list(self._presence_channels):
                 with contextlib.suppress(Exception):
                     await self._note_view_presence(channel, None, joined=False)
+            # Clear member presence for every workspace still counted online.
+            for owner in list(self._online_workspaces):
+                with contextlib.suppress(Exception):
+                    await self._note_member_presence(owner, joined=False)
             pump_task.cancel()
             heartbeat_task.cancel()
             for task in (pump_task, heartbeat_task):
@@ -272,7 +351,12 @@ class RealtimeSession:
                 channel = frame.get("channel")
                 if isinstance(channel, str):
                     self._state.subscriptions.discard(channel)
+                    owner = self._subscription_owners.pop(channel, None)
                     await self._note_view_presence(channel, None, joined=False)
+                    # Member presence clears only when this was the workspace's
+                    # last subscribed channel on this connection.
+                    if owner is not None and owner not in self._subscription_owners.values():
+                        await self._note_member_presence(owner, joined=False)
             elif op == OP_PING:
                 await self._send({"op": FRAME_PING})
             else:
@@ -327,6 +411,8 @@ class RealtimeSession:
         # announce presence when the channel is still subscribed.
         if channel in self._state.subscriptions:
             await self._note_view_presence(channel, owner, joined=True)
+            self._subscription_owners[channel] = owner
+            await self._note_member_presence(owner, joined=True)
 
     async def _replay(self, channel: str, resume_from: int, owner_workspace) -> None:
         """Replay stored events from ``resume_from``; emit resync_required when stale.
@@ -425,7 +511,10 @@ class RealtimeSession:
         if principal is not None and await self._authorizer.authorize(principal, channel) is not None:
             return True
         self._state.subscriptions.discard(channel)
+        owner = self._subscription_owners.pop(channel, None)
         await self._note_view_presence(channel, None, joined=False)
+        if owner is not None and owner not in self._subscription_owners.values():
+            await self._note_member_presence(owner, joined=False)
         await self._send_error(
             "forbidden",
             "authorization changed; subscription removed",

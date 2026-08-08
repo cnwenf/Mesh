@@ -6,6 +6,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ErrorState, Icon, Skeleton, useToast } from '../../design';
 import { formatRelativeTime, useT } from '../../i18n';
+import {
+  DirtyNavigationGuardDialog,
+  useDirtyNavigationGuard,
+} from '../../workspace/useDirtyNavigationGuard';
 import { CommentCard } from './CommentCard';
 import { CommentComposer } from './CommentComposer';
 import { RunStatus } from './RunStatus';
@@ -57,6 +61,30 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
   const [replyTarget, setReplyTarget] = useState<Comment | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(readAnchorId);
   const attemptedAnchors = useRef<Set<string>>(new Set());
+
+  // L242 评论草稿脏态保护:仅当草稿未能持久化(localStorage 不可用)时,
+  // 对应 draftKey 记为脏;任一 composer 脏即拦截站内导航。
+  // reporter 按 draftKey 缓存,保证传给 composer 的回调身份稳定,
+  // 避免 composer 的 effect 依赖抖动造成清理/上报交替的无限重渲染。
+  const [dirtyDraftKeys, setDirtyDraftKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const draftReporterCache = useRef<Map<string, (dirty: boolean) => void>>(new Map());
+  const getDraftReporter = useCallback((draftKey: string) => {
+    let reporter = draftReporterCache.current.get(draftKey);
+    if (reporter === undefined) {
+      reporter = (dirty: boolean): void => {
+        setDirtyDraftKeys((prev) => {
+          if (prev.has(draftKey) === dirty) return prev;
+          const next = new Set(prev);
+          if (dirty) next.add(draftKey);
+          else next.delete(draftKey);
+          return next;
+        });
+      };
+      draftReporterCache.current.set(draftKey, reporter);
+    }
+    return reporter;
+  }, []);
+  const guard = useDirtyNavigationGuard(dirtyDraftKeys.size > 0);
 
   // 深链锚点:初始 + hashchange 同步高亮 id。
   useEffect(() => {
@@ -262,6 +290,7 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
             candidates={props.candidates}
             replyToName={replyTarget.author?.name ?? null}
             onSubmit={handleSubmit}
+            onDirtyChange={getDraftReporter(`${props.issueId}:reply:${root.id}`)}
             autoFocus
           />
         ) : null}
@@ -353,8 +382,20 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
           draftKey={props.issueId}
           candidates={props.candidates}
           onSubmit={handleSubmit}
+          onDirtyChange={getDraftReporter(props.issueId)}
         />
       ) : null}
+
+      <DirtyNavigationGuardDialog
+        isConfirming={guard.isConfirming}
+        title={t('common.unsavedTitle')}
+        description={t('common.unsavedDescription')}
+        stayLabel={t('common.unsavedStay')}
+        discardLabel={t('common.unsavedDiscard')}
+        closeLabel={t('a11y.closeDialog')}
+        onStay={guard.stay}
+        onDiscard={guard.discard}
+      />
     </section>
   );
 }

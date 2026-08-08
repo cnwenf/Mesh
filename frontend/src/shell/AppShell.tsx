@@ -21,13 +21,15 @@ import {
 import type { ReactNode } from 'react';
 import { Outlet, useLocation, useMatch, useNavigate } from 'react-router';
 import { MeshApiError, getToken } from '../api';
+import { createOptimisticQueue, initOptimisticQueueTriggers } from '../api/optimisticQueue';
+import type { OptimisticQueue } from '../api/optimisticQueue';
 import { useToast } from '../design';
 import { env, resolveWsGatewayUrl } from '../env';
 import { useT } from '../i18n';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
-import { OnboardingChecklist } from '../features/onboarding';
+import { KeyboardHintBanner, OnboardingChecklist } from '../features/onboarding';
 import { useAuthStore } from '../state/authStore';
 import { usePaletteContext } from '../shortcuts/usePaletteContext';
 import type { RealtimeEventFrame } from '../types/realtime';
@@ -60,6 +62,18 @@ export const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 /** shell 外(如登录页/独立渲染的 HomePage)返回 null */
 export function useRealtimeContext(): RealtimeContextValue | null {
   return useContext(RealtimeContext);
+}
+
+/**
+ * L182 通用乐观操作队列上下文(README §6.12 offline 行「乐观操作排队」)。
+ * 队列实例由 AppShell 持有并接线回放触发器(online 事件 / realtime 重连);
+ * 特性页面经 useOptimisticQueue 提交幂等操作(断线入队、恢复回放、逐项标记)。
+ */
+export const OptimisticQueueContext = createContext<OptimisticQueue | null>(null);
+
+/** shell 外返回 null */
+export function useOptimisticQueue(): OptimisticQueue | null {
+  return useContext(OptimisticQueueContext);
 }
 
 export interface OverlayControls {
@@ -333,6 +347,52 @@ export function AppShell(): React.JSX.Element {
   });
 
   const realtimeValue = useMemo<RealtimeContextValue>(() => ({ state, client }), [state, client]);
+
+  // L182 通用乐观操作队列(README §6.12 offline 行):断线排队,online 事件 /
+  // realtime 重连(→ connected)按 FIFO 回放;逐项结果标记。
+  const [optimisticQueue] = useState(() => createOptimisticQueue());
+  useEffect(() => () => optimisticQueue.dispose(), [optimisticQueue]);
+  useEffect(
+    () =>
+      initOptimisticQueueTriggers(optimisticQueue, {
+        extraTriggers: [
+          (fire) =>
+            client.onState((next) => {
+              if (next === 'connected') fire();
+            }),
+        ],
+      }),
+    [optimisticQueue, client],
+  );
+  const [queuedCount, setQueuedCount] = useState(0);
+  useEffect(() => {
+    setQueuedCount(optimisticQueue.pendingCount());
+    return optimisticQueue.subscribe((items) => {
+      setQueuedCount(
+        items.filter((item) => item.status === 'queued' || item.status === 'running').length,
+      );
+    });
+  }, [optimisticQueue]);
+  // 回放失败项以 toast 呈现(逐项标记的聚合提示);已提示项不重复打扰。
+  const notifiedFailedIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(
+    () =>
+      optimisticQueue.subscribe((items) => {
+        const fresh = items.filter(
+          (item) => item.status === 'failed' && !notifiedFailedIdsRef.current.has(item.id),
+        );
+        if (fresh.length === 0) return;
+        notifiedFailedIdsRef.current = new Set([
+          ...notifiedFailedIdsRef.current,
+          ...fresh.map((item) => item.id),
+        ]);
+        addToast(t('state.offlineOpFailed', { count: fresh.length }), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
+      }),
+    [optimisticQueue, addToast, t],
+  );
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
   const openSearch = useOverlaySearch();
@@ -391,11 +451,14 @@ export function AppShell(): React.JSX.Element {
         <Sidebar collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       </aside>
       <div className="mesh-shell__banner">
-        <StatusBanner state={state} />
+        <StatusBanner state={state} queuedCount={queuedCount} />
       </div>
       <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />
+        {/* 键盘入口一次性提示(onboarding.md §4.2 / L513):仅工作区上下文内呈现,
+            已关闭/已使用即自隐藏(本地记忆,不进服务端) */}
+        {workspaceSlug !== undefined ? <KeyboardHintBanner /> : null}
         {outlet}
       </main>
       {/* 手机导航(design-quality §4.3):0–599px 底部主导航 + 「更多」全高抽屉;
@@ -407,18 +470,20 @@ export function AppShell(): React.JSX.Element {
 
   return (
     <RealtimeContext.Provider value={realtimeValue}>
-      <WorkspaceFeatureFlagsProvider value={featureFlags}>
-        {workspaceSlug !== undefined ? (
-          // The slug is the tenant identity boundary. Remount the complete
-          // workspace subtree synchronously so local page state and late
-          // requests owned by the previous workspace cannot cross tenants.
-          <WorkspaceProvider key={workspaceSlug} slug={workspaceSlug}>
-            {layout}
-          </WorkspaceProvider>
-        ) : (
-          layout
-        )}
-      </WorkspaceFeatureFlagsProvider>
+      <OptimisticQueueContext.Provider value={optimisticQueue}>
+        <WorkspaceFeatureFlagsProvider value={featureFlags}>
+          {workspaceSlug !== undefined ? (
+            // The slug is the tenant identity boundary. Remount the complete
+            // workspace subtree synchronously so local page state and late
+            // requests owned by the previous workspace cannot cross tenants.
+            <WorkspaceProvider key={workspaceSlug} slug={workspaceSlug}>
+              {layout}
+            </WorkspaceProvider>
+          ) : (
+            layout
+          )}
+        </WorkspaceFeatureFlagsProvider>
+      </OptimisticQueueContext.Provider>
     </RealtimeContext.Provider>
   );
 }

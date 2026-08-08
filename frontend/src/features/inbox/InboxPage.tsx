@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
+import { useUrlState } from '../../hooks/useUrlState';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import {
   Avatar,
@@ -25,6 +26,7 @@ import {
   useToast,
 } from '../../design';
 import { env } from '../../env';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -43,6 +45,7 @@ import {
 } from './api';
 import { setCurrentInboxView } from './currentFilter';
 import { groupNotifications } from './grouping';
+import { InboxApprovalActions } from './InboxApprovalActions';
 import { InboxPreviewPane } from './InboxPreviewPane';
 import { extractQuietHours, isInQuietHours } from './quietHours';
 import type { QuietHours } from './quietHours';
@@ -53,10 +56,20 @@ import { useInboxContext } from './useInboxContext';
 import './inbox.css';
 
 const FILTERS: readonly InboxFilter[] = ['all', 'unread', 'mentions', 'assigned', 'agent'];
+/** L202 归档视图 tab 值(客户端视图态;API filter 参数不含 archived,走独立查询参数)。 */
+const ARCHIVED_TAB = 'archived' as const;
+type InboxTab = InboxFilter | typeof ARCHIVED_TAB;
+const TABS: readonly InboxTab[] = [...FILTERS, ARCHIVED_TAB];
 const PAGE_LIMIT = 30;
+
+/** URL filter 参数 → 合法枚举值;非法/缺失一律回落 all(L92 可分享、刷新不丢)。 */
+function tabFromParam(raw: string | null): InboxTab {
+  return (TABS as readonly string[]).includes(raw ?? '') ? (raw as InboxTab) : 'all';
+}
 
 export function InboxPage(): React.JSX.Element {
   const t = useT();
+  useDocumentTitle(t('inbox.title')); // L93 标签页标题
   const toast = useToast();
   const navigate = useNavigate();
   const { notificationId } = useParams();
@@ -66,8 +79,18 @@ export function InboxPage(): React.JSX.Element {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
 
-  const [filter, setFilter] = useState<InboxFilter>('all');
-  // 命令面板「标记全部已读」命令随当前视图 filter 口径(§1.2 S3 命令 ⑧)。
+  // L92:筛选同步 URL(?filter=),刷新不丢、可分享;all 为缺省不占参数。
+  const [filterParam, setFilterParam] = useUrlState('filter');
+  const tab = tabFromParam(filterParam);
+  // L202:归档视图为客户端 tab 态;API filter 保持 Spec 五值,archived 走独立查询参数。
+  const isArchivedView = tab === ARCHIVED_TAB;
+  const filter: InboxFilter = isArchivedView ? 'all' : tab;
+  const setFilter = useCallback(
+    (next: InboxTab) => setFilterParam(next === 'all' ? null : next),
+    [setFilterParam],
+  );
+  // 命令面板「标记全部已读」命令随当前视图 filter 口径(§1.2 S3 命令 ⑧);
+  // 归档视图回落 all(后端 filter 不接受 archived,命令作用于主视图)。
   useEffect(() => {
     setCurrentInboxView(workspaceId, filter);
     return () => setCurrentInboxView(null, 'all');
@@ -91,6 +114,7 @@ export function InboxPage(): React.JSX.Element {
           workspaceId,
           filter,
           grouped: true,
+          archived: isArchivedView,
           limit: PAGE_LIMIT,
         });
         if (cancelled) return;
@@ -105,7 +129,7 @@ export function InboxPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [client, workspaceId, filter, reloadKey]);
+  }, [client, workspaceId, filter, isArchivedView, reloadKey]);
 
   // 免打扰偏好:best-effort 一次,失败静默(不渲染横幅)。
   useEffect(() => {
@@ -124,6 +148,8 @@ export function InboxPage(): React.JSX.Element {
   // realtime 合并(新通知前置 / 标已读多端同步)。
   useEffect(() => {
     if (realtime === null || memberId === null) return;
+    // L202:归档视图不合并实时帧(帧均为主视图语义;行以进页拉取为准)。
+    if (isArchivedView) return;
     const channel = inboxChannel(memberId);
     realtime.client.subscribe(channel);
     const off = realtime.client.onFrame((frame) => {
@@ -134,7 +160,7 @@ export function InboxPage(): React.JSX.Element {
       off();
       realtime.client.unsubscribe(channel);
     };
-  }, [realtime, memberId, filter]);
+  }, [realtime, memberId, filter, isArchivedView]);
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
@@ -152,9 +178,7 @@ export function InboxPage(): React.JSX.Element {
       if (workspaceId === null || notification.read_at !== null) return;
       void markRead(client, workspaceId, notification.id).catch(() => {
         setNotifications((prev) =>
-          prev.map((item) =>
-            item.id === notification.id ? { ...item, read_at: null } : item,
-          ),
+          prev.map((item) => (item.id === notification.id ? { ...item, read_at: null } : item)),
         );
         notifyFailure();
       });
@@ -268,9 +292,7 @@ export function InboxPage(): React.JSX.Element {
 
   const groups = groupNotifications(notifications);
   const selectedNotification =
-    selectedId === null
-      ? null
-      : notifications.find((item) => item.id === selectedId) ?? null;
+    selectedId === null ? null : (notifications.find((item) => item.id === selectedId) ?? null);
   const unknownId =
     selectedId !== null && !isLoading && selectedNotification === null ? selectedId : null;
 
@@ -285,28 +307,44 @@ export function InboxPage(): React.JSX.Element {
       {isLoading ? (
         <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox__skeleton" />
       ) : groups.length === 0 ? (
-        <EmptyState
-          illustration={<EmptyInboxTray />}
-          title={t('onboarding.empty.inbox.title')}
-          description={t('onboarding.empty.inbox.description')}
-          action={
-            <Button
-              size="sm"
-              data-testid="inbox-empty-action"
-              onClick={() => navigate(boardPath)}
-            >
-              {t('onboarding.empty.inbox.action')}
-            </Button>
-          }
-        />
+        isArchivedView ? (
+          <div data-testid="inbox-archived-empty">
+            <EmptyState
+              illustration={<EmptyInboxTray />}
+              title={t('inbox.archivedEmpty.title')}
+              description={t('inbox.archivedEmpty.description')}
+            />
+          </div>
+        ) : (
+          <EmptyState
+            illustration={<EmptyInboxTray />}
+            title={t('onboarding.empty.inbox.title')}
+            description={t('onboarding.empty.inbox.description')}
+            action={
+              <Button
+                size="sm"
+                data-testid="inbox-empty-action"
+                onClick={() => navigate(boardPath)}
+              >
+                {t('onboarding.empty.inbox.action')}
+              </Button>
+            }
+          />
+        )
       ) : (
         <div className="mesh-inbox__groups" data-testid="inbox-groups">
           {groups.map((group) => (
-            <section key={group.issueId} className="mesh-inbox__group" data-testid={`inbox-group-${group.issueId}`}>
+            <section
+              key={group.issueId}
+              className="mesh-inbox__group"
+              data-testid={`inbox-group-${group.issueId}`}
+            >
               <header className="mesh-inbox__group-head">
                 <span className="mesh-inbox__group-title mesh-text-caption">
                   {group.issue !== null
-                    ? `${group.issue.identifier} · ${group.issue.title}`
+                    ? [group.issue.identifier, group.issue.title]
+                        .filter((part): part is string => part !== null && part !== '')
+                        .join(' · ') || group.issueId
                     : group.issueId}
                 </span>
                 {group.issueId !== 'none' ? (
@@ -325,11 +363,13 @@ export function InboxPage(): React.JSX.Element {
                   <InboxRow
                     key={notification.id}
                     notification={notification}
+                    workspaceId={workspaceId}
                     isSelected={notification.id === selectedId}
                     locale={locale}
                     onSelect={handleSelect}
                     onMarkRead={handleMarkRead}
                     onArchive={handleArchive}
+                    showArchive={!isArchivedView}
                   />
                 ))}
               </ul>
@@ -343,9 +383,9 @@ export function InboxPage(): React.JSX.Element {
     <Tabs
       className="mesh-inbox__filter-tabs"
       label={t('inbox.filterLabel')}
-      value={filter}
-      onChange={(value) => setFilter(value as InboxFilter)}
-      items={FILTERS.map((value) => ({
+      value={tab}
+      onChange={(value) => setFilter(value as InboxTab)}
+      items={TABS.map((value) => ({
         value,
         label: t(`inbox.filter.${value}`),
         content: listContent,
@@ -360,14 +400,26 @@ export function InboxPage(): React.JSX.Element {
         className="mesh-inbox__data-view"
         title={t('inbox.title')}
         actions={
-          <div className="mesh-inbox__toolbar">
-            <Button size="sm" variant="secondary" data-testid="inbox-read-all" onClick={handleReadAll}>
-              {t('inbox.readAll')}
-            </Button>
-            <Button size="sm" variant="secondary" data-testid="inbox-archive-read" onClick={handleArchiveRead}>
-              {t('inbox.archiveRead')}
-            </Button>
-          </div>
+          isArchivedView ? undefined : (
+            <div className="mesh-inbox__toolbar">
+              <Button
+                size="sm"
+                variant="secondary"
+                data-testid="inbox-read-all"
+                onClick={handleReadAll}
+              >
+                {t('inbox.readAll')}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                data-testid="inbox-archive-read"
+                onClick={handleArchiveRead}
+              >
+                {t('inbox.archiveRead')}
+              </Button>
+            </div>
+          )
         }
       >
         <ConversationLayout
@@ -385,6 +437,7 @@ export function InboxPage(): React.JSX.Element {
             workspaceSlug={workspaceSlug}
             onMarkRead={handleMarkRead}
             onArchive={handleArchive}
+            showArchive={!isArchivedView}
           />
         </ConversationLayout>
       </DataView>
@@ -394,11 +447,14 @@ export function InboxPage(): React.JSX.Element {
 
 interface InboxRowProps {
   readonly notification: Notification;
+  readonly workspaceId: string;
   readonly isSelected: boolean;
   readonly locale: string;
   readonly onSelect: (notification: Notification) => void;
   readonly onMarkRead: (notification: Notification) => void;
   readonly onArchive: (notification: Notification) => void;
+  /** L202 归档视图:行已归档,不再提供归档操作。 */
+  readonly showArchive: boolean;
 }
 
 /**
@@ -407,7 +463,16 @@ interface InboxRowProps {
  * 徽标表达优先级;来源者在标题前显迷你头像。行操作 hover/focus 出现,≤720px 常驻。
  */
 function InboxRow(props: InboxRowProps): React.JSX.Element {
-  const { notification, isSelected, locale, onSelect, onMarkRead, onArchive } = props;
+  const {
+    notification,
+    workspaceId,
+    isSelected,
+    locale,
+    onSelect,
+    onMarkRead,
+    onArchive,
+    showArchive,
+  } = props;
   const t = useT();
   const unread = isUnread(notification);
   const rowClasses = [
@@ -436,10 +501,17 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
       >
         <span className="mesh-inbox__row-lead">
           {unread ? (
-            <span className="mesh-inbox__dot" aria-hidden="true" data-testid={`inbox-unread-dot-${notification.id}`} />
+            <span
+              className="mesh-inbox__dot"
+              aria-hidden="true"
+              data-testid={`inbox-unread-dot-${notification.id}`}
+            />
           ) : null}
           {notification.actor !== null ? (
-            <span className="mesh-inbox__row-actor" data-testid={`inbox-row-actor-${notification.id}`}>
+            <span
+              className="mesh-inbox__row-actor"
+              data-testid={`inbox-row-actor-${notification.id}`}
+            >
               <Avatar
                 name={notification.actor.name}
                 size={20}
@@ -449,10 +521,13 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
           ) : null}
         </span>
         <span className="mesh-inbox__row-body">
-          <span className={titleClasses} title={notification.title}>
+          <span className={titleClasses} title={notification.title ?? undefined}>
             {notification.title}
           </span>
-          <span className="mesh-inbox__row-preview mesh-text-caption mesh-truncate" title={notification.preview}>
+          <span
+            className="mesh-inbox__row-preview mesh-text-caption mesh-truncate"
+            title={notification.preview}
+          >
             {notification.preview}
           </span>
         </span>
@@ -462,7 +537,10 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
           </span>
         ) : null}
         {notification.priority === 'critical' ? (
-          <span className="mesh-inbox__row-priority" data-testid={`inbox-row-priority-${notification.id}`}>
+          <span
+            className="mesh-inbox__row-priority"
+            data-testid={`inbox-row-priority-${notification.id}`}
+          >
             <Badge icon="warning" tone="warning">
               {t('inbox.priority.critical')}
             </Badge>
@@ -476,6 +554,9 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
         </time>
       </button>
       <span className="mesh-inbox__row-actions">
+        {notification.type === 'review_requested' && notification.approval_id != null ? (
+          <InboxApprovalActions workspaceId={workspaceId} approvalId={notification.approval_id} />
+        ) : null}
         {unread ? (
           <button
             type="button"
@@ -485,13 +566,15 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
             {t('inbox.action.read')}
           </button>
         ) : null}
-        <button
-          type="button"
-          data-testid={`inbox-archive-${notification.id}`}
-          onClick={() => onArchive(notification)}
-        >
-          {t('inbox.action.archive')}
-        </button>
+        {showArchive ? (
+          <button
+            type="button"
+            data-testid={`inbox-archive-${notification.id}`}
+            onClick={() => onArchive(notification)}
+          >
+            {t('inbox.action.archive')}
+          </button>
+        ) : null}
       </span>
     </li>
   );

@@ -415,6 +415,7 @@ class BoardMoveService:
                     issue=issue,
                     previous_assignee_id=uuid.UUID(prev) if prev else None,
                     trigger_event_id=moved_event.id,
+                    actor=actor,
                 )
             await self._upsert_position_tx(
                 session,
@@ -696,6 +697,7 @@ class BoardMoveService:
                     issue=issue,
                     previous_assignee_id=uuid.UUID(prev) if prev else None,
                     trigger_event_id=moved_event.id,
+                    actor=actor,
                 )
             if wip_exceeded:
                 await emit_realtime(

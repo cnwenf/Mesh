@@ -36,6 +36,7 @@ from mesh.db.models.skill import (
 )
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
+    BusinessRuleError,
     ConflictError,
     NotFoundError,
     ValidationError,
@@ -231,6 +232,54 @@ class BindingService:
                 user_agent=user_agent,
             )
             return rendered
+
+    async def bulk_bind(
+        self,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        agent_ids: list[uuid.UUID],
+        skill_installation_id: uuid.UUID,
+        skill_version_id: uuid.UUID | None = None,
+        auto_trigger: bool = True,
+        priority: int = 100,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict:
+        """Bind one installed skill to many agents at once (L247 批量操作).
+
+        Each agent is bound in its own transaction (the single-bind contract
+        is reused verbatim), so one agent's failure never poisons the rest —
+        the response carries per-item results in the issues/bulk error-marker
+        convention: ``bound`` rows plus ``errors[]`` with ``agent_id``/``code``.
+        """
+        SkillService.require_manage(actor)
+        bound: list[dict] = []
+        errors: list[dict] = []
+        seen: set[uuid.UUID] = set()
+        for agent_id in agent_ids:
+            if agent_id in seen:
+                continue
+            seen.add(agent_id)
+            try:
+                rendered = await self.bind(
+                    actor=actor,
+                    workspace_id=workspace_id,
+                    agent_id=agent_id,
+                    skill_installation_id=skill_installation_id,
+                    skill_version_id=skill_version_id,
+                    auto_trigger=auto_trigger,
+                    priority=priority,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+            except (NotFoundError, ConflictError, ValidationError, BusinessRuleError) as exc:
+                errors.append(
+                    {"agent_id": str(agent_id), "code": exc.code, "message": str(exc)}
+                )
+                continue
+            bound.append(rendered)
+        return {"bound": bound, "errors": errors}
 
     # -- list (agent skills, §3.2 example shape) ----------------------------------------------
 

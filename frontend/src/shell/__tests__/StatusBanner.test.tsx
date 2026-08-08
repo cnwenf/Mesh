@@ -39,4 +39,18 @@ describe('StatusBanner', () => {
     renderWithProviders(<StatusBanner state="offline" onRetry={() => undefined} />);
     expect(screen.getByTestId('status-banner-offline')).toBeInTheDocument();
   });
+
+  it('offline 且有待回放操作时附排队计数提示(L182)', () => {
+    renderWithProviders(<StatusBanner state="offline" queuedCount={3} />);
+    expect(screen.getByTestId('status-banner-offline-queued')).toBeInTheDocument();
+    expect(screen.getByTestId('status-banner-offline-queued').textContent).toContain('3');
+  });
+
+  it('offline 且 queuedCount 缺省/为 0 时不渲染排队提示(L182)', () => {
+    const { unmount } = renderWithProviders(<StatusBanner state="offline" />);
+    expect(screen.queryByTestId('status-banner-offline-queued')).not.toBeInTheDocument();
+    unmount();
+    renderWithProviders(<StatusBanner state="offline" queuedCount={0} />);
+    expect(screen.queryByTestId('status-banner-offline-queued')).not.toBeInTheDocument();
+  });
 });

@@ -13,15 +13,19 @@ import {
   EmptyState,
   ErrorState,
   Icon,
+  IconButton,
+  Menu,
   PageHeader,
   Skeleton,
   Tabs,
   buttonClasses,
   useToast,
 } from '../../design';
+import type { MenuEntry } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { useFavorites } from '../favorites/useFavorites';
 import { fetchMe } from '../members/api';
 import {
   archiveProject,
@@ -85,6 +89,8 @@ export function ProjectDetailPage(): React.JSX.Element {
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  // L222 收藏入口:项目头部星标(§6.19);workspace 未解析时不发请求。
+  const projectFavorites = useFavorites(workspace?.workspace_id ?? null, 'project');
   const projectListPath =
     workspace?.workspace_slug !== undefined
       ? projectsRoute(workspace.workspace_slug)
@@ -256,6 +262,26 @@ export function ProjectDetailPage(): React.JSX.Element {
 
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
+  // L543(import-export.md §4.1):项目 ⋯ 情境入口 — 读权限可导出本项目;
+  // 写权限(admin/owner)可导入到本项目(import-export.md §3.1 权限闸门)。
+  const canImportToProject = workspace?.role === 'admin' || workspace?.role === 'owner';
+  const projectMenuEntries: readonly MenuEntry[] = [
+    {
+      key: 'export',
+      label: t('dataJobs.page.exportProject'),
+      onSelect: () => setExportOpen(true),
+    },
+    ...(canImportToProject
+      ? [
+          {
+            key: 'import',
+            label: t('dataJobs.page.importProject'),
+            disabled: project.archived,
+            onSelect: () => setImportOpen(true),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="mesh-projects">
@@ -287,6 +313,21 @@ export function ProjectDetailPage(): React.JSX.Element {
           }
           actions={
             <div className="mesh-projects__detail-actions">
+              {/* L222 项目收藏星标:已收藏呈实心星,aria-pressed 暴露切换态(§6.19)。 */}
+              <IconButton
+                variant="secondary"
+                className="mesh-projects__favorite-toggle"
+                data-testid="project-favorite-toggle"
+                label={
+                  projectFavorites.favoriteIds.has(project.id)
+                    ? t('favorites.remove')
+                    : t('favorites.add')
+                }
+                aria-pressed={projectFavorites.favoriteIds.has(project.id)}
+                onClick={() => void projectFavorites.toggle(project.id)}
+              >
+                <Icon name="star" size={16} filled={projectFavorites.favoriteIds.has(project.id)} />
+              </IconButton>
               <Button
                 variant="secondary"
                 data-testid="update-status-button"
@@ -319,23 +360,14 @@ export function ProjectDetailPage(): React.JSX.Element {
               >
                 {t('projects.detail.delete')}
               </Button>
-              <Button
-                variant="secondary"
-                data-testid="export-project-button"
-                onClick={() => setExportOpen(true)}
-              >
-                {t('dataJobs.page.exportProject')}
-              </Button>
-              {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
-                <Button
-                  variant="secondary"
-                  data-testid="import-project-button"
-                  disabled={project.archived}
-                  onClick={() => setImportOpen(true)}
-                >
-                  {t('dataJobs.page.importProject')}
-                </Button>
-              )}
+              {/* L543:导入/导出收进 ⋯ 情境菜单(import-export.md §4.1)。 */}
+              <Menu
+                trigger={<Icon name="more-horizontal" size={16} />}
+                triggerLabel={t('projects.detail.moreActions')}
+                align="end"
+                entries={projectMenuEntries}
+                className="mesh-projects__more-menu"
+              />
             </div>
           }
         />

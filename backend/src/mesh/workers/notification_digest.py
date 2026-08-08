@@ -24,12 +24,17 @@ async def notification_digest_loop(
     mailer,
     interval: float,
     stop: asyncio.Event,
+    settings=None,
 ) -> None:
-    """Run the digest sweep every ``interval`` seconds until ``stop``."""
+    """Run the digest sweep every ``interval`` seconds until ``stop``.
+
+    ``settings`` enables the token-gated deep links (app_base_url + jwt
+    signing); the sweep degrades to link-less bodies without it.
+    """
     while not stop.is_set():
         try:
             async with session_factory() as session, session.begin():
-                sent = await send_digest_emails(session, mailer=mailer)
+                sent = await send_digest_emails(session, mailer=mailer, settings=settings)
             if sent:
                 logger.info("notification digest sweep sent %s emails", sent)
         except Exception:

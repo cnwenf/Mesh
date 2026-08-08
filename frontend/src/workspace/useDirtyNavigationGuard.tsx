@@ -18,6 +18,11 @@ export interface DirtyNavigationGuardResult {
   stay: () => void;
   /** 放弃更改并前往被拦截目标 */
   discard: () => void;
+  /**
+   * 以编程方式请求离开(如「取消」按钮):脏态下弹确认,确认放弃后导航到 path;
+   * 非脏态调用方应直接 navigate,不经由此方法。
+   */
+  requestLeave: (path: string) => void;
 }
 
 /** 是否为应用内路径(以单个 / 开头,排除协议相对 //)。 */
@@ -72,8 +77,12 @@ export function useDirtyNavigationGuard(dirty: boolean): DirtyNavigationGuardRes
     if (pendingPath !== null) navigate(pendingPath);
     setPendingPath(null);
   }, [navigate, pendingPath]);
+  const requestLeave = useCallback((path: string) => {
+    // 已有待确认目标时不覆盖(先到的导航请求优先)。
+    setPendingPath((prev) => (prev === null ? path : prev));
+  }, []);
 
-  return { isConfirming: pendingPath !== null, stay, discard };
+  return { isConfirming: pendingPath !== null, stay, discard, requestLeave };
 }
 
 export interface DirtyNavigationGuardDialogProps {
@@ -88,9 +97,19 @@ export interface DirtyNavigationGuardDialogProps {
 }
 
 /** 离开确认 Dialog(stay/discard;discard 为破坏性 → danger 变体)。 */
-export function DirtyNavigationGuardDialog(props: DirtyNavigationGuardDialogProps): React.JSX.Element {
-  const { isConfirming, title, description, stayLabel, discardLabel, closeLabel, onStay, onDiscard } =
-    props;
+export function DirtyNavigationGuardDialog(
+  props: DirtyNavigationGuardDialogProps,
+): React.JSX.Element {
+  const {
+    isConfirming,
+    title,
+    description,
+    stayLabel,
+    discardLabel,
+    closeLabel,
+    onStay,
+    onDiscard,
+  } = props;
   return (
     <Dialog open={isConfirming} onClose={onStay} title={title} closeLabel={closeLabel}>
       <p className="mesh-settings-guard__description">{description}</p>

@@ -173,9 +173,12 @@ describe('IssueExecutionsPanel', () => {
         ),
       ).toBe(true),
     );
-    expect(screen.getByTestId('issue-execution-status-exec-running')).toHaveAttribute(
-      'data-status',
-      'cancelling',
+    // 行状态收敛发生在 cancel 响应落 state 之后(异步渲染),必须等待而非同步断言
+    await waitFor(() =>
+      expect(screen.getByTestId('issue-execution-status-exec-running')).toHaveAttribute(
+        'data-status',
+        'cancelling',
+      ),
     );
     expect(screen.queryByTestId('issue-execution-cancel-exec-running')).toBeNull();
   });

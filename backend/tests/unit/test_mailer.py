@@ -65,6 +65,24 @@ def test_compose_without_base_url_has_no_link():
     assert "http" not in body
 
 
+@pytest.mark.parametrize("kind", ["notification_digest", "notification_realtime"])
+def test_compose_notification_kinds_pass_body_through_verbatim(kind):
+    # Notification mails arrive fully rendered (locale chrome + escaped
+    # previews + deep link — comment-inbox.md §4.4); the ``token`` slot is
+    # the body itself and must never be wrapped in one-time-code chrome.
+    mailer = SmtpMailDelivery(
+        _settings(
+            auth_mode="production",
+            smtp_host="mail.corp.com",
+            app_base_url="https://mesh.example.com",
+        )
+    )
+    rendered = "Mesh notification digest (1 items)\n\nPreview: hello\n"
+    msg = mailer.compose("a@corp.com", kind, rendered)
+    assert msg["Subject"] == "Mesh notification"
+    assert msg.get_content() == rendered
+
+
 # --- SMTP send ---------------------------------------------------------------
 
 

@@ -9,7 +9,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useIntl } from 'react-intl';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, Dialog, ErrorState, Select, Skeleton, StatusDot, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  ErrorState,
+  Icon,
+  Menu,
+  Select,
+  Skeleton,
+  StatusDot,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { formatDateTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -20,6 +30,7 @@ import {
   addMembers,
   archiveSquad,
   changeRole,
+  exportSquadArchive,
   listActivity,
   listMembers,
   listMessages,
@@ -343,7 +354,7 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
           {visible.map((message) => (
             <li
               key={message.id}
-              className="mesh-squads__message"
+              className={`mesh-squads__message mesh-squads__message--${message.kind}`}
               data-testid={`squad-message-${message.id}`}
             >
               <span className="mesh-squads__message-sender">
@@ -355,6 +366,19 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
               <span className="mesh-squads__message-time">
                 {timestamp(message.created_at, intl.locale)}
               </span>
+              {message.task_id !== null &&
+              (message.kind === 'instruction' || message.kind === 'report') ? (
+                <Link
+                  to={workspaceRoute(
+                    workspace.workspace_slug,
+                    `/squads/${squad.id}/tasks/${message.task_id}`,
+                  )}
+                  className="mesh-squads__message-task"
+                  data-testid={`squad-message-task-${message.id}`}
+                >
+                  {t('squads.relatedTask')}
+                </Link>
+              ) : null}
               <p className="mesh-squads__message-body">{message.body_markdown}</p>
             </li>
           ))}
@@ -487,6 +511,34 @@ export function SquadDetailPage(): React.JSX.Element {
     }
   }, [client, workspace, squad, toast, t]);
 
+  // 归档导出(squad.md §4.6 / L486):原始 markdown 走 Blob 下载;
+  // 读权限即可使用(页面可见者皆可导出),故不挂 canManage 门。
+  const [isExporting, setIsExporting] = useState(false);
+  const handleExportArchive = useCallback(async (): Promise<void> => {
+    // 入口仅在加载完成后渲染,守卫仅为类型收窄;重复点击由菜单项 disabled 防抖。
+    if (workspace === null || squad === null) return;
+    setIsExporting(true);
+    try {
+      const { markdown, fileName } = await exportSquadArchive(workspace.workspace_id, squad.id);
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.addToast(t('squads.toast.exported'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
+    } catch (err: unknown) {
+      const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+      toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+    } finally {
+      setIsExporting(false);
+    }
+  }, [workspace, squad, toast, t]);
+
   // 成员就地更新(改角色 / 移除)与名册重拉(加成员后)——避免整页级联重拉。
   const handleRoleChanged = useCallback((memberId: string, role: SquadRole) => {
     setMembers((prev) => prev.map((m) => (m.member_id === memberId ? { ...m, role } : m)));
@@ -559,6 +611,20 @@ export function SquadDetailPage(): React.JSX.Element {
             </Button>
           </>
         ) : null}
+        <Menu
+          trigger={<Icon name="more-horizontal" size={16} />}
+          triggerLabel={t('squads.moreMenu')}
+          align="end"
+          entries={[
+            {
+              key: 'export-archive',
+              label: t('squads.exportArchive'),
+              icon: 'download',
+              disabled: isExporting,
+              onSelect: () => void handleExportArchive(),
+            },
+          ]}
+        />
       </header>
 
       <MembersPane

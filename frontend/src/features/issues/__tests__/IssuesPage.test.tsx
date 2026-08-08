@@ -5,7 +5,7 @@
  * fetch 桩按调用序驱动:users/me → members → issues → statuses。
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { Link, MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -571,6 +571,50 @@ describe('IssuesPage', () => {
     });
     // 批量成功后 onDone 清空选择 → 批量条(selectedCount 0)消失
     await waitFor(() => expect(screen.queryByTestId('bulk-bar')).toBeNull());
+  });
+
+  it('bulk assign via menu sends changes.assignee_id; suspended members excluded (L247)', async () => {
+    const stub = queueInitialLoad(
+      fakeResponse({ body: { data: { succeeded: 1, failed: 0, errors: [] } } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    await screen.findByTestId('bulk-bar');
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to…' }));
+    // 活跃成员可选;停用成员不入候选
+    expect(screen.queryByRole('menuitem', { name: 'Suspended member' })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Planner' }));
+    await waitFor(() => {
+      const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+      expect(JSON.parse(String(posts[0].init?.body))).toEqual({
+        issue_ids: ['iss-1'],
+        changes: { assignee_id: 'agent-1' },
+      });
+    });
+  });
+
+  it('bulk unassign sends empty assignee_id (backend clears, L247)', async () => {
+    const stub = queueInitialLoad(
+      fakeResponse({ body: { data: { succeeded: 1, failed: 0, errors: [] } } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    await screen.findByTestId('bulk-bar');
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to…' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unassign' }));
+    await waitFor(() => {
+      const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+      expect(JSON.parse(String(posts[0].init?.body))).toEqual({
+        issue_ids: ['iss-1'],
+        changes: { assignee_id: '' },
+      });
+    });
   });
 
   it('bulk failure (non-partial) shows a danger toast and keeps rows', async () => {
@@ -1518,5 +1562,118 @@ describe('IssuesPage', () => {
       'href',
       '/w/team/issues/by-identifier/WS-1',
     );
+  });
+});
+
+describe('IssuesPage 分页 ↔ URL 同步(L92)', () => {
+  let latestSearch = '';
+
+  function LocationProbe(): null {
+    latestSearch = useLocation().search;
+    return null;
+  }
+
+  function renderPageWithProbe(realtime: RealtimeContextValue, route: string): void {
+    render(
+      <MemoryRouter initialEntries={[route]}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={realtime}>
+                <LocationProbe />
+                <Routes>
+                  <Route path="/w/:workspaceSlug/issues" element={<IssuesPage />} />
+                </Routes>
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function issueCalls(stub: FetchStub): FetchStub['calls'] {
+    return stub.calls.filter((call) => String(call.url).includes('/issues?'));
+  }
+
+  beforeEach(() => {
+    latestSearch = '';
+  });
+
+  it('深链 ?page=2 经游标追赶第 2 页', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'cur-1' } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPageWithProbe(makeFakeRealtime().value, '/w/team/issues?page=2');
+
+    expect(await screen.findByText('WS-1')).toBeTruthy();
+    expect(await screen.findByText('WS-2')).toBeTruthy();
+    const calls = issueCalls(stub);
+    expect(calls.length).toBe(2);
+    expect(String(calls[1]?.url)).toContain('cursor=cur-1');
+    expect(latestSearch).toBe('?page=2');
+  });
+
+  it('加载更多写入 ?page=2,刷新可恢复深度', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'cur-1' } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPageWithProbe(makeFakeRealtime().value, '/w/team/issues');
+    await screen.findByText('WS-1');
+
+    fireEvent.click(screen.getByTestId('issues-load-more'));
+    await screen.findByText('WS-2');
+    await waitFor(() => expect(latestSearch).toBe('?page=2'));
+  });
+
+  it('筛选变更清除 ?page=(新列表从第 1 页起)', async () => {
+    const mine = { ...ISSUE_1, assignee_id: 'mem-1' };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({ body: { data: [ISSUE_1], next_cursor: 'cur-1' } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+      fakeResponse({ body: { data: [ISSUE_2], next_cursor: null } }),
+      // mine 切换后:assignee_id 过滤的第 1 页 + 状态定义
+      fakeResponse({ body: { data: [mine], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPageWithProbe(makeFakeRealtime().value, '/w/team/issues?page=2');
+    await screen.findByText('WS-2'); // 追赶完成
+
+    fireEvent.click(screen.getByTestId('issue-filter-mine'));
+    await waitFor(() => expect(latestSearch).toBe('?mine=true'));
+    await waitFor(() => {
+      const last = issueCalls(stub).pop();
+      expect(String(last?.url)).toContain('assignee_id=mem-1');
+    });
+  });
+
+  it('非法 ?page= 回落单页且不写参数', async () => {
+    const stub = queueInitialLoad();
+    renderPageWithProbe(makeFakeRealtime().value, '/w/team/issues?page=bogus');
+    await screen.findByText('WS-1');
+    expect(issueCalls(stub).length).toBe(1);
+    // sanitize 是数据落定后的 effect,与同级用例一致用 waitFor 等 URL 收敛。
+    await waitFor(() => expect(latestSearch).toBe(''));
+  });
+
+  it('数据不足目标页数时清除陈旧 ?page=', async () => {
+    const stub = queueInitialLoad();
+    renderPageWithProbe(makeFakeRealtime().value, '/w/team/issues?page=5');
+    await screen.findByText('WS-1');
+    await waitFor(() => expect(latestSearch).toBe(''));
+    expect(issueCalls(stub).length).toBe(1);
   });
 });

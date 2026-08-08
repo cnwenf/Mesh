@@ -39,16 +39,14 @@ export async function listInbox(
       filter: params.filter,
       type: params.type,
       grouped: params.grouped,
+      archived: params.archived,
     },
   });
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
 
 /** 未读计数(顶栏徽标)。 */
-export async function unreadCount(
-  client: MeshApiClient,
-  workspaceId: string,
-): Promise<number> {
+export async function unreadCount(client: MeshApiClient, workspaceId: string): Promise<number> {
   const result = await client.request<{ count: number }>('GET', `${INBOX_PATH}/unread-count`, {
     query: { workspace_id: workspaceId },
   });
@@ -69,10 +67,7 @@ export async function readAll(
 }
 
 /** 归档全部已读。 */
-export async function archiveRead(
-  client: MeshApiClient,
-  workspaceId: string,
-): Promise<number> {
+export async function archiveRead(client: MeshApiClient, workspaceId: string): Promise<number> {
   const result = await client.request<{ archived: number }>('POST', `${INBOX_PATH}/archive-read`, {
     query: { workspace_id: workspaceId },
     body: {},

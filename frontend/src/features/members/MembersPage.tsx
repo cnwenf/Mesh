@@ -49,10 +49,11 @@ import type { IssueSummary } from '../issues/types';
 import { resetOnboardingMember } from '../onboarding/api';
 import { requestOptimisticStepComplete } from '../onboarding/notify';
 import { EmptyRoster } from '../onboarding/illustrations';
-import { getMember, listMembers, updateMember } from './api';
+import { getMember, getMemberPresence, listMembers, updateMember } from './api';
 import { AddMemberDialog } from './AddMemberDialog';
 import { RemoveMemberDialog } from './RemoveMemberDialog';
 import type { RemoveMode } from './RemoveMemberDialog';
+import { ReassignMemberDialog } from './ReassignMemberDialog';
 import type { MemberDetail, MemberRole, MemberSummary, MemberType } from './types';
 import { ROLE_ORDER } from './types';
 import { useWorkspaceMembership, workspaceRoute } from './useWorkspaceMembership';
@@ -199,6 +200,8 @@ export function MembersPage(): React.JSX.Element {
   const [searchInput, setSearchInput] = useState('');
   const [q, setQ] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  /** 在线成员集(member.md §3.1 快照 + §3.5 member.presence 帧增量)。 */
+  const [onlineIds, setOnlineIds] = useState<ReadonlySet<string>>(() => new Set<string>());
 
   const [addOpen, setAddOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -216,6 +219,8 @@ export function MembersPage(): React.JSX.Element {
   const [agentActionError, setAgentActionError] = useState<string | null>(null);
   /** 管理员重置上手进度的二次确认目标(onboarding.md §4.2;仅人类成员行) */
   const [resetTarget, setResetTarget] = useState<MemberSummary | null>(null);
+  // L247 成员名下任务批量转派入口(POST /members/reassign)。
+  const [reassignSource, setReassignSource] = useState<MemberSummary | null>(null);
 
   // REST 快照先填充 agentId → 容量三元组,realtime 绝对帧随后覆盖。
   const agentIds = useMemo(
@@ -314,6 +319,25 @@ export function MembersPage(): React.JSX.Element {
     loadRoster();
   }, [loadRoster, reloadKey]);
 
+  // 在线成员首屏快照(member.md §3.1):presence 为可选增强,失败静默降级为
+  // 「无人在线」,绝不阻塞名册渲染——与后端 best-effort 语义对齐。
+  useEffect(() => {
+    if (workspace === null) return;
+    let cancelled = false;
+    getMemberPresence(client, workspace.workspace_id)
+      .then((snapshot) => {
+        if (cancelled) return;
+        const ids = Array.isArray(snapshot.online_member_ids) ? snapshot.online_member_ids : [];
+        setOnlineIds(new Set(ids));
+      })
+      .catch(() => {
+        if (!cancelled) setOnlineIds(new Set<string>());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspace]);
+
   // Member mutations are projected onto the workspace channel by the current
   // backend. Reload the active projection only for this workspace/channel.
   useEffect(() => {
@@ -321,7 +345,30 @@ export function MembersPage(): React.JSX.Element {
     const channel = workspaceChannel(workspace.workspace_id);
     realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
-      if (frame.channel !== channel || !MEMBER_EVENTS.has(frame.event)) return;
+      if (frame.channel !== channel) return;
+      // member.presence(§3.5):在线态增量更新,不触发整册重载。
+      if (frame.event === 'member.presence') {
+        const payload = frame.payload as { member_id?: unknown; presence?: unknown };
+        if (
+          typeof payload.member_id === 'string' &&
+          (payload.presence === 'online' || payload.presence === 'offline')
+        ) {
+          const memberId = payload.member_id;
+          const online = payload.presence === 'online';
+          setOnlineIds((prev) => {
+            if (prev.has(memberId) === online) return prev;
+            const next = new Set(prev);
+            if (online) {
+              next.add(memberId);
+            } else {
+              next.delete(memberId);
+            }
+            return next;
+          });
+        }
+        return;
+      }
+      if (!MEMBER_EVENTS.has(frame.event)) return;
       setReloadKey((key) => key + 1);
     });
     return () => {
@@ -539,6 +586,14 @@ export function MembersPage(): React.JSX.Element {
         onSelect: () => void handleEnable(member),
       });
     }
+    // L247 批量转派入口:活跃成员名下未完成 issue 整体转给另一名活跃成员。
+    if (member.status === 'active') {
+      entries.push({
+        key: `reassign-${member.id}`,
+        label: t('members.reassign.action'),
+        onSelect: () => setReassignSource(member),
+      });
+    }
     const canRemove = member.member_type === 'human' || agentIdOf(member) !== null;
     if (canRemove && member.status !== 'removed' && !isCurrentHumanMember(member, currentUserId)) {
       entries.push({
@@ -634,12 +689,24 @@ export function MembersPage(): React.JSX.Element {
         data-testid={isCard ? `member-card-open-${member.id}` : `member-open-${member.id}`}
         onClick={() => openDetail(member)}
       >
-        <Avatar
-          name={member.display_name}
-          kind={member.member_type === 'agent' ? 'agent' : 'human'}
-          size={32}
-          src={avatarSrc(member)}
-        />
+        <span className="mesh-members__avatar-wrap">
+          <Avatar
+            name={member.display_name}
+            kind={member.member_type === 'agent' ? 'agent' : 'human'}
+            size={32}
+            src={avatarSrc(member)}
+          />
+          {onlineIds.has(member.id) ? (
+            <span
+              className="mesh-members__online-dot"
+              data-testid={
+                isCard ? `card-member-online-${member.id}` : `member-online-${member.id}`
+              }
+              title={t('members.presence.online')}
+              aria-label={t('members.presence.online')}
+            />
+          ) : null}
+        </span>
         <span className="mesh-members__identity-text">
           <span className="mesh-members__identity-primary">
             <span
@@ -1101,6 +1168,18 @@ export function MembersPage(): React.JSX.Element {
                 );
                 setReloadKey((key) => key + 1);
               }}
+            />
+          ) : null}
+          {reassignSource !== null ? (
+            <ReassignMemberDialog
+              open
+              onClose={() => setReassignSource(null)}
+              client={client}
+              workspaceId={workspace.workspace_id}
+              member={reassignSource}
+              targets={members.filter(
+                (member) => member.status === 'active' && member.id !== reassignSource.id,
+              )}
             />
           ) : null}
           <Dialog

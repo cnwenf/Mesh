@@ -15,6 +15,7 @@ import pytest
 import redis.asyncio as aioredis
 
 from mesh.api.app import create_app
+from mesh.comment_inbox.notifications import issue_email_open_token
 from mesh.config import load_settings
 
 PASSWORD = "a-strong-passw0rd"
@@ -560,6 +561,89 @@ async def test_inbox_requires_workspace_id(env):
     assert bad.status_code == 400
 
 
+async def test_email_open_link_marks_read_and_rejects_invalid_tokens(env, app):
+    """comment-inbox.md §4.4:the signed one-time email link marks the
+    notification read over an UNAUTHENTICATED route; every verification
+    failure collapses to the same 404 (anti-oracle). MES-189 regression
+    surface for the tenant-context fix found by the real-stack e2e."""
+    client, token, workspace = env["client"], env["token"], env["workspace"]
+    await _seed_inbox_notifications(env, count=1)
+    notification = (
+        await client.get(
+            "/api/v1/inbox", params={"workspace_id": workspace["id"]}, headers=_auth(token),
+        )
+    ).json()["data"][0]
+    assert notification["read_at"] is None
+
+    roster = await client.get(
+        f"/api/v1/workspaces/{workspace['id']}/members", headers=_auth(token)
+    )
+    alice_member = next(m for m in roster.json()["data"] if m["member_type"] == "human")
+
+    open_token = issue_email_open_token(
+        app.state.settings,
+        notification_id=uuid.UUID(notification["id"]),
+        workspace_id=uuid.UUID(workspace["id"]),
+        recipient_member_id=uuid.UUID(alice_member["id"]),
+    )
+
+    opened = await client.get(
+        f"/api/v1/inbox/{notification['id']}/open", params={"token": open_token}
+    )
+    assert opened.status_code == 200, opened.text
+    frame = opened.json()["data"]
+    assert frame["read_at"] is not None
+
+    # unified 404: tampered token / swapped notification id / missing token
+    tampered = await client.get(
+        f"/api/v1/inbox/{notification['id']}/open", params={"token": open_token + "x"}
+    )
+    assert tampered.status_code == 404
+    swapped = await client.get(
+        f"/api/v1/inbox/{uuid.uuid4()}/open", params={"token": open_token}
+    )
+    assert swapped.status_code == 404
+    missing = await client.get(f"/api/v1/inbox/{notification['id']}/open")
+    assert missing.status_code == 404
+
+
+async def test_inbox_archived_view(env):
+    """L202:GET /inbox?archived=true 只返回已归档通知(可回查);缺省不含归档行。"""
+    client, token, workspace = env["client"], env["token"], env["workspace"]
+    await _seed_inbox_notifications(env, count=2)  # 60s 窗口内聚合为 1 行
+    listing = await client.get(
+        "/api/v1/inbox", params={"workspace_id": workspace["id"]}, headers=_auth(token),
+    )
+    notification_id = listing.json()["data"][0]["id"]
+    archived_post = await client.post(
+        f"/api/v1/inbox/{notification_id}/archive",
+        params={"workspace_id": workspace["id"]}, headers=_auth(token),
+    )
+    assert archived_post.status_code == 200
+    # 缺省主视图不再含该行
+    main = await client.get(
+        "/api/v1/inbox", params={"workspace_id": workspace["id"]}, headers=_auth(token),
+    )
+    assert main.json()["data"] == []
+    # archived=true 回查:只含已归档行
+    archived = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": workspace["id"], "archived": "true"},
+        headers=_auth(token),
+    )
+    assert archived.status_code == 200
+    items = archived.json()["data"]
+    assert [item["id"] for item in items] == [notification_id]
+    assert items[0]["archived_at"] is not None
+    # archived 缺省为 false,显式 false 与缺省一致
+    explicit = await client.get(
+        "/api/v1/inbox",
+        params={"workspace_id": workspace["id"], "archived": "false"},
+        headers=_auth(token),
+    )
+    assert explicit.json()["data"] == []
+
+
 async def test_mute_unmute_issue(env):
     client, token, issue = env["client"], env["token"], env["issue"]
     muted = await client.post(
@@ -690,6 +774,43 @@ async def test_private_project_comment_invisible_to_non_member_member(client):
     assert (
         await client.get(f"/api/v1/comments/{comment_id}", headers=_auth(owner))
     ).status_code == 200
+
+
+async def test_comment_path_404_messages_are_indistinguishable(client):
+    """DEBT-2: a known comment UUID must not reveal whether the comment exists
+    in an invisible project. All comment-UUID path denials return the SAME
+    message — a nonexistent comment and an invisible-project comment both say
+    ``comment not found`` (no residual existence inference)."""
+    owner = await _register_and_login(client, "s1d-owner@mesh.example")
+    workspace = await _create_workspace(client, owner, f"ws-{uuid.uuid4().hex[:10]}")
+    private_project = await _create_project(
+        client, owner, workspace["id"], "PRVD", visibility="private"
+    )
+    issue = await _create_issue_in_project(
+        client, owner, workspace["id"], private_project["id"]
+    )
+    created = await _post_comment(client, owner, issue["id"], "hidden comment")
+    assert created.status_code == 201, created.text
+    hidden_comment_id = created.json()["data"]["id"]
+
+    outsider = await _invite_accept(
+        client, owner, workspace["id"], "s1d-outsider@mesh.example", role="member"
+    )
+
+    # Existing comment in an invisible project → 404 "comment not found".
+    invisible = await client.get(
+        f"/api/v1/comments/{hidden_comment_id}", headers=_auth(outsider)
+    )
+    assert invisible.status_code == 404
+    assert invisible.json()["error"]["message"] == "comment not found"
+
+    # Nonexistent comment UUID → identical 404 + identical message.
+    ghost = await client.get(
+        f"/api/v1/comments/{uuid.uuid4()}", headers=_auth(outsider)
+    )
+    assert ghost.status_code == 404
+    assert ghost.json()["error"]["message"] == "comment not found"
+    assert ghost.json()["error"]["message"] == invisible.json()["error"]["message"]
 
 
 async def test_private_project_comment_invisible_to_guest(client):

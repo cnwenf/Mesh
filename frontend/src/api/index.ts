@@ -4,6 +4,14 @@
  */
 export { MeshApiError, errorToI18nKey } from './errors';
 export type { MeshApiErrorOptions } from './errors';
+export {
+  RATE_LIMIT_NOTICE_MIN_INTERVAL_MS,
+  notifyDeprecation,
+  notifyRateLimited,
+  onApiNotice,
+  resetApiNoticeState,
+} from './notices';
+export type { ApiNotice, ApiNoticeKind, ApiNoticeListener } from './notices';
 export { uuidv4 } from './uuid';
 export { AUTH_HEADER, bearerHeader, getToken, useAuthStore } from './tokenStore';
 export { MeshApiClient } from './client';

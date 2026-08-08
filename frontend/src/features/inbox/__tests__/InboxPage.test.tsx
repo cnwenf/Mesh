@@ -20,13 +20,27 @@ import { useAuthStore } from '../../../state/authStore';
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'WS',
+      workspace_slug: 'ws',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 const MEMBERS = {
   data: [
-    { id: 'mem-1', member_type: 'human', role: 'owner', status: 'active', display_name: 'Owner', joined_at: null,
-      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null } },
+    {
+      id: 'mem-1',
+      member_type: 'human',
+      role: 'owner',
+      status: 'active',
+      display_name: 'Owner',
+      joined_at: null,
+      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null },
+    },
   ],
   next_cursor: null,
 };
@@ -93,7 +107,13 @@ const fakeClient = {
 const realtimeValue = { state: 'connected', client: fakeClient } as unknown as RealtimeContextValue;
 
 function rtFrame(event: string, payload: unknown): RealtimeEventFrame {
-  return { op: 'event', channel: 'member:mem-1:inbox', seq: 1, event, payload } as RealtimeEventFrame;
+  return {
+    op: 'event',
+    channel: 'member:mem-1:inbox',
+    seq: 1,
+    event,
+    payload,
+  } as RealtimeEventFrame;
 }
 
 // MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
@@ -117,6 +137,27 @@ describe('InboxPage', () => {
     expect(screen.getByTestId('inbox-group-iss-1').textContent).toContain('WS-1 · Login bug');
     expect(screen.getByTestId('inbox-row-n-1')).toBeTruthy();
     expect(screen.getByTestId('inbox-unread-dot-n-1')).toBeTruthy();
+  });
+
+  it('group header never stringifies null when the issue snapshot is partial', async () => {
+    // 旧行/缺快照生产者(如 assigned、review_requested)可能只带 title 或全缺:
+    // 组头退回可用片段,绝不渲染字面 "null"。
+    const partial = { ...NOTIF, issue: { id: 'iss-1', identifier: null, title: 'Login bug' } };
+    const bare = {
+      ...NOTIF,
+      id: 'n-2',
+      issue: { id: 'iss-2', identifier: null, title: null },
+      issue_id: 'iss-2',
+    };
+    queue({ data: [partial, bare], next_cursor: null });
+    renderInbox();
+    await screen.findByTestId('inbox-page');
+    const partialHead = await screen.findByTestId('inbox-group-iss-1');
+    expect(partialHead.textContent).toContain('Login bug');
+    expect(partialHead.textContent).not.toContain('null');
+    const bareHead = await screen.findByTestId('inbox-group-iss-2');
+    expect(bareHead.textContent).toContain('iss-2');
+    expect(bareHead.textContent).not.toContain('null');
   });
 
   it('renders the two-column ConversationLayout with list and preview panes', async () => {
@@ -145,9 +186,41 @@ describe('InboxPage', () => {
     await screen.findByTestId('inbox-row-n-1');
     fireEvent.click(screen.getByTestId('inbox-tab-unread'));
     await waitFor(() => {
-      const inboxCalls = stub.calls.filter((c) => String(c.url).includes('/api/v1/inbox?') || String(c.url).includes('/api/v1/inbox&'));
+      const inboxCalls = stub.calls.filter(
+        (c) => String(c.url).includes('/api/v1/inbox?') || String(c.url).includes('/api/v1/inbox&'),
+      );
       expect(inboxCalls.some((c) => String(c.url).includes('filter=unread'))).toBe(true);
     });
+  });
+
+  it('L92:深链 ?filter=unread 直接命中筛选(刷新不丢、可分享)', async () => {
+    const stub = queue();
+    renderInbox('/inbox?filter=unread');
+    await screen.findByTestId('inbox-row-n-1');
+    expect(screen.getByTestId('inbox-tab-unread').getAttribute('aria-selected')).toBe('true');
+    await waitFor(() => {
+      expect(stub.calls.some((c) => String(c.url).includes('filter=unread'))).toBe(true);
+    });
+  });
+
+  it('L92:非法 filter 参数回落 all,不带筛选查询', async () => {
+    const stub = queue();
+    renderInbox('/inbox?filter=bogus');
+    await screen.findByTestId('inbox-row-n-1');
+    expect(screen.getByTestId('inbox-tab-all').getAttribute('aria-selected')).toBe('true');
+    const inboxCalls = stub.calls.filter((c) => String(c.url).includes('/api/v1/inbox'));
+    expect(inboxCalls.some((c) => String(c.url).includes('filter=unread'))).toBe(false);
+  });
+
+  it('L92:切回 All 清除 filter 参数(缺省态不占 URL)', async () => {
+    queue();
+    renderInbox('/inbox?filter=unread');
+    await screen.findByTestId('inbox-row-n-1');
+    fireEvent.click(screen.getByTestId('inbox-tab-all'));
+    await waitFor(() => {
+      expect(screen.getByTestId('inbox-tab-all').getAttribute('aria-selected')).toBe('true');
+    });
+    expect(screen.getByTestId('inbox-tab-unread').getAttribute('aria-selected')).toBe('false');
   });
 
   it('selects the notification (route /inbox/:id) and marks it read on row click', async () => {
@@ -186,7 +259,9 @@ describe('InboxPage', () => {
     await screen.findByTestId('inbox-mute-iss-1');
     fireEvent.click(screen.getByTestId('inbox-mute-iss-1'));
     await waitFor(() => {
-      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/issues/iss-1/mute'))).toBe(true);
+      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/issues/iss-1/mute'))).toBe(
+        true,
+      );
     });
   });
 
@@ -206,7 +281,9 @@ describe('InboxPage', () => {
     await screen.findByTestId('inbox-row-n-1');
     fireEvent.click(screen.getByTestId('inbox-archive-n-1'));
     await waitFor(() => {
-      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/inbox/n-1/archive'))).toBe(true);
+      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/inbox/n-1/archive'))).toBe(
+        true,
+      );
     });
     await waitFor(() => expect(screen.queryByTestId('inbox-row-n-1')).toBeNull());
   });
@@ -262,7 +339,13 @@ describe('InboxPage', () => {
     await screen.findByTestId('inbox-row-n-1');
     await waitFor(() => expect(pageFrame).not.toBeNull());
     act(() =>
-      pageFrame?.({ op: 'event', channel: 'member:other:inbox', seq: 1, event: 'notification.created', payload: { ...NOTIF, id: 'n-x' } } as RealtimeEventFrame),
+      pageFrame?.({
+        op: 'event',
+        channel: 'member:other:inbox',
+        seq: 1,
+        event: 'notification.created',
+        payload: { ...NOTIF, id: 'n-x' },
+      } as RealtimeEventFrame),
     );
     expect(screen.queryByTestId('inbox-row-n-x')).toBeNull();
   });
@@ -312,7 +395,9 @@ describe('InboxPage 预览窗格(双栏详情)', () => {
     });
     renderInbox('/inbox/n-1');
     await screen.findByTestId('inbox-row-actor-n-1');
-    expect(screen.getByTestId('inbox-preview-actor').textContent).toContain('From agent Mesh Agent');
+    expect(screen.getByTestId('inbox-preview-actor').textContent).toContain(
+      'From agent Mesh Agent',
+    );
   });
 
   it('marks read from the preview pane without navigating away', async () => {
@@ -334,7 +419,9 @@ describe('InboxPage 预览窗格(双栏详情)', () => {
     await screen.findByTestId('inbox-preview-archive');
     fireEvent.click(screen.getByTestId('inbox-preview-archive'));
     await waitFor(() => {
-      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/inbox/n-1/archive'))).toBe(true);
+      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/inbox/n-1/archive'))).toBe(
+        true,
+      );
     });
     // 归档后回到列表(navigate('/inbox'))→ 预览空态;行在 API 成功后移除。
     expect(await screen.findByTestId('inbox-preview-empty')).toBeTruthy();
@@ -413,7 +500,9 @@ describe('InboxPage 预览窗格(双栏详情)', () => {
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderInbox('/inbox/n-1');
     await screen.findByTestId('inbox-page');
-    expect(screen.getByLabelText('Notification preview').querySelector('.mesh-skeleton')).not.toBeNull();
+    expect(
+      screen.getByLabelText('Notification preview').querySelector('.mesh-skeleton'),
+    ).not.toBeNull();
   });
 });
 
@@ -424,7 +513,13 @@ describe('InboxPage 免打扰横幅', () => {
     vi.setSystemTime(new Date('2026-07-01T23:30:00'));
     const prefs = {
       data: [
-        { event_type: 'all', in_app: true, email: 'none', quiet_hours_start: '22:00:00', quiet_hours_end: '07:00:00' },
+        {
+          event_type: 'all',
+          in_app: true,
+          email: 'none',
+          quiet_hours_start: '22:00:00',
+          quiet_hours_end: '07:00:00',
+        },
       ],
       next_cursor: null,
     };
@@ -446,7 +541,13 @@ describe('InboxPage 免打扰横幅', () => {
     vi.setSystemTime(new Date('2026-07-01T12:00:00'));
     const prefs = {
       data: [
-        { event_type: 'all', in_app: true, email: 'none', quiet_hours_start: '22:00:00', quiet_hours_end: '07:00:00' },
+        {
+          event_type: 'all',
+          in_app: true,
+          email: 'none',
+          quiet_hours_start: '22:00:00',
+          quiet_hours_end: '07:00:00',
+        },
       ],
       next_cursor: null,
     };

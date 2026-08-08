@@ -13,10 +13,11 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
-from sqlalchemy import text
+from fastapi.responses import RedirectResponse
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mesh.api.deps import get_session
+from mesh.api.deps import get_session, get_settings
 from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import (
     WorkspaceContext,
@@ -24,6 +25,11 @@ from mesh.auth.rbac import (
     role_satisfies,
 )
 from mesh.comment_inbox.inbox import INBOX_FILTERS, InboxService
+from mesh.comment_inbox.notifications import (
+    notification_deep_link,
+    verify_email_open_token,
+    workspace_slug_for,
+)
 from mesh.comment_inbox.schemas import (
     AddReactionRequest,
     CreateCommentRequest,
@@ -32,6 +38,9 @@ from mesh.comment_inbox.schemas import (
     UpdateCommentRequest,
 )
 from mesh.comment_inbox.service import CommentService
+from mesh.config import Settings
+from mesh.db.models.member import Member
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, NotFoundError, ValidationError
 
 router = APIRouter(prefix="/api/v1", tags=["comment-inbox"])
@@ -463,6 +472,7 @@ async def list_inbox(
     filter: str = Query(default="all"),
     type: str | None = Query(default=None),
     grouped: bool = Query(default=False),
+    archived: bool = Query(default=False),
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -475,6 +485,7 @@ async def list_inbox(
         inbox_filter=filter,
         notification_type=type,
         grouped=grouped,
+        archived_only=archived,
     )
 
 
@@ -553,6 +564,50 @@ async def _inbox_item_op(
     return await service.set_archived(
         workspace_id=context.workspace.id, member=context.member, notification_id=parsed
     )
+
+
+@router.get("/inbox/{notification_id}/open")
+async def inbox_open_from_email(
+    notification_id: str,
+    request: Request,
+    token: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    """Email deep-link entry (comment-inbox.md §4.4 点邮件链接回站内并标已读).
+
+    Unauthenticated by design — the signed one-time token IS the credential
+    (recipient + workspace bound, expiry enforced). Any verification failure
+    returns the same 404 as a missing notification (anti-oracle). On success
+    the notification is read-marked (idempotent) and the client is 302'd to
+    the in-site inbox anchor; without a configured app base URL the frame is
+    returned as JSON instead.
+    """
+    parsed = _path_uuid(notification_id, message="notification not found")
+    resolved = verify_email_open_token(settings, token, notification_id=parsed)
+    if resolved is None:
+        raise NotFoundError("notification not found")
+    workspace_id, member_id = resolved
+    # Unauthenticated route: the auth middleware never sets the tenant GUC,
+    # so establish it from the VERIFIED token's workspace before any RLS
+    # query on the request session (MES-189 e2e found the 500/empty read).
+    await set_tenant_context(session, workspace_id)
+    member = await session.scalar(
+        select(Member).where(
+            Member.workspace_id == workspace_id,
+            Member.id == member_id,
+        )
+    )
+    if member is None or member.user_id is None:
+        raise NotFoundError("notification not found")
+    frame = await _inbox(request).mark_read(
+        workspace_id=workspace_id, member=member, notification_id=parsed, read=True
+    )
+    slug = await workspace_slug_for(session, workspace_id=workspace_id)
+    link = notification_deep_link(settings.app_base_url, slug, parsed)
+    if link is None:
+        return {"data": frame}
+    return RedirectResponse(url=link, status_code=302)
 
 
 @router.post("/inbox/{notification_id}/read")

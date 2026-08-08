@@ -5,7 +5,7 @@
  * fetch 桩按调用序:GET issue → statuses / children / dependencies / activity / members。
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, headersOf } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -82,15 +82,19 @@ function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
   return <ToastProvider regionLabel={t('a11y.notifications')}>{props.children}</ToastProvider>;
 }
 
-function renderDetail(): void {
+function renderDetail(entry = '/w/ws/issues/iss-1'): void {
   render(
-    <MemoryRouter initialEntries={['/w/ws/issues/iss-1']}>
+    <MemoryRouter initialEntries={[entry]}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
           <ToastLayer>
             <Routes>
               <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
               <Route path="/w/:workspaceSlug/issues" element={<div data-testid="issue-list" />} />
+              <Route
+                path="/w/:workspaceSlug/automations/runtimes"
+                element={<div data-testid="runtimes-page" />}
+              />
             </Routes>
           </ToastLayer>
         </I18nProvider>
@@ -351,6 +355,34 @@ function issueExecutionsEmpty(): ReturnType<typeof fakeResponse> {
 }
 
 /**
+ * L222 收藏:详情头部 ⋯ 菜单星标挂载即拉 issue 收藏列表,与详情并行 ——
+ * URL 感知恒定回固定响应、不消耗队列(避免盲队列错位);PUT/DELETE 幂等回成功。
+ */
+function isFavoritesCall(url: string): boolean {
+  return url.includes('/favorites');
+}
+
+function favoritesResponse(init: RequestInit | undefined): ReturnType<typeof fakeResponse> {
+  const method = init?.method ?? 'GET';
+  if (method === 'PUT') return fakeResponse({ status: 201, body: { data: null } });
+  if (method === 'DELETE') return fakeResponse({ status: 204 });
+  return fakeResponse({ body: { data: [], next_cursor: null } });
+}
+
+/**
+ * L186 agent 分派成功后的在线 runtime 探测(§6.12 专项恢复入口):仅分派目标
+ * 为 agent 时发起 —— URL 感知恒定回「有在线 runtime」、不消耗队列,默认不
+ * 触发提示;「无 runtime」用例在测试内包装 fetch 拦截该 URL 回空页。
+ */
+function isRuntimeListCall(url: string, init?: RequestInit): boolean {
+  return (init?.method ?? 'GET') === 'GET' && url.includes('/workspaces/ws-1/runtimes');
+}
+
+function runtimeListOnline(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: [{ id: 'rt-1', status: 'online' }], next_cursor: null } });
+}
+
+/**
  * URL 感知的顺序桩:附件列表 / 小队分派查询恒定回固定响应、**不消耗队列**
  * (消除与并行详情请求的到达顺序竞争 —— 盲队列在这些 fetch 插队时会整体错位,
  * CI 上间歇红);其余请求按顺序消耗响应,超出后复用最后一个(与 stubFetch 语义一致)。
@@ -365,6 +397,8 @@ function detailStub(...responses: Response[]): FetchStub {
     if (isAssignmentCall(url, init)) return assignmentEmpty();
     if (isVcsPanelCall(url, init)) return vcsPanelEmpty();
     if (isIssueExecutionsCall(url, init)) return issueExecutionsEmpty();
+    if (isFavoritesCall(url)) return favoritesResponse(init);
+    if (isRuntimeListCall(url, init)) return runtimeListOnline();
     const response = responses[Math.min(index, responses.length - 1)];
     index += 1;
     return response;
@@ -376,6 +410,23 @@ function queue(...extra: ReturnType<typeof fakeResponse>[]): FetchStub {
   const stub = detailStub(...detailResponses(), ...extra);
   vi.stubGlobal('fetch', stub.fetchImpl);
   return stub;
+}
+
+/**
+ * 队列消耗请求计数(detailStub 的 URL 感知旁路 —— 附件/分派/VCS/运行/收藏 ——
+ * 记入 calls 但不消耗队列;阈值等待若直接数 calls.length 会提前一格放行,
+ * 使盲队列错位,详见 estimate 编辑用例)。与 detailStub 旁路链保持同步。
+ */
+function queueCallCount(stub: FetchStub): number {
+  return stub.calls.filter(
+    (call) =>
+      !isAttachmentListCall(call.url, call.init) &&
+      !isAssignmentCall(call.url, call.init) &&
+      !isVcsPanelCall(call.url, call.init) &&
+      !isIssueExecutionsCall(call.url, call.init) &&
+      !isFavoritesCall(call.url) &&
+      !isRuntimeListCall(call.url, call.init),
+  ).length;
 }
 
 beforeEach(() => {
@@ -394,7 +445,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     expect(screen.getByTestId('issue-detail-identifier').textContent).toBe('APL-1');
@@ -682,7 +733,7 @@ describe('IssueDetailPage', () => {
     const stub = queue(fakeResponse({ body: { data: { id: 'iss-1', deleted: true } } }));
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), { timeout: 5000 });
     // 动作菜单 → 删除 → 确认
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
@@ -774,7 +825,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('dep-target-input'), {
@@ -793,7 +844,7 @@ describe('IssueDetailPage', () => {
     renderDetail();
     await screen.findByText('WS-7');
     // 等关联编辑器挂载请求发出,避免后续操作抢跑导致响应队列错位。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.click(screen.getByText('Remove'));
@@ -838,7 +889,7 @@ describe('IssueDetailPage', () => {
     vi.stubGlobal('fetch', fetchImpl);
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(base.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(base)).toBeGreaterThanOrEqual(12), { timeout: 5000 });
 
     fireEvent.change(screen.getByTestId('dep-target-input'), {
       target: { value: '33333333-3333-3333-3333-333333333333' },
@@ -894,7 +945,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-estimate'), { target: { value: '5' } });
@@ -908,7 +959,7 @@ describe('IssueDetailPage', () => {
     );
     await waitFor(
       () => {
-        expect(stub.calls.length).toBeGreaterThanOrEqual(22);
+        expect(queueCallCount(stub)).toBeGreaterThanOrEqual(22);
       },
       { timeout: 5000 },
     );
@@ -954,7 +1005,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
@@ -993,7 +1044,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
@@ -1023,7 +1074,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     // 类型选择器存在(§4.2/§4.3:选类型)并切换类型(覆盖 dep-type onChange)
@@ -1053,7 +1104,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
   });
@@ -1074,7 +1125,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: '' } });
@@ -1105,7 +1156,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(13), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(13), {
       timeout: 5000,
     });
     const statusSelect = screen.getByTestId('issue-detail-status') as HTMLSelectElement;
@@ -1150,7 +1201,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-status') as HTMLSelectElement, {
@@ -1184,7 +1235,7 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
 
@@ -1214,7 +1265,7 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
 
@@ -1238,7 +1289,7 @@ describe('IssueDetailPage', () => {
     const stub = queue(fakeResponse({ body: { data: updated } }), ...reloadRound(updated));
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
 
@@ -1288,7 +1339,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
@@ -1325,7 +1376,7 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), { timeout: 5000 });
     fireEvent.change(screen.getByTestId(first.testId), { target: { value: first.value } });
     await waitFor(
       () => {
@@ -1335,7 +1386,7 @@ describe('IssueDetailPage', () => {
       },
       { timeout: 5000 },
     );
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(22), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(22), { timeout: 5000 });
     fireEvent.change(screen.getByTestId(second.testId), { target: { value: second.value } });
     await waitFor(
       () => {
@@ -1466,6 +1517,145 @@ describe('IssueDetailPage', () => {
     ).toHaveLength(1);
   });
 
+  it('分派 agent 且无在线 runtime:warn toast「无匹配 runtime」+ Runtimes 深链(L186 §6.12)', async () => {
+    const agent = {
+      id: 'mem-agent',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    };
+    const initialResponses = detailResponses();
+    initialResponses[5] = fakeResponse({
+      body: { data: [...MEMBERS_PAGE.data, agent], next_cursor: null },
+    });
+    const base = detailStub(...initialResponses);
+    const updated = {
+      ...DETAIL,
+      assignee_id: agent.id,
+      assignee: { id: agent.id, name: agent.display_name, member_type: 'agent' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const runtimeCalls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/workspaces/ws-1/runtimes')) {
+        runtimeCalls.push(url);
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url, init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Builder (agent)' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: agent.id },
+    });
+
+    // 提示不阻断分派:PATCH 照常发出且成功
+    await waitFor(
+      () => expect(base.calls.filter((c) => c.init?.method === 'PATCH')).toHaveLength(1),
+      { timeout: 5000 },
+    );
+    // 确定无在线 runtime → warn toast + Runtimes 深链入口(§6.12 / onboarding §4)
+    expect(await screen.findByText(/No matching runtime/)).toBeInTheDocument();
+    expect(runtimeCalls).toHaveLength(1);
+    expect(runtimeCalls[0]).toContain('status=online');
+    expect(runtimeCalls[0]).toContain('limit=1');
+    fireEvent.click(screen.getByRole('button', { name: 'Runtimes' }));
+    expect(await screen.findByTestId('runtimes-page')).toBeInTheDocument();
+  });
+
+  it('分派 agent 且存在在线 runtime:不发「无匹配 runtime」提示(L186 仅确定时提示)', async () => {
+    const agent = {
+      id: 'mem-agent',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    };
+    const initialResponses = detailResponses();
+    initialResponses[5] = fakeResponse({
+      body: { data: [...MEMBERS_PAGE.data, agent], next_cursor: null },
+    });
+    // detailStub 的 URL 感知旁路恒定回「有在线 runtime」
+    const base = detailStub(...initialResponses);
+    const updated = {
+      ...DETAIL,
+      assignee_id: agent.id,
+      assignee: { id: agent.id, name: agent.display_name, member_type: 'agent' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url: String(input), init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Builder (agent)' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: agent.id },
+    });
+
+    await screen.findByText('v4');
+    await waitFor(
+      () => expect(base.calls.some((c) => c.url.includes('/workspaces/ws-1/runtimes'))).toBe(true),
+      { timeout: 5000 },
+    );
+    // 探测返回在线 runtime → 无提示(微任务落定后仍无 toast)
+    await act(async () => undefined);
+    await act(async () => undefined);
+    expect(screen.queryByText(/No matching runtime/)).toBeNull();
+  });
+
+  it('分派人类成员不触发 runtime 探测(L186 仅 agent 分派检查)', async () => {
+    const base = detailStub(...detailResponses());
+    const updated = {
+      ...DETAIL,
+      assignee_id: 'mem-1',
+      assignee: { id: 'mem-1', name: 'Owner', member_type: 'human' },
+      version: 4,
+      updated_at: '2026-07-03T00:00:00Z',
+      children_progress: undefined,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        base.calls.push({ url: String(input), init });
+        return fakeResponse({ body: { data: updated } });
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByRole('option', { name: 'Owner' });
+
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), {
+      target: { value: 'mem-1' },
+    });
+
+    await screen.findByText('v4');
+    await act(async () => undefined);
+    expect(base.calls.some((c) => c.url.includes('/workspaces/ws-1/runtimes'))).toBe(false);
+    expect(screen.queryByText(/No matching runtime/)).toBeNull();
+  });
+
   it('patches due date and estimate unit from the sidebar (§4.2)', async () => {
     await twoSidebarChanges(
       {
@@ -1515,7 +1705,7 @@ describe('IssueDetailPage', () => {
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), { timeout: 5000 });
     expect((screen.getByTestId('issue-detail-estimate') as HTMLInputElement).value).toBe('5');
     expect((screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement).value).toBe(
       'points',
@@ -1540,7 +1730,7 @@ describe('IssueDetailPage', () => {
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), { timeout: 5000 });
     fireEvent.change(screen.getByTestId('issue-detail-assignee'), { target: { value: '' } });
     await waitFor(() => {
       const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
@@ -1561,7 +1751,7 @@ describe('IssueDetailPage', () => {
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
     await screen.findByTestId('issue-detail');
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), { timeout: 5000 });
     expect(document.querySelector('.mesh-issues-detail__meta')?.textContent).toContain(
       'Unassigned',
     );
@@ -1573,7 +1763,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     const options = (screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement).options;
@@ -1618,7 +1808,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
@@ -1664,7 +1854,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(queueCallCount(stub)).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
@@ -1676,6 +1866,77 @@ describe('IssueDetailPage', () => {
         'Moving this item changes some fields. Please review and confirm the move.',
       ),
     ).toBeTruthy();
+  });
+});
+
+describe('IssueDetailPage 讨论/活动 Tab ↔ URL 同步(L92)', () => {
+  let latestSearch = '';
+
+  function LocationProbe(): null {
+    latestSearch = useLocation().search;
+    return null;
+  }
+
+  function renderDetailWithProbe(entry: string): void {
+    render(
+      <MemoryRouter initialEntries={[entry]}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <LocationProbe />
+              <Routes>
+                <Route path="/w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
+                <Route path="/w/:workspaceSlug/issues" element={<div data-testid="issue-list" />} />
+              </Routes>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function tabsOf(): ReturnType<typeof within> {
+    return within(screen.getByRole('tablist', { name: 'Comments and activity' }));
+  }
+
+  beforeEach(() => {
+    latestSearch = '';
+  });
+
+  it('深链 ?tab=activity 渲染活动 Tab 选中', async () => {
+    queue();
+    renderDetailWithProbe('/w/ws/issues/iss-1?tab=activity');
+    await screen.findByTestId('issue-detail');
+    const list = tabsOf();
+    expect(await list.findByRole('tab', { name: 'Activity' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(list.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('非法 ?tab= 值回落 comments 缺省', async () => {
+    queue();
+    renderDetailWithProbe('/w/ws/issues/iss-1?tab=bogus');
+    await screen.findByTestId('issue-detail');
+    const list = tabsOf();
+    expect(await list.findByRole('tab', { name: 'Comments' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('切换活动 Tab 写入 ?tab=activity,切回评论删除参数', async () => {
+    queue();
+    renderDetailWithProbe('/w/ws/issues/iss-1');
+    await screen.findByTestId('issue-detail');
+    const list = tabsOf();
+
+    fireEvent.click(await list.findByRole('tab', { name: 'Activity' }));
+    await waitFor(() => expect(latestSearch).toBe('?tab=activity'));
+
+    fireEvent.click(list.getByRole('tab', { name: 'Comments' }));
+    await waitFor(() => expect(latestSearch).toBe(''));
   });
 });
 

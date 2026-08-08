@@ -12,6 +12,10 @@ import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api
 import { Button, ErrorState, Icon, Input, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import {
+  DirtyNavigationGuardDialog,
+  useDirtyNavigationGuard,
+} from '../../workspace/useDirtyNavigationGuard';
 import { listAgents } from '../agents/api';
 import type { AgentSummary } from '../agents/types';
 import { useWorkspaceMembership, workspaceRoute } from '../members/useWorkspaceMembership';
@@ -389,6 +393,9 @@ export function AutopilotEditorPage(): React.JSX.Element {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [secrets, setSecrets] = useState<WebhookSecretPublic[]>([]);
   const [state, setState] = useState<EditorState>(DEFAULT_STATE);
+  // L242 脏态保护:最近一次「来自服务端/保存成功」的状态快照,与之不同即视为脏。
+  // 保存成功后本页即 navigate 离开,无需刷新快照;失败留在原页仍为脏。
+  const [savedSnapshot, setSavedSnapshot] = useState<string>(() => JSON.stringify(DEFAULT_STATE));
   const [openSection, setOpenSection] = useState<SectionKey | null>('trigger');
   const [loading, setLoading] = useState(isEdit);
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -398,6 +405,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
   const patch = useCallback((partial: Partial<EditorState>) => {
     setState((prev) => ({ ...prev, ...partial }));
   }, []);
+
+  // L242 未保存离开确认(autopilot.md §4.2 保存草稿语义下的脏态保护):
+  // 表单与最近保存快照不同(或保存进行中)即为脏;保存成功后 navigate 离开本页。
+  const dirty = saving || JSON.stringify(state) !== savedSnapshot;
+  const guard = useDirtyNavigationGuard(dirty);
 
   useEffect(() => {
     if (membershipState.kind === 'loading') return;
@@ -418,7 +430,9 @@ export function AutopilotEditorPage(): React.JSX.Element {
         if (isEdit && autopilotId) {
           const rule = await getAutopilot(client, membership.workspace_id, autopilotId);
           if (cancelled) return;
-          setState(stateFromRule(rule));
+          const editorState = stateFromRule(rule);
+          setState(editorState);
+          setSavedSnapshot(JSON.stringify(editorState));
           setLoading(false);
         }
       } catch (error) {
@@ -1202,7 +1216,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
         </EditorSection>
 
         <div className="mesh-autopilots__footer">
-          <Button variant="ghost" onClick={() => navigate(listPath)}>
+          <Button
+            variant="ghost"
+            onClick={() => (dirty ? guard.requestLeave(listPath) : navigate(listPath))}
+            data-testid="autopilot-editor-cancel"
+          >
             {t('common.cancel')}
           </Button>
           <Button
@@ -1224,6 +1242,17 @@ export function AutopilotEditorPage(): React.JSX.Element {
           </Button>
         </div>
       </div>
+
+      <DirtyNavigationGuardDialog
+        isConfirming={guard.isConfirming}
+        title={t('common.unsavedTitle')}
+        description={t('common.unsavedDescription')}
+        stayLabel={t('common.unsavedStay')}
+        discardLabel={t('common.unsavedDiscard')}
+        closeLabel={t('a11y.closeDialog')}
+        onStay={guard.stay}
+        onDiscard={guard.discard}
+      />
     </div>
   );
 }

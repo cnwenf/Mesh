@@ -22,6 +22,12 @@ import './dataJobs.css';
 
 export type ExportScope = 'project' | 'workspace' | 'view';
 
+/** 413 export_too_large 前置预警状态(§4.4):范围选择阶段提示收窄。 */
+interface ExportSizeWarning {
+  readonly estimate: number;
+  readonly maxRows: number;
+}
+
 export interface ExportDialogProps {
   readonly open: boolean;
   readonly onClose: () => void;
@@ -45,11 +51,13 @@ export function ExportDialog(props: ExportDialogProps): React.JSX.Element | null
   const [job, setJob] = useState<DataJob | null>(null);
   const [busy, setBusy] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [sizeWarning, setSizeWarning] = useState<ExportSizeWarning | null>(null);
 
   const reset = useCallback(() => {
     setJob(null);
     setBusy(false);
     setDownloadUrl(null);
+    setSizeWarning(null);
     setScope(props.defaultScope ?? 'workspace');
     setFormat('csv');
   }, [props.defaultScope]);
@@ -131,8 +139,17 @@ export function ExportDialog(props: ExportDialogProps): React.JSX.Element | null
         }
       }
     } catch (error) {
-      const key = error instanceof MeshApiError ? errorToI18nKey(error) : 'common.unknownError';
-          toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+      if (error instanceof MeshApiError && error.code === 'export_too_large') {
+        // §4.4 前置预警:范围选择阶段提示收窄,而非仅 toast 一闪。
+        const details = error.details ?? {};
+        setSizeWarning({
+          estimate: typeof details.estimate === 'number' ? details.estimate : 0,
+          maxRows: typeof details.max_rows === 'number' ? details.max_rows : 0,
+        });
+      } else {
+        const key = error instanceof MeshApiError ? errorToI18nKey(error) : 'common.unknownError';
+        toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+      }
     } finally {
       setBusy(false);
     }
@@ -149,6 +166,28 @@ export function ExportDialog(props: ExportDialogProps): React.JSX.Element | null
     >
       {!submitted && (
         <section aria-label={t('dataJobs.export.configure')}>
+          {sizeWarning !== null ? (
+            <div
+              className="mesh-data-jobs__size-warning"
+              role="alert"
+              data-testid="export-size-warning"
+            >
+              <p>
+                {t('dataJobs.export.tooLargeBody', {
+                  estimate: sizeWarning.estimate,
+                  maxRows: sizeWarning.maxRows,
+                })}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSizeWarning(null)}
+                data-testid="export-size-warning-dismiss"
+              >
+                {t('dataJobs.export.tooLargeDismiss')}
+              </Button>
+            </div>
+          ) : null}
           <label>
             {t('dataJobs.export.scopeLabel')}
             <select
@@ -189,9 +228,7 @@ export function ExportDialog(props: ExportDialogProps): React.JSX.Element | null
       {submitted && job !== null && (
         <section aria-label={t('dataJobs.export.progress')}>
           <p data-testid="export-status">{t(`dataJobs.status.${job.status}`)}</p>
-          {!isTerminalDataJobStatus(job.status) && (
-            <p>{t('dataJobs.export.runningHint')}</p>
-          )}
+          {!isTerminalDataJobStatus(job.status) && <p>{t('dataJobs.export.runningHint')}</p>}
           {job.status === 'failed' && job.failure_reason !== null && (
             <p>{t('dataJobs.import.failureReason', { reason: job.failure_reason })}</p>
           )}

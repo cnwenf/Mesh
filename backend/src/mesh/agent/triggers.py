@@ -295,6 +295,16 @@ async def assign_orchestration_handler(
     agent, member = await _load_agent_and_member(
         session, workspace_id=workspace_id, agent_id=agent_id
     )
+    # TD-3: the enqueue payload carries the assigning principal's user id so the
+    # shared gate can enforce the §3.5 owner-only rule for private agents.
+    # Missing/null identity fails closed inside the gate.
+    raw_actor_user_id = payload.get("actor_user_id")
+    actor_user_id: uuid.UUID | None = None
+    if raw_actor_user_id:
+        try:
+            actor_user_id = uuid.UUID(str(raw_actor_user_id))
+        except ValueError:
+            actor_user_id = None
     reason = await evaluate_assign_trigger(
         session,
         workspace_id=workspace_id,
@@ -303,6 +313,7 @@ async def assign_orchestration_handler(
         trigger=trigger,
         chain_depth=int(payload.get("chain_depth") or 0),
         config=guardrail_config or TriggerGuardrailConfig(),
+        actor_user_id=actor_user_id,
     )
     if reason is not None:
         # Stable purpose-tagged key: redelivery skips the duplicate event.

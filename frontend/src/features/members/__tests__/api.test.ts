@@ -8,6 +8,7 @@ import {
   createInvitation,
   fetchMe,
   getMember,
+  getMemberPresence,
   listAvailableAgents,
   listMembers,
   listProjectAccess,
@@ -116,6 +117,19 @@ describe('成员名册 API 路径与包络', () => {
       body: { from_member_id: 'from', to_member_id: 'to' },
     });
     expect(result.reassigned_issues).toBe(3);
+  });
+
+  it('getMemberPresence GET /members/presence 解包在线快照(L251)', async () => {
+    const { client, request } = makeClient();
+    request.mockResolvedValueOnce({
+      workspace_id: 'ws-1',
+      online_member_ids: ['mem-h'],
+      count: 1,
+    });
+    const snapshot = await getMemberPresence(client, 'ws-1');
+    expect(request).toHaveBeenCalledWith('GET', '/api/v1/workspaces/ws-1/members/presence');
+    expect(snapshot.online_member_ids).toEqual(['mem-h']);
+    expect(snapshot.count).toBe(1);
   });
 
   it('listAvailableAgents 命中 agents/available 并解包 data', async () => {

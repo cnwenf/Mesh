@@ -3,7 +3,7 @@
  * 头部(状态/健康度/进度)、Tab 切换(概览/里程碑/更新动态)、健康度留痕对话框、
  * 里程碑创建/开合/删除(二次确认)、归档切换、删除(二次确认 + 回列表)、错误态。
  */
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -100,6 +100,8 @@ interface StubOptions {
   readonly archiveStatus?: number;
   readonly deleteStatus?: number;
   readonly me?: unknown;
+  /** 初始已收藏目标 id(GET /favorites 列表;L222)。 */
+  readonly favoriteIds?: readonly string[];
 }
 
 function stubFetch(opts: StubOptions = {}) {
@@ -163,6 +165,22 @@ function stubFetch(opts: StubOptions = {}) {
         });
       }
       return fakeResponse({ body: { data: project } });
+    }
+    // L222 收藏:列表按 favoriteIds 呈现;PUT 201 / DELETE 204(服务端幂等)。
+    if (url.includes('/favorites')) {
+      if (method === 'GET') {
+        return fakeResponse({
+          body: {
+            data: (opts.favoriteIds ?? []).map((targetId) => ({
+              target_type: 'project',
+              target_id: targetId,
+            })),
+            next_cursor: null,
+          },
+        });
+      }
+      if (method === 'PUT') return fakeResponse({ status: 201, body: { data: null } });
+      if (method === 'DELETE') return fakeResponse({ status: 204 });
     }
     return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
   }) as typeof fetch;
@@ -267,18 +285,20 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('project-detail-header')).toBeNull();
   });
 
-  it('opens and closes project export and import dialogs', async () => {
+  it('opens and closes project export and import dialogs from the ⋯ menu (L543)', async () => {
     stubFetch();
     const user = userEvent.setup();
     renderDetail();
     await screen.findByText('Apollo');
 
-    await user.click(screen.getByTestId('export-project-button'));
+    await user.click(screen.getByRole('button', { name: 'More project actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Export this project' }));
     const exportDialog = await screen.findByRole('dialog', { name: 'Export data' });
     await user.click(within(exportDialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Export data' })).toBeNull());
 
-    await user.click(screen.getByTestId('import-project-button'));
+    await user.click(screen.getByRole('button', { name: 'More project actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Import into this project' }));
     const importDialog = await screen.findByRole('dialog', { name: 'Import data' });
     await user.click(within(importDialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Import data' })).toBeNull());
@@ -919,5 +939,41 @@ describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
     vi.stubGlobal('fetch', impl);
     renderDetail();
     expect(await screen.findByText('Something went wrong')).toBeDefined();
+  });
+
+  it('头部星标:未收藏呈空心(aria-pressed=false),点击后 PUT 并切为已收藏(L222)', async () => {
+    const calls = stubFetch();
+    renderDetail();
+    const toggle = await screen.findByTestId('project-favorite-toggle');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle.getAttribute('aria-label')).toBe('Add to favorites');
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => expect(callsTo(calls, 'PUT', '/favorites/project/prj-1').length).toBe(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('project-favorite-toggle')).toHaveAttribute('aria-pressed', 'true'),
+    );
+    expect(screen.getByText('Added to favorites')).toBeInTheDocument();
+  });
+
+  it('头部星标:已收藏呈实心(aria-pressed=true),点击后 DELETE 并切为未收藏(L222)', async () => {
+    const calls = stubFetch({ favoriteIds: ['prj-1'] });
+    renderDetail();
+    const toggle = await screen.findByTestId('project-favorite-toggle');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'true'));
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() =>
+      expect(callsTo(calls, 'DELETE', '/favorites/project/prj-1').length).toBe(1),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('project-favorite-toggle')).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      ),
+    );
+    expect(screen.getByText('Removed from favorites')).toBeInTheDocument();
   });
 });

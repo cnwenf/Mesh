@@ -5,10 +5,13 @@
  * - 幂等写(§6.5):POST/PUT/PATCH/DELETE 自动携带 `Idempotency-Key`(可显式覆盖);GET 不携带。
  * - 乐观并发:`ifMatch` → `If-Match` 头(冲突 409,见 optimistic.ts)。
  * - 错误一律归一为 MeshApiError;429 解析 `Retry-After`。
+ * - L252 契约提示:429 退避与 Deprecation/Sunset 公告经契约通知总线(notices.ts)
+ *   交给 UI 桥呈现,client 本身不硬编码可见文案。
  */
 import type { GroupedEnvelope, ListEnvelope } from '../types/envelopes';
 import { isErrorEnvelope } from '../types/envelopes';
 import { MeshApiError } from './errors';
+import { notifyDeprecation, notifyRateLimited } from './notices';
 import { AUTH_HEADER, bearerHeader } from './tokenStore';
 import { isAuthExemptPath } from './unauthorized';
 import { uuidv4 } from './uuid';
@@ -28,6 +31,8 @@ const CONTENT_TYPE_JSON = 'application/json';
 const IF_MATCH_HEADER = 'If-Match';
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 const RETRY_AFTER_HEADER = 'Retry-After';
+const DEPRECATION_HEADER = 'Deprecation';
+const SUNSET_HEADER = 'Sunset';
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_UNAUTHORIZED = 401;
 const HTTP_NO_CONTENT = 204;
@@ -251,6 +256,13 @@ export class MeshApiClient {
       throw new MeshApiError({ status: 0, code: 'network', message: 'network error' });
     }
 
+    // L252:Deprecation/Sunset 头公告(README §6 版本策略)——拦截层检测,
+    // 每会话一次性去抖后经契约通知总线提示升级;头值不入文案,无注入面。
+    notifyDeprecation(
+      response.headers.get(DEPRECATION_HEADER),
+      response.headers.get(SUNSET_HEADER),
+    );
+
     if (!response.ok) {
       // MES-106:会话/PAT 的受保护端点 401 走全局兜底；agent token
       // 则只以统一 `/me` 自省为失效依据，避免人类专属端点的 401 误清凭证。
@@ -261,7 +273,12 @@ export class MeshApiClient {
       ) {
         this.onUnauthorized?.();
       }
-      throw await this.buildHttpError(response);
+      const error = await this.buildHttpError(response);
+      // L252:429 退避提示经契约通知总线交给 UI 桥呈现(含 Retry-After 秒数)。
+      if (response.status === HTTP_TOO_MANY_REQUESTS) {
+        notifyRateLimited(error.retryAfter);
+      }
+      throw error;
     }
     return response;
   }

@@ -162,6 +162,27 @@ async def get_squad(
     return {"data": await _squad_service(request).get_squad(workspace_id=context.workspace.id, squad_id=sid)}
 
 
+@router.get("/workspaces/{workspace_id}/squads/{squad_id}/export")
+async def export_squad(
+    request: Request,
+    squad_id: str,
+    context: WorkspaceContext = Depends(require_workspace("issue:read")),
+):
+    """Markdown archive export: task messages + timeline (squad.md §4.5)."""
+    sid = _path_uuid(squad_id)
+    await _assert_squad_read(
+        _sf(request), workspace_id=context.workspace.id, squad_id=sid, member=context.member
+    )
+    markdown = await _squad_service(request).export_markdown(
+        workspace_id=context.workspace.id, squad_id=sid
+    )
+    return Response(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="squad-{sid}.md"'},
+    )
+
+
 @router.patch("/workspaces/{workspace_id}/squads/{squad_id}")
 async def update_squad(
     request: Request,

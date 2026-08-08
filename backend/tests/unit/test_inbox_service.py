@@ -369,6 +369,119 @@ async def test_aggregation_window_merges_same_group(env):
     assert rows[0].payload["preview"] == "msg 2"  # latest wins
 
 
+async def test_review_requested_carries_approval_id_to_payload_and_frame(env):
+    """Unified approvals (README §6.10 / agent.md §5.4): review_requested
+    notifications must carry the pending approval id end-to-end — stored
+    payload snapshot AND the realtime ``notification.created`` frame — so an
+    inbox row can offer inline approve/reject without a lookup."""
+    factory, workspace = env["factory"], env["workspace"]
+    approval_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    # issue_id omitted on purpose: implicit issue routing (reporter/assignee) is
+    # covered elsewhere — this contract is approval_id propagation only.
+    event = await _emit_fanout(
+        factory, workspace,
+        notification_type="review_requested",
+        actor_member_id=env["agent"].id, actor_name="reviewer",
+        execution_id=execution_id,
+        recipient_ids=[env["bob"].id],
+        group_key=f"execution:{execution_id}:approval",
+        title="Approval needed", preview="tool: shell",
+        extra={"approval_id": str(approval_id)},
+    )
+    await _run_fanout(factory, event)
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["approval_id"] == str(approval_id)
+
+    frames = await _realtime_events(factory, "notification.created")
+    frames = [f for f in frames if f.workspace_id == workspace.id]
+    assert len(frames) == 1
+    assert frames[0].payload["data"]["approval_id"] == str(approval_id)
+    assert frames[0].payload["data"]["type"] == "review_requested"
+
+
+async def test_review_requested_aggregation_refreshes_approval_id(env):
+    """A re-requested approval merged into the 60 s window refreshes the
+    approval id so inline actions address the latest pending approval."""
+    factory, workspace = env["factory"], env["workspace"]
+    execution_id = uuid.uuid4()
+    group = f"execution:{execution_id}:approval"
+    first_approval = uuid.uuid4()
+    second_approval = uuid.uuid4()
+    for approval_id, offset in ((first_approval, 0), (second_approval, 10)):
+        event = await _emit_fanout(
+            factory, workspace,
+            notification_type="review_requested",
+            execution_id=execution_id,
+            recipient_ids=[env["bob"].id], group_key=group,
+            title="Approval needed", preview="tool: shell",
+            extra={"approval_id": str(approval_id)},
+        )
+        await _run_fanout(factory, event, clock=T0 + timedelta(seconds=offset))
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["count"] == 2
+    assert rows[0].payload["approval_id"] == str(second_approval)
+
+
+async def test_missing_snapshot_fields_are_backfilled_from_live_issue(env):
+    """Producers that only carry ids (assigned / review_requested) must still
+    render readable inbox text: the handler backfills issue_identifier/title
+    from the live issue so group headers never stringify a bare "null"
+    (MES-189 evidence finding)."""
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    execution_id = uuid.uuid4()
+    event = await _emit_fanout(
+        factory, workspace,
+        notification_type="review_requested",
+        execution_id=execution_id,
+        issue_id=issue.id,
+        recipient_ids=[env["bob"].id],
+        group_key=f"execution:{execution_id}:approval",
+        preview="tool: shell",
+    )
+    await _run_fanout(factory, event)
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["issue_identifier"] == issue.identifier
+    assert rows[0].payload["title"] == issue.title
+
+    frames = await _realtime_events(factory, "notification.created")
+    frames = [f for f in frames if f.workspace_id == workspace.id]
+    assert frames, "expected at least one notification.created frame"
+    # issue_id also routes to the reporter, so assert the contract on every
+    # frame: the §2.6 snapshot must be backfilled, never None.
+    for frame in frames:
+        data = frame.payload["data"]
+        assert data["issue"]["identifier"] == issue.identifier
+        assert data["issue"]["title"] == issue.title
+
+
+async def test_existing_snapshot_fields_are_never_overwritten_by_backfill(env):
+    """Backfill only fills what the producer omitted: producer-supplied text
+    wins over the live issue's current values."""
+    factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
+    event = await _emit_fanout(
+        factory, workspace,
+        notification_type="comment_created",
+        issue_id=issue.id,
+        recipient_ids=[env["bob"].id],
+        group_key=f"issue:{issue.id}:comment_created",
+        title="Producer title", preview="hi",
+        extra={"issue_identifier": "PROD-9"},
+    )
+    await _run_fanout(factory, event)
+
+    rows = [row for row in await _notifications(factory) if row.recipient_id == env["bob"].id]
+    assert len(rows) == 1
+    assert rows[0].payload["issue_identifier"] == "PROD-9"
+    assert rows[0].payload["title"] == "Producer title"
+
+
 async def test_aggregation_outside_window_creates_new_row(env):
     factory, workspace, issue = env["factory"], env["workspace"], env["issue"]
     group = f"issue:{issue.id}:comment_created"
@@ -792,6 +905,33 @@ async def test_read_all_and_archive(env):
         workspace_id=env["workspace"].id, member=env["bob"], notification_id=rows[0].id,
     )
     assert result["archived_at"] is not None
+
+
+async def test_archived_only_listing(env):
+    """L202 归档视图:archived_only=True 只返回已归档通知(移出主视图,可回查)。"""
+    inbox = env["inbox"]
+    rows = await _seed_notifications(env, count=2)
+    await inbox.set_archived(
+        workspace_id=env["workspace"].id, member=env["bob"], notification_id=rows[0].id,
+    )
+    # 主视图只剩未归档行
+    main = await inbox.list_notifications(
+        workspace_id=env["workspace"].id, member=env["bob"],
+    )
+    assert [item["id"] for item in main["data"]] == [str(rows[1].id)]
+    # 归档视图只含已归档行,且 archived_at 非空
+    archived = await inbox.list_notifications(
+        workspace_id=env["workspace"].id, member=env["bob"], archived_only=True,
+    )
+    assert [item["id"] for item in archived["data"]] == [str(rows[0].id)]
+    assert all(item["archived_at"] is not None for item in archived["data"])
+    # 分组形态同样支持(两行同 group_key,归档视图内仅 1 组 1 条)
+    grouped = await inbox.list_notifications(
+        workspace_id=env["workspace"].id, member=env["bob"],
+        grouped=True, archived_only=True,
+    )
+    assert len(grouped["data"]) == 1
+    assert grouped["data"][0]["count"] == 1
 
 
 async def test_inbox_item_of_other_member_is_404(env):

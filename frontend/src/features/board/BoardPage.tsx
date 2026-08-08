@@ -27,11 +27,15 @@ import {
   Skeleton,
   useToast,
 } from '../../design';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useUrlState } from '../../hooks/useUrlState';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
 import type { RealtimeEventFrame } from '../../types/realtime';
+import { useFavorites } from '../favorites/useFavorites';
+import { ExportDialog } from '../data-jobs/ExportDialog';
 import { getIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
 import {
   listCustomFields,
@@ -125,6 +129,48 @@ function draftDiffers(view: View, draft: ViewDraft): boolean {
   );
 }
 
+/**
+ * L92:URL ?draft= 反序列化为视图草稿(深链分享未保存改动)。
+ * 宽松结构校验 —— 只保证形状安全(group_by/sub_group_by 为字符串或 null、
+ * filters/board_settings 为对象、sort 为数组),非法/损坏一律 null(回落视图原值);
+ * 字段语义由视图层既有渲染路径消化,不在此重复校验。
+ */
+export function parseViewDraft(raw: string | null): ViewDraft | null {
+  if (raw === null || raw === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.group_by !== null && typeof record.group_by !== 'string') return null;
+  if (record.sub_group_by !== null && typeof record.sub_group_by !== 'string') return null;
+  if (
+    typeof record.filters !== 'object' ||
+    record.filters === null ||
+    Array.isArray(record.filters)
+  ) {
+    return null;
+  }
+  if (!Array.isArray(record.sort)) return null;
+  if (
+    typeof record.board_settings !== 'object' ||
+    record.board_settings === null ||
+    Array.isArray(record.board_settings)
+  ) {
+    return null;
+  }
+  return {
+    group_by: record.group_by as GroupByField | null,
+    sub_group_by: record.sub_group_by as GroupByField | null,
+    filters: record.filters as Filters,
+    sort: record.sort as readonly SortRule[],
+    board_settings: record.board_settings as BoardSettings,
+  };
+}
+
 type PanelKey = 'filter' | 'sort' | 'wip' | 'display';
 
 const GROUP_BY_OPTIONS: readonly GroupByField[] = [
@@ -138,6 +184,8 @@ const GROUP_BY_OPTIONS: readonly GroupByField[] = [
 
 /** 新建卡片插入高亮保持时长(§9.3.4)。 */
 const HIGHLIGHT_MS = 1200;
+/** 工具栏观众头像槽位上限(L251 协作感知):超出部分折叠为「+N」。 */
+const MAX_VIEWER_AVATARS = 5;
 
 /** 从整体游标分组包络拉取整板卡片(遍历 next_cursor 至末页,§6.14)。 */
 export async function loadAllGroups(
@@ -251,6 +299,10 @@ export function BoardPage(): React.JSX.Element {
           ? 'empty'
           : 'error'
     : standaloneWsStatus;
+  // L222 收藏入口:列表行 issue 星标 + 视图 ⋯ 菜单收藏条目(§6.19);
+  // membership 未就绪时 workspaceId 为 null,hook 内部不发请求。
+  const issueFavorites = useFavorites(membership?.workspace_id ?? null, 'issue');
+  const viewFavorites = useFavorites(membership?.workspace_id ?? null, 'view');
   const [views, setViews] = useState<readonly View[]>([]);
   const [viewsStatus, setViewsStatus] = useState<LoadStatus>('loading');
   const [customGroupFields, setCustomGroupFields] = useState<readonly CustomFieldDef[]>([]);
@@ -258,10 +310,17 @@ export function BoardPage(): React.JSX.Element {
   customGroupFieldsRef.current = customGroupFields;
   const [customFieldsRefresh, setCustomFieldsRefresh] = useState(0);
   const [draft, setDraft] = useState<ViewDraft | null>(null);
+  // L92:未保存草稿经 URL(?draft=<json>)持久化 —— 刷新不丢、可分享;
+  // 经 ref 读取供视图初始化时恢复,写侧 effect 在草稿脏时序列化、收敛时清除。
+  const [draftParam, setDraftParam] = useUrlState('draft');
+  const draftParamRef = useRef<string | null>(null);
+  draftParamRef.current = draftParam;
   const [panel, setPanel] = useState<PanelKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsName, setSaveAsName] = useState('');
+  // L543(import-export.md §4.1):视图 ⋯「导出本视图」情境入口目标。
+  const [exportView, setExportView] = useState<View | null>(null);
 
   // 投影层状态:整板分组 + 列目标状态映射 + 加载态。
   const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
@@ -307,6 +366,15 @@ export function BoardPage(): React.JSX.Element {
   selectedCardIdRef.current = selectedCardId;
   const boardGridRef = useRef<BoardGrid>([]);
   const membersCacheRef = useRef<readonly MemberSummary[] | null>(null);
+
+  // —— 协作感知(kanban.md §3.5 view.presence):同看板在线观众(可选特性,best-effort)——
+  const [viewPresence, setViewPresence] = useState<{
+    readonly online: number;
+    readonly subjects: readonly string[];
+  } | null>(null);
+  /** subject(用户 id)→ 成员显示名的映射名册,首个 presence 帧后惰性加载。 */
+  const [viewerRoster, setViewerRoster] = useState<readonly MemberSummary[] | null>(null);
+  const viewerRosterLoadingRef = useRef(false);
 
   // 规范路由前缀:挂载于 /w/{slug}/* 时内部导航保持 workspace-scoped 规范形态。
   const workspaceRouteMatch = useMatch('/w/:workspaceSlug/*');
@@ -566,10 +634,57 @@ export function BoardPage(): React.JSX.Element {
     return scopedViews.find((view) => view.is_default) ?? scopedViews[0] ?? null;
   }, [scopedViews, viewId]);
   selectedViewIdRef.current = selectedView?.id ?? null;
-
+  // 切换视图/工作区时清空上一视图的观众态,避免残留串看板。
   useEffect(() => {
-    setDraft(selectedView === null ? null : draftFromView(selectedView));
+    setViewPresence(null);
+  }, [selectedView?.id]);
+  // 有观众且名册未加载时惰性拉一次成员名册,把 subject 映射为显示名。
+  // 失败降级为无名册(仍显示计数与原始 subject 首字母),不弹错——可选特性。
+  useEffect(() => {
+    if (membership === null || selectedView === null) return;
+    if (viewPresence === null || viewPresence.subjects.length === 0) return;
+    if (viewerRoster !== null || viewerRosterLoadingRef.current) return;
+    viewerRosterLoadingRef.current = true;
+    listMembers(client, membership.workspace_id, { limit: 100 })
+      .then((page) => setViewerRoster(page.data))
+      .catch(() => setViewerRoster([]))
+      .finally(() => {
+        viewerRosterLoadingRef.current = false;
+      });
+  }, [client, membership, selectedView, viewPresence, viewerRoster]);
+  /** 观众头像槽位:subject(用户 id)经名册映射为显示名,未映射者用 subject 首字符。 */
+  const viewerSlots = useMemo(() => {
+    if (viewPresence === null) return [];
+    return viewPresence.subjects.slice(0, MAX_VIEWER_AVATARS).map((subject) => {
+      const member = viewerRoster?.find((entry) => entry.profile?.id === subject) ?? null;
+      const name = member?.display_name ?? subject;
+      return { key: member?.id ?? subject, name, initial: name.slice(0, 1).toUpperCase() };
+    });
+  }, [viewPresence, viewerRoster]);
+  // L93 标签页标题:当前视图名(无视图时回落产品名)。
+  useDocumentTitle(selectedView?.name ?? '');
+
+  // 视图初始化草稿:真正换视图(首次进入/切换)才重置 —— 优先恢复 URL 里的
+  // 未保存草稿(L92 深链);仅视图列表刷新(同 id 新对象)不得冲掉在改草稿。
+  const lastDraftedViewIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (selectedView === null) {
+      lastDraftedViewIdRef.current = null;
+      setDraft(null);
+      return;
+    }
+    if (lastDraftedViewIdRef.current === selectedView.id) return;
+    lastDraftedViewIdRef.current = selectedView.id;
+    setDraft(parseViewDraft(draftParamRef.current) ?? draftFromView(selectedView));
   }, [selectedView]);
+
+  // L92:草稿脏时把序列化结果写入 ?draft=,收敛(保存/丢弃/换视图后追平)即清除。
+  // 未初始化(视图加载中/空)不动参数 —— 避免在恢复前把深链参数误删。
+  useEffect(() => {
+    if (draft === null || selectedView === null) return;
+    const serialized = draftDiffers(selectedView, draft) ? JSON.stringify(draft) : null;
+    if (draftParamRef.current !== serialized) setDraftParam(serialized);
+  }, [draft, selectedView, setDraftParam]);
 
   useEffect(() => {
     let cancelled = false;
@@ -858,7 +973,19 @@ export function BoardPage(): React.JSX.Element {
           reconcileRequests.delete(`${reconcilePrefix}${issue.id}`);
         }
       }
-      if (frame.event === 'view.presence') return;
+      if (frame.event === 'view.presence') {
+        // 协作感知(kanban.md §3.5):更新同看板观众计数/名单,供工具栏头像簇渲染。
+        const d = frame.payload as { view_id?: unknown; online?: unknown; members?: unknown };
+        if (d.view_id === selectedView.id) {
+          setViewPresence({
+            online: typeof d.online === 'number' ? d.online : 0,
+            subjects: Array.isArray(d.members)
+              ? d.members.filter((s): s is string => typeof s === 'string')
+              : [],
+          });
+        }
+        return;
+      }
       // §4.4/§5.1: warn 超限放行后,服务端广播 view.wip_exceeded → 顶部 toast
       // (拖拽者本人与同视图协作者均可见),与列头红色徽章并存。
       if (frame.event === 'view.wip_exceeded') {
@@ -1050,6 +1177,8 @@ export function BoardPage(): React.JSX.Element {
           onDuplicate={handleDuplicate}
           onSetDefault={handleSetDefault}
           onDelete={handleDelete}
+          favoriteViewIds={viewFavorites.favoriteIds}
+          onToggleFavorite={(view) => void viewFavorites.toggle(view.id)}
         />
         <EmptyState
           illustration={<EmptyBoardColumns />}
@@ -1542,6 +1671,9 @@ export function BoardPage(): React.JSX.Element {
         onDuplicate={handleDuplicate}
         onSetDefault={handleSetDefault}
         onDelete={handleDelete}
+        favoriteViewIds={viewFavorites.favoriteIds}
+        onToggleFavorite={(view) => void viewFavorites.toggle(view.id)}
+        onExportView={(view) => setExportView(view)}
       />
       <div className="mesh-board__main">
         <header className="mesh-board__toolbar">
@@ -1551,6 +1683,29 @@ export function BoardPage(): React.JSX.Element {
           <span className="mesh-board__layout-chip">
             {t('board.layout.' + selectedView.layout)}
           </span>
+          {viewPresence !== null && viewPresence.online > 0 ? (
+            <span
+              className="mesh-board__view-presence"
+              data-testid="board-view-presence"
+              title={viewerSlots.map((slot) => slot.name).join(', ')}
+            >
+              <span className="mesh-board__viewer-stack" aria-hidden="true">
+                {viewerSlots.map((slot) => (
+                  <span key={slot.key} className="mesh-board__viewer">
+                    {slot.initial}
+                  </span>
+                ))}
+                {viewPresence.subjects.length > MAX_VIEWER_AVATARS ? (
+                  <span className="mesh-board__viewer mesh-board__viewer--more">
+                    +{viewPresence.subjects.length - MAX_VIEWER_AVATARS}
+                  </span>
+                ) : null}
+              </span>
+              <span className="mesh-board__viewer-count mesh-text-caption mesh-tnum">
+                {t('board.viewPresence', { count: viewPresence.online })}
+              </span>
+            </span>
+          ) : null}
           <Select
             label={t('board.groupByLabel')}
             value={draft.group_by ?? 'state_category'}
@@ -1714,6 +1869,8 @@ export function BoardPage(): React.JSX.Element {
                 navigate(`${routePrefixRef.current}/issues/${encodeURIComponent(id)}`)
               }
               onChanged={() => void loadBoard(selectedView)}
+              favoriteIssueIds={issueFavorites.favoriteIds}
+              onToggleFavorite={(issueId) => void issueFavorites.toggle(issueId)}
             />
           )
         ) : (
@@ -1781,6 +1938,20 @@ export function BoardPage(): React.JSX.Element {
           </div>
         </div>
       </Dialog>
+
+      {/* L543(import-export.md §4.1):视图 ⋯「导出本视图」→ 范围预选 view 的导出对话框;
+          每次打开重新挂载,保证 defaultScope/filters 随目标视图刷新。 */}
+      {exportView !== null && membership !== null ? (
+        <ExportDialog
+          open
+          onClose={() => setExportView(null)}
+          workspaceId={membership.workspace_id}
+          defaultScope="view"
+          filters={
+            exportView.project_id !== null ? { project_id: exportView.project_id } : undefined
+          }
+        />
+      ) : null}
     </div>
   );
 }

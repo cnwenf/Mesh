@@ -3,6 +3,7 @@
  * 列表走 `list`(自动解 {data,next_cursor}),单对象走 `request`;
  * 所有函数为接收 (client, workspaceId, …) 的自由函数(与 issues/members 同构)。
  */
+import { AUTH_HEADER, MeshApiError, bearerHeader, getToken } from '../../api';
 import type { MeshApiClient } from '../../api';
 import { env } from '../../env';
 import type {
@@ -31,8 +32,7 @@ export interface Page<T> {
   readonly nextCursor: string | null;
 }
 
-const squadsPath = (workspaceId: string): string =>
-  `/api/v1/workspaces/${workspaceId}/squads`;
+const squadsPath = (workspaceId: string): string => `/api/v1/workspaces/${workspaceId}/squads`;
 
 const squadPath = (workspaceId: string, squadId: string): string =>
   `${squadsPath(workspaceId)}/${squadId}`;
@@ -65,11 +65,7 @@ export async function getIssueAssignment(
  * 头,故消费端以 fetch 流式读取并手动带 Bearer 凭证(见 stream.ts);此处仅构 URL。
  * 同源部署 apiBaseUrl 可为空。
  */
-export function taskStreamUrl(
-  workspaceId: string,
-  squadId: string,
-  taskId: string,
-): string {
+export function taskStreamUrl(workspaceId: string, squadId: string, taskId: string): string {
   return `${env.apiBaseUrl}${taskPath(workspaceId, squadId, taskId)}/stream`;
 }
 
@@ -167,11 +163,9 @@ export async function changeRole(
   memberId: string,
   role: SquadRole,
 ): Promise<Squad> {
-  return client.request<Squad>(
-    'PATCH',
-    `${squadPath(workspaceId, squadId)}/members/${memberId}`,
-    { body: { role } },
-  );
+  return client.request<Squad>('PATCH', `${squadPath(workspaceId, squadId)}/members/${memberId}`, {
+    body: { role },
+  });
 }
 
 /** 移除成员(leader 离队无替补 → 根任务 blocked,§6.9)。 */
@@ -360,9 +354,62 @@ export async function listActivity(
   squadId: string,
   params: { taskId?: string; action?: string; limit?: number } = {},
 ): Promise<readonly SquadActivity[]> {
-  const envelope = await client.list<SquadActivity>(
-    `${squadPath(workspaceId, squadId)}/activity`,
-    { query: { task_id: params.taskId, action: params.action, limit: params.limit } },
-  );
+  const envelope = await client.list<SquadActivity>(`${squadPath(workspaceId, squadId)}/activity`, {
+    query: { task_id: params.taskId, action: params.action, limit: params.limit },
+  });
   return envelope.data;
+}
+
+/** 归档导出结果(squad.md §4.6 / L486):markdown 原文 + 建议文件名。 */
+export interface SquadArchiveExport {
+  readonly markdown: string;
+  readonly fileName: string;
+}
+
+/**
+ * 导出小队归档(squad.md §4.6 / L486)。
+ * 后端返回原始 markdown(`text/markdown`,非 JSON 包络),MeshApiClient 仅解析包络,
+ * 故此处独立 fetch;鉴权与包络路径同构(`Authorization: Bearer <token>`)。
+ * 非 2xx 归一为 MeshApiError(解析错误包络);网络失败归一为 `network` 码——失败必须对调用方可见。
+ */
+export async function exportSquadArchive(
+  workspaceId: string,
+  squadId: string,
+): Promise<SquadArchiveExport> {
+  const url = `${env.apiBaseUrl}${squadPath(workspaceId, squadId)}/export`;
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token !== null) {
+    headers[AUTH_HEADER] = bearerHeader(token);
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, { method: 'GET', headers });
+  } catch {
+    throw new MeshApiError({ status: 0, code: 'network', message: 'network error' });
+  }
+  if (!response.ok) {
+    throw new MeshApiError(await parseErrorEnvelope(response));
+  }
+  const markdown = await response.text();
+  return { markdown, fileName: `squad-${squadId}.md` };
+}
+
+/** 从非 2xx 响应解析后端错误包络(与 client 归一结果同构);非 JSON 体退化为 unknown。 */
+async function parseErrorEnvelope(response: Response): Promise<{
+  status: number;
+  code: string;
+  message: string;
+}> {
+  const text = await response.text();
+  try {
+    const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+    return {
+      status: response.status,
+      code: parsed.error?.code ?? 'unknown',
+      message: parsed.error?.message ?? '',
+    };
+  } catch {
+    return { status: response.status, code: 'unknown', message: '' };
+  }
 }

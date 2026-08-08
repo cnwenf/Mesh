@@ -22,6 +22,11 @@ interface ViewSwitcherProps {
   readonly onDuplicate: (view: View) => Promise<void>;
   readonly onSetDefault: (view: View) => Promise<void>;
   readonly onDelete: (view: View) => Promise<void>;
+  /** L222:已收藏视图 id 集合(⋯ 菜单星标条目);未提供 onToggleFavorite 则不渲染。 */
+  readonly favoriteViewIds?: ReadonlySet<string>;
+  readonly onToggleFavorite?: (view: View) => void;
+  /** L543(import-export.md §4.1):读权限情境入口「导出本视图」;提供后只读视图也显示 ⋯ 菜单。 */
+  readonly onExportView?: (view: View) => void;
 }
 
 /* 布局图标一律经设计图标集(§13.2 禁字符图标)。timeline/table 为预留布局,
@@ -44,6 +49,9 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
     onDuplicate,
     onSetDefault,
     onDelete,
+    favoriteViewIds,
+    onToggleFavorite,
+    onExportView,
   } = props;
   const t = useT();
   const [createOpen, setCreateOpen] = useState(false);
@@ -109,7 +117,7 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                   </span>
                 ) : null}
               </Button>
-              {canWrite(view) ? (
+              {canWrite(view) || onExportView !== undefined ? (
                 <>
                   <IconButton
                     variant="ghost"
@@ -131,34 +139,38 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                       role="menu"
                       data-testid={`view-menu-list-${view.id}`}
                     >
-                      <li>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          role="menuitem"
-                          onClick={() => {
-                            setRenameTarget(view);
-                            setRenameName(view.name);
-                            setMenuFor(null);
-                          }}
-                        >
-                          {t('board.renameView')}
-                        </Button>
-                      </li>
-                      <li>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          role="menuitem"
-                          onClick={() => {
-                            void onDuplicate(view);
-                            setMenuFor(null);
-                          }}
-                        >
-                          {t('board.duplicateView')}
-                        </Button>
-                      </li>
-                      {view.is_default ? null : (
+                      {canWrite(view) ? (
+                        <li>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            role="menuitem"
+                            onClick={() => {
+                              setRenameTarget(view);
+                              setRenameName(view.name);
+                              setMenuFor(null);
+                            }}
+                          >
+                            {t('board.renameView')}
+                          </Button>
+                        </li>
+                      ) : null}
+                      {canWrite(view) ? (
+                        <li>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            role="menuitem"
+                            onClick={() => {
+                              void onDuplicate(view);
+                              setMenuFor(null);
+                            }}
+                          >
+                            {t('board.duplicateView')}
+                          </Button>
+                        </li>
+                      ) : null}
+                      {!canWrite(view) || view.is_default ? null : (
                         <li>
                           <Button
                             variant="ghost"
@@ -173,21 +185,60 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                           </Button>
                         </li>
                       )}
-                      <li>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          role="menuitem"
-                          className="mesh-view-switcher__danger"
-                          data-testid={`view-delete-open-${view.id}`}
-                          onClick={() => {
-                            setDeleteTarget(view);
-                            setMenuFor(null);
-                          }}
-                        >
-                          {t('board.deleteView')}
-                        </Button>
-                      </li>
+                      {/* L543(import-export.md §4.1):读权限情境入口「导出本视图」。 */}
+                      {onExportView !== undefined ? (
+                        <li>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            role="menuitem"
+                            data-testid={`view-export-${view.id}`}
+                            onClick={() => {
+                              onExportView(view);
+                              setMenuFor(null);
+                            }}
+                          >
+                            {t('board.exportView')}
+                          </Button>
+                        </li>
+                      ) : null}
+                      {/* L222:收藏视图条目(星标);收藏与删除权限解耦,读权限即可收藏。
+                          未提供 onToggleFavorite 的调用方不渲染该条目。 */}
+                      {onToggleFavorite === undefined ? null : (
+                        <li>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            role="menuitem"
+                            data-testid={`view-favorite-toggle-${view.id}`}
+                            onClick={() => {
+                              onToggleFavorite(view);
+                              setMenuFor(null);
+                            }}
+                          >
+                            {favoriteViewIds?.has(view.id) === true
+                              ? t('favorites.remove')
+                              : t('favorites.add')}
+                          </Button>
+                        </li>
+                      )}
+                      {canWrite(view) ? (
+                        <li>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            role="menuitem"
+                            className="mesh-view-switcher__danger"
+                            data-testid={`view-delete-open-${view.id}`}
+                            onClick={() => {
+                              setDeleteTarget(view);
+                              setMenuFor(null);
+                            }}
+                          >
+                            {t('board.deleteView')}
+                          </Button>
+                        </li>
+                      ) : null}
                     </ul>
                   ) : null}
                 </>

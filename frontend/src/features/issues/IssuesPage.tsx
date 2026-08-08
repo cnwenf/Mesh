@@ -25,6 +25,7 @@ import {
 } from '../../design';
 import type { FilterChip } from '../../design';
 import { env } from '../../env';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
@@ -47,15 +48,31 @@ import { nextIssueSort, parseIssueSort, sortIssues } from './issuesSort';
 import type { IssueSortField, IssueSortState } from './issuesSort';
 import { workspaceIssueByIdentifierPath } from './issueRoutes';
 import { applyIssueListFrame } from './realtime';
-import type { IssuePriority, IssueSummary, IssueStatusRef, StateCategory } from './types';
+import type {
+  IssuePriority,
+  IssueSummary,
+  IssueStatusRef,
+  ListIssuesParams,
+  StateCategory,
+} from './types';
 import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
 import './issues.css';
 
 const PAGE_LIMIT = 25;
 const ALL = 'all';
+/** L92 分页深链的追赶上限:防止 ?page= 超大值引发连环拉取(20 页 = 500 行足够深)。 */
+const MAX_PAGE_TARGET = 20;
 
 /** URL 中由本页管理的参数键(保存视图快照/应用与清除全部的边界)。 */
 const MANAGED_PARAM_KEYS = ['q', 'category', 'priority', 'mine', 'sort', 'order'] as const;
+
+/** URL ?page=N → 已加载页数目标;非法/越界回落 1(L92 刷新不丢、可分享)。 */
+function pageTargetFromParam(raw: string | null): number {
+  if (raw === null) return 1;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) return 1;
+  return Math.min(parsed, MAX_PAGE_TARGET);
+}
 
 function matchesFilters(
   issue: IssueSummary,
@@ -83,6 +100,7 @@ function matchesFilters(
 
 export function IssuesPage(): React.JSX.Element {
   const t = useT();
+  useDocumentTitle(t('issues.pageTitle')); // L93 标签页标题
   const toast = useToast();
   const navigate = useNavigate();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
@@ -163,6 +181,13 @@ export function IssuesPage(): React.JSX.Element {
   tRef.current = t;
   // 请求序号闸:乱序到达的旧响应不得覆盖新结果(过滤切换竞态防护)
   const loadSeqRef = useRef(0);
+  // L92:已加载页数经 URL(?page=N)持久化 —— 目标值经 ref 读取(load 依赖不含
+  // searchParams,写 page 不会触发重拉);loadMore/追赶成功后回写真实页数。
+  const pagesLoadedRef = useRef(1);
+  const pageTargetRef = useRef(1);
+  pageTargetRef.current = pageTargetFromParam(searchParams.get('page'));
+  const pageParamRawRef = useRef<string | null>(null);
+  pageParamRawRef.current = searchParams.get('page');
 
   // 解析本人 member id(经当前路由工作区名册邮箱匹配;assignee=我过滤需要)。
   // /users/me 只提供本人邮箱;不得再参与工作区选择。
@@ -213,6 +238,7 @@ export function IssuesPage(): React.JSX.Element {
   const workspaceId = workspace?.workspace_id ?? null;
   useEffect(() => {
     loadSeqRef.current += 1;
+    pagesLoadedRef.current = 1;
     setIssues([]);
     setStatuses([]);
     setNextCursor(null);
@@ -222,6 +248,21 @@ export function IssuesPage(): React.JSX.Element {
   }, [workspaceId, workspaceContextStatus]);
 
   const mineMemberId = mineOnly ? currentMemberId : null;
+  // load/追赶/loadMore 共用的列表请求参数(API 固定 created_at desc,客户端重排已加载行)。
+  const listRequestParams = useCallback(
+    (cursor?: string): ListIssuesParams => ({
+      q: qFilter === '' ? undefined : qFilter,
+      state_category: categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
+      priority: priorityFilter === ALL ? undefined : (priorityFilter as IssuePriority),
+      assignee_id:
+        mineOnly && currentMemberIdRef.current !== null ? currentMemberIdRef.current : undefined,
+      sort: 'created_at',
+      order: 'desc',
+      limit: PAGE_LIMIT,
+      ...(cursor === undefined ? {} : { cursor }),
+    }),
+    [qFilter, categoryFilter, priorityFilter, mineOnly],
+  );
   const load = useCallback(async (): Promise<void> => {
     if (workspace === null) {
       setIsLoading(false);
@@ -235,25 +276,39 @@ export function IssuesPage(): React.JSX.Element {
     setError(null);
     const seq = ++loadSeqRef.current;
     try {
-      const [page, defs] = await Promise.all([
-        listIssues(client, workspace.workspace_id, {
-          q: qFilter === '' ? undefined : qFilter,
-          state_category: categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
-          priority: priorityFilter === ALL ? undefined : (priorityFilter as IssuePriority),
-          assignee_id:
-            mineOnly && currentMemberIdRef.current !== null
-              ? currentMemberIdRef.current
-              : undefined,
-          sort: 'created_at',
-          order: 'desc',
-          limit: PAGE_LIMIT,
-        }),
+      const [firstPage, defs] = await Promise.all([
+        listIssues(client, workspace.workspace_id, listRequestParams()),
         listStatuses(client, workspace.workspace_id),
       ]);
       if (seq !== loadSeqRef.current) return; // 旧响应:丢弃,不覆盖新结果
-      setIssues([...page.data]);
-      setNextCursor(page.nextCursor);
+      // L92:?page=N 深链 —— 游标追赶后续页至目标(或数据耗尽),刷新保住已加载页数。
+      let loaded = [...firstPage.data];
+      let cursor = firstPage.nextCursor;
+      let pages = 1;
+      const target = pageTargetRef.current;
+      while (pages < target && cursor !== null) {
+        const nextPage = await listIssues(
+          client,
+          workspace.workspace_id,
+          listRequestParams(cursor),
+        );
+        if (seq !== loadSeqRef.current) return;
+        const seen = new Set(loaded.map((issue) => issue.id));
+        loaded = [...loaded, ...nextPage.data.filter((issue) => !seen.has(issue.id))];
+        cursor = nextPage.nextCursor;
+        pages += 1;
+      }
+      if (seq !== loadSeqRef.current) return;
+      setIssues(loaded);
+      setNextCursor(cursor);
       setStatuses([...defs]);
+      pagesLoadedRef.current = pages;
+      // 回写真实已加载页数(数据不足目标时以实际为准);与现参数一致则免写,
+      // 顺带把非法值(如 ?page=bogus)归一化清除。
+      const canonicalPage = pages > 1 ? String(pages) : null;
+      if (pageParamRawRef.current !== canonicalPage) {
+        setParamRef.current('page', canonicalPage);
+      }
     } catch (err: unknown) {
       if (seq !== loadSeqRef.current) return;
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -264,16 +319,7 @@ export function IssuesPage(): React.JSX.Element {
         setHasLoaded(true);
       }
     }
-  }, [
-    client,
-    workspace,
-    memberContextWorkspaceId,
-    qFilter,
-    categoryFilter,
-    priorityFilter,
-    mineOnly,
-    mineMemberId,
-  ]);
+  }, [client, workspace, memberContextWorkspaceId, mineOnly, mineMemberId, listRequestParams]);
 
   useEffect(() => {
     void load();
@@ -313,23 +359,16 @@ export function IssuesPage(): React.JSX.Element {
     if (workspace === null || nextCursor === null) return;
     const seq = ++loadSeqRef.current;
     try {
-      const page = await listIssues(client, workspace.workspace_id, {
-        q: qFilter === '' ? undefined : qFilter,
-        state_category: categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
-        priority: priorityFilter === ALL ? undefined : (priorityFilter as IssuePriority),
-        assignee_id:
-          mineOnly && currentMemberIdRef.current !== null ? currentMemberIdRef.current : undefined,
-        sort: 'created_at',
-        order: 'desc',
-        limit: PAGE_LIMIT,
-        cursor: nextCursor,
-      });
+      const page = await listIssues(client, workspace.workspace_id, listRequestParams(nextCursor));
       if (seq !== loadSeqRef.current) return;
       setIssues((prev) => {
         const seen = new Set(prev.map((issue) => issue.id));
         return [...prev, ...page.data.filter((issue) => !seen.has(issue.id))];
       });
       setNextCursor(page.nextCursor);
+      // L92:已加载页数 +1 同步 URL,刷新/分享后按 ?page= 追赶到同一深度。
+      pagesLoadedRef.current += 1;
+      setParamRef.current('page', String(pagesLoadedRef.current));
     } catch (err: unknown) {
       if (seq !== loadSeqRef.current) return;
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -338,7 +377,7 @@ export function IssuesPage(): React.JSX.Element {
         closeLabel: tRef.current('common.close'),
       });
     }
-  }, [client, workspace, nextCursor, qFilter, categoryFilter, priorityFilter, mineOnly, toast]);
+  }, [client, workspace, nextCursor, listRequestParams, toast]);
 
   /** 多键写 URL(保留非管理键;replace 避免污染历史栈)。 */
   const setParams = useCallback(
@@ -348,6 +387,12 @@ export function IssuesPage(): React.JSX.Element {
         if (value === null || value === '') next.delete(key);
         else next.set(key, value);
       }
+      // L92:筛选/排序变更即重置已加载页数(新列表从第 1 页起);
+      // page 仅在调用方显式写入时保留(loadMore/追赶回写)。
+      const filterChanged = Object.keys(updates).some((key) =>
+        (MANAGED_PARAM_KEYS as readonly string[]).includes(key),
+      );
+      if (filterChanged && !('page' in updates)) next.delete('page');
       setSearchParams(next, { replace: true });
     },
     [searchParams, setSearchParams],
@@ -669,7 +714,11 @@ export function IssuesPage(): React.JSX.Element {
       toolbar={toolbar}
       footer={
         nextCursor !== null ? (
-          <Button variant="secondary" onClick={() => void loadMore()}>
+          <Button
+            variant="secondary"
+            data-testid="issues-load-more"
+            onClick={() => void loadMore()}
+          >
             {t('issues.loadMore')}
           </Button>
         ) : undefined
@@ -678,6 +727,7 @@ export function IssuesPage(): React.JSX.Element {
         <IssuesBulkBar
           selected={[...selected]}
           statuses={statuses}
+          members={roster}
           onDone={() => {
             setSelected(new Set());
             setReloadKey((k) => k + 1);

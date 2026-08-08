@@ -9,6 +9,7 @@ import { BulkBar, Button, Dialog, Menu, useToast } from '../../design';
 import type { MenuItem } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import type { MemberSummary } from '../members/types';
 import { bulkIssues } from './api';
 import type { IssuePriority, IssueStatusRef } from './types';
 import { PRIORITY_ORDER } from './types';
@@ -16,12 +17,14 @@ import { PRIORITY_ORDER } from './types';
 interface IssuesBulkBarProps {
   readonly selected: readonly string[];
   readonly statuses: readonly IssueStatusRef[];
+  /** 工作区名册(批量转派候选;仅活跃成员可选)。 */
+  readonly members: readonly MemberSummary[];
   readonly onDone: (summary: { succeeded: number; failed: number }) => void;
   readonly onClear: () => void;
 }
 
 interface BulkRunBody {
-  readonly changes?: { priority?: IssuePriority; status_id?: string };
+  readonly changes?: { priority?: IssuePriority; status_id?: string; assignee_id?: string };
   readonly delete?: boolean;
 }
 
@@ -95,6 +98,21 @@ export function IssuesBulkBar(props: IssuesBulkBarProps): React.JSX.Element | nu
     onSelect: () => void run({ changes: { priority: p } }),
   }));
 
+  // L247 批量转派:取消指派(空串 → 后端置 null)+ 活跃成员候选。
+  const unassignEntry: MenuItem = {
+    key: 'unassign',
+    label: t('issues.bulk.unassign'),
+    onSelect: () => void run({ changes: { assignee_id: '' } }),
+  };
+  const memberEntries: readonly MenuItem[] = props.members
+    .filter((member) => member.status === 'active')
+    .map((member) => ({
+      key: member.id,
+      label: member.display_name,
+      onSelect: () => void run({ changes: { assignee_id: member.id } }),
+    }));
+  const assigneeEntries: readonly MenuItem[] = [unassignEntry, ...memberEntries];
+
   return (
     <>
       <BulkBar
@@ -114,6 +132,11 @@ export function IssuesBulkBar(props: IssuesBulkBarProps): React.JSX.Element | nu
               triggerLabel={t('issues.bulk.setPriority')}
               trigger={t('issues.bulk.setPriority')}
               entries={priorityEntries}
+            />
+            <Menu
+              triggerLabel={t('issues.bulk.setAssignee')}
+              trigger={t('issues.bulk.setAssignee')}
+              entries={assigneeEntries}
             />
             <Button
               variant="danger"

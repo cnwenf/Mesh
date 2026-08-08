@@ -512,6 +512,10 @@ def _notification_payload(fanout: dict[str, Any]) -> dict[str, Any]:
         "count": 1,
         "changes": fanout.get("changes"),
         "execution_status": fanout.get("execution_status"),
+        # Unified approvals (README §6.10 / agent.md §5.4): review_requested
+        # notifications carry the pending approval id so inbox rows can offer
+        # inline approve/reject without a lookup round-trip.
+        "approval_id": fanout.get("approval_id"),
     }
 
 
@@ -531,10 +535,14 @@ class NotificationFanoutHandler:
         aggregation_window_seconds: float = DEFAULT_AGGREGATION_WINDOW_SECONDS,
         mailer: Any | None = None,
         clock: Any | None = None,
+        settings: Any | None = None,
     ) -> None:
         self._window = timedelta(seconds=aggregation_window_seconds)
         self._mailer = mailer
         self._clock = clock or (lambda: datetime.now(UTC))
+        # Settings gate the email deep-link (app_base_url) and open-token
+        # signing (jwt_secret); absent settings keep bodies link-less.
+        self._settings = settings
 
     async def __call__(self, session: AsyncSession, event: OutboxEvent) -> None:
         await self.handle(session, event)
@@ -562,6 +570,27 @@ class NotificationFanoutHandler:
         explicit = {uuid.UUID(raw) for raw in fanout.get("recipient_ids") or ()}
         exclude = {uuid.UUID(raw) for raw in fanout.get("exclude_ids") or ()}
         group_key = fanout.get("group_key")
+
+        # Some producers carry ids but omit snapshot text (``assigned`` omits
+        # the identifier; ``review_requested`` omits both) — backfill the §2.6
+        # snapshot once per event so inbox headers/rows render real text and
+        # never a bare "null". Deleted issues simply keep the None fields.
+        if issue_id is not None and (
+            fanout.get("issue_identifier") is None or fanout.get("title") is None
+        ):
+            issue = await session.scalar(
+                select(Issue).where(
+                    Issue.id == issue_id,
+                    Issue.workspace_id == workspace_id,
+                    Issue.deleted_at.is_(None),
+                )
+            )
+            if issue is not None:
+                fanout = {**fanout}
+                if fanout.get("issue_identifier") is None:
+                    fanout["issue_identifier"] = issue.identifier
+                if fanout.get("title") is None:
+                    fanout["title"] = issue.title
 
         candidates, _muted = await _candidate_recipient_ids(
             session,
@@ -727,7 +756,7 @@ class NotificationFanoutHandler:
             if existing is not None:
                 payload = dict(existing.payload or {})
                 payload["count"] = int(payload.get("count") or 1) + 1
-                for key in ("preview", "title", "actor_name", "actor_member_type"):
+                for key in ("preview", "title", "actor_name", "actor_member_type", "approval_id"):
                     if fanout.get(key) is not None:
                         payload[key] = fanout[key]
                 if comment_id is not None:
@@ -811,7 +840,9 @@ class NotificationFanoutHandler:
         if email_address is None:
             return
         if send_now and self._mailer is not None:
-            body = _email_body(notification)
+            body = await self._render_email_body(
+                session, notification=notification, recipient=recipient
+            )
             try:
                 await self._mailer.deliver(email_address, EMAIL_KIND_REALTIME, body)
                 await self._record_delivery(
@@ -851,6 +882,37 @@ class NotificationFanoutHandler:
             external_target=email_address,
             state="pending",
         )
+
+    async def _render_email_body(
+        self,
+        session: AsyncSession,
+        *,
+        notification: Notification,
+        recipient: Member,
+    ) -> str:
+        """Locale-rendered body + token-gated deep link (i18n.md §5.1 / §4.4)."""
+        locale = await resolve_recipient_locale(
+            session,
+            recipient_member_id=recipient.id,
+            workspace_id=notification.workspace_id,
+        )
+        link: str | None = None
+        if self._settings is not None:
+            link = await email_open_link(
+                session,
+                self._settings,
+                notification_id=notification.id,
+                workspace_id=notification.workspace_id,
+                recipient_member_id=recipient.id,
+            )
+        if link is None:
+            # Fall back to the plain in-site anchor (requires a logged-in
+            # session) when no base URL/slug or no signing settings exist.
+            slug = await workspace_slug_for(session, workspace_id=notification.workspace_id)
+            link = notification_deep_link(
+                getattr(self._settings, "app_base_url", None), slug, notification.id
+            )
+        return _email_body(notification, locale=locale, link=link)
 
     async def _recipient_email(self, session: AsyncSession, recipient: Member) -> str | None:
         if recipient.user_id is None:
@@ -904,6 +966,7 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
         "issue": issue,
         "comment_id": str(notification.comment_id) if notification.comment_id else None,
         "execution_id": str(notification.execution_id) if notification.execution_id else None,
+        "approval_id": payload.get("approval_id"),
         "group_key": notification.group_key,
         "actor": actor,
         "preview": payload.get("preview"),
@@ -918,20 +981,190 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
     }
 
 
-def _email_body(notification: Notification) -> str:
-    """Plain-text email body; previews are HTML-escaped (§4.4 injection guard)."""
+def _email_body(notification: Notification, *, locale: str = "en", link: str | None = None) -> str:
+    """Plain-text email body rendered in the recipient locale (§4.4 / i18n §5.1).
+
+    Previews are HTML-escaped (§4.4 injection guard). ``link`` is the in-site
+    deep link back to the notification (auto read-marked when opened).
+    """
+    strings = _EMAIL_STRINGS.get(_locale_key(locale), _EMAIL_STRINGS["en"])
     payload = notification.payload or {}
     actor = html.escape(str(payload.get("actor_name") or ""), quote=True)
     title = html.escape(str(payload.get("title") or ""), quote=True)
     preview = html.escape(str(payload.get("preview") or ""), quote=True)
-    lines = [f"Mesh notification: {notification.type}"]
+    lines = [strings["header"].format(type=notification.type)]
     if actor:
-        lines.append(f"From: {actor}")
+        lines.append(f"{strings['from']}{actor}")
     if title:
-        lines.append(f"Issue: {title}")
+        lines.append(f"{strings['issue']}{title}")
     if preview:
-        lines.append(f"Preview: {preview}")
+        lines.append(f"{strings['preview']}{preview}")
+    if link:
+        lines.extend(["", strings["open"], link])
     return "\n".join(lines) + "\n"
+
+
+# Locale-specific email strings (i18n.md §5.1: server renders each recipient's
+# digest in their own locale; en is the fallback). Only fixed chrome is
+# translated — actor/title/preview are data and stay verbatim (escaped).
+_EMAIL_STRINGS: dict[str, dict[str, str]] = {
+    "en": {
+        "header": "Mesh notification: {type}",
+        "from": "From: ",
+        "issue": "Issue: ",
+        "preview": "Preview: ",
+        "open": "Open this notification (marks it read):",
+        "digest": "Mesh notification digest ({count} items)",
+    },
+    "zh-CN": {
+        "header": "Mesh 通知：{type}",
+        "from": "来自：",
+        "issue": "事项：",
+        "preview": "预览：",
+        "open": "打开该通知（打开即标记已读）：",
+        "digest": "Mesh 通知摘要（共 {count} 条）",
+    },
+}
+
+
+def _locale_key(locale: str | None) -> str:
+    """Map a stored locale to an email-template key (zh-* → zh-CN, else en)."""
+    if not locale:
+        return "en"
+    normalized = locale.strip().lower()
+    if normalized.startswith("zh"):
+        return "zh-CN"
+    return "en"
+
+
+async def resolve_recipient_locale(
+    session: AsyncSession, *, recipient_member_id: uuid.UUID, workspace_id: uuid.UUID
+) -> str:
+    """Negotiation chain (i18n.md §5.1): users.settings.locale →
+    workspaces.settings.default_locale → ``en``."""
+    from mesh.db.models.workspace import Workspace
+
+    user_locale = await session.scalar(
+        select(User.settings["locale"])
+        .join(Member, Member.user_id == User.id)
+        .where(
+            Member.workspace_id == workspace_id,
+            Member.id == recipient_member_id,
+        )
+    )
+    if isinstance(user_locale, str) and user_locale.strip():
+        return user_locale
+    workspace_locale = await session.scalar(
+        select(Workspace.settings["default_locale"]).where(
+            Workspace.id == workspace_id
+        )
+    )
+    if isinstance(workspace_locale, str) and workspace_locale.strip():
+        return workspace_locale
+    return "en"
+
+
+async def workspace_slug_for(session: AsyncSession, *, workspace_id: uuid.UUID) -> str | None:
+    from mesh.db.models.workspace import Workspace
+
+    return await session.scalar(select(Workspace.slug).where(Workspace.id == workspace_id))
+
+
+def notification_deep_link(
+    app_base_url: str | None, workspace_slug: str | None, notification_id: uuid.UUID
+) -> str | None:
+    """In-site anchor for an email notification (opens + auto read-marks)."""
+    if not app_base_url or not workspace_slug:
+        return None
+    base = app_base_url.rstrip("/")
+    return f"{base}/w/{workspace_slug}/inbox/{notification_id}"
+
+
+# One-time email open tokens (comment-inbox.md §4.4: 点邮件链接回站内并标已读).
+# A signed JWT is the credential: the open endpoint is unauthenticated, so the
+# token carries the recipient/workspace binding and an expiry; verification is
+# fail-closed (any mismatch/expiry → 404, no existence oracle). The read-mark
+# itself is idempotent, so a replayed link after first use is harmless.
+EMAIL_OPEN_TOKEN_PURPOSE = "email_open"
+EMAIL_OPEN_TOKEN_TTL = timedelta(days=7)
+
+
+def issue_email_open_token(
+    settings: Any,
+    *,
+    notification_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    recipient_member_id: uuid.UUID,
+    now: datetime | None = None,
+) -> str:
+    """Sign a short-lived open token bound to one notification+recipient."""
+    import jwt as pyjwt
+
+    moment = now or datetime.now(UTC)
+    claims = {
+        "purpose": EMAIL_OPEN_TOKEN_PURPOSE,
+        "sub": str(notification_id),
+        "ws": str(workspace_id),
+        "member": str(recipient_member_id),
+        "iat": int(moment.timestamp()),
+        "exp": moment + EMAIL_OPEN_TOKEN_TTL,
+    }
+    return pyjwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def verify_email_open_token(
+    settings: Any, token: str | None, *, notification_id: uuid.UUID
+) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Verify signature/expiry/purpose/subject; return (workspace, member).
+
+    Returns None on ANY failure — the caller turns that into a 404 so token
+    probing never distinguishes causes (anti-oracle, LOW-S2 lineage).
+    """
+    import jwt as pyjwt
+
+    if not token:
+        return None
+    try:
+        claims = pyjwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
+    except Exception:  # noqa: BLE001 — every failure mode is just "invalid"
+        return None
+    if claims.get("purpose") != EMAIL_OPEN_TOKEN_PURPOSE:
+        return None
+    if claims.get("sub") != str(notification_id):
+        return None
+    try:
+        workspace_id = uuid.UUID(str(claims.get("ws")))
+        member_id = uuid.UUID(str(claims.get("member")))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return workspace_id, member_id
+
+
+async def email_open_link(
+    session: AsyncSession,
+    settings: Any,
+    *,
+    notification_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    recipient_member_id: uuid.UUID,
+) -> str | None:
+    """The emailed link: token-gated open endpoint that read-marks then 302s
+    to the in-site anchor. None when no app base URL / slug is configured."""
+    base = (settings.app_base_url or "").rstrip("/")
+    if not base:
+        return None
+    slug = await workspace_slug_for(session, workspace_id=workspace_id)
+    if not slug:
+        return None
+    token = issue_email_open_token(
+        settings,
+        notification_id=notification_id,
+        workspace_id=workspace_id,
+        recipient_member_id=recipient_member_id,
+    )
+    return f"{base}/api/v1/inbox/{notification_id}/open?token={token}"
 
 
 # ---------------------------------------------------------------------------
@@ -1014,13 +1247,17 @@ async def send_digest_emails(
     session: AsyncSession,
     *,
     mailer: Any,
+    settings: Any | None = None,
     batch_size: int = 200,
 ) -> int:
     """One digest sweep: aggregate pending email rows per recipient, send,
     and mark the ledger sent. Returns the number of emails sent.
 
-    ``uq_delivery`` keeps the sweep idempotent across crashes; failures are
-    recorded as ``failed`` with the reason only (R3 — never routing data).
+    Each digest is rendered in the recipient's own locale (i18n.md §5.1) and
+    every item carries its token-gated deep link back into the inbox
+    (comment-inbox.md §4.4). ``uq_delivery`` keeps the sweep idempotent
+    across crashes; failures are recorded as ``failed`` with the reason only
+    (R3 — never routing data).
     """
     pending = (
         (
@@ -1057,8 +1294,45 @@ async def send_digest_emails(
             .scalars()
             .all()
         )
-        rendered = [_email_body(notification) for notification in notifications]
-        body = f"Mesh notification digest ({len(rendered)} items)\n\n" + "\n---\n".join(rendered)
+        if not notifications:
+            continue
+        # One digest per email target: locale from the recipient of the first
+        # item (a shared inbox address still belongs to one member in
+        # practice; the chain degrades to workspace default → en anyway).
+        first = notifications[0]
+        await set_tenant_context(session, first.workspace_id)
+        locale = (
+            await resolve_recipient_locale(
+                session,
+                recipient_member_id=first.recipient_id,
+                workspace_id=first.workspace_id,
+            )
+            if first.recipient_id is not None
+            else "en"
+        )
+        rendered: list[str] = []
+        for notification in notifications:
+            link: str | None = None
+            if notification.recipient_id is not None:
+                if settings is not None:
+                    link = await email_open_link(
+                        session,
+                        settings,
+                        notification_id=notification.id,
+                        workspace_id=notification.workspace_id,
+                        recipient_member_id=notification.recipient_id,
+                    )
+                if link is None:
+                    slug = await workspace_slug_for(
+                        session, workspace_id=notification.workspace_id
+                    )
+                    link = notification_deep_link(
+                        getattr(settings, "app_base_url", None), slug, notification.id
+                    )
+            rendered.append(_email_body(notification, locale=locale, link=link))
+        strings = _EMAIL_STRINGS.get(_locale_key(locale), _EMAIL_STRINGS["en"])
+        header = strings["digest"].format(count=len(rendered))
+        body = f"{header}\n\n" + "\n---\n".join(rendered)
         try:
             await mailer.deliver(target, EMAIL_KIND_DIGEST, body)
             for row in rows:
@@ -1077,13 +1351,19 @@ async def send_digest_emails(
 __all__ = [
     "EMAIL_KIND_DIGEST",
     "EMAIL_KIND_REALTIME",
+    "EMAIL_OPEN_TOKEN_TTL",
     "FANOUT_EVENT_TYPE",
     "NotificationFanoutHandler",
     "NotificationPolicy",
+    "email_open_link",
     "emit_due_soon_notifications",
     "emit_notification_fanout",
     "in_quiet_hours",
     "inbox_channel",
+    "issue_email_open_token",
+    "notification_deep_link",
     "policy_for",
+    "resolve_recipient_locale",
     "send_digest_emails",
+    "verify_email_open_token",
 ]

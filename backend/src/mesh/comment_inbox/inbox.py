@@ -94,6 +94,7 @@ class InboxService:
         notification_type: str | None = None,
         grouped: bool = False,
         include_archived: bool = False,
+        archived_only: bool = False,
     ) -> dict:
         if inbox_filter not in INBOX_FILTERS:
             raise ValidationError(
@@ -114,6 +115,7 @@ class InboxService:
                     inbox_filter=inbox_filter,
                     notification_type=notification_type,
                     include_archived=include_archived,
+                    archived_only=archived_only,
                 )
             return await self._list_flat(
                 session,
@@ -124,6 +126,7 @@ class InboxService:
                 inbox_filter=inbox_filter,
                 notification_type=notification_type,
                 include_archived=include_archived,
+            archived_only=archived_only,
             )
 
     def _apply_filters(
@@ -135,12 +138,15 @@ class InboxService:
         inbox_filter: str,
         notification_type: str | None,
         include_archived: bool,
+        archived_only: bool,
     ):
         stmt = stmt.where(
             Notification.workspace_id == workspace_id,
             Notification.recipient_id == member.id,
         )
-        if not include_archived:
+        if archived_only:
+            stmt = stmt.where(Notification.archived_at.is_not(None))
+        elif not include_archived:
             stmt = stmt.where(Notification.archived_at.is_(None))
         if inbox_filter == "unread":
             stmt = stmt.where(Notification.read_at.is_(None))
@@ -165,6 +171,7 @@ class InboxService:
         inbox_filter: str,
         notification_type: str | None,
         include_archived: bool,
+        archived_only: bool,
     ) -> dict:
         from mesh.api.pagination import paginate
 
@@ -176,6 +183,7 @@ class InboxService:
             inbox_filter=inbox_filter,
             notification_type=notification_type,
             include_archived=include_archived,
+            archived_only=archived_only,
         )
         page = await paginate(
             session,
@@ -204,6 +212,7 @@ class InboxService:
         inbox_filter: str,
         notification_type: str | None,
         include_archived: bool,
+        archived_only: bool,
     ) -> dict:
         """Group by ``group_key`` (ungrouped rows group by their id).
 
@@ -226,6 +235,7 @@ class InboxService:
             inbox_filter=inbox_filter,
             notification_type=notification_type,
             include_archived=include_archived,
+            archived_only=archived_only,
         )
         stmt = stmt.group_by(group_key_expr)
         if cursor is not None:

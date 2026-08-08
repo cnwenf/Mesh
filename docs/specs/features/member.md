@@ -199,7 +199,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 | GET | `/users/me` | 当前登录用户及其在各工作区的成员身份 | 已登录 |
 | PATCH | `/users/me` | 更新自己的资料；字段省略=不变，`avatar_url:null`=恢复默认头像，非空头像仅允许绝对 HTTPS URL | 已登录 |
 | GET | `/workspaces/{ws}/agents/available` | 列出可加入名册的 agent(详见 agent.md) | admin |
-| GET | `/members/{id}/presence` | 成员在线/运行态(可选) | 成员 |
+| GET | `/workspaces/{ws}/members/presence` | 工作区在线成员快照(可选;`{"data": {"workspace_id", "online_member_ids", "count"}}`)。**落地说明**:原 `/members/{id}/presence` 为无工作区路径,无法在 RLS 下安全实现(需 definer 旁路),故落地为工作区作用域快照;在线状态变化仍按 §3.5 以 `member.presence` 事件广播,agent 运行态见 `agent.presence`(agent.md) | 成员 |
 | GET | `/workspaces/{ws}/members/{id}/project-access` | 列出 guest 的项目级可见性 | admin |
 | POST | `/workspaces/{ws}/members/{id}/project-access` | 为 guest 授予/变更项目共享(read/write) | admin |
 | DELETE | `/workspaces/{ws}/members/{id}/project-access/{project_id}` | 撤销某项目的 guest 共享 | admin |
@@ -330,14 +330,14 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 
 > **统一实时契约见 README §6.7**(本 Spec 不重复定义):`seq` **一律为频道内单调递增**(持久化于 `realtime_events`,无"全局 seq");断线重连带 `resume_from=<last_seq+1>`,游标过旧收 `resync_required` + REST 对账水位;订阅 `workspace:{ws}:members` 频道时**重新做资源级授权**。
 
-订阅频道 `workspace:{ws}:members`。事件命名 `<entity>.<action>`,携带频道内单调递增 `seq`,断线凭 `resume_from` 重放(README §6.7)。
+订阅频道 `workspace:{ws}`(实现与前端均使用工作区主频道,早期文案中的 `workspace:{ws}:members` 子频道未落地)。事件命名 `<entity>.<action>`,携带频道内单调递增 `seq`,断线凭 `resume_from` 重放(README §6.7)。
 
 | 事件 | 触发时机 | payload 关键字段 |
 |------|----------|------------------|
 | `member.added` | 人或 agent 入册 | `member_id`, `member_type`, `role` |
 | `member.updated` | 角色/状态/资料变更 | `member_id`, `changes` |
 | `member.removed` | 成员被移除 | `member_id` |
-| `member.presence` | 在线/运行态变化(可选) | `member_id`, `presence` |
+| `member.presence` | 在线状态变化(可选):成员在该工作区的实时连接 0→1 / 1→0 时广播 | `member_id`, `presence`("online"/"offline") |
 
 > agent 的运行态变化(开始/完成某 issue)通过 issue 事件广播(见 issue.md),成员页据此实时反映"该 agent 正在处理 X"。
 

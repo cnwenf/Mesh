@@ -364,6 +364,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 | GET | `/workspaces/{ws}/squads/{squad_id}/messages` | 列出消息(`task_id`/`kind`) | 小队成员 |
 | POST | `/workspaces/{ws}/squads/{squad_id}/messages` | 发送消息 | 小队成员 |
 | GET | `/workspaces/{ws}/squads/{squad_id}/activity` | 协作时间线(`task_id`/`action`) | 小队成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}/export` | **归档导出**(§4.6):任务清单(含结果摘要)+ 任务消息(按 kind 标注、关联任务 tag)+ 协作时间线,单一 markdown 文档;`Content-Disposition: attachment; filename="squad-{squad_id}.md"`;正文为 markdown 源文本直嵌,不渲染 HTML | 小队成员 / observer / admin |
 
 ### 3.2 请求/响应 JSON 示例
 
@@ -658,6 +659,15 @@ pending / dispatching ──父任务取消──► cancelled
 - **受阻/失败 → 通知 leader 与发起人**:子任务 `blocked`/`failed` 时上报。
 - **去噪与回环抑制**:动作发起者不给自己发通知;agent 之间的指令/汇报不触发"会再次唤醒自身"的通知,防 leader↔member 死循环(沿用 comment-inbox 的回环抑制原则,见 §5.3)。
 - **通知偏好**:复用通知偏好矩阵,新增事件类型 `squad_task_assigned` / `squad_task_finished` / `squad_plan_review`,可分别开关站内/邮件。
+
+### 4.6 归档导出(检查表 L486)
+
+> 锚点勘误:parity 检查表 L486 原指向 §4.5,而 §4.5 主题为实时性与通知;导出要求登记于本节(§4.6)。
+
+- **能力**:小队页「⋯」菜单提供「导出归档」,产出一份 markdown 文档,内容按序为:小队头部信息(名称/ID/状态/形态/描述/Leader/成员数/导出时间 UTC)→ 任务清单(每任务状态、关联 Issue、执行者、起止时间、失败原因、结果摘要)→ 任务消息(逐条时间戳 + kind 标签(指令/汇报/闲聊/系统/上下文)+ 收发者 + 关联任务 tag,正文以 markdown 引用块直嵌)→ 协作时间线(actor/action/target/任务)。
+- **语义**:导出是**只读文档快照**,不含可执行内容;消息正文已是 markdown 源(`body_markdown` 为落库真源),逐字嵌入不做 HTML 渲染。时间戳一律保留 UTC 原值(§6.18)。
+- **鉴权**:与小队读同口径(小队成员 / observer / admin);响应 `Content-Disposition: attachment; filename="squad-{squad_id}.md"`。
+- **定位**:结项归档(S1)之外的离线留档手段;归档(软解散)不依赖导出,导出亦不改变任何状态。
 
 ---
 
