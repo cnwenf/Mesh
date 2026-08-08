@@ -195,9 +195,12 @@ async def test_h1_chat_generation_rides_real_runtime_chain(
     assert "H1 真实执行" in deltas
 
     # (d) Terminal write-back finalized BOTH the message and the execution.
+    # The execution keeps the daemon's schema-v1 result verbatim; the message
+    # linkage is the §6.5 idempotency key (trigger_event_id = message_id).
     final = await _wait_by_idem(session_factory, ws_id, real_key, "completed")
     assert isinstance(final.result, dict)
-    assert final.result.get("chat_message_id") == sent["message_id"]
+    assert final.result["schema_version"] == 1
+    assert final.result["outcome"]["summary"] == "done"
     async with session_factory() as s:
         msg = (
             await s.execute(

@@ -3,20 +3,20 @@
 Real uvicorn API subprocess (RLS-restricted ``mesh_app`` role) + real
 PostgreSQL + real Redis + real outbox relay/projector + real WebSocket
 gateway. Covers the acceptance flows the unit tier cannot: the full
-POST → GET SSE chain across process boundaries, ``Last-Event-ID`` resume on
-a real connection, idempotent mid-stream stop, candidate branching, the
-沉淀为评论 closed loop through the comment API + §6.9 mention enqueue,
-untrusted-context isolation (§6.15), the trigger='chat' execution through
-the outbox, and cross-tenant isolation (T1).
+POST → GET SSE chain across process boundaries — MES-191: generations ride
+the SAME real runtime chain as issue executions (a registered daemon claims
+the trigger='chat' execution over HTTP, streams stdout which is mirrored as
+SSE deltas, and its terminal PATCH writes back message + execution) —
+``Last-Event-ID`` resume on a real connection, idempotent stop of a live
+execution, candidate branching, the 沉淀为评论 closed loop through the
+comment API + §6.9 mention enqueue, untrusted-context isolation (§6.15),
+and cross-tenant isolation (T1).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-import subprocess
-import sys
 import uuid
 
 import httpx
@@ -35,6 +35,8 @@ from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.realtime import RealtimeEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.workers.main import build_relay
+from tests.e2e.test_runtime_e2e import _activated_runtime, _claim, _daemon
+from tests.unit.runtime_support import valid_result_v1
 
 pytestmark = pytest.mark.e2e
 
@@ -78,8 +80,6 @@ async def _consume_sse(client: httpx.AsyncClient, token: str, url: str,
                 elif line == "" and current.get("event"):
                     frames.append(current)
                     current = {}
-                    if current is None:  # pragma: no cover
-                        pass
                     if frames[-1]["event"] in ("message.done", "message.interrupted", "error"):
                         return frames
         return frames
@@ -183,55 +183,69 @@ async def env(api_client):
     return {"client": api_client, "token": token, "ws": ws, "agent": agent, "issue": issue}
 
 
-def _free_port() -> int:
-    import socket
-
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+CHAT_E2E_LINES = ("这是真实执行的第一段回复。", "第二段:问题定位与修复建议。")
 
 
-@pytest_asyncio.fixture
-async def slow_server(provision_database):
-    """A second API server whose provider chunks slowly (stoppable streams)."""
-    from tests.e2e.conftest import _wait_ready
+async def _drive_chat_execution(
+    client: httpx.AsyncClient,
+    token: str,
+    ws_id: str,
+    relay,
+    *,
+    lines=CHAT_E2E_LINES,
+    terminal_status: str = "completed",
+    stop_after_logs: bool = False,
+) -> dict:
+    """Drive the pending chat generation through the REAL runtime chain.
 
-    port = _free_port()
-    env = os.environ.copy()
-    from tests.e2e.conftest import get_test_database_url, get_test_redis_url
-
-    env["MESH_DATABASE_URL"] = get_test_database_url()
-    env["MESH_REDIS_URL"] = get_test_redis_url()
-    env["MESH_AUTH_MODE"] = "dev"
-    env["MESH_APP_DATABASE_URL"] = get_test_database_url().replace(
-        "mesh:mesh@", "mesh_app:mesh_app@"
+    MES-191: chat replies are produced exactly like issue executions — the
+    relay materializes the ``execution.enqueue`` outbox event, a registered
+    daemon runtime claims the trigger='chat' execution over HTTP, streams
+    stdout (mirrored into the SSE buffer as delta frames) and PATCHes the
+    attempt to a terminal state. Returns the claim payload so stop-flow
+    tests can ack ``cancelled`` themselves (``stop_after_logs=True`` leaves
+    the attempt in ``running``).
+    """
+    await _drain(relay)
+    created, daemon_token = await _activated_runtime(
+        client, token, ws_id, name=f"chat-e2e-{uuid.uuid4().hex[:6]}"
     )
-    env["MESH_CHAT_GENERATION_CHUNK_DELAY_SECONDS"] = "0.12"
-    proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "uvicorn", "mesh.api.app:create_app",
-            "--factory", "--host", "127.0.0.1", "--port", str(port),
-            "--log-level", "warning", "--ws-max-size", "65536",
-        ],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    claimed = await _claim(client, created["id"], daemon_token)
+    assert claimed.status_code == 200, claimed.text
+    data = claimed.json()["data"]
+    assert data["execution"]["trigger"] == "chat"
+    attempt = data["attempt"]
+    logs = await client.post(
+        f"/api/v1/daemon/attempts/{attempt['id']}/logs",
+        json={
+            "lease_seq": attempt["lease_seq"], "stream": "stdout",
+            "start_offset": 0, "lines": list(lines),
+        },
+        headers=_daemon(daemon_token),
     )
-    base_url = f"http://127.0.0.1:{port}"
-    try:
-        await _wait_ready(base_url)
-        async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
-            yield client
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:  # pragma: no cover
-            proc.kill()
+    assert logs.status_code == 200, logs.text
+    running = await client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": attempt["lease_seq"], "status": "running"},
+        headers=_daemon(daemon_token),
+    )
+    assert running.status_code == 200, running.text
+    if stop_after_logs:
+        return {"attempt": attempt, "daemon_token": daemon_token, "runtime": created}
+    done = await client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={
+            "lease_seq": attempt["lease_seq"], "status": terminal_status,
+            "result": valid_result_v1(),
+        },
+        headers=_daemon(daemon_token),
+    )
+    assert done.status_code == 200, done.text
+    return {"attempt": attempt, "daemon_token": daemon_token, "runtime": created}
 
 
 # ---------------------------------------------------------------------------
-# 1. full POST → GET SSE chain + trigger='chat' execution through the outbox
+# 1. full POST → real runtime chain → GET SSE + execution terminal state
 # ---------------------------------------------------------------------------
 
 
@@ -246,27 +260,30 @@ async def test_chat_full_flow_sse_and_execution_e2e(env, relay, owner_factory):
             headers=_auth(token),
         )
     ).json()["data"]
+    question = "帮我分析登录跳转 bug 的可能原因"
     sent = (
         await client.post(
             f"/api/v1/workspaces/{ws['id']}/chat-sessions/{session['id']}/messages",
-            json={"content": "帮我分析登录跳转 bug 的可能原因"},
+            json={"content": question},
             headers=_auth(token),
         )
     ).json()["data"]
     assert sent["stream_url"].startswith(
         f"/api/v1/workspaces/{ws['id']}/chat-sessions/{session['id']}/generations/"
     )
+    # The reply is produced by a registered daemon through the SAME runtime
+    # chain issue executions use — not by an in-process template engine.
+    await _drive_chat_execution(client, token, ws["id"], relay)
     frames = await _consume_sse(client, token, sent["stream_url"])
     events = [f["event"] for f in frames]
     assert events[0] == "message.created"
     assert "message.delta" in events
     assert events[-1] == "message.done"
     content = "".join(f["data"]["delta"] for f in frames if f["event"] == "message.delta")
-    assert content
+    assert content == "".join(CHAT_E2E_LINES)  # lossless stdout mirror
 
-    # Relay the outbox: the chat execution materializes (trigger='chat') and
-    # the terminal write-back completes it; realtime projection lands the
-    # message.done event on the session channel.
+    # The terminal write-back completed the trigger='chat' execution and the
+    # realtime projection landed message.done on the session channel.
     await _drain(relay)
     ws_uuid = uuid.UUID(ws["id"])
     async with owner_factory() as dbs:
@@ -288,6 +305,7 @@ async def test_chat_full_flow_sse_and_execution_e2e(env, relay, owner_factory):
         ).scalars().all()
     assert len(execution) == 1
     assert execution[0].status == "completed"
+    assert execution[0].issue_id is None  # chat runs are issue-less
     expected_key = chat_execution_idempotency_key(
         agent_id=uuid.UUID(agent["id"]), issue_id=None,
         trigger_event_id=uuid.UUID(sent["message_id"]),
@@ -303,7 +321,7 @@ async def test_chat_full_flow_sse_and_execution_e2e(env, relay, owner_factory):
 # ---------------------------------------------------------------------------
 
 
-async def test_last_event_id_resume_e2e(env):
+async def test_last_event_id_resume_e2e(env, relay):
     client, token, ws, agent = env["client"], env["token"], env["ws"], env["agent"]
     session = (
         await client.post(
@@ -319,6 +337,7 @@ async def test_last_event_id_resume_e2e(env):
             headers=_auth(token),
         )
     ).json()["data"]
+    await _drive_chat_execution(client, token, ws["id"], relay)
     full = await _consume_sse(client, token, sent["stream_url"])
     assert full[-1]["event"] == "message.done"
     cursor = full[1]["id"]  # pretend the connection died after frame 2
@@ -331,27 +350,18 @@ async def test_last_event_id_resume_e2e(env):
 
 
 # ---------------------------------------------------------------------------
-# 3. idempotent mid-stream stop (dedicated slow server)
+# 3. idempotent stop of a LIVE execution (real runtime cancel chain)
 # ---------------------------------------------------------------------------
 
 
-async def test_stop_midstream_idempotent_e2e(slow_server):
-    client = slow_server
-    token = await _register_and_login(client, "chat-stop@mesh.example")
-    ws = (
-        await client.post(
-            "/api/v1/workspaces",
-            json={"name": "Stop", "slug": f"stop-{uuid.uuid4().hex[:8]}"},
-            headers=_auth(token),
-        )
-    ).json()["data"]
-    agent = (
-        await client.post(
-            f"/api/v1/workspaces/{ws['id']}/agents",
-            json={"name": f"slow-{uuid.uuid4().hex[:6]}"},
-            headers=_auth(token),
-        )
-    ).json()["data"]
+async def test_stop_midstream_idempotent_e2e(env, relay, owner_factory):
+    """MES-191: stopping a live chat generation routes through the runtime
+    cancel chain — the stop persists the cancel intent (202, still
+    ``streaming``), the daemon's graceful-stop ack PATCHes the attempt to
+    ``cancelled``, the terminal write-back interrupts the message with the
+    streamed partial content, and later stops are side-effect-free 202s.
+    """
+    client, token, ws, agent = env["client"], env["token"], env["ws"], env["agent"]
     session = (
         await client.post(
             f"/api/v1/workspaces/{ws['id']}/chat-sessions",
@@ -366,6 +376,11 @@ async def test_stop_midstream_idempotent_e2e(slow_server):
             headers=_auth(token),
         )
     ).json()["data"]
+    # The daemon claims, streams a couple of stdout lines and stays running.
+    lines = ("第一块内容。", "第二块内容。")
+    driven = await _drive_chat_execution(
+        client, token, ws["id"], relay, lines=lines, stop_after_logs=True
+    )
     # Read a couple of frames, disconnect, then stop out-of-band.
     partial = await _partial_sse(client, token, sent["stream_url"], 3)
     assert any(f["event"] == "message.delta" for f in partial)
@@ -373,17 +388,39 @@ async def test_stop_midstream_idempotent_e2e(slow_server):
         f"/api/v1/workspaces/{ws['id']}/chat-sessions/{session['id']}"
         f"/generations/{sent['generation_id']}/stop"
     )
+    # 1) Live execution → cancel intent persisted; the message is still
+    #    streaming until the daemon acks (202 with the CURRENT status).
     resp1 = await client.post(stop_url, headers=_auth(token))
     assert resp1.status_code == 202
     body1 = resp1.json()["data"]
-    assert body1["generation_status"] == "interrupted"
+    assert body1["generation_status"] == "streaming"
+    # 2) The daemon acks the graceful stop → terminal write-back interrupts
+    #    the message with the mirrored partial content.
+    attempt = driven["attempt"]
+    ack = await client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": attempt["lease_seq"], "status": "cancelled"},
+        headers=_daemon(driven["daemon_token"]),
+    )
+    assert ack.status_code == 200, ack.text
+    assert ack.json()["data"]["execution_status"] == "cancelled"
+    # 3) Subsequent stops are side-effect-free 202s (stale/interrupted path).
     resp2 = await client.post(stop_url, headers=_auth(token))
     assert resp2.status_code == 202
-    assert resp2.json()["data"] == body1  # idempotent, no side effects
+    body2 = resp2.json()["data"]
+    assert body2["generation_status"] == "interrupted"
+    resp3 = await client.post(stop_url, headers=_auth(token))
+    assert resp3.status_code == 202
+    assert resp3.json()["data"] == body2  # idempotent, no side effects
     # A fresh subscriber still sees the terminal state (buffer intact).
     frames = await _consume_sse(client, token, sent["stream_url"])
     assert frames[-1]["event"] == "message.interrupted"
     assert frames[-1]["data"]["partial_content"]
+    # L4: the persisted body is exactly the buffered stdout mirror.
+    async with owner_factory() as dbs:
+        message = await dbs.get(ChatMessage, uuid.UUID(sent["message_id"]))
+    assert message.generation_status == "interrupted"
+    assert message.content == "".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +428,7 @@ async def test_stop_midstream_idempotent_e2e(slow_server):
 # ---------------------------------------------------------------------------
 
 
-async def test_regenerate_and_select_e2e(env, owner_factory):
+async def test_regenerate_and_select_e2e(env, relay, owner_factory):
     client, token, ws, agent = env["client"], env["token"], env["ws"], env["agent"]
     session = (
         await client.post(
@@ -407,6 +444,7 @@ async def test_regenerate_and_select_e2e(env, owner_factory):
             headers=_auth(token),
         )
     ).json()["data"]
+    await _drive_chat_execution(client, token, ws["id"], relay)
     await _consume_sse(client, token, sent["stream_url"])
     timeline = (
         await client.get(
@@ -422,6 +460,7 @@ async def test_regenerate_and_select_e2e(env, owner_factory):
             headers=_auth(token),
         )
     ).json()["data"]
+    await _drive_chat_execution(client, token, ws["id"], relay)
     await _consume_sse(client, token, regen["stream_url"])
     candidates = (
         await client.get(
@@ -567,7 +606,7 @@ async def test_distill_suppress_triggers_no_execution_e2e(env, relay, owner_fact
 # ---------------------------------------------------------------------------
 
 
-async def test_untrusted_issue_context_isolation_e2e(env, owner_factory):
+async def test_untrusted_issue_context_isolation_e2e(env, relay, owner_factory):
     client, token, ws, agent = env["client"], env["token"], env["ws"], env["agent"]
     injected = (
         await client.post(
@@ -593,6 +632,9 @@ async def test_untrusted_issue_context_isolation_e2e(env, owner_factory):
             headers=_auth(token),
         )
     ).json()["data"]
+    # Drive the generation through the real runtime chain so the stream
+    # terminates; the system-row snapshot is written at send time.
+    await _drive_chat_execution(client, token, ws["id"], relay)
     await _consume_sse(client, token, sent["stream_url"])
     async with owner_factory() as dbs:
         system_rows = (
